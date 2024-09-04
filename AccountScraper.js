@@ -1,6 +1,10 @@
 const express = require('express');
 const axios = require('axios');
 const { MongoClient } = require('mongodb');
+const fs = require('fs');  
+const https = require('https');  
+const http = require('http');  
+const cors = require('cors');  
 
 const app = express();
 const port = 3000;
@@ -9,6 +13,9 @@ const phantombusterApiKey = 'ZJNIKxvLxe7xmiOnaBlNQNlGqIeDdLquL69ajMg111c';
 const profileAgentId = '3183235071854652';  
 const mongoUri = 'mongodb+srv://harishmaneru:Xe2Mz13z83IDhbPW@cluster0.bu3exkw.mongodb.net/?retryWrites=true&w=majority&tls=true';
 const dbName = 'Phantombuster';
+
+app.use(cors());
+app.use(express.json());
 
 async function launchPhantombusterAgent(agentId, _profileUrl, agentArgs) {
     try {
@@ -95,7 +102,7 @@ async function saveToMongoDB(collectionName, data) {
 
 app.use(express.json());
 
-app.post('/scrape-profile', async (req, res) => {
+app.post('/LinkedInprofile', async (req, res) => {
     const { profileUrl } = req.body;
 
     try {
@@ -121,6 +128,14 @@ app.post('/scrape-profile', async (req, res) => {
     }
 });
 
-app.listen(port, () => {
-    console.log(`Server running on http://localhost:${port}`);
+const options = {
+    key: fs.readFileSync('./onepgr.com.key', 'utf8'),
+    cert: fs.readFileSync('./STAR_onepgr_com.crt', 'utf8'),
+    ca: fs.readFileSync('./STAR_onepgr_com.ca-bundle', 'utf8')
+};
+
+const AccountScraper = https.createServer(options, app);
+
+AccountScraper.listen(port, () => {
+    console.log(`Server running on port:${port}`);
 });
