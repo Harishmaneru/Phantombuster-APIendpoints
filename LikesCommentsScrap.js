@@ -7,7 +7,7 @@ const http = require('http');
 const cors = require('cors');  
 
 const app = express();
-const port = 3000;
+const port = 3002;
 
 const phantombusterApiKey = 'ZJNIKxvLxe7xmiOnaBlNQNlGqIeDdLquL69ajMg111c';
 const commentAgentId = '3764598866836521';  // Comments scraper agent ID
@@ -154,8 +154,8 @@ const options = {
     ca: fs.readFileSync('./STAR_onepgr_com.ca-bundle', 'utf8')
 };
 
-const likesCommentsScraperServer = https.createServer(options, app);
+const LikesCommentsScrap = https.createServer(options, app);
 
-likesCommentsScraperServer.listen(port, () => {
+LikesCommentsScrap.listen(port, () => {
     console.log(`Server running on port: ${port}`);
 });
