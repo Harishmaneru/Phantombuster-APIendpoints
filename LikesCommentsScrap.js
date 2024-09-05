@@ -189,8 +189,8 @@ router.post('/LinkedInlikescomments', async (req, res) => {
             getAgentResults(likesContainerId)
         ]);
 
-        console.log('Comment Results:', JSON.stringify(commentResults, null, 2));
-        console.log('Likes Results:', JSON.stringify(likesResults, null, 2));
+        // console.log('Comment Results:', JSON.stringify(commentResults, null, 2));
+        // console.log('Likes Results:', JSON.stringify(likesResults, null, 2));
 
         if (commentResults && commentResults.resultObject) {
             await saveToMongoDB('Comments', commentResults.resultObject);
