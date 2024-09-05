@@ -1,25 +1,16 @@
 const express = require('express');
 const axios = require('axios');
 const { MongoClient } = require('mongodb');
-const fs = require('fs');  
-const https = require('https');  
-const http = require('http');  
-const cors = require('cors');  
 
-const app = express();
-const port = 3002;
+const router = express.Router();
 
 const phantombusterApiKey = 'ZJNIKxvLxe7xmiOnaBlNQNlGqIeDdLquL69ajMg111c';
-const commentAgentId = '3764598866836521';  // Comments scraper agent ID
-const likesAgentId = '7246285351294436';    // Likes scraper agent ID
+const commentAgentId = '3764598866836521';
+const likesAgentId = '7246285351294436';
 const mongoUri = 'mongodb+srv://harishmaneru:Xe2Mz13z83IDhbPW@cluster0.bu3exkw.mongodb.net/?retryWrites=true&w=majority&tls=true';
 const dbName = 'Phantombuster';
 
- 
-app.use(cors());
-app.use(express.json());
-
-async function launchPhantombusterAgent(agentId, postUrl, agentArgs) {
+async function launchPhantombusterAgent(agentId, agentArgs) {
     try {
         const response = await axios.post('https://api.phantombuster.com/api/v2/agents/launch', {
             id: agentId,
@@ -45,7 +36,7 @@ async function launchLikesAgent(postUrl) {
         sessionCookie: "AQEFARABAAAAABE1lMUAAAGRnXXh8gAAAZHCIwDtVgAAs3VybjpsaTplbnRlcnByaXNlQXV0aFRva2VuOmVKeGpaQUFDN3RYMkppQmFaRUVxUDRqbWwrRzl3d2hpUlArV2F3SXpJdDl2UHNUQUNBQ09IQWdkXnVybjpsaTplbnRlcnByaXNlUHJvZmlsZToodXJuOmxpOmVudGVycHJpc2VBY2NvdW50OjE5NTc3MjIxMiwzNDYwNTU5NTEpXnVybjpsaTptZW1iZXI6NjA3NTU1MDA4Y_vDMXQrWKPRIaGks3aMqw2TMs85hYZsWnfYCiDVDpdlHhTqZqHe1AEH_gVGWIS_2u9wkW-DMOzxv5rjo95Fe6KMz7RO9ypbqsoWYE7HSs5G--vKA1Y7mnECpQ7-qZf-x2XvccRi3C1KP7JEZ84J1jJ9GhlxSTtM0UCAKOphMeq-gvSg3tGMK_-FKNEkzuB-pUpVRg",
         userAgent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
     };
-    return launchPhantombusterAgent(likesAgentId, postUrl, args);
+    return launchPhantombusterAgent(likesAgentId, args);
 }
 
 async function launchCommentsAgent(postUrl) {
@@ -56,7 +47,7 @@ async function launchCommentsAgent(postUrl) {
         sessionCookie: "AQEFARABAAAAABE1lMUAAAGRnXXh8gAAAZHCIwDtVgAAs3VybjpsaTplbnRlcnByaXNlQXV0aFRva2VuOmVKeGpaQUFDN3RYMkppQmFaRUVxUDRqbWwrRzl3d2hpUlArV2F3SXpJdDl2UHNUQUNBQ09IQWdkXnVybjpsaTplbnRlcnByaXNlUHJvZmlsZToodXJuOmxpOmVudGVycHJpc2VBY2NvdW50OjE5NTc3MjIxMiwzNDYwNTU5NTEpXnVybjpsaTptZW1iZXI6NjA3NTU1MDA4Y_vDMXQrWKPRIaGks3aMqw2TMs85hYZsWnfYCiDVDpdlHhTqZqHe1AEH_gVGWIS_2u9wkW-DMOzxv5rjo95Fe6KMz7RO9ypbqsoWYE7HSs5G--vKA1Y7mnECpQ7-qZf-x2XvccRi3C1KP7JEZ84J1jJ9GhlxSTtM0UCAKOphMeq-gvSg3tGMK_-FKNEkzuB-pUpVRg",
         userAgent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
     };
-    return launchPhantombusterAgent(commentAgentId, postUrl, args);
+    return launchPhantombusterAgent(commentAgentId, args);
 }
 
 async function getAgentResults(containerId) {
@@ -70,28 +61,74 @@ async function getAgentResults(containerId) {
         });
         return response.data;
     } catch (error) {
-        if (error.response && error.response.status === 404) {
-            console.log(`No result object found for container ID: ${containerId}`);
-            return null;
-        }
         console.error('Error getting agent results:', error.message);
         throw error;
     }
 }
 
-async function processScrapedData(containerId) {
-    const result = await getAgentResults(containerId);
-    if (result && result.resultObject) {
-        return JSON.parse(result.resultObject);
-    } else {
-        console.log(`No data available for container ID: ${containerId}`);
+async function getContainerOutput(containerId) {
+    try {
+        const response = await axios.get(`https://api.phantombuster.com/api/v2/containers/fetch-output?id=${containerId}`, {
+            headers: {
+                'X-Phantombuster-Key': phantombusterApiKey,
+                'accept': 'application/json'
+            }
+        });
+        return response.data.output;
+    } catch (error) {
+        console.error(`Error fetching container output for ${containerId}:`, error.message);
         return null;
     }
 }
 
-async function waitForResults() {
-    await new Promise(resolve => setTimeout(resolve, 50000));  
+async function getAllContainers(agentId) {
+    try {
+        const response = await axios.get('https://api.phantombuster.com/api/v2/containers/fetch-all', {
+            headers: {
+                'X-Phantombuster-Key': phantombusterApiKey,
+                'accept': 'application/json'
+            },
+            params: { agentId }
+        });
+        return response.data.containers;
+    } catch (error) {
+        console.error('Error fetching containers:', error.message);
+        throw error;
+    }
 }
+
+async function findPreviousScrapedData(agentId, postUrl) {
+    const containers = await getAllContainers(agentId);
+    console.log(`Checking ${containers.length} containers for previously scraped data...`);
+
+    if (containers.length === 0) {
+        console.log("No containers found or error occurred while fetching containers.");
+        return null;
+    }
+
+    for (const container of containers) {
+        try {
+            const output = await getContainerOutput(container.id);
+            
+           
+            if (agentId === likesAgentId && output && output.includes(postUrl)) {
+                console.log(`Found previously scraped likes data in container ${container.id}`);
+                return await getAgentResults(container.id);
+            }
+
+           
+            if (agentId === commentAgentId && output && output.includes(postUrl)) {
+                console.log(`Found previously scraped comments data in container ${container.id}`);
+                return await getAgentResults(container.id);
+            }
+        } catch (error) {
+            console.error(`Error processing container ${container.id}:`, error.message);
+        }
+    }
+    console.log("No previously scraped data found.");
+    return null;
+}
+
 
 async function saveToMongoDB(collectionName, data) {
     const client = new MongoClient(mongoUri);
@@ -102,9 +139,19 @@ async function saveToMongoDB(collectionName, data) {
         const db = client.db(dbName);
         const collection = db.collection(collectionName);
 
-        // Insert the data into the collection
-        const result = await collection.insertMany(data);
-        console.log(`Data inserted into ${collectionName}:`, result.insertedIds);
+        if (Array.isArray(data)) {
+            if (data.length > 0) {
+                const result = await collection.insertMany(data);
+                console.log(`${data.length} documents inserted into ${collectionName}:`, result.insertedIds);
+            } else {
+                console.log(`No data to insert into ${collectionName}`);
+            }
+        } else if (data && typeof data === 'object') {
+            const result = await collection.insertOne(data);
+            console.log(`Data inserted into ${collectionName}:`, result.insertedId);
+        } else {
+            console.log(`Invalid data format for ${collectionName}. Expected an array or object.`);
+        }
     } catch (error) {
         console.error(`Error inserting data into ${collectionName}:`, error.message);
     } finally {
@@ -112,10 +159,22 @@ async function saveToMongoDB(collectionName, data) {
     }
 }
 
-app.post('/LinkedInlikescomments', async (req, res) => {
+router.post('/LinkedInlikescomments', async (req, res) => {
     const { postUrl } = req.body;
 
     try {
+        const [previousComments, previousLikes] = await Promise.all([
+            findPreviousScrapedData(commentAgentId, postUrl),
+            findPreviousScrapedData(likesAgentId, postUrl)
+        ]);
+
+        if (previousComments && previousLikes) {
+            return res.json({
+                comments: previousComments.resultObject || {},
+                likes: previousLikes.resultObject || {}
+            });
+        }
+
         const [commentContainerId, likesContainerId] = await Promise.all([
             launchCommentsAgent(postUrl),
             launchLikesAgent(postUrl)
@@ -123,24 +182,31 @@ app.post('/LinkedInlikescomments', async (req, res) => {
 
         console.log(`Agents launched: Comments container ID ${commentContainerId}, Likes container ID ${likesContainerId}`);
 
-        await waitForResults();
+        await new Promise(resolve => setTimeout(resolve, 50000)); // Wait for results
 
         const [commentResults, likesResults] = await Promise.all([
-            processScrapedData(commentContainerId),
-            processScrapedData(likesContainerId)
+            getAgentResults(commentContainerId),
+            getAgentResults(likesContainerId)
         ]);
 
-        // Save results to MongoDB
-        if (commentResults) {
-            await saveToMongoDB('Comments', commentResults);
+        console.log('Comment Results:', JSON.stringify(commentResults, null, 2));
+        console.log('Likes Results:', JSON.stringify(likesResults, null, 2));
+
+        if (commentResults && commentResults.resultObject) {
+            await saveToMongoDB('Comments', commentResults.resultObject);
+        } else {
+            console.log('No comment results to save');
         }
-        if (likesResults) {
-            await saveToMongoDB('Likes', likesResults);
+
+        if (likesResults && likesResults.resultObject) {
+            await saveToMongoDB('Likes', likesResults.resultObject);
+        } else {
+            console.log('No likes results to save');
         }
 
         res.json({
-            comments: commentResults,
-            likes: likesResults
+            comments: commentResults?.resultObject || {},
+            likes: likesResults?.resultObject || {}
         });
     } catch (error) {
         console.error('An error occurred:', error.message);
@@ -148,14 +214,4 @@ app.post('/LinkedInlikescomments', async (req, res) => {
     }
 });
 
-const options = {
-    key: fs.readFileSync('./onepgr.com.key', 'utf8'),
-    cert: fs.readFileSync('./STAR_onepgr_com.crt', 'utf8'),
-    ca: fs.readFileSync('./STAR_onepgr_com.ca-bundle', 'utf8')
-};
-
-const LikesCommentsScrap = https.createServer(options, app);
-
-LikesCommentsScrap.listen(port, () => {
-    console.log(`Server running on port: ${port}`);
-});
+module.exports = router;
