@@ -151,7 +151,7 @@ async function findPreviousScrapedData(profileUrl) {
     return null;
 }
 
-router.post('/LinkedInprofile', async (req, res) => {
+router.post('/LinkedIncompanyurl', async (req, res) => {
     const { profileUrl } = req.body;
 
     try {
