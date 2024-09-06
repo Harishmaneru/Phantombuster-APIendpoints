@@ -6,6 +6,8 @@ const cors = require('cors');
 const accountScraper = require('./AccountScraper');
 const likesCommentsScraper = require('./LikesCommentsScrap');
 const profileScraper =require('./ProfileScraper')
+const emailScraper =require('./EmailScraper')
+
 
 const app = express();
 const port = 3001;
@@ -15,6 +17,7 @@ app.use(express.json());
 app.use(accountScraper);
 app.use(likesCommentsScraper);
 app.use(profileScraper);
+app.use(emailScraper)
 
 
 
