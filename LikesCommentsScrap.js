@@ -5,8 +5,8 @@ const { MongoClient } = require('mongodb');
 const router = express.Router();
 
 const phantombusterApiKey = 'ZJNIKxvLxe7xmiOnaBlNQNlGqIeDdLquL69ajMg111c';
-const commentAgentId = '3764598866836521';
-const likesAgentId = '7246285351294436';
+const commentAgentId = '5900453882056051';
+const likesAgentId = '4118839789269539';
 const mongoUri = 'mongodb+srv://harishmaneru:Xe2Mz13z83IDhbPW@cluster0.bu3exkw.mongodb.net/?retryWrites=true&w=majority&tls=true';
 const dbName = 'Phantombuster';
 
@@ -168,8 +168,8 @@ router.post('/LinkedInlikescomments', async (req, res) => {
             launchLikesAgent(postUrl)
         ]);
 
-        console.log(`Agents launched: Comments container ID ${commentContainerId},/n Likes container ID ${likesContainerId}`);
-
+       
+        console.log(`Agents launched: Comments container ID ${commentContainerId}\nLikes container ID ${likesContainerId}`);
        await new Promise(resolve => setTimeout(resolve, 50000)); 
 
         const [commentResults, likesResults] = await Promise.all([
@@ -189,7 +189,7 @@ router.post('/LinkedInlikescomments', async (req, res) => {
 
         // Save the combined data into the "Results" collection
        // console.log(combinedResults)
-        await saveToMongoDB('Results', combinedResults);
+        await saveToMongoDB('Likes-Comments', combinedResults);
 
         res.json({
             Comments: commentResults,
