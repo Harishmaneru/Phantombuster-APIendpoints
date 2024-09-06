@@ -132,26 +132,14 @@ async function findPreviousScrapedData(agentId, postUrl) {
 
 async function saveToMongoDB(collectionName, data) {
     const client = new MongoClient(mongoUri);
-
     try {
         await client.connect();
-        console.log('Connected to Database');
         const db = client.db(dbName);
         const collection = db.collection(collectionName);
 
-        if (Array.isArray(data)) {
-            if (data.length > 0) {
-                const result = await collection.insertMany(data);
-                console.log(`${data.length} documents inserted into ${collectionName}:`, result.insertedIds);
-            } else {
-                console.log(`No data to insert into ${collectionName}`);
-            }
-        } else if (data && typeof data === 'object') {
-            const result = await collection.insertOne(data);
-            console.log(`Data inserted into ${collectionName}:`, result.insertedId);
-        } else {
-            console.log(`Invalid data format for ${collectionName}. Expected an array or object.`);
-        }
+    
+        const result = await collection.insertOne(data);
+        console.log(`Data inserted into ${collectionName}:`, result.insertedId);
     } catch (error) {
         console.error(`Error inserting data into ${collectionName}:`, error.message);
     } finally {
@@ -170,8 +158,8 @@ router.post('/LinkedInlikescomments', async (req, res) => {
 
         if (previousComments && previousLikes) {
             return res.json({
-                comments: previousComments.resultObject || {},
-                likes: previousLikes.resultObject || {}
+                comments: previousComments.resultObject,
+                likes: previousLikes.resultObject
             });
         }
 
@@ -180,9 +168,9 @@ router.post('/LinkedInlikescomments', async (req, res) => {
             launchLikesAgent(postUrl)
         ]);
 
-        console.log(`Agents launched: Comments container ID ${commentContainerId}, Likes container ID ${likesContainerId}`);
+        console.log(`Agents launched: Comments container ID ${commentContainerId},/n Likes container ID ${likesContainerId}`);
 
-        await new Promise(resolve => setTimeout(resolve, 50000)); // Wait for results
+       await new Promise(resolve => setTimeout(resolve, 50000)); 
 
         const [commentResults, likesResults] = await Promise.all([
             getAgentResults(commentContainerId),
@@ -192,21 +180,20 @@ router.post('/LinkedInlikescomments', async (req, res) => {
         // console.log('Comment Results:', JSON.stringify(commentResults, null, 2));
         // console.log('Likes Results:', JSON.stringify(likesResults, null, 2));
 
-        if (commentResults && commentResults.resultObject) {
-            await saveToMongoDB('Comments', commentResults.resultObject);
-        } else {
-            console.log('No comment results to save');
-        }
+        const combinedResults = {
+            postUrl,
+            comments: commentResults,
+            likes: likesResults,
+            timestamp: new Date().toISOString([])
+        };
 
-        if (likesResults && likesResults.resultObject) {
-            await saveToMongoDB('Likes', likesResults.resultObject);
-        } else {
-            console.log('No likes results to save');
-        }
+        // Save the combined data into the "Results" collection
+       // console.log(combinedResults)
+        await saveToMongoDB('Results', combinedResults);
 
         res.json({
-            comments: commentResults?.resultObject || {},
-            likes: likesResults?.resultObject || {}
+            Comments: commentResults,
+            Likes: likesResults
         });
     } catch (error) {
         console.error('An error occurred:', error.message);
