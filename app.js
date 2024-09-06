@@ -3,16 +3,20 @@ const https = require('https');
 const fs = require('fs');
 const cors = require('cors');
 
-const profileScraper = require('./AccountScraper');
+const accountScraper = require('./AccountScraper');
 const likesCommentsScraper = require('./LikesCommentsScrap');
+const profileScraper =require('./ProfileScraper')
 
 const app = express();
 const port = 3001;
 
 app.use(cors());
 app.use(express.json());
-app.use(profileScraper);
+app.use(accountScraper);
 app.use(likesCommentsScraper);
+app.use(profileScraper);
+
+
 
 const options = {
     key: fs.readFileSync('./onepgr.com.key', 'utf8'),
