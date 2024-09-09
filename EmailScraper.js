@@ -147,7 +147,7 @@ router.post('/LinkedInquerieURL', async (req, res) => {
                     res.status(500).json({ error: 'Error processing or saving data' });
                 }
             } else {
-                console.log("Expected output strings not found.");
+                console.log("Not a valid Sales Navigator People Search Link.");
                 res.status(400).json({ error: 'Not a valid Sales Navigator People Search Link' });
             }
         } else {
