@@ -148,7 +148,7 @@ router.post('/LinkedInquerieURL', async (req, res) => {
                 }
             } else {
                 console.log("Expected output strings not found.");
-                res.status(400).json({ error: 'Invalid output format' });
+                res.status(400).json({ error: 'Not a valid Sales Navigator People Search Link' });
             }
         } else {
             console.log("No output available.");
