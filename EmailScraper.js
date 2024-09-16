@@ -4,11 +4,11 @@ const { MongoClient } = require('mongodb');
 const router = express.Router();
 
 const phantombusterApiKey = 'ZJNIKxvLxe7xmiOnaBlNQNlGqIeDdLquL69ajMg111c';
-const profileAgentId = '1697173618329248';
+const profileAgentId = '1195272623267090';
 const mongoUri = 'mongodb+srv://harishmaneru:Xe2Mz13z83IDhbPW@cluster0.bu3exkw.mongodb.net/?retryWrites=true&w=majority&tls=true';
 const dbName = 'Phantombuster';
 
-async function launchPhantombusterAgent(agentId, querieURL, agentArgs) {
+async function launchPhantombusterAgent(agentId, querieURL, sessionCookie, agentArgs) {
     try {
         const response = await axios.post('https://api.phantombuster.com/api/v2/agents/launch', {
             id: agentId,
@@ -16,7 +16,8 @@ async function launchPhantombusterAgent(agentId, querieURL, agentArgs) {
                 numberOfResultsPerSearch: 50,
                 numberOfCredits: 10,
                 chooseSecondTeam: false,
-                sessionCookie: "AQEFARABAAAAABE1lMUAAAGRnXXh8gAAAZHCIwDtVgAAs3VybjpsaTplbnRlcnByaXNlQXV0aFRva2VuOmVKeGpaQUFDN3RYMkppQmFaRUVxUDRqbWwrRzl3d2hpUlArV2F3SXpJdDl2UHNUQUNBQ09IQWdkXnVybjpsaTplbnRlcnByaXNlUHJvZmlsZToodXJuOmxpOmVudGVycHJpc2VBY2NvdW50OjE5NTc3MjIxMiwzNDYwNTU5NTEpXnVybjpsaTptZW1iZXI6NjA3NTU1MDA4Y_vDMXQrWKPRIaGks3aMqw2TMs85hYZsWnfYCiDVDpdlHhTqZqHe1AEH_gVGWIS_2u9wkW-DMOzxv5rjo95Fe6KMz7RO9ypbqsoWYE7HSs5G--vKA1Y7mnECpQ7-qZf-x2XvccRi3C1KP7JEZ84J1jJ9GhlxSTtM0UCAKOphMeq-gvSg3tGMK_-FKNEkzuB-pUpVRg",
+                sessionCookie: sessionCookie,
+               // sessionCookie: "AQEFARABAAAAABE1lMUAAAGRnXXh8gAAAZHCIwDtVgAAs3VybjpsaTplbnRlcnByaXNlQXV0aFRva2VuOmVKeGpaQUFDN3RYMkppQmFaRUVxUDRqbWwrRzl3d2hpUlArV2F3SXpJdDl2UHNUQUNBQ09IQWdkXnVybjpsaTplbnRlcnByaXNlUHJvZmlsZToodXJuOmxpOmVudGVycHJpc2VBY2NvdW50OjE5NTc3MjIxMiwzNDYwNTU5NTEpXnVybjpsaTptZW1iZXI6NjA3NTU1MDA4Y_vDMXQrWKPRIaGks3aMqw2TMs85hYZsWnfYCiDVDpdlHhTqZqHe1AEH_gVGWIS_2u9wkW-DMOzxv5rjo95Fe6KMz7RO9ypbqsoWYE7HSs5G--vKA1Y7mnECpQ7-qZf-x2XvccRi3C1KP7JEZ84J1jJ9GhlxSTtM0UCAKOphMeq-gvSg3tGMK_-FKNEkzuB-pUpVRg",
                 userAgent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
                 queries: querieURL
             }
@@ -89,12 +90,12 @@ async function waitForResults() {
 }
 
 router.post('/LinkedInquerieURL', async (req, res) => {
-    const { querieURL } = req.body;
+    const { querieURL, sessionCookie } = req.body;
 
     try {
-        console.log(`Launching profile scraping agent for ${querieURL}`);
-        const containerId = await launchPhantombusterAgent(profileAgentId, querieURL);
-        console.log(`Profile scraping agent launched with container ID ${containerId}`);
+        console.log(`Launching email scraping agent for ${querieURL}`);
+        const containerId = await launchPhantombusterAgent(profileAgentId, querieURL, sessionCookie);
+        console.log(`Email scraping agent launched with container ID ${containerId}`);
 
         await waitForResults();
 

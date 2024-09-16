@@ -28,23 +28,29 @@ async function launchPhantombusterAgent(agentId, agentArgs) {
     }
 }
 
-async function launchLikesAgent(postUrl) {
+async function launchLikesAgent(postUrl, sessionCookie) {
+    if (!sessionCookie) {
+        throw new Error('Session cookie is required for launching likes agent');
+    }
     const args = {
         removeDuplicate: true,
         numberOfPostsPerLaunch: 1,
         postUrl: postUrl,
-        sessionCookie: "AQEFARABAAAAABE1lMUAAAGRnXXh8gAAAZHCIwDtVgAAs3VybjpsaTplbnRlcnByaXNlQXV0aFRva2VuOmVKeGpaQUFDN3RYMkppQmFaRUVxUDRqbWwrRzl3d2hpUlArV2F3SXpJdDl2UHNUQUNBQ09IQWdkXnVybjpsaTplbnRlcnByaXNlUHJvZmlsZToodXJuOmxpOmVudGVycHJpc2VBY2NvdW50OjE5NTc3MjIxMiwzNDYwNTU5NTEpXnVybjpsaTptZW1iZXI6NjA3NTU1MDA4Y_vDMXQrWKPRIaGks3aMqw2TMs85hYZsWnfYCiDVDpdlHhTqZqHe1AEH_gVGWIS_2u9wkW-DMOzxv5rjo95Fe6KMz7RO9ypbqsoWYE7HSs5G--vKA1Y7mnECpQ7-qZf-x2XvccRi3C1KP7JEZ84J1jJ9GhlxSTtM0UCAKOphMeq-gvSg3tGMK_-FKNEkzuB-pUpVRg",
+        sessionCookie: sessionCookie,
         userAgent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
     };
     return launchPhantombusterAgent(likesAgentId, args);
 }
 
-async function launchCommentsAgent(postUrl) {
+async function launchCommentsAgent(postUrl, sessionCookie) {
+    if (!sessionCookie) {
+        throw new Error('Session cookie is required for launching comments agent');
+    }
     const args = {
         numberOfPostsPerLaunch: 1,
         numberOfCommentsPerPost: 20,
         postUrl: postUrl,
-        sessionCookie: "AQEFARABAAAAABE1lMUAAAGRnXXh8gAAAZHCIwDtVgAAs3VybjpsaTplbnRlcnByaXNlQXV0aFRva2VuOmVKeGpaQUFDN3RYMkppQmFaRUVxUDRqbWwrRzl3d2hpUlArV2F3SXpJdDl2UHNUQUNBQ09IQWdkXnVybjpsaTplbnRlcnByaXNlUHJvZmlsZToodXJuOmxpOmVudGVycHJpc2VBY2NvdW50OjE5NTc3MjIxMiwzNDYwNTU5NTEpXnVybjpsaTptZW1iZXI6NjA3NTU1MDA4Y_vDMXQrWKPRIaGks3aMqw2TMs85hYZsWnfYCiDVDpdlHhTqZqHe1AEH_gVGWIS_2u9wkW-DMOzxv5rjo95Fe6KMz7RO9ypbqsoWYE7HSs5G--vKA1Y7mnECpQ7-qZf-x2XvccRi3C1KP7JEZ84J1jJ9GhlxSTtM0UCAKOphMeq-gvSg3tGMK_-FKNEkzuB-pUpVRg",
+        sessionCookie: sessionCookie,
         userAgent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
     };
     return launchPhantombusterAgent(commentAgentId, args);
@@ -96,7 +102,6 @@ async function getAllContainers(agentId) {
         throw error;
     }
 }
-
 async function findPreviousScrapedData(agentId, postUrl) {
     const containers = await getAllContainers(agentId);
     console.log(`Checking ${containers.length} containers for previously scraped data...`);
@@ -110,15 +115,8 @@ async function findPreviousScrapedData(agentId, postUrl) {
         try {
             const output = await getContainerOutput(container.id);
             
-           
-            if (agentId === likesAgentId && output && output.includes(postUrl)) {
-                console.log(`Found previously scraped likes data in container ${container.id}`);
-                return await getAgentResults(container.id);
-            }
-
-           
-            if (agentId === commentAgentId && output && output.includes(postUrl)) {
-                console.log(`Found previously scraped comments data in container ${container.id}`);
+            if (output && output.includes(postUrl)) {
+                console.log(`Found previously scraped data in container ${container.id}`);
                 return await getAgentResults(container.id);
             }
         } catch (error) {
@@ -128,7 +126,6 @@ async function findPreviousScrapedData(agentId, postUrl) {
     console.log("No previously scraped data found.");
     return null;
 }
-
 
 async function saveToMongoDB(collectionName, data) {
     const client = new MongoClient(mongoUri);
@@ -148,56 +145,62 @@ async function saveToMongoDB(collectionName, data) {
 }
 
 router.post('/LinkedInlikescomments', async (req, res) => {
-    const { postUrl } = req.body;
+    const { postUrl, sessionCookie } = req.body;
+   
+    if (!postUrl || !sessionCookie) {
+        return res.status(400).json({ error: 'Post URL and session cookie are required' });
+    }
 
     try {
+        console.log(`Processing request for post URL: ${postUrl}`);
+
         const [previousComments, previousLikes] = await Promise.all([
             findPreviousScrapedData(commentAgentId, postUrl),
             findPreviousScrapedData(likesAgentId, postUrl)
         ]);
 
         if (previousComments && previousLikes) {
+            console.log('Returning previously scraped data');
             return res.json({
                 comments: previousComments.resultObject,
                 likes: previousLikes.resultObject
             });
         }
 
+        console.log('Launching new agents for scraping');
         const [commentContainerId, likesContainerId] = await Promise.all([
-            launchCommentsAgent(postUrl),
-            launchLikesAgent(postUrl)
+            launchCommentsAgent(postUrl, sessionCookie),
+            launchLikesAgent(postUrl, sessionCookie)
         ]);
 
-       
-        console.log(`Agents launched: Comments container ID ${commentContainerId}\nLikes container ID ${likesContainerId}`);
-       await new Promise(resolve => setTimeout(resolve, 50000)); 
+        console.log(`Agents launched: Comments container ID ${commentContainerId}, Likes container ID ${likesContainerId}`);
+        console.log('Waiting for 50 seconds for agents to complete...');
+        await new Promise(resolve => setTimeout(resolve, 50000)); 
 
+        console.log('Fetching agent results');
         const [commentResults, likesResults] = await Promise.all([
             getAgentResults(commentContainerId),
             getAgentResults(likesContainerId)
         ]);
 
-        // console.log('Comment Results:', JSON.stringify(commentResults, null, 2));
-        // console.log('Likes Results:', JSON.stringify(likesResults, null, 2));
-
         const combinedResults = {
             postUrl,
             comments: commentResults,
             likes: likesResults,
-            timestamp: new Date().toISOString([])
+            timestamp: new Date().toISOString()
         };
 
-        // Save the combined data into the "Results" collection
-       // console.log(combinedResults)
+        console.log('Saving combined results to MongoDB');
         await saveToMongoDB('Likes-Comments', combinedResults);
 
+        console.log('Sending response');
         res.json({
             Comments: commentResults,
             Likes: likesResults
         });
     } catch (error) {
         console.error('An error occurred:', error.message);
-        res.status(500).json({ error: 'Internal server error' });
+        res.status(500).json({ error: 'Internal server error', details: error.message });
     }
 });
 

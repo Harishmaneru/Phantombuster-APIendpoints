@@ -8,7 +8,7 @@ const profileAgentId = '8800432948435719';
 const mongoUri = 'mongodb+srv://harishmaneru:Xe2Mz13z83IDhbPW@cluster0.bu3exkw.mongodb.net/?retryWrites=true&w=majority&tls=true';
 const dbName = 'Phantombuster';
 
-async function launchPhantombusterAgent(agentId, profileUrl, agentArgs) {
+async function launchPhantombusterAgent(agentId, profileUrl, sessionCookie, agentArgs) {
     try {
         const response = await axios.post('https://api.phantombuster.com/api/v2/agents/launch', {
             id: agentId,
@@ -17,7 +17,8 @@ async function launchPhantombusterAgent(agentId, profileUrl, agentArgs) {
                 saveImg: false,
                 takeScreenshot: false,
                 spreadsheetUrl: profileUrl,
-                sessionCookie: "AQEFARABAAAAABE1lMUAAAGRnXXh8gAAAZHCIwDtVgAAs3VybjpsaTplbnRlcnByaXNlQXV0aFRva2VuOmVKeGpaQUFDN3RYMkppQmFaRUVxUDRqbWwrRzl3d2hpUlArV2F3SXpJdDl2UHNUQUNBQ09IQWdkXnVybjpsaTplbnRlcnByaXNlUHJvZmlsZToodXJuOmxpOmVudGVycHJpc2VBY2NvdW50OjE5NTc3MjIxMiwzNDYwNTU5NTEpXnVybjpsaTptZW1iZXI6NjA3NTU1MDA4Y_vDMXQrWKPRIaGks3aMqw2TMs85hYZsWnfYCiDVDpdlHhTqZqHe1AEH_gVGWIS_2u9wkW-DMOzxv5rjo95Fe6KMz7RO9ypbqsoWYE7HSs5G--vKA1Y7mnECpQ7-qZf-x2XvccRi3C1KP7JEZ84J1jJ9GhlxSTtM0UCAKOphMeq-gvSg3tGMK_-FKNEkzuB-pUpVRg",
+                sessionCookie:sessionCookie,
+                // sessionCookie: "AQEFARABAAAAABFvcMkAAAGR67ubyQAAAZIP3nqFVgAAs3VybjpsaTplbnRlcnByaXNlQXV0aFRva2VuOmVKeGpaQUFDN3RYMkppQmFaRUVxUDRqbWwrRzl3d2hpUlArV2F3SXpJdDl2UHNUQUNBQ09IQWdkXnVybjpsaTplbnRlcnByaXNlUHJvZmlsZToodXJuOmxpOmVudGVycHJpc2VBY2NvdW50OjE5NTc3MjIxMiwzNDYwNTU5NTEpXnVybjpsaTptZW1iZXI6NjA3NTU1MDA4lGpW-MTrgEcMnh4oySmz-ADoIzyDgxY16OEDsMTVusQMtLyEaR9wW844lUSi_QclUoq8x8lSKieve1gQmH5lM8F5BZasVgwyTkSlP33fu7H13Je6W9Kb9kTXsg_LBXh91V0lE4aDBrwsH1nWe38CkDW8nPrn6FbveLYvY91Ctp_derO1Fs4Usxu95gw6om-kaAyUTQ",
                 userAgent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
             }
         }, {
@@ -139,24 +140,31 @@ async function findPreviousScrapedData(profileUrl) {
     for (const container of containers) {
         try {
             const output = await getContainerOutput(container.id);
-            if (output && output.includes(profileUrl)) {
-                console.log(`Found previously scraped data in container ${container.id}`);
-                return await processScrapedData(container.id);
+            
+            if (output) {  // Check if output is defined
+                if (output.includes(profileUrl)) {
+                    console.log(`Found previously scraped data in container ${container.id}`);
+                    return await processScrapedData(container.id);
+                }
+            } else {
+                console.log(`No output found for container ID: ${container.id}`);
             }
         } catch (error) {
             console.error(`Error processing container ${container.id}:`, error.message);
         }
     }
+    
     console.log("No previously scraped data found.");
     return null;
 }
 
-router.post('/LinkedIncompanyurl', async (req, res) => {
-    const { profileUrl } = req.body;
 
+router.post('/LinkedIncompanyurl', async (req, res) => {
+    const { profileUrl, sessionCookie } = req.body;
+    console.log(sessionCookie);
     try {
         console.log(`Launching profile scraping agent for ${profileUrl}`);
-        const containerId = await launchPhantombusterAgent(profileAgentId, profileUrl);
+        const containerId = await launchPhantombusterAgent(profileAgentId, profileUrl, sessionCookie);
         console.log(`Profile scraping agent launched with container ID ${containerId}`);
 
         await waitForResults();
@@ -174,6 +182,7 @@ router.post('/LinkedIncompanyurl', async (req, res) => {
                 console.log("Unexpected output from container:", output);
             }
         }
+     
 
         if (profileResults) {
             console.log("Saving scraped data to MongoDB...");
