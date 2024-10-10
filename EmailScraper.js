@@ -4,9 +4,48 @@ const { MongoClient } = require('mongodb');
 const router = express.Router();
 
 const phantombusterApiKey = 'ZJNIKxvLxe7xmiOnaBlNQNlGqIeDdLquL69ajMg111c';
-const profileAgentId = '1195272623267090';
+const profileAgentId = '3709479595300465';
 const mongoUri = 'mongodb+srv://harishmaneru:Xe2Mz13z83IDhbPW@cluster0.bu3exkw.mongodb.net/?retryWrites=true&w=majority&tls=true';
 const dbName = 'Phantombuster';
+
+ 
+async function waitForFetchOutput(containerId) {
+    let output = null;
+    const maxAttempts = 20;  
+    let attempts = 0;
+    const delay = 5000;  
+
+    while (!output && attempts < maxAttempts) {
+        console.log(`Checking fetch-output for containerId: ${containerId}, attempt: ${attempts + 1}`);
+        output = await getContainerOutput(containerId);
+        
+        if (!output) {
+            attempts++;
+            await new Promise(resolve => setTimeout(resolve, delay));  
+        }
+    }
+
+    return output;
+}
+
+async function waitForResultObject(containerId) {
+    let resultObject = null;
+    const maxAttempts = 20; // Maximum attempts to avoid infinite loops
+    let attempts = 0;
+    const delay = 5000; // Delay between each poll (5 seconds)
+
+    while (!resultObject && attempts < maxAttempts) {
+        console.log(`Checking result-object for containerId: ${containerId}, attempt: ${attempts + 1}`);
+        resultObject = await getResultObject(containerId);
+        
+        if (!resultObject) {
+            attempts++;
+            await new Promise(resolve => setTimeout(resolve, delay)); // Wait before next poll
+        }
+    }
+
+    return resultObject;
+}
 
 async function launchPhantombusterAgent(agentId, querieURL, sessionCookie, agentArgs) {
     try {
@@ -17,7 +56,6 @@ async function launchPhantombusterAgent(agentId, querieURL, sessionCookie, agent
                 numberOfCredits: 10,
                 chooseSecondTeam: false,
                 sessionCookie: sessionCookie,
-               // sessionCookie: "AQEFARABAAAAABE1lMUAAAGRnXXh8gAAAZHCIwDtVgAAs3VybjpsaTplbnRlcnByaXNlQXV0aFRva2VuOmVKeGpaQUFDN3RYMkppQmFaRUVxUDRqbWwrRzl3d2hpUlArV2F3SXpJdDl2UHNUQUNBQ09IQWdkXnVybjpsaTplbnRlcnByaXNlUHJvZmlsZToodXJuOmxpOmVudGVycHJpc2VBY2NvdW50OjE5NTc3MjIxMiwzNDYwNTU5NTEpXnVybjpsaTptZW1iZXI6NjA3NTU1MDA4Y_vDMXQrWKPRIaGks3aMqw2TMs85hYZsWnfYCiDVDpdlHhTqZqHe1AEH_gVGWIS_2u9wkW-DMOzxv5rjo95Fe6KMz7RO9ypbqsoWYE7HSs5G--vKA1Y7mnECpQ7-qZf-x2XvccRi3C1KP7JEZ84J1jJ9GhlxSTtM0UCAKOphMeq-gvSg3tGMK_-FKNEkzuB-pUpVRg",
                 userAgent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
                 queries: querieURL
             }
@@ -85,10 +123,6 @@ async function saveToMongoDB(collectionName, data) {
     }
 }
 
-async function waitForResults() {
-    await new Promise(resolve => setTimeout(resolve, 50000));
-}
-
 router.post('/LinkedInquerieURL', async (req, res) => {
     const { querieURL, sessionCookie } = req.body;
 
@@ -97,62 +131,45 @@ router.post('/LinkedInquerieURL', async (req, res) => {
         const containerId = await launchPhantombusterAgent(profileAgentId, querieURL, sessionCookie);
         console.log(`Email scraping agent launched with container ID ${containerId}`);
 
-        await waitForResults();
+        const output = await waitForFetchOutput(containerId);
+        const resultObject = await waitForResultObject(containerId);
 
-        const output = await getContainerOutput(containerId);
-
-        if (output) {
-            if (output.includes("✅ Data successfully saved!") && output.includes("ℹ️ Leads found:")) {
+        if (output && resultObject) {
+            // Parse and save resultObject data
+            let dataToSave;
+            if (typeof resultObject === 'string') {
                 try {
-                    const resultObject = await getResultObject(containerId);
-                    if (resultObject) {
-                        let dataToSave;
-                        
-                        if (typeof resultObject === 'string') {
-                            try {
-                                dataToSave = JSON.parse(resultObject);
-                            } catch (error) {
-                                console.error('Error parsing resultObject:', error);
-                                return res.status(400).json({ error: 'Invalid data format' });
-                            }
-                        } else {
-                            dataToSave = resultObject;
-                        }
-                        
-                        // Ensure dataToSave is an array
-                        if (!Array.isArray(dataToSave)) {
-                            dataToSave = [dataToSave];
-                        }
-            
-                        // Add timestamp to each item
-                        const dataWithTimestamp = dataToSave.map(item => ({
-                            ...item,
-                            timestamp: new Date()
-                        }));
-            
-                        // Save data to MongoDB
-                        console.log("Saving scraped data to MongoDB...");
-                        await saveToMongoDB('ScrapedEmails', dataWithTimestamp);
-                        
-                        res.json({
-                            ScrapedEmails: dataWithTimestamp
-                        });
-                    } else {
-                        console.log("No data found for the provided URL.");
-                        res.json({
-                            ScrapedEmails: []
-                        });
-                    }
+                    dataToSave = JSON.parse(resultObject);
                 } catch (error) {
-                    console.error('Error processing or saving data:', error);
-                    res.status(500).json({ error: 'Error processing or saving data' });
+                    console.error('Error parsing resultObject:', error);
+                    return res.status(400).json({ error: 'Invalid data format' });
                 }
             } else {
-                console.log("Not a valid Sales Navigator People Search Link.");
-                res.status(400).json({ error: 'Not a valid Sales Navigator People Search Link' });
+                dataToSave = resultObject;
             }
+
+            // Ensure dataToSave is an array
+            if (!Array.isArray(dataToSave)) {
+                dataToSave = [dataToSave];
+            }
+
+            // Add timestamp to each item
+            const dataWithTimestamp = dataToSave.map(item => ({
+                ...item,
+                timestamp: new Date()
+            }));
+
+            // Save data to MongoDB
+            console.log("Saving scraped data to MongoDB...");
+            await saveToMongoDB('ScrapedEmails', dataWithTimestamp);
+
+            // Send both fetch-output and result-object in the response
+            res.json({
+                fetchOutput: output, // Include the fetch-output result
+                resultObject: dataWithTimestamp // Send the processed resultObject with timestamp
+            });
         } else {
-            console.log("No output available.");
+            console.log("No output or result object available.");
             res.status(404).json({ error: "No data found for this URL" });
         }
     } catch (error) {

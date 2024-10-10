@@ -5,8 +5,8 @@ const { MongoClient } = require('mongodb');
 const router = express.Router();
 
 const phantombusterApiKey = 'ZJNIKxvLxe7xmiOnaBlNQNlGqIeDdLquL69ajMg111c';
-const commentAgentId = '5900453882056051';
-const likesAgentId = '4118839789269539';
+const commentAgentId = '7382122378061727';
+const likesAgentId = '8317656565599206';         
 const mongoUri = 'mongodb+srv://harishmaneru:Xe2Mz13z83IDhbPW@cluster0.bu3exkw.mongodb.net/?retryWrites=true&w=majority&tls=true';
 const dbName = 'Phantombuster';
 
@@ -58,32 +58,30 @@ async function launchCommentsAgent(postUrl, sessionCookie) {
 
 async function getAgentResults(containerId) {
     try {
-        const response = await axios.get('https://api.phantombuster.com/api/v2/containers/fetch-result-object', {
-            headers: {
-                'X-Phantombuster-Key': phantombusterApiKey,
-                'accept': 'application/json'
-            },
-            params: { id: containerId }
-        });
-        return response.data;
+        const [resultResponse, outputResponse] = await Promise.all([
+            axios.get('https://api.phantombuster.com/api/v2/containers/fetch-result-object', {
+                headers: {
+                    'X-Phantombuster-Key': phantombusterApiKey,
+                    'accept': 'application/json'
+                },
+                params: { id: containerId }
+            }),
+            axios.get(`https://api.phantombuster.com/api/v2/containers/fetch-output`, {
+                headers: {
+                    'X-Phantombuster-Key': phantombusterApiKey,
+                    'accept': 'application/json'
+                },
+                params: { id: containerId }
+            })
+        ]);
+
+        return {
+            resultObject: resultResponse.data,
+            containerOutput: outputResponse.data.output
+        };
     } catch (error) {
         console.error('Error getting agent results:', error.message);
         throw error;
-    }
-}
-
-async function getContainerOutput(containerId) {
-    try {
-        const response = await axios.get(`https://api.phantombuster.com/api/v2/containers/fetch-output?id=${containerId}`, {
-            headers: {
-                'X-Phantombuster-Key': phantombusterApiKey,
-                'accept': 'application/json'
-            }
-        });
-        return response.data.output;
-    } catch (error) {
-        console.error(`Error fetching container output for ${containerId}:`, error.message);
-        return null;
     }
 }
 
@@ -102,6 +100,7 @@ async function getAllContainers(agentId) {
         throw error;
     }
 }
+
 async function findPreviousScrapedData(agentId, postUrl) {
     const containers = await getAllContainers(agentId);
     console.log(`Checking ${containers.length} containers for previously scraped data...`);
@@ -113,11 +112,11 @@ async function findPreviousScrapedData(agentId, postUrl) {
 
     for (const container of containers) {
         try {
-            const output = await getContainerOutput(container.id);
+            const results = await getAgentResults(container.id);
             
-            if (output && output.includes(postUrl)) {
+            if (results.containerOutput && results.containerOutput.includes(postUrl)) {
                 console.log(`Found previously scraped data in container ${container.id}`);
-                return await getAgentResults(container.id);
+                return results;
             }
         } catch (error) {
             console.error(`Error processing container ${container.id}:`, error.message);
@@ -134,7 +133,6 @@ async function saveToMongoDB(collectionName, data) {
         const db = client.db(dbName);
         const collection = db.collection(collectionName);
 
-    
         const result = await collection.insertOne(data);
         console.log(`Data inserted into ${collectionName}:`, result.insertedId);
     } catch (error) {
@@ -162,8 +160,14 @@ router.post('/LinkedInlikescomments', async (req, res) => {
         if (previousComments && previousLikes) {
             console.log('Returning previously scraped data');
             return res.json({
-                comments: previousComments.resultObject,
-                likes: previousLikes.resultObject
+                comments: {
+                    resultObject: previousComments.resultObject,
+                    containerOutput: previousComments.containerOutput
+                },
+                likes: {
+                    resultObject: previousLikes.resultObject,
+                    containerOutput: previousLikes.containerOutput
+                }
             });
         }
 
@@ -185,8 +189,14 @@ router.post('/LinkedInlikescomments', async (req, res) => {
 
         const combinedResults = {
             postUrl,
-            comments: commentResults,
-            likes: likesResults,
+            comments: {
+                resultObject: commentResults.resultObject,
+                containerOutput: commentResults.containerOutput
+            },
+            likes: {
+                resultObject: likesResults.resultObject,
+                containerOutput: likesResults.containerOutput
+            },
             timestamp: new Date().toISOString()
         };
 
@@ -195,8 +205,14 @@ router.post('/LinkedInlikescomments', async (req, res) => {
 
         console.log('Sending response');
         res.json({
-            Comments: commentResults,
-            Likes: likesResults
+            comments: {
+                resultObject: commentResults.resultObject,
+                containerOutput: commentResults.containerOutput
+            },
+            likes: {
+                resultObject: likesResults.resultObject,
+                containerOutput: likesResults.containerOutput
+            }
         });
     } catch (error) {
         console.error('An error occurred:', error.message);

@@ -4,7 +4,7 @@ const { MongoClient } = require('mongodb');
 const router = express.Router();
 
 const phantombusterApiKey = 'ZJNIKxvLxe7xmiOnaBlNQNlGqIeDdLquL69ajMg111c';
-const profileAgentId = '8800432948435719';
+const profileAgentId = '64352835652191';
 const mongoUri = 'mongodb+srv://harishmaneru:Xe2Mz13z83IDhbPW@cluster0.bu3exkw.mongodb.net/?retryWrites=true&w=majority&tls=true';
 const dbName = 'Phantombuster';
 
@@ -17,8 +17,7 @@ async function launchPhantombusterAgent(agentId, profileUrl, sessionCookie, agen
                 saveImg: false,
                 takeScreenshot: false,
                 spreadsheetUrl: profileUrl,
-                sessionCookie:sessionCookie,
-                // sessionCookie: "AQEFARABAAAAABFvcMkAAAGR67ubyQAAAZIP3nqFVgAAs3VybjpsaTplbnRlcnByaXNlQXV0aFRva2VuOmVKeGpaQUFDN3RYMkppQmFaRUVxUDRqbWwrRzl3d2hpUlArV2F3SXpJdDl2UHNUQUNBQ09IQWdkXnVybjpsaTplbnRlcnByaXNlUHJvZmlsZToodXJuOmxpOmVudGVycHJpc2VBY2NvdW50OjE5NTc3MjIxMiwzNDYwNTU5NTEpXnVybjpsaTptZW1iZXI6NjA3NTU1MDA4lGpW-MTrgEcMnh4oySmz-ADoIzyDgxY16OEDsMTVusQMtLyEaR9wW844lUSi_QclUoq8x8lSKieve1gQmH5lM8F5BZasVgwyTkSlP33fu7H13Je6W9Kb9kTXsg_LBXh91V0lE4aDBrwsH1nWe38CkDW8nPrn6FbveLYvY91Ctp_derO1Fs4Usxu95gw6om-kaAyUTQ",
+                sessionCookie: sessionCookie,
                 userAgent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
             }
         }, {
@@ -54,14 +53,36 @@ async function getAgentResults(containerId) {
     }
 }
 
-async function processScrapedData(containerId) {
-    const result = await getAgentResults(containerId);
-    if (result && result.resultObject) {
-        return JSON.parse(result.resultObject);
-    } else {
-        console.log(`No data available for container ID: ${containerId}`);
+async function getContainerOutput(containerId) {
+    try {
+        const response = await axios.get(`https://api.phantombuster.com/api/v2/containers/fetch-output?id=${containerId}`, {
+            headers: {
+                'X-Phantombuster-Key': phantombusterApiKey,
+                'accept': 'application/json'
+            }
+        });
+        return {
+            output: response.data.output,
+            scrapedMessage: response.data.output.split('\n').find(line => 
+                line.includes("⚠️ The provided company list is already scraped.")
+            )
+        };
+    } catch (error) {
+        console.error(`Error fetching container output for ${containerId}:`, error.message);
         return null;
     }
+}
+
+async function processScrapedData(containerId) {
+    const [resultData, outputData] = await Promise.all([
+        getAgentResults(containerId),
+        getContainerOutput(containerId)
+    ]);
+
+    return {
+        resultObject: resultData && resultData.resultObject ? JSON.parse(resultData.resultObject) : null,
+        containerOutput: outputData
+    };
 }
 
 async function waitForResults() {
@@ -86,46 +107,22 @@ async function saveToMongoDB(collectionName, data) {
     }
 }
 
-async function getContainerOutput(containerId) {
-    try {
-        const response = await axios.get(`https://api.phantombuster.com/api/v2/containers/fetch-output?id=${containerId}`, {
-            headers: {
-                'X-Phantombuster-Key': phantombusterApiKey,
-                'accept': 'application/json'
-            }
-        });
-        const output = response.data.output;
-
-        
-        const scrapedMessage = output.split('\n').find(line => line.includes("⚠️ The provided company list is already scraped."));
-
-        if (scrapedMessage) {
-            console.log(scrapedMessage);
-        } 
-
-        return response.data.output;
-    } catch (error) {
-        console.error(`Error fetching container output for ${containerId}:`, error.message);
-        return null;
-    }
-}
-
 async function getAllContainers() {
     try {
         const response = await axios.get('https://api.phantombuster.com/api/v2/containers/fetch-all', {
-          headers: {
-            'X-Phantombuster-Key': phantombusterApiKey,
-            'accept': 'application/json'
-          },
-          params: {
-            agentId: profileAgentId
-          }
+            headers: {
+                'X-Phantombuster-Key': phantombusterApiKey,
+                'accept': 'application/json'
+            },
+            params: {
+                agentId: profileAgentId
+            }
         });
         return response.data.containers;
-      } catch (error) {
+    } catch (error) {
         console.error('Error fetching containers:', error.message);
         throw error;
-      }
+    }
 }
 
 async function findPreviousScrapedData(profileUrl) {
@@ -139,15 +136,11 @@ async function findPreviousScrapedData(profileUrl) {
 
     for (const container of containers) {
         try {
-            const output = await getContainerOutput(container.id);
+            const data = await processScrapedData(container.id);
             
-            if (output) {  // Check if output is defined
-                if (output.includes(profileUrl)) {
-                    console.log(`Found previously scraped data in container ${container.id}`);
-                    return await processScrapedData(container.id);
-                }
-            } else {
-                console.log(`No output found for container ID: ${container.id}`);
+            if (data.containerOutput && data.containerOutput.output.includes(profileUrl)) {
+                console.log(`Found previously scraped data in container ${container.id}`);
+                return data;
             }
         } catch (error) {
             console.error(`Error processing container ${container.id}:`, error.message);
@@ -157,7 +150,6 @@ async function findPreviousScrapedData(profileUrl) {
     console.log("No previously scraped data found.");
     return null;
 }
-
 
 router.post('/LinkedIncompanyurl', async (req, res) => {
     const { profileUrl, sessionCookie } = req.body;
@@ -169,31 +161,31 @@ router.post('/LinkedIncompanyurl', async (req, res) => {
 
         await waitForResults();
 
-        let profileResults = await processScrapedData(containerId);
+        let scrapedData = await processScrapedData(containerId);
 
-        if (!profileResults) {
+        if (!scrapedData.resultObject) {
             console.log("No new data scraped. Checking container output...");
-            const output = await getContainerOutput(containerId);
             
-            if (output && output.includes("The provided company list is already scraped")) {
+            if (scrapedData.containerOutput && 
+                scrapedData.containerOutput.output.includes("The provided company list is already scraped")) {
                 console.log("Profile URL already scraped. Searching for previous data...");
-                profileResults = await findPreviousScrapedData(profileUrl);
+                scrapedData = await findPreviousScrapedData(profileUrl);
             } else {
-                console.log("Unexpected output from container:", output);
+                console.log("Unexpected output from container:", scrapedData.containerOutput);
             }
         }
-     
 
-        if (profileResults) {
+        if (scrapedData && scrapedData.resultObject) {
             console.log("Saving scraped data to MongoDB...");
-            await saveToMongoDB('Profiles', profileResults);
+            await saveToMongoDB('Profiles', scrapedData.resultObject);
             console.log("Data saved successfully.");
         } else {
             console.log("No data found for the provided profile URL.");
         }
 
         res.json({
-            profile: profileResults
+            profile: scrapedData?.resultObject || null,
+            containerOutput: scrapedData?.containerOutput || null
         });
     } catch (error) {
         console.error('An error occurred:', error.message);

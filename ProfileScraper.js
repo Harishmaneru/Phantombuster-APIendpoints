@@ -4,7 +4,7 @@ const { MongoClient } = require('mongodb');
 const router = express.Router();
 
 const phantombusterApiKey = 'ZJNIKxvLxe7xmiOnaBlNQNlGqIeDdLquL69ajMg111c';
-const profileAgentId = '6878586369358734';
+const profileAgentId = '2171701392421700';
 const mongoUri = 'mongodb+srv://harishmaneru:Xe2Mz13z83IDhbPW@cluster0.bu3exkw.mongodb.net/?retryWrites=true&w=majority&tls=true';
 const dbName = 'Phantombuster';
 
@@ -35,14 +35,27 @@ async function launchPhantombusterAgent(agentId, profileUrl, sessionCookie, agen
 
 async function getAgentResults(containerId) {
     try {
-        const response = await axios.get('https://api.phantombuster.com/api/v2/containers/fetch-result-object', {
-            headers: {
-                'X-Phantombuster-Key': phantombusterApiKey,
-                'accept': 'application/json'
-            },
-            params: { id: containerId }
-        });
-        return response.data;
+        const [resultResponse, outputResponse] = await Promise.all([
+            axios.get('https://api.phantombuster.com/api/v2/containers/fetch-result-object', {
+                headers: {
+                    'X-Phantombuster-Key': phantombusterApiKey,
+                    'accept': 'application/json'
+                },
+                params: { id: containerId }
+            }),
+            axios.get(`https://api.phantombuster.com/api/v2/containers/fetch-output`, {
+                headers: {
+                    'X-Phantombuster-Key': phantombusterApiKey,
+                    'accept': 'application/json'
+                },
+                params: { id: containerId }
+            })
+        ]);
+
+        return {
+            resultObject: resultResponse.data,
+            containerOutput: outputResponse.data.output
+        };
     } catch (error) {
         if (error.response && error.response.status === 404) {
             console.log(`No result object found for container ID: ${containerId}`);
@@ -54,50 +67,20 @@ async function getAgentResults(containerId) {
 }
 
 async function processScrapedData(containerId) {
-    const result = await getAgentResults(containerId);
-    if (result && result.resultObject) {
-        return JSON.parse(result.resultObject);
+    const data = await getAgentResults(containerId);
+    if (data && data.resultObject && data.resultObject.resultObject) {
+        return {
+            resultObject: JSON.parse(data.resultObject.resultObject),
+            containerOutput: data.containerOutput
+        };
     } else {
         console.log(`No data available for container ID: ${containerId}`);
         return null;
     }
 }
 
-async function isAgentComplete(containerId) {
-    try {
-        const response = await axios.get(`https://api.phantombuster.com/api/v2/containers/fetch?id=${containerId}`, {
-            headers: {
-                'X-Phantombuster-Key': phantombusterApiKey,
-                'accept': 'application/json'
-            }
-        });
-        return response.data.status === "finished"; 
-    } catch (error) {
-        console.error('Error fetching container status:', error.message);
-        throw error;
-    }
-}
-
-async function waitForResults(containerId) {
-    const maxRetries = 10;
-    let retries = 0;
-    let isComplete = false;
-
-    while (!isComplete && retries < maxRetries) {
-        retries++;
-        console.log(`Checking agent status... attempt ${retries}`);
-        isComplete = await isAgentComplete(containerId);
-
-        if (isComplete) {
-            console.log("Agent has finished scraping.");
-            return;
-        }
-        await new Promise(resolve => setTimeout(resolve, 5000)); // Poll every 5 seconds
-    }
-
-    if (!isComplete) {
-        console.log('Agent did not finish within the maximum retries.');
-    }
+async function waitForResults() {
+    await new Promise(resolve => setTimeout(resolve, 50000)); // Wait for 50 seconds
 }
 
 async function saveToMongoDB(collectionName, data) {
@@ -108,7 +91,7 @@ async function saveToMongoDB(collectionName, data) {
         console.log('Connected to Database');
         const db = client.db(dbName);
         const collection = db.collection(collectionName);
-        console.log('Collection: ', collection.collectionName);
+
         const result = await collection.insertMany(Array.isArray(data) ? data : [data]);
         console.log(`Data inserted into ${collectionName}:`, result.insertedIds);
     } catch (error) {
@@ -118,45 +101,22 @@ async function saveToMongoDB(collectionName, data) {
     }
 }
 
-async function getContainerOutput(containerId) {
-    try {
-        const response = await axios.get(`https://api.phantombuster.com/api/v2/containers/fetch-output?id=${containerId}`, {
-            headers: {
-                'X-Phantombuster-Key': phantombusterApiKey,
-                'accept': 'application/json'
-            }
-        });
-        const output = response.data.output;
-
-        const scrapedMessage = output.split('\n').find(line => line.includes("⚠️ We've already scraped this profile.."));
-
-        if (scrapedMessage) {
-            console.log(scrapedMessage);
-        } 
-
-        return response.data.output;
-    } catch (error) {
-        console.error(`Error fetching container output for ${containerId}:`, error.message);
-        return null;
-    }
-}
-
 async function getAllContainers() {
     try {
         const response = await axios.get('https://api.phantombuster.com/api/v2/containers/fetch-all', {
-          headers: {
-            'X-Phantombuster-Key': phantombusterApiKey,
-            'accept': 'application/json'
-          },
-          params: {
-            agentId: profileAgentId
-          }
+            headers: {
+                'X-Phantombuster-Key': phantombusterApiKey,
+                'accept': 'application/json'
+            },
+            params: {
+                agentId: profileAgentId
+            }
         });
         return response.data.containers;
-      } catch (error) {
+    } catch (error) {
         console.error('Error fetching containers:', error.message);
         throw error;
-      }
+    }
 }
 
 async function findPreviousScrapedData(profileUrl) {
@@ -170,10 +130,10 @@ async function findPreviousScrapedData(profileUrl) {
 
     for (const container of containers) {
         try {
-            const output = await getContainerOutput(container.id);
-            if (output && output.includes(profileUrl)) {
+            const data = await processScrapedData(container.id);
+            if (data && data.containerOutput && data.containerOutput.includes(profileUrl)) {
                 console.log(`Found previously scraped data in container ${container.id}`);
-                return await processScrapedData(container.id);
+                return data;
             }
         } catch (error) {
             console.error(`Error processing container ${container.id}:`, error.message);
@@ -185,64 +145,76 @@ async function findPreviousScrapedData(profileUrl) {
 
 router.post('/LinkedInprofileurl', async (req, res) => {
     const { profileUrl, sessionCookie } = req.body;
-    console.log(sessionCookie);
+    
+    if (!profileUrl || !sessionCookie) {
+        return res.status(400).json({ error: 'Profile URL and session cookie are required' });
+    }
+
     try {
-        console.log(`Launching profile scraping agent for ${profileUrl}`);
+        console.log(`Processing request for profile URL: ${profileUrl}`);
+
+        // Check for previously scraped data first
+        const previousData = await findPreviousScrapedData(profileUrl);
         
-        const containerId = await launchPhantombusterAgent(profileAgentId, profileUrl, sessionCookie); // Pass sessionCookie
-        console.log(`Profile scraping agent launched with container ID ${containerId}`);
-        
-        await waitForResults(containerId);
-
-        let profileResults = await processScrapedData(containerId);
-
-        if (!profileResults) {
-            console.log("No new data scraped. Checking container output...");
-            const output = await getContainerOutput(containerId);
-
-            // Check for session cookie error in the output
-            if (output && output.includes("Can't connect to LinkedIn with this session cookie")) {
-                console.log("Session cookie is invalid. Sending error message to frontend.");
-                return res.status(400).json({
-                    error: "Can't connect to LinkedIn with this session cookie. Please check and provide a valid session cookie."
-                });
-            }
-
-            if (output && output.includes("⚠️ We've already scraped this profile")) {
-                console.log("Profile URL already scraped. Searching for previous data...");
-
-                profileResults = await findPreviousScrapedData(profileUrl);
-
-                if (profileResults) {
-                    console.log("Found previously scraped data.");
-                } else {
-                    console.log("No previous data found for this profile URL.");
+        if (previousData) {
+            console.log('Returning previously scraped data');
+            return res.json({
+                profile: {
+                    resultObject: previousData.resultObject,
+                    containerOutput: previousData.containerOutput
                 }
-            } else {
-                console.log("Unexpected output from container:", output);
-                return res.status(500).json({
-                    error: `Unexpected output from container: ${output}`
-                });
-            }
+            });
         }
 
-        if (profileResults) {
-            await saveToMongoDB('SalesNavigatorProfiles', profileResults);
-        } else {
-            console.log("No data found for the provided profile URL.");
+        console.log('Launching profile scraping agent');
+        const containerId = await launchPhantombusterAgent(profileAgentId, profileUrl, sessionCookie);
+        console.log(`Profile scraping agent launched with container ID ${containerId}`);
+
+        console.log('Waiting for agent to complete...');
+        await waitForResults();
+
+        console.log('Fetching agent results');
+        const profileData = await processScrapedData(containerId);
+
+        if (!profileData) {
+            console.log("No data scraped. Checking container output...");
+            const data = await getAgentResults(containerId);
+
+            if (data && data.containerOutput) {
+                if (data.containerOutput.includes("Can't connect to LinkedIn with this session cookie")) {
+                    return res.status(400).json({
+                        error: "Invalid session cookie. Please provide a valid LinkedIn session cookie."
+                    });
+                }
+                return res.status(500).json({
+                    error: "Scraping failed",
+                    containerOutput: data.containerOutput
+                });
+            }
+            
             return res.status(404).json({
                 error: "No data found for the provided profile URL"
             });
         }
 
+        console.log('Saving scraped data to MongoDB');
+        await saveToMongoDB('SalesNavigatorProfiles', {
+            resultObject: profileData.resultObject,
+            containerOutput: profileData.containerOutput,
+            timestamp: new Date().toISOString()
+        });
+
+        console.log('Sending response');
         res.json({
-            SalesNavigatorProfiles: profileResults || "No data found for the provided profile URL"
+            profile: {
+                resultObject: profileData.resultObject,
+                containerOutput: profileData.containerOutput
+            }
         });
     } catch (error) {
         console.error('An error occurred:', error.message);
         res.status(500).json({ error: 'Internal server error', details: error.message });
     }
 });
-
 
 module.exports = router;
