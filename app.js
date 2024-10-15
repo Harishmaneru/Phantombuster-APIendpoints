@@ -8,7 +8,7 @@ const accountScraper = require('./AccountScraper');
 const likesCommentsScraper = require('./LikesCommentsScrap');
 const profileScraper =require('./ProfileScraper')
 const emailScraper =require('./EmailScraper')
-
+const webscraper =require('./WebscrapAgent')
 
 const app = express();
 const port = 3001;
@@ -19,6 +19,7 @@ app.use(accountScraper);
 app.use(likesCommentsScraper);
 app.use(profileScraper);
 app.use(emailScraper)
+app.use(webscraper)
 
 const options = {
     key: fs.readFileSync('./onepgr.com.key', 'utf8'),
