@@ -8,7 +8,7 @@ const apiKey = 'bab7e837c303dcb10ff6ab67c9ac873952eb72d418d9b697f34bf9d27e3742b9
 router.post('/person/search', async (req, res) => {
     const { industry, location, job_company_name, skills, job_title } = req.body;
 
-    // Validate that at least one of the required fields is provided
+  
     if (!industry && !location && !job_company_name && !skills && !job_title) {
         return res.status(400).json({
             error: "Please provide exactly any one of the following fields: industry, job_company_name, skills, or job_title."
@@ -26,7 +26,7 @@ router.post('/person/search', async (req, res) => {
         });
     }
 
-    // Create a dynamic query object
+    
     let queryObject = { term: {} };
 
     if (industry) queryObject.term.industry = industry;
@@ -79,23 +79,22 @@ router.post('/company/search', async (req, res) => {
         }
     };
 
-    // Check if 'name' is provided
+   
     if (name) queryObject.bool.must.push({ term: { name: name } });
-
-    // Check if 'industry' is provided
+ 
     if (industry) queryObject.bool.must.push({ term: { industry: industry } });
 
-    // Check if 'summary' is provided
+     
     if (summary) queryObject.bool.must.push({ match: { summary: summary } });
 
-    // Check if 'industries' array is provided and not empty
+    
     if (industries && industries.length > 0) {
         queryObject.bool.must.push({ terms: { industry: industries } });
     }
 
-    // Check if 'location' is provided before using it
+    
     if (location) {
-        queryObject.bool.must.push({ term: { "location.country": location.toLowerCase() } });
+        queryObject.bool.must.push({ term: { "location.name": location.toLowerCase() } });
     }
 
 

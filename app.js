@@ -10,6 +10,7 @@ const profileScraper =require('./ProfileScraper')
 const emailScraper =require('./EmailScraper')
 const webscraper =require('./WebscrapAgent')
 const peopledatalabs =require('./peopleDataLabs')
+const findpeople =require('./findPeople')
 
 const app = express();
 const port = 3001;
@@ -22,6 +23,7 @@ app.use(profileScraper);
 app.use(emailScraper)
 app.use(webscraper)
 app.use(peopledatalabs)
+app.use(findpeople)
 
 const options = {
     key: fs.readFileSync('./onepgr.com.key', 'utf8'),
