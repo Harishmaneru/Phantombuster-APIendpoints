@@ -11,6 +11,8 @@ const emailScraper =require('./EmailScraper')
 const webscraper =require('./WebscrapAgent')
 const peopledatalabs =require('./peopleDataLabs')
 const findpeople =require('./findPeople')
+const scrapeJoblistings = require('./scrapeJoblistings')
+const scrapIndeedJobs = require('./scrapIndeedJobs')
 
 const app = express();
 const port = 3001;
@@ -24,6 +26,8 @@ app.use(emailScraper)
 app.use(webscraper)
 app.use(peopledatalabs)
 app.use(findpeople)
+app.use(scrapIndeedJobs)
+app.use(scrapeJoblistings)
 
 const options = {
     key: fs.readFileSync('./onepgr.com.key', 'utf8'),

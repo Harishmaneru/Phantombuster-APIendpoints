@@ -4,7 +4,9 @@ const { MongoClient } = require('mongodb');
 const router = express.Router();
 
 const phantombusterApiKey = 'ZJNIKxvLxe7xmiOnaBlNQNlGqIeDdLquL69ajMg111c';
-const profileAgentId = '64352835652191';
+// const profileAgentId = '64352835652191'; sales navgator profiles
+const profileAgentId = '3535423044065606';
+
 const mongoUri = 'mongodb+srv://harishmaneru:Xe2Mz13z83IDhbPW@cluster0.bu3exkw.mongodb.net/?retryWrites=true&w=majority&tls=true';
 const dbName = 'Phantombuster';
 
