@@ -13,6 +13,7 @@ const peopledatalabs =require('./peopleDataLabs')
 const findpeople =require('./findPeople')
 const scrapeJoblistings = require('./scrapeJoblistings')
 const scrapIndeedJobs = require('./scrapIndeedJobs')
+const companyEmployesScrap = require('./companyEmployesScrap.js')
 
 const app = express();
 const port = 3001;
@@ -28,6 +29,8 @@ app.use(peopledatalabs)
 app.use(findpeople)
 app.use(scrapIndeedJobs)
 app.use(scrapeJoblistings)
+app.use(companyEmployesScrap)
+
 
 const options = {
     key: fs.readFileSync('./onepgr.com.key', 'utf8'),
