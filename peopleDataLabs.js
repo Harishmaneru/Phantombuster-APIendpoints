@@ -116,45 +116,51 @@ router.post('/company/search', async (req, res) => {
 });
 
 // Person Enrich Endpoint
-router.get('/person/enrich', async (req, res) => {
-    const { profile } = req.query;
+router.post('/person/enrich', async (req, res) => {
+    const { requests } = req.body;
 
     // Input validation
-    if (!profile) {
+    if (!requests || !Array.isArray(requests) || requests.length === 0) {
         return res.status(400).json({
-            error: "Please provide a LinkedIn profile URL in the 'profile' query parameter"
+            error: "Please provide an array of LinkedIn profile URLs in the 'requests' field of the request body."
         });
     }
 
-    // Validate LinkedIn URL format
+    // Validate each LinkedIn URL format
     const linkedInUrlRegex = /^https:\/\/(www\.)?linkedin\.com\/in\/[\w\-]+\/?$/;
-    if (!linkedInUrlRegex.test(profile)) {
-        return res.status(400).json({
-            error: "Invalid LinkedIn profile URL format. Please provide a URL like 'https://www.linkedin.com/in/username'"
-        });
+    for (const request of requests) {
+        if (!request.params || !linkedInUrlRegex.test(request.params.profile)) {
+            return res.status(400).json({
+                error: "Invalid LinkedIn profile URL format in one or more requests. Each profile URL should match 'https://www.linkedin.com/in/username'"
+            });
+        }
     }
 
     try {
         const response = await axios({
-            method: 'get',
+            method: 'post',
             url: 'https://api.peopledatalabs.com/v5/person/bulk',
-            params: {
-                profile: profile,
-                pretty: false,
-                min_likelihood: 2,
-                include_if_matched: false,
-                titlecase: false
-            },
             headers: {
                 'Content-Type': 'application/json',
-                'X-API-Key': apiKey,
+                'X-API-Key': apiKey,  
                 'accept': 'application/json'
+            },
+            data: {
+                requests: requests.map(request => ({
+                    params: {
+                        profile: request.params.profile,
+                        pretty: false,
+                        min_likelihood: 2,
+                        include_if_matched: false,
+                        titlecase: false
+                    }
+                }))
             }
         });
 
         // Log successful request
-        console.log('Person enriched successfully:', {
-            profile: profile,
+        console.log('Person enrich request successful:', {
+            profiles: requests.map(request => request.params.profile),
             status: response.status,
             timestamp: new Date().toISOString()
         });
@@ -164,7 +170,7 @@ router.get('/person/enrich', async (req, res) => {
     } catch (error) {
         // Enhanced error handling
         console.error('Error enriching person:', {
-            profile: profile,
+            profiles: requests.map(request => request.params.profile),
             error: error.message,
             timestamp: new Date().toISOString(),
             response: error.response?.data
@@ -180,5 +186,6 @@ router.get('/person/enrich', async (req, res) => {
         res.status(statusCode).json(errorResponse);
     }
 });
+
 
 module.exports = router;
