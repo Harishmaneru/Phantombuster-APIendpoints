@@ -137,7 +137,7 @@ router.get('/person/enrich', async (req, res) => {
     try {
         const response = await axios({
             method: 'get',
-            url: 'https://api.peopledatalabs.com/v5/person/enrich',
+            url: 'https://api.peopledatalabs.com/v5/person/bulk',
             params: {
                 profile: profile,
                 pretty: false,
