@@ -14,6 +14,9 @@ const findpeople =require('./findPeople')
 const scrapeJoblistings = require('./scrapeJoblistings')
 const scrapIndeedJobs = require('./scrapIndeedJobs')
 const companyEmployesScrap = require('./companyEmployesScrap.js')
+const generateScene = require('./generateScene')
+
+
 
 const app = express();
 const port = 3001;
@@ -30,6 +33,9 @@ app.use(findpeople)
 app.use(scrapIndeedJobs)
 app.use(scrapeJoblistings)
 app.use(companyEmployesScrap)
+app.use(generateScene)
+
+
 
 
 const options = {

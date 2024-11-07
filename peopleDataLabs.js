@@ -3,12 +3,11 @@ const axios = require('axios');
 const router = express.Router();
 
 const apiKey = 'bab7e837c303dcb10ff6ab67c9ac873952eb72d418d9b697f34bf9d27e3742b9';
-
+router.use(express.json());
 // Person Search Endpoint
 router.post('/person/search', async (req, res) => {
     const { industry, location, job_company_name, skills, job_title } = req.body;
 
-  
     if (!industry && !location && !job_company_name && !skills && !job_title) {
         return res.status(400).json({
             error: "Please provide exactly any one of the following fields: industry, job_company_name, skills, or job_title."
@@ -26,7 +25,6 @@ router.post('/person/search', async (req, res) => {
         });
     }
 
-    
     let queryObject = { term: {} };
 
     if (industry) queryObject.term.industry = industry;
@@ -38,7 +36,6 @@ router.post('/person/search', async (req, res) => {
     const url = `https://api.peopledatalabs.com/v5/person/search`;
 
     try {
-
         const response = await axios.post(
             url,
             {
@@ -57,8 +54,7 @@ router.post('/person/search', async (req, res) => {
         );
 
         res.json(response.data);
-        // console.log("Result ID:", response.data[0].id);
-        console.log('people found successfully:', response.config.data)
+        console.log('people found successfully:', response.config.data);
 
     } catch (error) {
         console.error('Error getting results:', error);
@@ -68,8 +64,7 @@ router.post('/person/search', async (req, res) => {
     }
 });
 
-
-
+// Company Search Endpoint
 router.post('/company/search', async (req, res) => {
     const { name, industry, summary, industries, location } = req.body;
 
@@ -79,24 +74,15 @@ router.post('/company/search', async (req, res) => {
         }
     };
 
-   
     if (name) queryObject.bool.must.push({ term: { name: name } });
- 
     if (industry) queryObject.bool.must.push({ term: { industry: industry } });
-
-     
     if (summary) queryObject.bool.must.push({ match: { summary: summary } });
-
-    
     if (industries && industries.length > 0) {
         queryObject.bool.must.push({ terms: { industry: industries } });
     }
-
-    
     if (location) {
         queryObject.bool.must.push({ term: { "location.name": location.toLowerCase() } });
     }
-
 
     const url = `https://api.peopledatalabs.com/v5/company/search`;
 
@@ -119,8 +105,7 @@ router.post('/company/search', async (req, res) => {
         );
 
         res.json(response.data);
-        console.log('company found successfully:', response.config.data)
-
+        console.log('company found successfully:', response.config.data);
 
     } catch (error) {
         console.error('Error getting results:', error);
@@ -130,100 +115,70 @@ router.post('/company/search', async (req, res) => {
     }
 });
 
+// Person Enrich Endpoint
+router.get('/person/enrich', async (req, res) => {
+    const { profile } = req.query;
 
+    // Input validation
+    if (!profile) {
+        return res.status(400).json({
+            error: "Please provide a LinkedIn profile URL in the 'profile' query parameter"
+        });
+    }
 
+    // Validate LinkedIn URL format
+    const linkedInUrlRegex = /^https:\/\/(www\.)?linkedin\.com\/in\/[\w\-]+\/?$/;
+    if (!linkedInUrlRegex.test(profile)) {
+        return res.status(400).json({
+            error: "Invalid LinkedIn profile URL format. Please provide a URL like 'https://www.linkedin.com/in/username'"
+        });
+    }
 
-// // Company Search Endpoint
-// router.post('/company/search', async (req, res) => {
-//     const { name, industry } = req.body;
-//     // console.log(name, industry)
+    try {
+        const response = await axios({
+            method: 'get',
+            url: 'https://api.peopledatalabs.com/v5/person/enrich',
+            params: {
+                profile: profile,
+                pretty: false,
+                min_likelihood: 2,
+                include_if_matched: false,
+                titlecase: false
+            },
+            headers: {
+                'Content-Type': 'application/json',
+                'X-API-Key': apiKey,
+                'accept': 'application/json'
+            }
+        });
 
-// //    { "match": { "summary": "financial solutions" } } want to use this also
+        // Log successful request
+        console.log('Person enriched successfully:', {
+            profile: profile,
+            status: response.status,
+            timestamp: new Date().toISOString()
+        });
 
-//     let queryObject = { term: {} };
-//     if (name) queryObject.term.name = name;
-//     if (industry) queryObject.term.industry = industry;
+        res.json(response.data);
 
-//     const url = `https://api.peopledatalabs.com/v5/company/search`;
+    } catch (error) {
+        // Enhanced error handling
+        console.error('Error enriching person:', {
+            profile: profile,
+            error: error.message,
+            timestamp: new Date().toISOString(),
+            response: error.response?.data
+        });
 
-//     try {
+        const errorResponse = {
+            error: 'Failed to enrich person data',
+            details: error.response?.data || error.message,
+            timestamp: new Date().toISOString()
+        };
 
-//       const response = await axios.post(
-//         url,
-//         {
-//           query: queryObject,
-//           size: 4,   
-//           from: 0,
-//           titlecase: false,
-//           pretty: false
-//         },
-//         {
-//           headers: {
-//             'Content-Type': 'application/json',
-//             'X-API-Key': apiKey 
-//           }
-//         }
-//       );
-
-
-//       res.json(response.data);
-//     //   console.log(response.data);
-//     } catch (error) {
-//         console.error('Error getting results:',error)
-//         res.status(500).json({
-
-//         error: error.response ? error.response.data : error.message
-//       });
-//     }
-//   });
-
-
+        const statusCode = error.response?.status || 500;
+        res.status(statusCode).json(errorResponse);
+    }
+});
 
 module.exports = router;
-
-
-
-
-
-
-// // Person Enrichment Endpoint
-// router.post('/person/enrich', async (req, res) => {
-//   const { email } = req.body;
-
-//   const url = `https://api.peopledatalabs.com/v5/person/enrich`;
-
-//   try {
-//     const response = await axios.get(url, {
-//       params: {
-//         api_key: apiKey,
-//         email: email
-//       }
-//     });
-//     res.json(response.data);
-//   } catch (error) {
-//     console.error('Error getting results:',response);
-//     res.status(500).json({
-//       error: error.response ? error.response.data : error.message
-//     });
-//   }
-// });
-// // Company Enrichment Endpoint
-// router.post('/company/enrich', async (req, res) => {
-//   const { domain } = req.body;
-
-//   const url = `https://api.peopledatalabs.com/v5/company/enrich`;
-
-//   try {
-//     const response = await axios.get(url, {
-//       params: {
-//         api_key: apiKey,
-//         domain: domain
-//       }
-//     });
-//     res.json(response.data);
-//   } catch (error) {
-//     res.status(500).json({
-//       error: error.response ? error.response.data : error.message
-//     });
-//   }
-// });
