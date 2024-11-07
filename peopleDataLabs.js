@@ -114,26 +114,57 @@ router.post('/company/search', async (req, res) => {
         });
     }
 });
-
-// Person Enrich Endpoint
 router.post('/person/enrich', async (req, res) => {
     const { requests } = req.body;
 
     // Input validation
     if (!requests || !Array.isArray(requests) || requests.length === 0) {
         return res.status(400).json({
-            error: "Please provide an array of LinkedIn profile URLs in the 'requests' field of the request body."
+            error: "Please provide an array of requests with LinkedIn profile URLs or other supported fields in the 'requests' field of the request body."
         });
     }
 
-    // Validate each LinkedIn URL format
     const linkedInUrlRegex = /^https:\/\/(www\.)?linkedin\.com\/in\/[\w\-]+\/?$/;
+
+    // Helper function to extract core company name
+    const extractCompanyName = (company) => {
+        return company.split(",")[0].trim();
+    };
+
+    // Validate each request
     for (const request of requests) {
-        if (!request.params || !linkedInUrlRegex.test(request.params.profile)) {
+        const params = request.params;
+        
+        if (!params) {
             return res.status(400).json({
-                error: "Invalid LinkedIn profile URL format in one or more requests. Each profile URL should match 'https://www.linkedin.com/in/username'"
+                error: "Each request must have a 'params' object."
             });
         }
+
+        // Validate LinkedIn profile URL if provided
+        if (params.profile && !linkedInUrlRegex.test(params.profile)) {
+            return res.status(400).json({
+                error: "Invalid LinkedIn profile URL format in one or more requests. Each profile URL should match 'https://www.linkedin.com/in/username'."
+            });
+        }
+
+        // Validate minimum required fields for name-based search
+        if (!params.profile && !params.email && !params.phone && !params.email_hash && !params.lid && !params.pdl_id &&
+            (!params.first_name || !params.last_name) &&
+            (!params.name || (!params.company && !params.school && !params.location && !params.street_address && 
+            !params.locality && !params.region && !params.country && !params.postal_code && !params.birth_date))) {
+            return res.status(400).json({
+                error: "Each request must contain at least one identifier such as profile, email, phone, email_hash, lid, or pdl_id. For name-based searches, include first_name and last_name or name, and at least one additional field like company, school, location, etc."
+            });
+        }
+
+        // Process the company name if provided
+        if (params.company) {
+            params.company = extractCompanyName(params.company);
+        }
+
+        // Default location example
+        params.location = params.location || "Medford, OR USA";
     }
 
     try {
@@ -142,13 +173,13 @@ router.post('/person/enrich', async (req, res) => {
             url: 'https://api.peopledatalabs.com/v5/person/bulk',
             headers: {
                 'Content-Type': 'application/json',
-                'X-API-Key': apiKey,  
+                'X-API-Key': apiKey,   
                 'accept': 'application/json'
             },
             data: {
                 requests: requests.map(request => ({
                     params: {
-                        profile: request.params.profile,
+                        ...request.params,
                         pretty: false,
                         min_likelihood: 2,
                         include_if_matched: false,
@@ -186,6 +217,5 @@ router.post('/person/enrich', async (req, res) => {
         res.status(statusCode).json(errorResponse);
     }
 });
-
 
 module.exports = router;
