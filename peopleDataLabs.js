@@ -114,6 +114,8 @@ router.post('/company/search', async (req, res) => {
         });
     }
 });
+
+// PERSON ENRICHMENT API
 router.post('/person/enrich', async (req, res) => {
     const { requests } = req.body;
 
@@ -217,5 +219,57 @@ router.post('/person/enrich', async (req, res) => {
         res.status(statusCode).json(errorResponse);
     }
 });
+
+// Ip Enrichment API
+router.get('/ip/enrich', async (req, res) => {
+    const { ip } = req.body;
+
+    if (!ip) {
+        return res.status(400).json({
+            error: "Please provide an IP address in the request body."
+        });
+    }
+
+    const url = `https://api.peopledatalabs.com/v5/ip/enrich?ip=${ip}&return_ip_location=true&return_ip_metadata=true&return_person=true&return_if_unmatched=true`;
+
+    try {
+        const response = await axios.get(url, {
+            headers: {
+                'X-API-Key': apiKey,
+                'Accept': 'application/json'
+            }
+        });
+
+        res.json(response.data);
+        console.log('IP enrichment successful:', response.data);
+
+    } catch (error) {
+        console.error('Error enriching IP:', error);
+        res.status(500).json({
+            error: error.response ? error.response.data : error.message
+        });
+    }
+});
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 module.exports = router;
