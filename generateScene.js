@@ -9,7 +9,8 @@ const router = express.Router(); // Initialize router
 
 router.use(express.json());
 
-const API_KEY = 'key_67e29a372c43145561bf788aca3934ac2ab625b14e6b7e949e4d8447a35fb8591156d1a7b0428fa6c48381a3ebabb7fa36d24402f4d56eee3110e3816b1e0692';
+// const API_KEY = 'key_67e29a372c43145561bf788aca3934ac2ab625b14e6b7e949e4d8447a35fb8591156d1a7b0428fa6c48381a3ebabb7fa36d24402f4d56eee3110e3816b1e0692';
+const API_KEY = 'key_b60146dae9d8bcaa129a3c6bc5f4180aa9bf581d8797e4bdb8d8b702d58df7920028d4dbf4d96613f245433f00a2a1b233ed8d4cf1715f3bff476b638ddf9f7c'
 
 router.post('/generate-video', async (req, res) => {
   let { imageUrl, promptText } = req.body;
