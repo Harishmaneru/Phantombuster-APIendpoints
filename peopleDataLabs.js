@@ -221,7 +221,7 @@ router.post('/person/enrich', async (req, res) => {
 });
 
 // Ip Enrichment API
-router.get('/ip/enrich', async (req, res) => {
+router.post('/ip/enrich', async (req, res) => {
     const { ip } = req.body;
 
     if (!ip) {
