@@ -186,7 +186,7 @@ router.post('/LinkedIncompanyurl', async (req, res) => {
         }
 
         res.json({
-            profile: scrapedData?.resultObject || null,
+            company_profile: scrapedData?.resultObject || null,
             containerOutput: scrapedData?.containerOutput || null
         });
     } catch (error) {

@@ -66,6 +66,9 @@ const scrapeJoblistings = require('./scrapeJoblistings');
 const scrapIndeedJobs = require('./scrapIndeedJobs');
 const companyEmployesScrap = require('./companyEmployesScrap.js');
 const generateScene = require('./generateScene');
+const warmupEmail = require('./SmartLeadAPI/warmupEmail.js');
+const eventGuestsScraper = require('./eventGuestsScraper.js');
+ 
 
 const app = express();
 const port = 3001;
@@ -96,6 +99,8 @@ app.use(scrapIndeedJobs);
 app.use(scrapeJoblistings);
 app.use(companyEmployesScrap);
 app.use(generateScene);
+app.use(warmupEmail);
+app.use(eventGuestsScraper);
 
 const options = {
   key: fs.readFileSync('./onepgr.com.key', 'utf8'),
