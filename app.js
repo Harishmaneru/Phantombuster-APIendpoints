@@ -55,20 +55,26 @@ const https = require('https');
 const fs = require('fs');
 const cors = require('cors');
 
-const accountScraper = require('./AccountScraper');
-const likesCommentsScraper = require('./LikesCommentsScrap');
-const profileScraper = require('./ProfileScraper');
-const emailScraper = require('./EmailScraper');
-const webscraper = require('./WebscrapAgent');
-const peopledatalabs = require('./peopleDataLabs');
-const findpeople = require('./findPeople');
-const scrapeJoblistings = require('./scrapeJoblistings');
-const scrapIndeedJobs = require('./scrapIndeedJobs');
-const companyEmployesScrap = require('./companyEmployesScrap.js');
-const generateScene = require('./generateScene');
+const accountScraper = require('./PhantombusterAPI/AccountScraper.js');
+const companyEmployesScrap = require('./PhantombusterAPI/companyEmployesScrap.js');
+const likesCommentsScraper = require('./PhantombusterAPI/LikesCommentsScrap.js');
+const eventGuestsScraper = require('./PhantombusterAPI/eventGuestsScraper.js');
+const linkdinJobScraper = require('./PhantombusterAPI/linkdinJobScraper.js');
+const profileScraper = require('./PhantombusterAPI/ProfileScraper.js');
+const emailScraper = require('./PhantombusterAPI/EmailScraper.js');
+const findpeople = require('./PhantombusterAPI/findPeople.js');
+
+const webscraper = require('./webScraperAPI/WebscrapAgent.js');
+
+const peopledatalabs = require('./pdlAPI/peopleDataLabs.js');
+
+const scrapeJoblistings = require('./jobListingsAPI/scrapeJoblistings.js');
+const scrapIndeedJobs = require('./jobListingsAPI/scrapIndeedJobs.js');
+
+const generateScene = require('./runwayAPI/generateScene.js');
+
 const warmupEmail = require('./SmartLeadAPI/warmupEmail.js');
-const eventGuestsScraper = require('./eventGuestsScraper.js');
- 
+
 
 const app = express();
 const port = 3001;
@@ -101,6 +107,7 @@ app.use(companyEmployesScrap);
 app.use(generateScene);
 app.use(warmupEmail);
 app.use(eventGuestsScraper);
+app.use(linkdinJobScraper);
 
 const options = {
   key: fs.readFileSync('./onepgr.com.key', 'utf8'),
