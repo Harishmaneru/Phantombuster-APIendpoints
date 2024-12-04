@@ -45,7 +45,7 @@ router.post('/enable-warmup', async (req, res) => {
         const warmupResponse = await axios.post(warmupUrl, warmupPayload, {
             headers: { 'Content-Type': 'application/json' },
         });
-
+        console.log('Warm-up enabled successfully:', warmupResponse.data);
         res.status(200).json({
             message: 'Warm-up enabled successfully.',
             warmupDetails: warmupResponse.data,
@@ -82,7 +82,7 @@ router.post('/warmup-stats/:emailAccountId', async (req, res) => {
         const warmupStatsResponse = await axios.get(warmupStatsUrl, {
             headers: { 'Content-Type': 'application/json' },
         });
-
+        console.log('Warm-up Statisstics:', warmupStatsResponse.data);
         // Return the warm-up stats
         res.status(200).json({
             message: 'Warm-up stats retrieved successfully.',

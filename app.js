@@ -59,10 +59,10 @@ const accountScraper = require('./PhantombusterAPI/AccountScraper.js');
 const companyEmployesScrap = require('./PhantombusterAPI/companyEmployesScrap.js');
 const likesCommentsScraper = require('./PhantombusterAPI/LikesCommentsScrap.js');
 const eventGuestsScraper = require('./PhantombusterAPI/eventGuestsScraper.js');
-const linkdinJobScraper = require('./PhantombusterAPI/linkdinJobScraper.js');
 const profileScraper = require('./PhantombusterAPI/ProfileScraper.js');
 const emailScraper = require('./PhantombusterAPI/EmailScraper.js');
 const findpeople = require('./PhantombusterAPI/findPeople.js');
+const linkdinMessagesScraper = require('./PhantombusterAPI/linkdinMessagesScraper.js');
 
 const webscraper = require('./webScraperAPI/WebscrapAgent.js');
 
@@ -70,11 +70,13 @@ const peopledatalabs = require('./pdlAPI/peopleDataLabs.js');
 
 const scrapeJoblistings = require('./jobListingsAPI/scrapeJoblistings.js');
 const scrapIndeedJobs = require('./jobListingsAPI/scrapIndeedJobs.js');
+const linkdinJobScraper = require('./jobListingsAPI/linkdinJobScraper.js');
 
 const generateScene = require('./runwayAPI/generateScene.js');
 
 const warmupEmail = require('./SmartLeadAPI/warmupEmail.js');
 
+const emailValidation = require('./naverBounceAPI/emailValidation.js')
 
 const app = express();
 const port = 3001;
@@ -108,6 +110,9 @@ app.use(generateScene);
 app.use(warmupEmail);
 app.use(eventGuestsScraper);
 app.use(linkdinJobScraper);
+app.use(linkdinMessagesScraper);
+app.use(emailValidation);
+
 
 const options = {
   key: fs.readFileSync('./onepgr.com.key', 'utf8'),
