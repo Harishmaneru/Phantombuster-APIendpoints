@@ -87,6 +87,7 @@ app.use(
       "http://localhost:4000",
       "http://localhost:4200",
       "http://localhost:4201",
+      "http://localhost:7860", //langflow test
       /\.onepgr\.com$/,
     ],
     methods: ["GET", "PUT", "POST", "DELETE", "OPTIONS"],

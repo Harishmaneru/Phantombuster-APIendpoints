@@ -16,7 +16,8 @@ router.post('/linkdinjobsscraper', async (req, res) => {
         const locationApiUrl = 'https://linkedin-data-api.p.rapidapi.com/search-locations';
         const locationHeaders = {
             'x-rapidapi-host': 'linkedin-data-api.p.rapidapi.com',
-            'x-rapidapi-key': '989f4f415emsh61990bfbf21063fp14c1a4jsn58f1c4a73736'
+              'x-rapidapi-key': '9dd9bb5522msh37997afd8f8bad0p1b1ef6jsn477fea6c5f2c'
+            // 'x-rapidapi-key': '989f4f415emsh61990bfbf21063fp14c1a4jsn58f1c4a73736'
         };
         const locationParams = { keyword: location };
 
@@ -41,7 +42,8 @@ router.post('/linkdinjobsscraper', async (req, res) => {
         const jobApiUrl = 'https://linkedin-data-api.p.rapidapi.com/search-jobs-v2';
         const jobHeaders = {
             'x-rapidapi-host': 'linkedin-data-api.p.rapidapi.com',
-            'x-rapidapi-key': '989f4f415emsh61990bfbf21063fp14c1a4jsn58f1c4a73736'
+            'x-rapidapi-key': '9dd9bb5522msh37997afd8f8bad0p1b1ef6jsn477fea6c5f2c'
+            // 'x-rapidapi-key': '989f4f415emsh61990bfbf21063fp14c1a4jsn58f1c4a73736'
         };
         const jobParams = {
             keywords,
@@ -75,7 +77,8 @@ router.post('/linkdinjobsscraper', async (req, res) => {
         const jobDetailsApiUrl = 'https://fresh-linkedin-profile-data.p.rapidapi.com/get-job-details';
         const jobDetailsHeaders = {
             'x-rapidapi-host': 'fresh-linkedin-profile-data.p.rapidapi.com',
-            'x-rapidapi-key': '989f4f415emsh61990bfbf21063fp14c1a4jsn58f1c4a73736'
+              'x-rapidapi-key': '9dd9bb5522msh37997afd8f8bad0p1b1ef6jsn477fea6c5f2c'
+            // 'x-rapidapi-key': '989f4f415emsh61990bfbf21063fp14c1a4jsn58f1c4a73736'
         };
         const jobDetailsParams = {
             job_url: jobUrl,
