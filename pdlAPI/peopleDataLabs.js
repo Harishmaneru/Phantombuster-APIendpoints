@@ -4,20 +4,20 @@ const router = express.Router();
 
 const apiKey = 'bab7e837c303dcb10ff6ab67c9ac873952eb72d418d9b697f34bf9d27e3742b9';
 router.use(express.json());
+
 // Person Search Endpoint
 router.post('/person/search', async (req, res) => {
-    const { industry, location, job_company_name, skills, job_title } = req.body;
+    const { location, job_company_name, job_title } = req.body;
 
-    if (!industry && !location && !job_company_name && !skills && !job_title) {
+    if (!location && !job_company_name && !job_title) {
         return res.status(400).json({
-            error: "Please provide exactly any one of the following fields: industry, job_company_name, skills, or job_title."
+            error: "Please provide at least one of the following fields: job_company_name, location, or job_title."
         });
     }
+
     if (
-        (industry && typeof industry !== 'string') ||
         (location && typeof location !== 'string') ||
         (job_company_name && typeof job_company_name !== 'string') ||
-        (skills && typeof skills !== 'string') ||
         (job_title && typeof job_title !== 'string')
     ) {
         return res.status(400).json({
@@ -25,13 +25,17 @@ router.post('/person/search', async (req, res) => {
         });
     }
 
-    let queryObject = { term: {} };
+    const queryObject = {
+        bool: {
+            must: []
+        }
+    };
+    
+    if (job_title) queryObject.bool.must.push({ term: { job_title } });
+    if (job_company_name) queryObject.bool.must.push({ term: { job_company_name } });
+    if (location) queryObject.bool.must.push({ term: { location_country: location } });
 
-    if (industry) queryObject.term.industry = industry;
-    if (location) queryObject.term.location = location;
-    if (job_company_name) queryObject.term.job_company_name = job_company_name;
-    if (skills) queryObject.term.skills = skills;
-    if (job_title) queryObject.term.job_title = job_title;
+    console.log('Query Object:', JSON.stringify(queryObject, null, 2));
 
     const url = `https://api.peopledatalabs.com/v5/person/search`;
 
@@ -40,29 +44,88 @@ router.post('/person/search', async (req, res) => {
             url,
             {
                 query: queryObject,
-                size: 1,
-                from: 0,
-                titlecase: false,
-                pretty: false
+                size: 2,
+                pretty: true
             },
             {
                 headers: {
                     'Content-Type': 'application/json',
-                    'X-API-Key': apiKey
+                    'X-Api-Key': apiKey
                 }
             }
         );
 
         res.json(response.data);
-        console.log('people found successfully:', response.config.data);
-
+        console.log(`Total persons received: ${response.data.data.length}`);
     } catch (error) {
-        console.error('Error getting results:', error);
+        console.error('Error fetching data:', error.response.data);
         res.status(500).json({
             error: error.response ? error.response.data : error.message
         });
     }
 });
+
+
+
+// // Person Search Endpoint
+// router.post('/person/search', async (req, res) => {
+//     const { industry, location, job_company_name, skills, job_title } = req.body;
+
+//     if (!industry && !location && !job_company_name && !skills && !job_title) {
+//         return res.status(400).json({
+//             error: "Please provide exactly any one of the following fields: industry, job_company_name, skills, or job_title."
+//         });
+//     }
+//     if (
+//         (industry && typeof industry !== 'string') ||
+//         (location && typeof location !== 'string') ||
+//         (job_company_name && typeof job_company_name !== 'string') ||
+//         (skills && typeof skills !== 'string') ||
+//         (job_title && typeof job_title !== 'string')
+//     ) {
+//         return res.status(400).json({
+//             error: "All input fields must be of type string."
+//         });
+//     }
+
+//     let queryObject = { term: {} };
+
+//     if (industry) queryObject.term.industry = industry;
+//     if (location) queryObject.term.location = location;
+//     if (job_company_name) queryObject.term.job_company_name = job_company_name;
+//     if (skills) queryObject.term.skills = skills;
+//     if (job_title) queryObject.term.job_title = job_title;
+
+//     const url = `https://api.peopledatalabs.com/v5/person/search`;
+
+//     try {
+//         const response = await axios.post(
+//             url,
+//             {
+//                 query: queryObject,
+//                 size: 1,
+//                 from: 0,
+//                 titlecase: false,
+//                 pretty: false
+//             },
+//             {
+//                 headers: {
+//                     'Content-Type': 'application/json',
+//                     'X-API-Key': apiKey
+//                 }
+//             }
+//         );
+
+//         res.json(response.data);
+//         console.log('people found successfully:', response.config.data);
+
+//     } catch (error) {
+//         console.error('Error getting results:', error);
+//         res.status(500).json({
+//             error: error.response ? error.response.data : error.message
+//         });
+//     }
+// });
 
 // Company Search Endpoint
 router.post('/company/search', async (req, res) => {
@@ -83,7 +146,7 @@ router.post('/company/search', async (req, res) => {
     if (location) {
         queryObject.bool.must.push({ term: { "location.name": location.toLowerCase() } });
     }
-
+    console.log('Query Object:', JSON.stringify(queryObject, null, 2));
     const url = `https://api.peopledatalabs.com/v5/company/search`;
 
     try {
@@ -108,7 +171,7 @@ router.post('/company/search', async (req, res) => {
         console.log('company found successfully:', response.config.data);
 
     } catch (error) {
-        console.error('Error getting results:', error);
+        console.error('Error getting results:', error.response.data);
         res.status(500).json({
             error: error.response ? error.response.data : error.message
         });
@@ -214,7 +277,7 @@ router.post('/person/enrich', async (req, res) => {
             details: error.response?.data || error.message,
             timestamp: new Date().toISOString()
         };
-
+        console.log(errorResponse)
         const statusCode = error.response?.status || 500;
         res.status(statusCode).json(errorResponse);
     }
@@ -244,7 +307,7 @@ router.post('/ip/enrich', async (req, res) => {
         console.log('IP enrichment successful:', response.data);
 
     } catch (error) {
-        console.error('Error enriching IP:', error);
+        console.error('Error enriching IP:', error.response.data);
         res.status(500).json({
             error: error.response ? error.response.data : error.message
         });

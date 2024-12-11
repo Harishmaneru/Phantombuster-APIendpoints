@@ -67,6 +67,7 @@ const linkdinMessagesScraper = require('./PhantombusterAPI/linkdinMessagesScrape
 const webscraper = require('./webScraperAPI/WebscrapAgent.js');
 
 const peopledatalabs = require('./pdlAPI/peopleDataLabs.js');
+const personSearch = require('./pdlAPI/personSearch');
 
 const scrapeJoblistings = require('./jobListingsAPI/scrapeJoblistings.js');
 const scrapIndeedJobs = require('./jobListingsAPI/scrapIndeedJobs.js');
@@ -113,6 +114,7 @@ app.use(eventGuestsScraper);
 app.use(linkdinJobScraper);
 app.use(linkdinMessagesScraper);
 app.use(emailValidation);
+app.use(personSearch);
 
 
 const options = {
