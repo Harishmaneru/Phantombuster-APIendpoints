@@ -29,6 +29,7 @@ const router = express.Router();
 
 router.post('/trigify-webhook', (req, res) => {
     const payload = req.body;
+    console.log('Full Payload:', JSON.stringify(req.body, null, 2));
 
     try {
         const results = payload.results.map((result) => {
