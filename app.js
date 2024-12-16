@@ -79,6 +79,8 @@ const warmupEmail = require('./SmartLeadAPI/warmupEmail.js');
 
 const emailValidation = require('./naverBounceAPI/emailValidation.js')
 
+const webhook = require('./TrigifyAPI/webhook.js')
+
 const app = express();
 const port = 3001;
 
@@ -115,7 +117,7 @@ app.use(linkdinJobScraper);
 app.use(linkdinMessagesScraper);
 app.use(emailValidation);
 app.use(personSearch);
-
+app.use(webhook);
 
 const options = {
   key: fs.readFileSync('./onepgr.com.key', 'utf8'),
