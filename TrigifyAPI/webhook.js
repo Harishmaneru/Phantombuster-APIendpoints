@@ -24,9 +24,10 @@
 
 const express = require('express');
 const app = express();
-app.use(express.json());
+const router = express.Router();
 
-app.post('/trigify-webhook', (req, res) => {
+
+router.post('/trigify-webhook', (req, res) => {
     const payload = req.body;
 
     try {
@@ -96,9 +97,6 @@ app.post('/trigify-webhook', (req, res) => {
     }
 });
 
-app.listen(3001, () => {
-    console.log('Webhook server is running on port 3001');
-});
 
 
 module.exports = router;
