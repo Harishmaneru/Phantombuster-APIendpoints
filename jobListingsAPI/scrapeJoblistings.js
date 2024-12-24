@@ -115,11 +115,12 @@ async function fetchAdzunaJobListings(jobType, location) {
         app_key: ADZUNA_APP_KEY,
         what: jobType,
         where: location,
-        results_per_page: 10   
+        results_per_page: 10
     };
 
     try {
         const response = await axios.get(url, { params });
+        console.log(`Total Jobs Count: ${response.data.results.length}`);
         return response.data.results;
     } catch (error) {
         console.error('Error fetching job listings from Adzuna:', error.message);
@@ -130,7 +131,7 @@ async function fetchAdzunaJobListings(jobType, location) {
 // Define the API endpoint for fetching job listings
 router.post('/apigetadzunajobs', async (req, res) => {
     const { jobType, location } = req.body;
-
+    console.log('request body:', req.body)
     // Validate jobType and location
     if (!jobType || !location) {
         return res.status(400).json({
@@ -151,6 +152,7 @@ router.post('/apigetadzunajobs', async (req, res) => {
         }
 
         // Return the original Adzuna response directly without formatting
+       
         res.json({
             success: true,
             count: jobListings.length,

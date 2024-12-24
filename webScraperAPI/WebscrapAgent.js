@@ -7,6 +7,7 @@ const router = express.Router();
 // Endpoint: /webscraper
 router.post('/webscraper', async (req, res) => {
     const query = req.body.query;
+    console.log('Query:', query);
     let data = JSON.stringify({
         "q": query
     });

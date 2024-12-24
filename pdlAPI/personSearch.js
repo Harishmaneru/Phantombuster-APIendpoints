@@ -5,12 +5,13 @@ const router = express.Router();
 router.use(express.json());
 
 // Person Search Endpoint
-router.post('/person/search-with-key', async (req, res) => {
-    const { location, job_company_name, job_title, apiKey } = req.body;
-
+router.post('/personsearch', async (req, res) => {
+    const { location, job_company_name, job_title } = req.body;
+    const apiKey = req.headers['x-api-key'];  
+    
     if (!apiKey) {
         return res.status(400).json({
-            error: "API key is required."
+            error: "API key is required in headers as 'x-api-key'."
         });
     }
 
@@ -63,7 +64,7 @@ router.post('/person/search-with-key', async (req, res) => {
         console.log(`Total persons received: ${response.data.data.length}`);
         res.json(response.data);
     } catch (error) {
-        console.error('Error fetching data:', error.response.data);
+        console.error('Error fetching data:', error.response ? error.response.data : error.message);
         res.status(500).json({
             error: error.response ? error.response.data : error.message
         });

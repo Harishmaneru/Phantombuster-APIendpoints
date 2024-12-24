@@ -195,7 +195,7 @@ router.post('/person/enrich', async (req, res) => {
 
         // Log successful request
         console.log('Person enrich request successful:', {
-            profiles: requests.map(request => request.params.profile),
+            // profiles: requests.map(request => request.params.profile),
             status: response.status,
             timestamp: new Date().toISOString()
         });
