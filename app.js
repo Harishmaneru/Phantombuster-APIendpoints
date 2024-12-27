@@ -41,6 +41,11 @@ const filingController =require('./secFilings/filingController.js');
 
 const downloadFillings =require('./secFilings/downloadFillings.js');
 
+const pressFundingAnnounements = require('./pressFundingAnnounements/newsAnnouncements.js');
+
+ const CompanyInsightsModule = require('./pressFundingAnnounements/CompanyInsightsModule.js');
+
+
 const app = express();
 const port = 3001;
 
@@ -84,6 +89,8 @@ app.use(findPerson);
 app.use(phoneFeedback);
 app.use(filingController);
 app.use(downloadFillings);
+app.use(pressFundingAnnounements);
+app.use(CompanyInsightsModule);
 
 const options = {
   key: fs.readFileSync('./onepgr.com.key', 'utf8'),
