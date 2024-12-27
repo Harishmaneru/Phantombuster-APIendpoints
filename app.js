@@ -43,8 +43,11 @@ const downloadFillings =require('./secFilings/downloadFillings.js');
 
 const pressFundingAnnounements = require('./pressFundingAnnounements/newsAnnouncements.js');
 
- const CompanyInsightsModule = require('./pressFundingAnnounements/CompanyInsightsModule.js');
+const CompanyInsightsModule = require('./pressFundingAnnounements/CompanyInsightsModule.js');
 
+const youtubeData = require('./socialSignals/youtubeData.js');
+
+const twitterMentions = require('./socialSignals/twitterMentions.js');
 
 const app = express();
 const port = 3001;
@@ -87,10 +90,13 @@ app.use(phoneValidationApi);
 app.use(realContact);
 app.use(findPerson);
 app.use(phoneFeedback);
-app.use(filingController);
+app.use(filingController.router);
 app.use(downloadFillings);
-app.use(pressFundingAnnounements);
-app.use(CompanyInsightsModule);
+app.use(pressFundingAnnounements.router);
+app.use(twitterMentions);
+app.use(CompanyInsightsModule.router);
+app.use(youtubeData.router);
+
 
 const options = {
   key: fs.readFileSync('./onepgr.com.key', 'utf8'),
