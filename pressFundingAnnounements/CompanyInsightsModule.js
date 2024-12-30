@@ -5,20 +5,20 @@ require("dotenv").config();
 
 const router = express.Router();
 
- 
+
 const FINNHUB_API_KEY = "ctmk1m9r01qvk0t4gctgctmk1m9r01qvk0t4gcu0";
- 
+
 const getSymbolFromCompanyName = async (companyName) => {
   try {
     const results = await yahooFinance.search(companyName);
     if (results.quotes && results.quotes.length > 0) {
       // Filter for exact or close matches and prefer stocks over other securities
-      const bestMatch = results.quotes.find(quote => 
-        quote.isYahooFinance && 
+      const bestMatch = results.quotes.find(quote =>
+        quote.isYahooFinance &&
         (quote.shortname?.toLowerCase().includes(companyName.toLowerCase()) ||
-         quote.longname?.toLowerCase().includes(companyName.toLowerCase()))
+          quote.longname?.toLowerCase().includes(companyName.toLowerCase()))
       );
-      
+
       if (bestMatch) {
         return bestMatch.symbol;
       }
@@ -75,10 +75,18 @@ router.post("/company-insights", async (req, res) => {
       console.log(`Converted company name "${companyName}" to symbol: ${stockSymbol}`);
     } catch (error) {
       console.error(`Error converting company name "${companyName}" to symbol:`, error.message);
-      return res.status(400).json({ error: "Could not find symbol for the provided company name" });
+      return res.status(200).json({
+        status: "-1",
+        message: "Could Not Find the Company-Insigtes For Provided Company",
+        data: {},
+      });
     }
   } else if (!symbol && !companyName) {
-    return res.status(400).json({ error: "Either symbol or company name is required" });
+    return res.status(200).send({
+      status: "-1",
+      message: "Company Name is required",
+      data: {},
+    });
   }
 
   try {

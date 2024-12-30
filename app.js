@@ -49,6 +49,8 @@ const youtubeData = require('./socialSignals/youtubeData.js');
 
 const twitterMentions = require('./socialSignals/twitterMentions.js');
 
+const jobSignals = require('./pressFundingAnnounements/jobSignals.js');
+
 const app = express();
 const port = 3001;
 
@@ -96,7 +98,7 @@ app.use(pressFundingAnnounements.router);
 app.use(twitterMentions);
 app.use(CompanyInsightsModule.router);
 app.use(youtubeData.router);
-
+app.use(jobSignals.router);
 
 const options = {
   key: fs.readFileSync('./onepgr.com.key', 'utf8'),
