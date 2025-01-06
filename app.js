@@ -51,6 +51,15 @@ const twitterMentions = require('./socialSignals/twitterMentions.js');
 
 const jobSignals = require('./pressFundingAnnounements/jobSignals.js');
 
+const fetchCompanyProfile = require('./pressFundingAnnounements/fetchCompanyProfile.js');
+
+const getCompanyArticles  = require('./pressFundingAnnounements/getCompanyArticles.js');
+
+const fetchCompanyByDomain = require('./pressFundingAnnounements/fetchCompanyByDomain.js');
+
+
+
+
 const app = express();
 const port = 3001;
 
@@ -99,6 +108,9 @@ app.use(twitterMentions);
 app.use(CompanyInsightsModule.router);
 app.use(youtubeData.router);
 app.use(jobSignals.router);
+app.use(fetchCompanyProfile.router)
+app.use(getCompanyArticles.router)
+app.use(fetchCompanyByDomain.router)
 
 const options = {
   key: fs.readFileSync('./onepgr.com.key', 'utf8'),
