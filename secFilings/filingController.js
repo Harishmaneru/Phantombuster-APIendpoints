@@ -4,7 +4,7 @@ const axios = require('axios');
 const express = require('express');
 const router = express.Router();
 
-const SEC_API_KEY = 'a4b8d2116974c6ed4fed5d5d5a3088e5a003055cc864eaf77fb0562b95c73ed6';
+const SEC_API_KEY = 'e1cd2b9bddef9ea679d69eec99cc9c546560c0c31afeeead0d8b49e9e3e09a79';
 
 router.post('/fetch-latest-filing', async (req, res) => {
     console.log('Received request with body:', req.body);
@@ -81,7 +81,7 @@ const fetchLatestFiling = async (body) => {
         } else {
             console.log('No filings found for:', { companyName, formType });
             return {
-                status:"-1",
+                status:"1",
                 message:"No filings found for the specified company and form type..",
                 data:{}
             }
@@ -91,7 +91,7 @@ const fetchLatestFiling = async (body) => {
         console.error('Full error object:', error);
         return {
             status:"-1",
-            message:error.message,
+            message: error.response.data.error,
             data:{}
         }
     }
@@ -102,7 +102,7 @@ module.exports ={
     fetchLatestFiling
 }
 
-// module.exports = router;
+
 
 
 
