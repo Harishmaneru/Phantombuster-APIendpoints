@@ -12,7 +12,7 @@ const { OpenAI } = require('openai');
 
 const url = "mongodb://onepgrdb:onepgrdb123@pages.onepgr.com:27017/?authSource=admin";
 
-const openai = new OpenAI({ apiKey: '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' });
+const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY  });
 
 const signalAutomationJobsSchema = new mongoose.Schema({
     user_id: { type: String, required: true },
