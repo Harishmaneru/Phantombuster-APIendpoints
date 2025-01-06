@@ -57,6 +57,7 @@ const getCompanyArticles  = require('./pressFundingAnnounements/getCompanyArticl
 
 const fetchCompanyByDomain = require('./pressFundingAnnounements/fetchCompanyByDomain.js');
 
+const signalAutomationJobs = require('./signalAutomationJobs/signalAutomationJobs.js');
 
 
 
@@ -104,13 +105,14 @@ app.use(phoneFeedback);
 app.use(filingController.router);
 app.use(downloadFillings);
 app.use(pressFundingAnnounements.router);
-app.use(twitterMentions);
+app.use(twitterMentions.router);
 app.use(CompanyInsightsModule.router);
 app.use(youtubeData.router);
 app.use(jobSignals.router);
-app.use(fetchCompanyProfile.router)
-app.use(getCompanyArticles.router)
-app.use(fetchCompanyByDomain.router)
+app.use(fetchCompanyProfile.router);
+app.use(getCompanyArticles.router);
+app.use(fetchCompanyByDomain.router);
+app.use(signalAutomationJobs.router);
 
 const options = {
   key: fs.readFileSync('./onepgr.com.key', 'utf8'),
