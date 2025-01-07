@@ -7,10 +7,10 @@ const { fetchAdzunaJobListings } = require('../pressFundingAnnounements/jobSigna
 const { fetchYouTubeVideos } = require('../socialSignals/youtubeData.js');
 const { fetchTwitterMentions } = require('../socialSignals/twitterMentions.js');
 const { fetchCompanyNews } = require('../pressFundingAnnounements/newsAnnouncements.js');
+const { fetchCompanyDetailsByLinkedInURL } = require('../pressFundingAnnounements/fetchCompanyByDomain.js');
 
 
 const { OpenAI } = require('openai');
-
 
 const url = "mongodb://onepgrdb:onepgrdb123@pages.onepgr.com:27017/?authSource=admin";
 
@@ -38,6 +38,22 @@ const signalAutomationJobsSchema = new mongoose.Schema({
 
 const onepgrDB = mongoose.createConnection(url, { dbName: 'onepgr' });
 const SignalAutomationJob = onepgrDB.model('signalAutomationJobs', signalAutomationJobsSchema);
+
+const constructLinkedInCompanyURL = (companyName) => {
+    if (!companyName || typeof companyName !== 'string') {
+        throw new Error('A valid company name must be provided.');
+    }
+
+    // Format the company name for the LinkedIn URL
+    const formattedName = companyName
+        .toLowerCase()
+        .replace(/[^a-z0-9\s]/g, '')  // Remove non-alphanumeric characters except spaces
+        .trim()
+        .replace(/\s+/g, '-');        // Replace spaces with hyphens
+
+    // Return the constructed LinkedIn company URL
+    return `https://www.linkedin.com/company/${formattedName}`;
+};
 
 async function fetchJobsByStatus(req, res) {
     try {
@@ -110,6 +126,11 @@ async function fetchJobsByStatus(req, res) {
                         case 'twitter_brand_mentions':
                             response = await fetchTwitterMentions({ companyName: job.contact_company });
                             break;
+                            case 'linkedin_company_updates':
+                                // Using the helper function here
+                                const linkedInURL = constructLinkedInCompanyURL(job.contact_company);
+                                response = await fetchCompanyDetailsByLinkedInURL(linkedInURL);
+                                break;
                         default:
                             console.warn(`Unknown signal_flag for job ID: ${job.job_id}`);
                             continue;
