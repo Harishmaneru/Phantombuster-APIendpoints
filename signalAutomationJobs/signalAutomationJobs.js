@@ -6,6 +6,8 @@ const { getComapnyInsights } = require('../pressFundingAnnounements/CompanyInsig
 const { fetchAdzunaJobListings } = require('../pressFundingAnnounements/jobSignals.js');
 const { fetchYouTubeVideos } = require('../socialSignals/youtubeData.js');
 const { fetchTwitterMentions } = require('../socialSignals/twitterMentions.js');
+const { fetchCompanyNews } = require('../pressFundingAnnounements/newsAnnouncements.js');
+
 
 const { OpenAI } = require('openai');
 
@@ -41,34 +43,32 @@ async function fetchJobsByStatus(req, res) {
     try {
         const { user_id, job_status } = req.query;
         console.log('Received:', { user_id, job_status });
-
-        // Validate inputs
         if (!user_id) {
-            console.error('Error: Missing user_id in request');
             return res.status(400).json({ message: 'user_id is required' });
         }
 
         if (!job_status || !["NOT_STARTED", "IN_PROGRESS", "FAILED"].includes(job_status)) {
-            console.error('Error: Invalid job_status provided');
             return res.status(400).json({ message: 'Valid job_status is required (NOT_STARTED, IN_PROGRESS, FAILED)' });
         }
 
-        // Fetch jobs from the database
         const jobs = await SignalAutomationJob.find({ job_status, user_id });
-        console.log(`Found ${jobs.length} jobs with status ${job_status}`);
 
-        // Handle no jobs found case
         if (jobs.length === 0) {
-            console.warn(`No jobs found for user_id: ${user_id} with status: ${job_status}`);
-            return res.status(200).json({ message: `No jobs with status ${job_status} found for this user.` });
+            console.log(`No jobs found with status ${job_status}`);
+            return res.json({ message: `No jobs with status ${job_status} found for this user.` });
         }
 
-        console.log(`Fetched jobs successfully. Job IDs: ${jobs.map(job => job.job_id).join(', ')}`);
-        // Process jobs if status is 'NOT_STARTED'
+        jobs.forEach(job => console.log(`Fetched Job ID: ${job.job_id}`));
+
         if (job_status === 'NOT_STARTED') {
             for (const job of jobs) {
                 try {
+                    let insightsResponse = null;
+                    let newsResponse = null;
                     let response;
+                    let hasError = false;
+                    let errorMessage = [];
+
                     switch (job.signal_flag) {
                         case 'financial_information':
                             const response10K = await fetchLatestFiling({ companyName: job.contact_company, formType: '10-K' });
@@ -76,7 +76,30 @@ async function fetchJobsByStatus(req, res) {
                             response = { form10K: response10K, form10Q: response10Q };
                             break;
                         case 'press_announcements':
-                            response = await getComapnyInsights({ companyName: job.contact_company });
+                            insightsResponse = await getComapnyInsights({ companyName: job.contact_company });
+                            newsResponse = await fetchCompanyNews({ companyName: job.contact_company });
+                            response = { insightsResponse, newsResponse };
+
+                            if (insightsResponse.status === "-1") {
+                                hasError = true;
+                                errorMessage.push(`Insights Error: ${insightsResponse.message}`);
+                            }
+                            if (newsResponse.status === "-1") {
+                                hasError = true;
+                                errorMessage.push(`News Error: ${newsResponse.message}`);
+                            }
+
+                            if (hasError && insightsResponse.status === "-1" && newsResponse.status === "-1") {
+                                await SignalAutomationJob.updateOne(
+                                    { _id: job._id },
+                                    {
+                                        job_status: 'FAILED',
+                                        job_error: errorMessage.join(' | '),
+                                        signal_data: null
+                                    }
+                                );
+                                continue;
+                            }
                             break;
                         case 'job_openings':
                             response = await fetchAdzunaJobListings({ companyName: job.contact_company });
@@ -92,49 +115,48 @@ async function fetchJobsByStatus(req, res) {
                             continue;
                     }
 
-                    // Error check based on the response
-                    const hasError = (response.form10K && response.form10K.status === "-1") ||
-                                     (response.form10Q && response.form10Q.status === "-1") ||
-                                     (response.status === "-1");
-
-                    if (hasError) {
-                        console.error(`Error processing job: ${job.job_id}`);
-                        await SignalAutomationJob.updateOne({ _id: job._id }, {
-                            signal_data: response,
-                            job_status: 'FAILED',
-                            job_error: response.message || "Error in signal processing"
-                        });
+                    if (response.status === "-1") {
+                        await SignalAutomationJob.updateOne(
+                            { _id: job._id },
+                            {
+                                job_status: 'FAILED',
+                                job_error: response.message || "Error in signal processing",
+                                signal_data: null
+                            }
+                        );
                     } else {
-                        await SignalAutomationJob.updateOne({ _id: job._id }, {
-                            signal_data: response,
-                            job_status: 'IN_PROGRESS'
-                        });
-                        console.log(`Job ${job.job_id} updated to IN_PROGRESS successfully`);
+                        await SignalAutomationJob.updateOne(
+                            { _id: job._id },
+                            {
+                                signal_data: response,
+                                job_status: 'IN_PROGRESS'
+                            }
+                        );
                     }
                 } catch (jobError) {
                     console.error(`Error occurred while processing job ID: ${job.job_id}`, jobError);
-                    await SignalAutomationJob.updateOne({ _id: job._id }, {
-                        job_status: 'FAILED',
-                        job_error: {
-                            message: jobError.message,
-                            timestamp: new Date()
+                    await SignalAutomationJob.updateOne(
+                        { _id: job._id },
+                        {
+                            job_status: 'FAILED',
+                            job_error: {
+                                message: jobError.message,
+                                timestamp: new Date()
+                            }
                         }
-                    });
+                    );
                 }
             }
         }
 
-        // Send success response
         res.json({ jobs, message: `${jobs.length} jobs processed successfully` });
 
     } catch (error) {
         console.error('Critical Error in fetchJobsByStatus:', error);
-        res.status(500).json({ 
-            error: 'An error occurred while fetching the jobs.', 
-            details: error.message 
-        });
+        res.status(500).json({ error: 'An error occurred while fetching the jobs.', details: error.message });
     }
 }
+
 
 async function summarizeSignalData(req, res) {
     try {
@@ -252,6 +274,16 @@ async function changeJobStatusToNotStarted(req, res) {
             }
         );
 
+        // const updatedJobs = await SignalAutomationJob.updateMany(
+        //     { user_id, job_id: { $in: job_ids }, job_status: { $in: ["FAILED", "2"] } },
+        //     {
+        //         job_status: 'NOT_STARTED',
+        //         signal_data: null,
+        //         signal_data_summary: null,
+        //         job_error: null
+        //     }
+        // );
+
         if (updatedJobs.modifiedCount === 0) {
             return res.status(404).json({ message: 'No jobs updated. Ensure job IDs exist and are in FAILED status.' });
         }
@@ -290,6 +322,34 @@ async function changeJobStatusToNotStarted(req, res) {
 // router.post('/resetAllJobsToNotStarted', resetAllJobsToNotStarted);
 
 
+async function fetchAllJobsByUser(req, res) {
+    try {
+        const { user_id } = req.query;
+
+        if (!user_id) {
+            return res.status(400).json({ message: 'user_id is required' });
+        }
+
+        const jobs = await SignalAutomationJob.find({ user_id });
+
+        if (jobs.length === 0) {
+            console.warn(`No jobs found for user_id: ${user_id}`);
+            return res.json({ message: `No jobs found for user_id ${user_id}.` });
+        }
+
+        console.log(`Fetched ${jobs.length} jobs for user_id: ${user_id}`);
+        jobs.forEach(job => console.log(`Job ID: ${job.job_id}, Job Status: ${job.job_status}`));
+
+        res.json({ jobs, message: `${jobs.length} jobs fetched successfully for user_id ${user_id}.` });
+
+    } catch (error) {
+        console.error('Error fetching jobs:', error);
+        res.status(500).json({ error: 'An error occurred while fetching the jobs.', details: error.message });
+    }
+}
+
+
+router.get('/fetchAllJobsByUser', fetchAllJobsByUser);
 router.get('/fetchJobsByStatus', fetchJobsByStatus);
 router.get('/summarizeSignalData', summarizeSignalData);
 router.post('/changeJobStatusToNotStarted', changeJobStatusToNotStarted);
@@ -297,6 +357,7 @@ router.post('/changeJobStatusToNotStarted', changeJobStatusToNotStarted);
 
 module.exports = {
     router,
+    fetchAllJobsByUser,
     fetchJobsByStatus,
     summarizeSignalData,
     changeJobStatusToNotStarted
