@@ -12,7 +12,7 @@ const { OpenAI } = require('openai');
 
 const url = "mongodb://onepgrdb:onepgrdb123@pages.onepgr.com:27017/?authSource=admin";
 
-const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY  });
+const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
 const signalAutomationJobsSchema = new mongoose.Schema({
     user_id: { type: String, required: true },
@@ -62,6 +62,7 @@ async function fetchJobsByStatus(req, res) {
             console.warn(`No jobs found for user_id: ${user_id} with status: ${job_status}`);
             return res.status(200).json({ message: `No jobs with status ${job_status} found for this user.` });
         }
+
         console.log(`Fetched jobs successfully. Job IDs: ${jobs.map(job => job.job_id).join(', ')}`);
         // Process jobs if status is 'NOT_STARTED'
         if (job_status === 'NOT_STARTED') {
@@ -135,21 +136,31 @@ async function fetchJobsByStatus(req, res) {
     }
 }
 
-
-
 async function summarizeSignalData(req, res) {
     try {
-        console.log('Starting summarizeSignalData');
-        const jobs = await SignalAutomationJob.find({ job_status: 'IN_PROGRESS' });
-        console.log(`Found ${jobs.length} jobs to summarize`);
+        const { user_id } = req.query;
+
+        if (!user_id) {
+            return res.status(400).json({ message: 'user_id is required' });
+        }
+
+        console.log('Starting summarizeSignalData for user:', user_id);
+        const jobs = await SignalAutomationJob.find({ job_status: 'IN_PROGRESS', user_id });
+
+        if (jobs.length === 0) {
+            return res.json({ message: `No IN_PROGRESS jobs found for user ${user_id}.` });
+        }
+
+        console.log(`Found ${jobs.length} jobs to summarize for user ${user_id}`);
 
         for (const job of jobs) {
             try {
-                if (!job.signal_data) {
+                if (!job.signal_data || Object.keys(job.signal_data).length === 0) {
                     console.log(`Skipping job ${job.job_id} - no signal data`);
                     continue;
                 }
-                let promptTemplate = '';
+
+                let promptTemplate;
                 switch (job.signal_flag) {
                     case 'financial_information':
                         promptTemplate = `Analyze the following financial data for ${job.contact_company}. Focus on key metrics from 10-K and 10-Q filings, including revenue, profit, and significant changes: `;
@@ -170,27 +181,26 @@ async function summarizeSignalData(req, res) {
                         promptTemplate = `Summarize the following data for ${job.contact_company}: `;
                 }
 
-                const promptData = promptTemplate + JSON.stringify(job.signal_data);
-                console.log(`Processing summary for job ${job.job_id}`);
+                const promptData = promptTemplate + JSON.stringify(job.signal_data, null, 2);
+                console.log(`Generating summary for job ${job.job_id}`);
 
+                // Calling OpenAI API for summarization
                 const completion = await openai.chat.completions.create({
                     model: "gpt-3.5-turbo",
-                    messages: [{ 
-                        role: "user", 
-                        content: promptData
-                    }],
+                    messages: [{ role: "user", content: promptData }],
                     max_tokens: 2000,
                     temperature: 0.7
                 });
 
                 const summary = completion.choices[0]?.message?.content;
-                
+
                 if (!summary) {
-                    throw new Error('No summary generated from OpenAI');
+                    throw new Error(`No summary generated for job ${job.job_id}`);
                 }
 
+                // Storing the summary in the database
                 await SignalAutomationJob.updateOne(
-                    { _id: job._id }, 
+                    { _id: job._id },
                     {
                         signal_data_summary: summary,
                         job_status: 'IN_PROGRESS'
@@ -200,7 +210,7 @@ async function summarizeSignalData(req, res) {
                 console.log(`Successfully summarized job ${job.job_id}`);
 
             } catch (error) {
-                console.error(`Error processing individual job ${job.job_id}:`, error);
+                console.error(`Error processing job ${job.job_id}:`, error.message);
                 await SignalAutomationJob.updateOne(
                     { _id: job._id },
                     {
@@ -215,17 +225,11 @@ async function summarizeSignalData(req, res) {
             }
         }
 
-        res.json({ 
-            message: 'Signal data summarization completed',
-            processed: jobs.length
-        });
+        res.json({ message: `Signal data summarization completed successfully for user ${user_id}.`, processed: jobs.length });
 
     } catch (error) {
-        console.error('Error in summarizeSignalData:', error);
-        res.status(500).json({ 
-            error: 'An error occurred while summarizing the signal data.',
-            details: error.message
-        });
+        console.error('Error in summarizeSignalData:', error.message);
+        res.status(500).json({ error: 'An error occurred while summarizing the signal data.', details: error.message });
     }
 }
 
