@@ -59,6 +59,8 @@ const fetchCompanyByDomain = require('./pressFundingAnnounements/fetchCompanyByD
 
 const signalAutomationJobs = require('./signalAutomationJobs/signalAutomationJobs.js');
 
+const productLunchs = require('./pressFundingAnnounements/productLunchs.js');
+
 
 
 const app = express();
@@ -113,6 +115,7 @@ app.use(fetchCompanyProfile.router);
 app.use(getCompanyArticles.router);
 app.use(fetchCompanyByDomain.router);
 app.use(signalAutomationJobs.router);
+app.use(productLunchs.router);
 
 const options = {
   key: fs.readFileSync('./onepgr.com.key', 'utf8'),
