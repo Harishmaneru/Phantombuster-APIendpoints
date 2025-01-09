@@ -9,6 +9,7 @@ const { fetchTwitterMentions } = require('../socialSignals/twitterMentions.js');
 const { fetchCompanyNews } = require('../pressFundingAnnounements/newsAnnouncements.js');
 const { fetchCompanyDetailsByLinkedInURL } = require('../pressFundingAnnounements/fetchCompanyByDomain.js');
 const { fetchProductLaunchSignals } = require('../pressFundingAnnounements/productLunchs.js');
+const { fetchPublicMentions } = require('../pressFundingAnnounements/publicMentions.js');
 
 const { OpenAI } = require('openai');
 
@@ -47,9 +48,9 @@ const constructLinkedInCompanyURL = (companyName) => {
     // Format the company name for the LinkedIn URL
     const formattedName = companyName
         .toLowerCase()
-        .replace(/[^a-z0-9\s]/g, '')  // Remove non-alphanumeric characters except spaces
+        .replace(/[^a-z0-9\s]/g, '')
         .trim()
-        .replace(/\s+/g, '-');        // Replace spaces with hyphens
+        .replace(/\s+/g, '-');
 
     // Return the constructed LinkedIn company URL
     return `https://www.linkedin.com/company/${formattedName}`;
@@ -126,6 +127,9 @@ async function fetchJobsByStatus(req, res) {
                         case 'twitter_brand_mentions':
                             response = await fetchTwitterMentions({ companyName: job.contact_company });
                             break;
+                        case 'public_mentions':
+                            response = await fetchPublicMentions({ companyName: job.contact_company });
+                            break;
                         case 'product_launches':
                             response = await fetchProductLaunchSignals({ companyName: job.contact_company });
                             // console.log('Product Launch Response:', response);
@@ -175,41 +179,43 @@ async function fetchJobsByStatus(req, res) {
             // After all jobs are processed, call summarizeSignalData
             try {
                 await summarizeSignalData({ query: { user_id } }, {
-                    json: () => {}, 
-                    status: () => ({ json: () => {} })
+                    json: () => { },
+                    status: () => ({ json: () => { } })
                 });
                 console.log('Summarization completed for user:', user_id);
             } catch (summaryError) {
                 console.error('Error during summarization:', summaryError);
-   
+
             }
         }
 
         // Fetch the final state of jobs after all processing
-        const updatedJobs = await SignalAutomationJob.find({ 
+        const updatedJobs = await SignalAutomationJob.find({
             user_id,
             $or: [
                 { job_status: job_status },
-               
+
                 ...(job_status === 'NOT_STARTED' ? [{ job_status: 'IN_PROGRESS' }] : []),
-           
+
                 { job_status: 'FAILED' }
             ]
         });
 
-        res.json({ 
-            jobs: updatedJobs, 
-            message: `${jobs.length} jobs processed successfully` 
+        res.json({
+            jobs: updatedJobs,
+            message: `${jobs.length} jobs processed successfully`
         });
 
     } catch (error) {
         console.error('Critical Error in fetchJobsByStatus:', error);
-        res.status(500).json({ 
-            error: 'An error occurred while fetching the jobs.', 
-            details: error.message 
+        res.status(500).json({
+            error: 'An error occurred while fetching the jobs.',
+            details: error.message
         });
     }
 }
+
+
 async function summarizeSignalData(req, res) {
     try {
         const { user_id } = req.query;
@@ -229,8 +235,15 @@ async function summarizeSignalData(req, res) {
 
         for (const job of jobs) {
             try {
+                // Skip if signal data is empty
                 if (!job.signal_data || Object.keys(job.signal_data).length === 0) {
                     console.log(`Skipping job ${job.job_id} - no signal data`);
+                    continue;
+                }
+
+                // Skip if summary already exists
+                if (job.signal_data_summary && job.signal_data_summary.trim().length > 0) {
+                    console.log(`Skipping job ${job.job_id} - summary already exists`);
                     continue;
                 }
 
@@ -251,8 +264,12 @@ async function summarizeSignalData(req, res) {
                     case 'twitter_brand_mentions':
                         promptTemplate = `Analyze Twitter engagement for ${job.contact_company}. Include mention volume, sentiment trends, and notable interactions: `;
                         break;
+                    case 'public_mentions':
+                        promptTemplate = `Summarize the public mentions for ${job.contact_company}. Include sentiment analysis, volume trends, and key themes: `;
+                        break;
                     case 'product_launches':
-                    promptTemplate = `Summarize the latest product launches for ${job.contact_company}. Include product details, launch dates, keyFeatures and market impact: `;
+                        promptTemplate = `Summarize the latest product launches for ${job.contact_company}. Include product details, launch dates, keyFeatures and market impact: `;
+                        break;
                     default:
                         promptTemplate = `Summarize the following data for ${job.contact_company}: `;
                 }
@@ -308,7 +325,6 @@ async function summarizeSignalData(req, res) {
         res.status(500).json({ error: 'An error occurred while summarizing the signal data.', details: error.message });
     }
 }
-
 
 async function changeJobStatusToNotStarted(req, res) {
     try {
