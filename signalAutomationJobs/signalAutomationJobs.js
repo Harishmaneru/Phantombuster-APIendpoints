@@ -367,29 +367,29 @@ async function changeJobStatusToNotStarted(req, res) {
     }
 }
 
-// async function resetAllJobsToNotStarted(req, res) {
-//     try {
-//         const result = await SignalAutomationJob.updateMany(
-//             {},
-//             {
-//                 job_status: 'NOT_STARTED',
-//                 signal_data: null,
-//                 signal_data_summary: null,
-//                 job_error: null
-//             }
-//         );
+async function resetAllJobsToNotStarted(req, res) {
+    try {
+        const result = await SignalAutomationJob.updateMany(
+            {},
+            {
+                job_status: 'NOT_STARTED',
+                signal_data: null,
+                signal_data_summary: null,
+                job_error: null
+            }
+        );
 
-//         if (result.modifiedCount === 0) {
-//             return res.status(404).json({ message: 'No jobs were updated to NOT_STARTED status.' });
-//         }
+        if (result.modifiedCount === 0) {
+            return res.status(404).json({ message: 'No jobs were updated to NOT_STARTED status.' });
+        }
 
-//         res.json({ message: `${result.modifiedCount} jobs have been reset to NOT_STARTED.` });
+        res.json({ message: `${result.modifiedCount} jobs have been reset to NOT_STARTED.` });
 
-//     } catch (error) {
-//         res.status(500).json({ error: 'An error occurred while resetting the jobs.' });
-//     }
-// }
-// router.post('/resetAllJobsToNotStarted', resetAllJobsToNotStarted);
+    } catch (error) {
+        res.status(500).json({ error: 'An error occurred while resetting the jobs.' });
+    }
+}
+router.post('/resetAllJobsToNotStarted', resetAllJobsToNotStarted);
 
 
 async function fetchAllJobsByUser(req, res) {
