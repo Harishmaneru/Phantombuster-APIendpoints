@@ -66,6 +66,7 @@ async function checkExistingProfile(profileUrl) {
         return null;
     }
 }
+
 async function checkContainerOutput(containerId) {
     try {
         console.log('Checking container output...');
@@ -78,43 +79,54 @@ async function checkContainerOutput(containerId) {
         });
 
         const output = outputResponse.data.output || '';
+        console.log('Received output:', output);
 
-    
-        if (output.includes("Can't connect to LinkedIn with this session cookie")) {
-            throw new Error('Invalid session cookie detected, stopping process.');
+        // Check for session cookie error first
+        if (output.includes('Session cookie not valid anymore') || 
+            output.includes("Can't connect to LinkedIn with this session cookie")) {
+            console.log('⚠️ Invalid session cookie detected');
+            throw new Error('SESSION_INVALID');
         }
 
-        
+        // Check for successful completion
         if (output.includes('✅ Data successfully saved') && 
             output.includes('Process finished successfully')) {
-            console.log('Scraping completed successfully, stopping further checks.');
-            return true;
-        } 
-        
-
-        if (output.includes('Process finished with an error')) {
-            throw new Error('Scraping process failed: ' + output);
+            console.log('✅ Scraping completed successfully');
+            return { status: 'SUCCESS' };
         }
 
-        return false;
+        // Check for process failure
+        if (output.includes('Process finished with an error')) {
+            console.log(' Process finished with error');
+            throw new Error('SCRAPING_FAILED');
+        }
+
+        // Still in progress
+        console.log(' Scraping still in progress');
+        return { status: 'IN_PROGRESS' };
     } catch (error) {
-        throw error;
+        if (error.message === 'SESSION_INVALID' || 
+            error.message === 'SCRAPING_FAILED') {
+            throw error;
+        }
+        console.error('Error checking container output:', error);
+        throw new Error('OUTPUT_CHECK_FAILED');
     }
 }
 
 async function waitForScrapingCompletion(containerId) {
-    console.log('Waiting for scraping completion...');
+    console.log('Starting scraping completion check...');
     const startTime = Date.now();
     const maxWaitTime = 5 * 60 * 1000; // 5 minutes maximum wait time
+    const checkInterval = 5000; // 5 seconds between checks
 
     while (Date.now() - startTime < maxWaitTime) {
         try {
-            // Call checkContainerOutput and stop further checking if error is detected
-            const isComplete = await checkContainerOutput(containerId);
-            if (isComplete) {
-                console.log('Scraping completed successfully, fetching results...');
+            const result = await checkContainerOutput(containerId);
+
+            if (result.status === 'SUCCESS') {
+                console.log(' Scraping completed successfully, fetching results...');
                 
-                // Fetch result object only after successful completion
                 const resultResponse = await axios.get('https://api.phantombuster.com/api/v2/containers/fetch-result-object', {
                     params: { id: containerId },
                     headers: {
@@ -125,22 +137,42 @@ async function waitForScrapingCompletion(containerId) {
 
                 if (resultResponse.data?.resultObject) {
                     return resultResponse.data;
+                } else {
+                    throw new Error('NO_RESULT_DATA');
                 }
             }
 
-            // Delay for 5 seconds before next check
-            await new Promise(resolve => setTimeout(resolve, 5000));
+            // Wait before next check only if we're still in progress
+            await new Promise(resolve => setTimeout(resolve, checkInterval));
 
         } catch (error) {
-            if (error.message.includes('Invalid session cookie detected')) {
-                console.error('Session error detected, stopping scraping...');
-                throw error;
+            switch (error.message) {
+                case 'SESSION_INVALID':
+                    console.error(' Session cookie is invalid, stopping process');
+                    throw new Error('Invalid session cookie. Please log in to LinkedIn to get a new one.');
+                    
+                case 'SCRAPING_FAILED':
+                    console.error(' Scraping process failed');
+                    throw new Error('Profile scraping failed. Please try again later.');
+                    
+                case 'NO_RESULT_DATA':
+                    console.error(' No result data available');
+                    throw new Error('Failed to retrieve profile data after successful scrape.');
+                    
+                case 'OUTPUT_CHECK_FAILED':
+                    console.error('Failed to check container output');
+                    // Continue checking if it's just a temporary error
+                    await new Promise(resolve => setTimeout(resolve, checkInterval));
+                    break;
+                    
+                default:
+                    console.error('Unexpected error:', error.message);
+                    throw error;
             }
-            console.error('Error during wait:', error.message);
-            await new Promise(resolve => setTimeout(resolve, 5000));
         }
     }
-    throw new Error('Timeout waiting for scraping completion');
+    
+    throw new Error('Timeout: Profile scraping took too long to complete.');
 }
 
 async function launchPhantombusterAgent(profileUrl, sessionCookie) {

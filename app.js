@@ -63,7 +63,7 @@ const productLunchs = require('./pressFundingAnnounements/productLunchs.js');
 
 const publicMentions = require('./pressFundingAnnounements/publicMentions.js');
 
-
+const personProfile = require('./rapidAPI/personProfile.js');
 
 const app = express();
 const port = 3001;
@@ -119,6 +119,7 @@ app.use(fetchCompanyByDomain.router);
 app.use(signalAutomationJobs.router);
 app.use(productLunchs.router);
 app.use(publicMentions.router);
+app.use(personProfile);
 
 const options = {
   key: fs.readFileSync('./onepgr.com.key', 'utf8'),
