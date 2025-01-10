@@ -1,3 +1,4 @@
+//new code
 const express = require('express');
 const axios = require('axios');
 const { MongoClient } = require('mongodb');
@@ -5,89 +6,148 @@ const router = express.Router();
 
 const phantombusterApiKey = 'ZJNIKxvLxe7xmiOnaBlNQNlGqIeDdLquL69ajMg111c';
 const profileAgentId = '7688980058172742';
-
 const mongoUri = 'mongodb+srv://harishmaneru:Xe2Mz13z83IDhbPW@cluster0.bu3exkw.mongodb.net/?retryWrites=true&w=majority&tls=true';
 const dbName = 'Phantombuster';
+
 async function checkExistingProfile(profileUrl) {
+    console.log('Fetching recent containers...');
     try {
-        // Fetch all containers for the profile scraping agent
-        const response = await axios.get('https://api.phantombuster.com/api/v2/containers/fetch-all', {
-            params: {
-                agentId: profileAgentId
-            },
+        const containersResponse = await axios.get('https://api.phantombuster.com/api/v2/containers/fetch-all', {
+            params: { agentId: profileAgentId },
             headers: {
                 'X-Phantombuster-Key': phantombusterApiKey,
                 'accept': 'application/json'
             }
         });
 
-        const containers = response.data.containers || [];
+        const containers = containersResponse.data.containers || [];
+        console.log(`Found ${containers.length} containers to check`);
+
+        containers.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
         const normalizedProfileUrl = profileUrl.toLowerCase().replace(/\/$/, '');
 
-        // Sort containers by date to get the most recent result first
-        containers.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
-
-        // Iterate over each container and fetch result object
-        for (const container of containers) {
+        for (const container of containers.slice(0, 5)) {
+            console.log(`Checking container: ${container.id}`);
             try {
+                const [resultResponse, outputResponse] = await Promise.all([
+                    axios.get('https://api.phantombuster.com/api/v2/containers/fetch-result-object', {
+                        params: { id: container.id },
+                        headers: {
+                            'X-Phantombuster-Key': phantombusterApiKey,
+                            'accept': 'application/json'
+                        }
+                    }),
+                    axios.get('https://api.phantombuster.com/api/v2/containers/fetch-output', {
+                        params: { id: container.id },
+                        headers: {
+                            'X-Phantombuster-Key': phantombusterApiKey,
+                            'accept': 'application/json'
+                        }
+                    })
+                ]);
+
+                if (resultResponse.data?.resultObject) {
+                    const matchedProfile = await processProfileData(
+                        resultResponse.data.resultObject,
+                        outputResponse.data.output,
+                        normalizedProfileUrl
+                    );
+                    if (matchedProfile) return matchedProfile;
+                }
+            } catch (error) {
+                console.error(`Error checking container ${container.id}:`, error.message);
+                continue;
+            }
+        }
+        console.log('No matching profile found in recent containers');
+        return null;
+    } catch (error) {
+        console.error('Error fetching containers:', error.message);
+        return null;
+    }
+}
+async function checkContainerOutput(containerId) {
+    try {
+        console.log('Checking container output...');
+        const outputResponse = await axios.get('https://api.phantombuster.com/api/v2/containers/fetch-output', {
+            params: { id: containerId },
+            headers: {
+                'X-Phantombuster-Key': phantombusterApiKey,
+                'accept': 'application/json'
+            }
+        });
+
+        const output = outputResponse.data.output || '';
+
+    
+        if (output.includes("Can't connect to LinkedIn with this session cookie")) {
+            throw new Error('Invalid session cookie detected, stopping process.');
+        }
+
+        
+        if (output.includes('✅ Data successfully saved') && 
+            output.includes('Process finished successfully')) {
+            console.log('Scraping completed successfully, stopping further checks.');
+            return true;
+        } 
+        
+
+        if (output.includes('Process finished with an error')) {
+            throw new Error('Scraping process failed: ' + output);
+        }
+
+        return false;
+    } catch (error) {
+        throw error;
+    }
+}
+
+async function waitForScrapingCompletion(containerId) {
+    console.log('Waiting for scraping completion...');
+    const startTime = Date.now();
+    const maxWaitTime = 5 * 60 * 1000; // 5 minutes maximum wait time
+
+    while (Date.now() - startTime < maxWaitTime) {
+        try {
+            // Call checkContainerOutput and stop further checking if error is detected
+            const isComplete = await checkContainerOutput(containerId);
+            if (isComplete) {
+                console.log('Scraping completed successfully, fetching results...');
+                
+                // Fetch result object only after successful completion
                 const resultResponse = await axios.get('https://api.phantombuster.com/api/v2/containers/fetch-result-object', {
-                    params: { id: container.id },
+                    params: { id: containerId },
                     headers: {
                         'X-Phantombuster-Key': phantombusterApiKey,
                         'accept': 'application/json'
                     }
                 });
 
-                if (resultResponse.data && resultResponse.data.resultObject) {
-                    let resultObject;
-
-                    try {
-                        resultObject = JSON.parse(resultResponse.data.resultObject);
-
-                        // Handle both array and single object responses
-                        if (Array.isArray(resultObject)) {
-                            const matchingProfile = resultObject.find(profile =>
-                                profile.query &&
-                                profile.query.toLowerCase().replace(/\/$/, '') === normalizedProfileUrl
-                            );
-                            if (matchingProfile) {
-                                return {
-                                    resultObject: matchingProfile,
-                                    containerOutput: resultResponse.data.output
-                                };
-                            }
-                        } else if (resultObject.query &&
-                            resultObject.query.toLowerCase().replace(/\/$/, '') === normalizedProfileUrl) {
-                            return {
-                                resultObject: resultObject,
-                                containerOutput: resultResponse.data.output
-                            };
-                        }
-                    } catch (error) {
-                        console.error('Error parsing container result:', error);
-                    }
+                if (resultResponse.data?.resultObject) {
+                    return resultResponse.data;
                 }
-            } catch (error) {
-                console.error(`Error fetching result for container ${container.id}:`, error.message);
-                // Continue to the next container if this one fails
-                continue;
             }
+
+            // Delay for 5 seconds before next check
+            await new Promise(resolve => setTimeout(resolve, 5000));
+
+        } catch (error) {
+            if (error.message.includes('Invalid session cookie detected')) {
+                console.error('Session error detected, stopping scraping...');
+                throw error;
+            }
+            console.error('Error during wait:', error.message);
+            await new Promise(resolve => setTimeout(resolve, 5000));
         }
-
-        // If no matching profile found, return null
-        return null;
-
-    } catch (error) {
-        console.error('Error checking existing profile:', error.message);
-        throw error;
     }
+    throw new Error('Timeout waiting for scraping completion');
 }
 
-
-async function launchPhantombusterAgent(agentId, profileUrl, sessionCookie) {
+async function launchPhantombusterAgent(profileUrl, sessionCookie) {
+    console.log('Launching new profile scrape...');
     try {
         const response = await axios.post('https://api.phantombuster.com/api/v2/agents/launch', {
-            id: agentId,
+            id: profileAgentId,
             argument: {
                 numberOfLinesPerLaunch: 1,
                 saveImg: false,
@@ -102,173 +162,118 @@ async function launchPhantombusterAgent(agentId, profileUrl, sessionCookie) {
                 'Content-Type': 'application/json'
             }
         });
+        console.log('Agent launched successfully:', response.data.containerId);
         return response.data.containerId;
     } catch (error) {
-        console.error(`Error launching Phantombuster agent ${agentId}:`, error.message);
+        console.error('Error launching agent:', error.message);
         throw error;
     }
 }
 
-async function getAgentResults(containerId) {
+async function processProfileData(resultObject, containerOutput, normalizedProfileUrl) {
     try {
-        const [resultResponse, outputResponse] = await Promise.all([
-            axios.get('https://api.phantombuster.com/api/v2/containers/fetch-result-object', {
-                headers: {
-                    'X-Phantombuster-Key': phantombusterApiKey,
-                    'accept': 'application/json'
-                },
-                params: { id: containerId }
-            }),
-            axios.get(`https://api.phantombuster.com/api/v2/containers/fetch-output`, {
-                headers: {
-                    'X-Phantombuster-Key': phantombusterApiKey,
-                    'accept': 'application/json'
-                },
-                params: { id: containerId }
-            })
-        ]);
-
-        return {
-            resultObject: resultResponse.data,
-            containerOutput: outputResponse.data.output
-        };
+        const parsedResult = JSON.parse(resultObject);
+        
+        if (Array.isArray(parsedResult)) {
+            const matchingProfile = parsedResult.find(profile =>
+                profile.query?.toLowerCase().replace(/\/$/, '') === normalizedProfileUrl
+            );
+            if (matchingProfile) {
+                console.log('Found matching profile in array');
+                return { resultObject: matchingProfile, containerOutput };
+            }
+        } else if (parsedResult.query?.toLowerCase().replace(/\/$/, '') === normalizedProfileUrl) {
+            console.log('Found matching single profile');
+            return { resultObject: parsedResult, containerOutput };
+        }
+        return null;
     } catch (error) {
-        console.error('Error getting agent results:', error.message);
-        throw error;
+        console.error('Error processing profile data:', error.message);
+        return null;
     }
 }
 
-async function waitForResults() {
-    await new Promise(resolve => setTimeout(resolve, 50000));
-}
-
-async function saveToMongoDB(collectionName, data) {
+async function saveToMongoDB(data) {
+    console.log('Saving profile to MongoDB...');
     const client = new MongoClient(mongoUri);
-
     try {
         await client.connect();
-        console.log('Connected to Database');
         const db = client.db(dbName);
-        const collection = db.collection(collectionName);
-
-        const result = await collection.insertOne(data);
-        console.log(`Data inserted into ${collectionName}:`, result.insertedId);
+        const collection = db.collection('LinkedInProfiles');
+        const result = await collection.insertOne({
+            ...data,
+            timestamp: new Date().toISOString()
+        });
+        console.log('Profile saved successfully:', result.insertedId);
     } catch (error) {
-        console.error(`Error inserting data into ${collectionName}:`, error.message);
+        console.error('MongoDB save error:', error.message);
     } finally {
         await client.close();
     }
 }
 
-async function processScrapedData(containerId, requestedProfileUrl) {
-    const data = await getAgentResults(containerId);
-    if (data && data.resultObject && data.resultObject.resultObject) {
-        let resultObject;
-        try {
-            resultObject = JSON.parse(data.resultObject.resultObject);
-        } catch (parseError) {
-            console.error('Error parsing result object JSON:', parseError);
-            return null;
-        }
-
-        if (Array.isArray(resultObject)) {
-            const normalizedRequestedUrl = requestedProfileUrl.toLowerCase().replace(/\/$/, '');
-
-            for (let i = resultObject.length - 1; i >= 0; i--) {
-                const profile = resultObject[i];
-                if (profile.query) {
-                    const normalizedQueryUrl = profile.query.toLowerCase().replace(/\/$/, '');
-                    if (normalizedQueryUrl === normalizedRequestedUrl) {
-                        console.log('Found matching profile');
-                        return {
-                            resultObject: profile,
-                            containerOutput: data.containerOutput
-                        };
-                    }
-                }
-            }
-            console.log('No matching profile found in results');
-            return null;
-        } else if (resultObject.query &&
-            resultObject.query.toLowerCase().replace(/\/$/, '') ===
-            requestedProfileUrl.toLowerCase().replace(/\/$/, '')) {
-            return {
-                resultObject: resultObject,
-                containerOutput: data.containerOutput
-            };
-        }
-
-        console.log('No matching profile found');
-        return null;
-    } else {
-        console.log(`No data available for container ID: ${containerId}`);
-        return null;
-    }
-}
-
 router.post('/LinkedInprofileurl', async (req, res) => {
+    console.log('Received new profile request');
     const { profileUrl, sessionCookie } = req.body;
 
     if (!profileUrl || !sessionCookie) {
+        console.log('Missing required parameters');
         return res.status(400).json({ error: 'Profile URL and session cookie are required' });
     }
 
     try {
-        console.log(`Processing request for profile URL: ${profileUrl}`);
-
-        // First, check if we already have this profile in existing containers
-        console.log('Checking for existing profile data...');
         const existingProfile = await checkExistingProfile(profileUrl);
 
         if (existingProfile) {
-            console.log('Found existing profile data');
-
-            // Save to MongoDB with current timestamp
-            await saveToMongoDB('LinkedInProfiles', {
-                ...existingProfile,
-                timestamp: new Date().toISOString()
-            });
-
+            console.log('Using existing profile data');
+            await saveToMongoDB(existingProfile);
             return res.json({
                 profile: existingProfile.resultObject,
                 cached: true
             });
         }
 
-        // If no existing profile found, proceed with scraping
-        console.log('No existing profile found. Launching profile scraping agent');
-        const containerId = await launchPhantombusterAgent(profileAgentId, profileUrl, sessionCookie);
-        console.log(`Profile scraping agent launched with container ID ${containerId}`);
-
-        console.log('Waiting for agent to complete...');
-        await waitForResults();
-
-        // Process scraped data for the requested profile URL
-        console.log('Processing scraped data...');
-        const scrapedProfile = await processScrapedData(containerId, profileUrl);
-
-        if (!scrapedProfile) {
-            return res.status(500).json({
-                error: "Scraping failed or profile not found",
-                containerOutput: `No matching profile found for container ID: ${containerId}`
-            });
+        console.log('No existing profile found, launching new scrape');
+        const containerId = await launchPhantombusterAgent(profileUrl, sessionCookie);
+        
+        console.log('Waiting for profile data...');
+        const scrapedData = await waitForScrapingCompletion(containerId);
+        
+        if (!scrapedData) {
+            throw new Error('Failed to get profile data');
         }
 
-        console.log('Saving scraped data to MongoDB');
-        await saveToMongoDB('LinkedInProfiles', {
-            ...scrapedProfile,
-            timestamp: new Date().toISOString()
-        });
+        const normalizedProfileUrl = profileUrl.toLowerCase().replace(/\/$/, '');
+        const processedProfile = await processProfileData(
+            scrapedData.resultObject,
+            scrapedData.output,
+            normalizedProfileUrl
+        );
 
-        console.log('Sending response');
+        if (!processedProfile) {
+            throw new Error('Failed to process profile data');
+        }
+
+        console.log('Successfully retrieved new profile');
+        await saveToMongoDB(processedProfile);
+
         res.json({
-            profile: scrapedProfile.resultObject,
+            profile: processedProfile.resultObject,
             cached: false
         });
 
     } catch (error) {
-        console.error('An error occurred:', error.message);
-        res.status(500).json({ error: 'Internal server error', details: error.message });
+        console.error('Request processing error:', error.message);
+        if (error.message.includes('Invalid session cookie')) {
+            return res.status(401).json({
+                error: 'Session cookie is invalid',
+                details: 'Please log in to LinkedIn to get a new session cookie'
+            });
+        }
+        res.status(500).json({ 
+            error: 'Internal server error', 
+            details: error.message
+        });
     }
 });
 
