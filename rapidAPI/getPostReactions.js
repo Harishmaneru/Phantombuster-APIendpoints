@@ -2,7 +2,7 @@ const express = require('express');
 const axios = require('axios');
 const router = express.Router();
 
-const getLinkedInPostReactions = async (postUrl, page) => {
+const getLinkedInPostReactions = async (postUrl) => {
     try {
         const apiUrl = 'https://linkedin-data-api.p.rapidapi.com/get-post-reactions';
 
@@ -10,7 +10,7 @@ const getLinkedInPostReactions = async (postUrl, page) => {
 
         const response = await axios.post(apiUrl, {
             url: postUrl,
-            page: parseInt(page)
+            page: 0  
         }, {
             headers: {
                 'Content-Type': 'application/json',
@@ -42,14 +42,14 @@ const getLinkedInPostReactions = async (postUrl, page) => {
 };
 
 router.post('/getPostReactions', async (req, res) => {
-    const { url, page } = req.query;
+    const { url } = req.query;
 
-    if (!url || !page) {
-        return res.status(400).json({ error: 'Post URL and page number are required' });
+    if (!url) {
+        return res.status(400).json({ error: 'Post URL is required' });
     }
 
     try {
-        const postReactions = await getLinkedInPostReactions(url, page);
+        const postReactions = await getLinkedInPostReactions(url);
         res.json({ success: true, data: postReactions });
     } catch (error) {
         console.error('Error handling API endpoint:', error);

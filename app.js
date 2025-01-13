@@ -69,6 +69,7 @@ const companyInfo = require('./rapidAPI/companyInfo.js');
 
 const getPostReactions = require('./rapidAPI/getPostReactions.js');
 
+const getpostComments = require('./rapidAPI/getpostComments.js');
 const app = express();
 const port = 3001;
 
@@ -126,6 +127,7 @@ app.use(publicMentions.router);
 app.use(personProfile);
 app.use(companyInfo);
 app.use(getPostReactions);
+app.use(getpostComments);
 
 
 

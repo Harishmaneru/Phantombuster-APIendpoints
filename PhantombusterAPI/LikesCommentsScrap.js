@@ -328,7 +328,8 @@ async function checkContainerStatus(containerId) {
 
         // Check for session cookie error
         if (output?.includes("Can't connect to LinkedIn with this session cookie")) {
-            return {
+          
+            return { 
                 status: 'error',
                 message: 'Invalid LinkedIn session cookie',
                 output
@@ -391,7 +392,6 @@ async function waitForContainerCompletion(containerId, maxAttempts = 20) {
 
 async function getAgentResults(containerId) {
     // console.log('Fetching agent results for container:', containerId);
-    ``
     try {
         const statusResult = await waitForContainerCompletion(containerId);
         
