@@ -2,26 +2,24 @@ const express = require('express');
 const axios = require('axios');
 const router = express.Router();
 
-const getLinkedInCompanyData = async (companyUrl) => {
+const getLinkedInProfileData = async (profileUrl) => {
     try {
-        const apiUrl = 'https://linkedin-data-scraper.p.rapidapi.com/company';
+        const apiUrl = 'https://linkedin-data-api.p.rapidapi.com/get-profile-data-by-url';
 
-        console.log('Requesting LinkedIn company data for URL:', companyUrl);
+        console.log('Requesting LinkedIn profile data for URL:', profileUrl);
 
-        const response = await axios.post(apiUrl, {
-            link: companyUrl
-        }, {
+        const response = await axios.get(apiUrl, {
+            params: { url: profileUrl },
             headers: {
-                'Content-Type': 'application/json',
-                'x-rapidapi-host': 'linkedin-data-scraper.p.rapidapi.com',
+                'x-rapidapi-host': 'linkedin-data-api.p.rapidapi.com',
                 'x-rapidapi-key': '989f4f415emsh61990bfbf21063fp14c1a4jsn58f1c4a73736'
             }
         });
 
-        console.log('Response received:', response.data.url);
+        console.log('Response received:', response.data);
         return response.data;
     } catch (error) {
-        console.error('Error fetching LinkedIn company data:', error);
+        console.error('Error fetching LinkedIn profile data:', error);
         if (error.response) {
             console.error('Error details:', error.response.data);
             throw new Error(`API Error: ${error.response.data.message || 'Unknown error'}`);
@@ -35,16 +33,16 @@ const getLinkedInCompanyData = async (companyUrl) => {
     }
 };
 
-router.post('/getCompanyData', async (req, res) => {
+router.post('/getProfileData', async (req, res) => {
     const { url } = req.query;
 
     if (!url) {
-        return res.status(400).json({ error: 'Company URL is required' });
+        return res.status(400).json({ error: 'Profile URL is required' });
     }
 
     try {
-        const companyData = await getLinkedInCompanyData(url);
-        res.json({ success: true, data: companyData });
+        const profileData = await getLinkedInProfileData(url);
+        res.json({ success: true, data: profileData });
     } catch (error) {
         console.error('Error handling API endpoint:', error);
         res.status(500).json({ success: false, error: error.message });
