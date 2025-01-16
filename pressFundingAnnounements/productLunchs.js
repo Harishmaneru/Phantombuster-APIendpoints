@@ -37,7 +37,7 @@ const fetchProductLaunchSignals = async ({ companyName }) => {
     const searchResults = await searchProductLaunches(companyName);
     // console.log('Search results:', searchResults);
 
-    if (!searchResults.length) return { status: "-1", message: `No data for ${companyName}` };
+    if (!searchResults.length) return { status: "0", message: `No Product Launch data found for ${companyName}` };
 
     const analyzedResults = await analyzeResults(searchResults, companyName);
     // console.log('Analyzed results:', analyzedResults);

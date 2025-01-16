@@ -5,22 +5,16 @@ const router = express.Router();
 const SEC_API_KEY = 'fddf9ef6f4e9d4e4366d3ed5551e642ab57b0638a5eb43e05b5c92116e7a59d1';
 
 router.post('/fetch-latest-filing', async (req, res) => {
-    console.log(' [API] POST /fetch-latest-filing - Starting request processing');
-    console.log(' [API] Request body:', JSON.stringify(req.body, null, 2));
-
+    console.log('[API] POST /fetch-latest-filing', { body: req.body });
     const response = await fetchLatestFiling(req.body);
-    console.log(' [API] Sending response:', JSON.stringify(response, null, 2));
     res.status(200).send(response);
 });
 
 const fetchLatestFiling = async (body) => {
-    console.log('\n [fetchLatestFiling] Starting with body:', JSON.stringify(body, null, 2));
-    
     const { companyName, formType } = body;
     
-    // Parameter validation
     if (!companyName || !formType) {
-        console.warn(' [fetchLatestFiling] Missing required parameters:', {
+        console.error('[fetchLatestFiling] Missing required parameters', {
             companyName: companyName || 'MISSING',
             formType: formType || 'MISSING'
         });
@@ -39,19 +33,10 @@ const fetchLatestFiling = async (body) => {
         },
         from: 0,
         size: 1,
-        sort: [
-            {
-                filedAt: {
-                    order: 'desc'
-                }
-            }
-        ]
+        sort: [{ filedAt: { order: 'desc' } }]
     };
 
-    console.log(' [fetchLatestFiling] Constructed SEC API query:', JSON.stringify(query, null, 2));
-
     try {
-        console.log(' [fetchLatestFiling] Sending request to SEC API...');
         const response = await axios.post('https://api.sec-api.io', query, {
             headers: {
                 Authorization: SEC_API_KEY,
@@ -59,13 +44,14 @@ const fetchLatestFiling = async (body) => {
             }
         });
 
-        console.log(` [fetchLatestFiling] SEC API Response Status: ${response.status} (${response.statusText})`);
-        console.log(' [fetchLatestFiling] Response data size:', JSON.stringify(response.data).length, 'bytes');
-
         const filings = response.data.filings;
         
         if (filings && filings.length > 0) {
-            console.log(' [fetchLatestFiling] Found', filings.length, 'filing(s)');
+            console.log('[fetchLatestFiling] Found filing', {
+                companyName,
+                formType,
+                accessionNo: filings[0].accessionNo
+            });
             
             const latestFiling = filings[0];
             const enhancedResponse = {};
@@ -84,25 +70,24 @@ const fetchLatestFiling = async (body) => {
 
             const missingFields = expectedFields.filter(field => !(field in enhancedResponse));
             if (missingFields.length > 0) {
-                console.warn(' [fetchLatestFiling] Missing expected fields:', missingFields);
+                console.warn('[fetchLatestFiling] Missing expected fields', { missingFields });
             }
 
-            console.log(' [fetchLatestFiling] Successfully processed filing data');
             return {
                 status: "1",
-                message: "Successfully found filings for the specified company and form type.",
+                message: `Successfully found filings for ${companyName}, ${formType}.`,
                 data: enhancedResponse
             }
         } else {
-            console.warn(' [fetchLatestFiling] No filings found:', { companyName, formType });
+            console.warn('[fetchLatestFiling] No filings found', { companyName, formType });
             return {
-                status: "1",
-                message: "No filings found for the specified company and form type.",
+                status: "0",
+                message: `No filings found for the ${companyName}, ${formType}.`,
                 data: {}
             }
         }
     } catch (error) {
-        console.error(' [fetchLatestFiling] Error fetching filing:', {
+        console.error('[fetchLatestFiling] Error fetching filing', {
             message: error.message,
             status: error.response?.status,
             statusText: error.response?.statusText,

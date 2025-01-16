@@ -57,7 +57,7 @@ const fetchYouTubeVideos = async (body) => {
         } else {
             console.log('No videos found for:', companyName);
             return {
-                status: "-1",
+                status: "0",
                 message: "No videos found for the specified company name.",
                 data: {}
             };

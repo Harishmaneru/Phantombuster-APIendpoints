@@ -44,8 +44,8 @@ const fetchCompanyNews = async (body) => {
         if (!articles || articles.length === 0) {
             console.log(' No articles found in API response');
             return {
-                status: "-1",
-                message: "No news found for the given company name.",
+                status: "0",
+                message: `No news found for the ${companyName}.`,
                 data: {}
             }
         }
@@ -69,8 +69,8 @@ const fetchCompanyNews = async (body) => {
         if (filteredArticles.length === 0) {
             console.log(' No articles remained after filtering');
             return {
-                status: "-1",
-                message: "No relevant news found containing the company name in the title.",
+                status: "0",
+                message: `No news found for the ${companyName}.`,
                 data: {}
             }
         }

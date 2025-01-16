@@ -28,7 +28,7 @@ const signalAutomationJobsSchema = new mongoose.Schema({
     signal_flag: { type: String, required: true },
     signal_list_id: { type: String, required: true },
     signal_prompt: { type: String, required: true },
-    job_status: { type: String, enum: ["NOT_STARTED", "IN_PROGRESS", "COMPLETED", "FAILED"], default: "NOT_STARTED", required: true },
+    job_status: { type: String, enum: ["NOT_STARTED", "IN_PROGRESS","SUCCESS","COMPLETED", "FAILED"], default: "NOT_STARTED", required: true },
     job_id: { type: String, required: true, unique: true },
     job_created_at: { type: Date, default: Date.now, required: true },
     signal_data: { type: mongoose.Schema.Types.Mixed },
@@ -40,21 +40,21 @@ const signalAutomationJobsSchema = new mongoose.Schema({
 const onepgrDB = mongoose.createConnection(url, { dbName: 'onepgr' });
 const SignalAutomationJob = onepgrDB.model('signalAutomationJobs', signalAutomationJobsSchema);
 
-const constructLinkedInCompanyURL = (companyName) => {
-    if (!companyName || typeof companyName !== 'string') {
-        throw new Error('A valid company name must be provided.');
-    }
+// const constructLinkedInCompanyURL = (companyName) => {
+//     if (!companyName || typeof companyName !== 'string') {
+//         throw new Error('A valid company name must be provided.');
+//     }
 
-    // Format the company name for the LinkedIn URL
-    const formattedName = companyName
-        .toLowerCase()
-        .replace(/[^a-z0-9\s]/g, '')
-        .trim()
-        .replace(/\s+/g, '-');
+//     // Format the company name for the LinkedIn URL
+//     const formattedName = companyName
+//         .toLowerCase()
+//         .replace(/[^a-z0-9\s]/g, '')
+//         .trim()
+//         .replace(/\s+/g, '-');
 
-    // Return the constructed LinkedIn company URL
-    return `https://www.linkedin.com/company/${formattedName}`;
-};
+//     // Return the constructed LinkedIn company URL
+//     return `https://www.linkedin.com/company/${formattedName}`;
+// };
 
 async function fetchJobsByStatus(req, res) {
     try {
@@ -120,7 +120,7 @@ async function fetchJobsByStatus(req, res) {
                             break;
                             case 'job_openings':
                             case 'job_changes':
-                            response = await fetchAdzunaJobListings({ companyName: job.contact_company });
+                            response = await fetchAdzunaJobListings({ linkedinUrl: job.contact_details.co_linkedin });
                             break;
                         case 'youtube_marketing_videos':
                             response = await fetchYouTubeVideos({ companyName: job.contact_company });
@@ -132,15 +132,16 @@ async function fetchJobsByStatus(req, res) {
                             response = await fetchPublicMentions({ companyName: job.contact_company });
                             break;
                         case 'product_launches':
-                            response = await fetchProductLaunchSignals({ companyName: job.contact_company });
+                            response = await fetchProductLaunchSignals({ linkedinUrl: job.contact_company });
                             // console.log('Product Launch Response:', response);
                             break;
                         case 'linkedin_company_updates':
                         case 'activity_on_linkedin':
+                            response = await fetchCompanyPosts({ linkedinUrl: job.contact_details.co_linkedin });
+                            break;
                         case 'contact_profile_information':
-                        case 'activity_on_linkedin':
-                            const linkedInURL = constructLinkedInCompanyURL(job.contact_company);
-                            response = await fetchCompanyDetailsByLinkedInURL(linkedInURL);
+                            // const linkedInURL = constructLinkedInCompanyURL(job.contact_company);
+                            response = await fetchCompanyDetailsByLinkedInURL({ linkedinUrl: job.contact_details.co_linkedin });
                             break;
                         default:
                             console.warn(`Unknown signal_flag for job ID: ${job.job_id}`);
@@ -152,8 +153,8 @@ async function fetchJobsByStatus(req, res) {
                             { _id: job._id },
                             {
                                 job_status: 'FAILED',
-                                job_error: response.message || "Error in signal processing",
-                                signal_data: null
+                                job_error: response,
+                                signal_data: response
                             }
                         );
                     } else {
@@ -204,6 +205,34 @@ async function fetchJobsByStatus(req, res) {
                 { job_status: 'FAILED' }
             ]
         });
+
+        const statusCounts = await SignalAutomationJob.aggregate([
+            { $match: { user_id } },
+            {
+                $group: {
+                    _id: '$job_status',
+                    count: { $sum: 1 }
+                }
+            }
+        ]);
+
+        console.log('\n=== Job Status Summary ===');
+        console.log('User ID:', user_id);
+        const summary = {
+            NOT_STARTED: 0,
+            IN_PROGRESS: 0,
+            FAILED: 0
+        };
+
+        statusCounts.forEach(status => {
+            summary[status._id] = status.count;
+        });
+
+        console.log('NOT_STARTED jobs:', summary.NOT_STARTED);
+        console.log('IN_PROGRESS jobs:', summary.IN_PROGRESS);
+        console.log('FAILED jobs:', summary.FAILED);
+        console.log('Total jobs:', Object.values(summary).reduce((a, b) => a + b, 0));
+        console.log('========================\n');
 
         res.json({
             jobs: updatedJobs,
@@ -277,8 +306,9 @@ async function summarizeSignalData(req, res) {
                         break;
                     case 'linkedin_company_updates':
                     case 'activity_on_linkedin':
+                        promptTemplate = `Summarize the latest LinkedIn updates and activities for ${job.contact_company}. Highlight recent posts, articles, announcements, and key engagements. Include any insights on company initiatives, market trends, and industry impact: `;
+                        break
                     case 'contact_profile_information':
-                    case 'activity_on_linkedin':
                         promptTemplate = `Summarize the following data for ${job.contact_company}: `;
                     default:
                         promptTemplate = `Summarize the following data for ${job.contact_company}: `;
@@ -438,7 +468,7 @@ async function fetchNotStartedJobs(req, res) {
 
         const jobs = await SignalAutomationJob.find({ 
             user_id, 
-            job_status: 'NOT_STARTED' 
+            job_status: 'FAILED' 
         });
 
         if (jobs.length === 0) {

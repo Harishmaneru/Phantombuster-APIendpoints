@@ -32,11 +32,20 @@ const fetchCompanyPosts = async (linkedinUrl) => {
 
         console.log('Successfully fetched company posts:', response.data.message);
 
-        return {
-            status: "1",
-            message: "Successfully fetched company posts.",
-            data: response.data
-        };
+        if (response.data.data && response.data.data.length > 0) {
+            return {
+                status: "1",
+                message: "Successfully fetched company posts.",
+                data: response.data
+            };
+        } else {
+            console.log('No posts found for the given LinkedIn URL.');
+            return {
+                status: "0",
+                message: "No posts found for the provided company.",
+                data: {}
+            };
+        }
     } catch (error) {
         console.error('Error fetching company posts:', error.message);
         return {
@@ -49,13 +58,13 @@ const fetchCompanyPosts = async (linkedinUrl) => {
 };
 
 router.post('/getCompanyPosts', async (req, res) => {
-    const {  linkedinUrl } = req.body;
+    const { linkedinUrl } = req.body;
     console.log('Request received with body:', req.body);
 
-    if (!linkedinUrl ) {
+    if (!linkedinUrl) {
         return res.status(400).json({
             status: "-1",
-            message: "Either LinkedIn URL or Company name is required.",
+            message: "LinkedIn URL is required.",
             data: {}
         });
     }

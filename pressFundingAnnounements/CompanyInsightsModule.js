@@ -5,14 +5,13 @@ require("dotenv").config();
 
 const router = express.Router();
 
-
 const FINNHUB_API_KEY = "ctmk1m9r01qvk0t4gctgctmk1m9r01qvk0t4gcu0";
 
 const getSymbolFromCompanyName = async (companyName) => {
   try {
     const results = await yahooFinance.search(companyName);
     if (results.quotes && results.quotes.length > 0) {
-      // Filter for exact or close matches and prefer stocks over other securities
+
       const bestMatch = results.quotes.find(quote =>
         quote.isYahooFinance &&
         (quote.shortname?.toLowerCase().includes(companyName.toLowerCase()) ||
@@ -43,7 +42,7 @@ const fetchCompanyNews = async (symbol, fromDate, toDate) => {
     if (response.data && response.data.length > 0) {
       return response.data;
     } else {
-      throw new Error("No news articles found");
+      return [];
     }
   } catch (error) {
     console.error("Error fetching company news:", error.message);
@@ -51,7 +50,7 @@ const fetchCompanyNews = async (symbol, fromDate, toDate) => {
   }
 };
 
-// Helper function to calculate the date range (last two months)
+// Helper function to calculate the date range (last twenty days)
 const getLastTwentyDays = () => {
   const today = new Date();
   const toDate = today.toISOString().split("T")[0];
@@ -76,21 +75,21 @@ router.post("/company-insights", async (req, res) => {
     } catch (error) {
       console.error(`Error converting company name "${companyName}" to symbol:`, error.message);
       return res.status(200).json({
-        status: "-1",
-        message: "Could Not Find the Company-Insigtes For Provided Company",
+        status: "0",
+        message: `No insights found for the company: ${companyName}`,
         data: {},
       });
     }
   } else if (!symbol && !companyName) {
     return res.status(200).send({
       status: "-1",
-      message: "Company Name is required",
+      message: "Company Name or Symbol is required",
       data: {},
     });
   }
 
   try {
-    const response = await getComapnyInsights(stockSymbol);
+    const response = await getCompanyInsights(stockSymbol);
     res.status(200).send(response);
   } catch (error) {
     console.error("Error in /company-insights endpoint:", error.message);
@@ -98,7 +97,7 @@ router.post("/company-insights", async (req, res) => {
   }
 });
 
-const getComapnyInsights = async (symbol) => {
+const getCompanyInsights = async (symbol) => {
   try {
     if (!symbol) {
       return {
@@ -108,8 +107,16 @@ const getComapnyInsights = async (symbol) => {
       };
     }
 
-    const { fromDate, toDate } = getLastTwentyDays(); // Changed to getLastTwentyDays
+    const { fromDate, toDate } = getLastTwentyDays();
     const news = await fetchCompanyNews(symbol, fromDate, toDate);
+
+    if (news.length === 0) {
+      return {
+        status: "0",
+        message: "No relevant news articles found for the company symbol.",
+        data: {},
+      };
+    }
 
     const relevantKeywords = [
       "funding",
@@ -128,9 +135,17 @@ const getComapnyInsights = async (symbol) => {
       )
     );
 
+    if (filteredNews.length === 0) {
+      return {
+        status: "0",
+        message: "No relevant news articles found matching the criteria.",
+        data: {},
+      };
+    }
+
     return {
       status: "1",
-      message: "success",
+      message: "Success",
       data: filteredNews,
     };
   } catch (error) {
@@ -143,8 +158,7 @@ const getComapnyInsights = async (symbol) => {
   }
 };
 
-
 module.exports = {
   router,
-  getComapnyInsights
-}
+  getCompanyInsights
+};

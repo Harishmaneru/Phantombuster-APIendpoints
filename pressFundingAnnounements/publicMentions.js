@@ -48,7 +48,7 @@ const fetchPublicMentions = async ({ companyName }) => {
 
     if (!searchResults.length) {
         console.log('No results found');
-        return { status: "-1", message: `No public mentions found for ${companyName}` };
+        return { status: "0", message: `No public mentions found for ${companyName}` };
     }
 
     console.log('Starting analysis of search results');

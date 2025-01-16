@@ -1,3 +1,6 @@
+
+
+
 require('dotenv').config();
 const express = require('express');
 const axios = require('axios');
@@ -7,13 +10,13 @@ const RAPIDAPI_HOST = 'linkedin-data-api.p.rapidapi.com';
 const RAPIDAPI_KEY = '7cc4e8cf11msh7c088d04e04b847p1f6f44jsnd42e7a941558';
 const RAPIDAPI_URL = 'https://linkedin-data-api.p.rapidapi.com/get-user-articles';
 
-
-const fetchCompanyArticles = async (linkedinUrl, username) => {
-    if (!linkedinUrl || !username) {
-        console.log('Missing LinkedIn URL or username.');
+// Fetch company articles function
+const fetchCompanyArticles = async (linkedinUrl) => {
+    if (!linkedinUrl) {
+        console.log('Missing LinkedIn URL.');
         return {
             status: "-1",
-            message: "LinkedIn URL and username are required.",
+            message: "LinkedIn URL is required.",
             data: {}
         };
     }
@@ -25,57 +28,65 @@ const fetchCompanyArticles = async (linkedinUrl, username) => {
                 'x-rapidapi-key': RAPIDAPI_KEY
             },
             params: {
-                url: linkedinUrl,
-                username: username
+                url: linkedinUrl
             }
         });
 
         console.log('Successfully fetched articles:', response.data);
 
-        return {
-            status: "1",
-            // message: "Successfully fetched articles.",
-            data: response.data
-        };
+        if (response.data && Array.isArray(response.data.articles) && response.data.articles.length > 0) {
+            return {
+                status: "1",
+                message: "Successfully fetched articles.",
+                data: response.data.articles
+            };
+        } else {
+            console.log('No articles found for the given LinkedIn URL.');
+            return {
+                status: "0",
+                message: "No articles found for the provided LinkedIn URL.",
+                data: {}
+            };
+        }
     } catch (error) {
-        console.error('Error fetching articles:', error.message);
+        console.error('Error fetching articles:', error);
+
+        // Return the raw response from the API if available
         return {
             status: "-1",
             message: "Failed to fetch articles.",
-            error: error.message,
+            errorDetails: error.response?.data || error.message,
             data: {}
         };
     }
 };
 
-
- // API Endpoint to fetch articles for a company
-
+// API Endpoint to fetch articles for a company
 router.post('/getCompanyArticles', async (req, res) => {
-    const { companyName } = req.body;
+    const { linkedinUrl } = req.body;
     console.log('Request received with body:', req.body);
-    if (!companyName) {
+
+    if (!linkedinUrl) {
         return res.status(400).json({
             status: "-1",
-            message: "Company name is required.",
+            message: "LinkedIn URL is required.",
             data: {}
         });
     }
 
     try {
-        // Construct LinkedIn profile URL and username dynamically
-        const linkedinUrl = `https://www.linkedin.com/company/${companyName}/`;
-        const username = "Fetch" 
-
-        // Fetch articles using the constructed parameters
-        const response = await fetchCompanyArticles(linkedinUrl, username);
+        // Fetch articles using the provided LinkedIn URL
+        const response = await fetchCompanyArticles(linkedinUrl);
         res.status(200).send(response);
     } catch (error) {
+        console.error('Error in endpoint:', error);
+
+        // Send the raw error details to the client
         res.status(500).json({
             status: "-1",
-            message: "An error occurred while fetching articles.",
-            data: {},
-            error: error.message
+            message: "An error occurred while processing your request.",
+            errorDetails: error.response?.data || error.message,
+            data: {}
         });
     }
 });
