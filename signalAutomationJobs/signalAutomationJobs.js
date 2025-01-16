@@ -118,7 +118,8 @@ async function fetchJobsByStatus(req, res) {
                                 continue;
                             }
                             break;
-                        case 'job_openings':
+                            case 'job_openings':
+                            case 'job_changes':
                             response = await fetchAdzunaJobListings({ companyName: job.contact_company });
                             break;
                         case 'youtube_marketing_videos':
@@ -135,6 +136,9 @@ async function fetchJobsByStatus(req, res) {
                             // console.log('Product Launch Response:', response);
                             break;
                         case 'linkedin_company_updates':
+                        case 'activity_on_linkedin':
+                        case 'contact_profile_information':
+                        case 'activity_on_linkedin':
                             const linkedInURL = constructLinkedInCompanyURL(job.contact_company);
                             response = await fetchCompanyDetailsByLinkedInURL(linkedInURL);
                             break;
@@ -255,7 +259,8 @@ async function summarizeSignalData(req, res) {
                     case 'press_announcements':
                         promptTemplate = `Summarize the latest press announcements and funding rounds for ${job.contact_company}. Highlight major events, funding amounts, and key developments: `;
                         break;
-                    case 'job_openings':
+                        case 'job_openings':
+                        case 'job_changes':
                         promptTemplate = `Analyze the job market activity for ${job.contact_company}. Include total openings, key departments hiring, and notable positions: `;
                         break;
                     case 'youtube_marketing_videos':
@@ -270,6 +275,11 @@ async function summarizeSignalData(req, res) {
                     case 'product_launches':
                         promptTemplate = `Summarize the latest product launches for ${job.contact_company}. Include product details, launch dates, keyFeatures and market impact: `;
                         break;
+                    case 'linkedin_company_updates':
+                    case 'activity_on_linkedin':
+                    case 'contact_profile_information':
+                    case 'activity_on_linkedin':
+                        promptTemplate = `Summarize the following data for ${job.contact_company}: `;
                     default:
                         promptTemplate = `Summarize the following data for ${job.contact_company}: `;
                 }
@@ -418,7 +428,44 @@ async function fetchAllJobsByUser(req, res) {
     }
 }
 
+async function fetchNotStartedJobs(req, res) {
+    try {
+        const { user_id } = req.query;
 
+        if (!user_id) {
+            return res.status(400).json({ message: 'user_id is required' });
+        }
+
+        const jobs = await SignalAutomationJob.find({ 
+            user_id, 
+            job_status: 'NOT_STARTED' 
+        });
+
+        if (jobs.length === 0) {
+            console.log(`No NOT_STARTED jobs found for user_id: ${user_id}`);
+            return res.json({ 
+                message: `No NOT_STARTED jobs found for user_id ${user_id}.`,
+                jobs: []
+            });
+        }
+
+        console.log(`Fetched ${jobs.length} NOT_STARTED jobs for user_id: ${user_id}`);
+        jobs.forEach(job => console.log(`Job ID: ${job.job_id}`));
+
+        res.json({ 
+            jobs, 
+            message: `${jobs.length} NOT_STARTED jobs fetched successfully for user_id ${user_id}.`
+        });
+
+    } catch (error) {
+        console.error('Error fetching NOT_STARTED jobs:', error);
+        res.status(500).json({ 
+            error: 'An error occurred while fetching NOT_STARTED jobs.',
+            details: error.message 
+        });
+    }
+}
+router.get('/fetchNotStartedJobs', fetchNotStartedJobs);
 router.get('/fetchAllJobsByUser', fetchAllJobsByUser);
 router.get('/fetchJobsByStatus', fetchJobsByStatus);
 router.get('/summarizeSignalData', summarizeSignalData);
@@ -430,6 +477,7 @@ module.exports = {
     fetchAllJobsByUser,
     fetchJobsByStatus,
     summarizeSignalData,
-    changeJobStatusToNotStarted
+    changeJobStatusToNotStarted,
+    fetchNotStartedJobs
     // resetAllJobsToNotStarted
 };
