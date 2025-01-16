@@ -33,10 +33,16 @@ const fetchCompanyPosts = async (linkedinUrl) => {
         console.log('Successfully fetched company posts:', response.data.message);
 
         if (response.data.data && response.data.data.length > 0) {
+            // Limit to last 3 posts
+            const limitedPosts = {
+                ...response.data,
+                data: response.data.data.slice(0, 3)  // Take only first 3 posts
+            };
+
             return {
                 status: "1",
-                message: "Successfully fetched company posts.",
-                data: response.data
+                message: "Successfully fetched last 3 company posts.",
+                data: limitedPosts
             };
         } else {
             console.log('No posts found for the given LinkedIn URL.');
@@ -70,10 +76,7 @@ router.post('/getCompanyPosts', async (req, res) => {
     }
 
     try {
-        // If linkedinUrl is provided, use it. Otherwise, construct using companyName
         const finalLinkedinUrl = linkedinUrl;
-
-        // Fetch company posts using the constructed URL
         const response = await fetchCompanyPosts(finalLinkedinUrl);
         res.status(200).send(response);
     } catch (error) {
