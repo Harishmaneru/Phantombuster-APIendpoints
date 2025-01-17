@@ -85,7 +85,7 @@ const fetchAdzunaJobListings = async (body) => {
     try {
         const response = await axios.get(url, { params });
         console.log('Received response from Adzuna API:', response.status, response.statusText);
-
+        console.log('Response data:', response.data);
         const jobListings = response.data.results;
 
         if (!jobListings || jobListings.length === 0) {
@@ -126,7 +126,7 @@ const fetchAdzunaJobListings = async (body) => {
             
             return {
                 status: "-1",
-                message: `API Error: ${error.response.data.error || 'Unknown API error'}`,
+                message: `Job search failed with status ${error.response.status}. Please try again later`,
                 data: {}
             };
         } else if (error.request) {
