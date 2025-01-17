@@ -84,7 +84,7 @@ router.post('/validate-bulk-email', async (req, res) => {
 
         const jobId = createJobResponse.data.job_id;
         const jobStartTime = new Date();
-
+        console.log(`[Email Validation] Job created successfully. Job ID: ${jobId}`);
         // Poll job status
         let isComplete = false;
 
@@ -108,7 +108,7 @@ router.post('/validate-bulk-email', async (req, res) => {
             }
         }
 
-        // Get results
+        console.log('[Email Validation] Fetching job results');
         const resultsResponse = await axios.get('https://api.neverbounce.com/v4/jobs/results', {
             params: {
                 key: apiKey,
@@ -116,14 +116,14 @@ router.post('/validate-bulk-email', async (req, res) => {
             }
         });
 
-        // Format results to match UI
+       
         const formattedResults = resultsResponse.data.results.map(item => ({
             email: item.data.email,
             result: formatResult(item.verification.result),
             explanation: resultExplanation[item.verification.result],
             time: getRelativeTime(jobStartTime)
         }));
-
+        console.log(`[Email Validation] Validation completed. Processed ${formattedResults.length} emails`);
         res.status(200).json({
             status: 'success',
             verification_results: formattedResults
