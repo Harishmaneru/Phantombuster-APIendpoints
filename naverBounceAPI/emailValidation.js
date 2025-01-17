@@ -4,115 +4,138 @@ const router = express.Router();
 
 router.use(express.json());
 const apiKey = 'private_abdd5ed846e818d9801cd92810283e4b';
-// Single Email Validation
-router.post('/validate-single-email', async (req, res) => {
-    try {
-        const { email } = req.body;
-        if (!email) {
-            return res.status(400).json({ error: 'Email is a required field' });
-        }
 
-      
-        
-        const apiUrl = 'https://api.neverbounce.com/v4/single/check';
-
-       
-        const response = await axios.post(apiUrl, {
-            key: apiKey,
-            email
-        });
-        console.log('single_email_response',response.data)
-        
-        res.status(200).json(response.data);
-    } catch (error) {
-        console.error('Error validating email:', error.response?.data || error.message);
-        res.status(500).json({
-            error: 'Failed to validate email',
-            details: error.response?.data || error.message
-        });
+const resultExplanation = {
+    'valid': {
+        description: 'A valid email address has been verified as a real email that is currently accepting mail.',
+        recommendation: 'SAFE – These emails exist and have been verified for safe sending.'
+    },
+    'invalid': {
+        description: 'An invalid email address has been verified as a bad recipient address that does not exist or is not accepting mail.',
+        recommendation: 'DON’T SEND – These emails do not exist and are not safe for sending.'
+    },
+    'disposable': {
+        description: 'Disposable emails are temporary accounts used to avoid using a real personal account during a sign-up process.',
+        recommendation: 'DON’T SEND – These emails are fake or temporary emails and are not safe for sending.'
+    },
+    'catchall': {
+        description: 'Also known as an “accept all”. This is a domain-wide setting where all emails on this domain will be reported as "accept all".',
+        recommendation: 'SAFE – If you have a dedicated email server with your own IPs, accept all emails may be safe for sending dependent on the overall health of your list. DON’T SEND – If you use a third party email provider that requires a bounce rate below 4%, these emails are not safe for sending.'
+    },
+    'unknown': {
+        description: 'We are unable to definitively determine this email’s status due to the domain and/or server not responding to our requests.',
+        recommendation: 'SAFE – If you have a dedicated email server with your own IPs, unknown emails are normally safe for sending. DON’T SEND – If you use a third party email provider that requires a bounce rate below 4%, these emails are not safe for sending.'
     }
-});
+};
 
-// Bulk Email Validation
+
+// Format verification result to match UI display
+const formatResult = (verificationResult) => {
+    const resultMap = {
+        'valid': 'VALID',
+        'invalid': 'INVALID',
+        'catchall': 'ACCEPT ALL',
+        'disposable': 'DISPOSABLE',
+        'unknown': 'UNKNOWN'
+    };
+    return resultMap[verificationResult] || verificationResult.toUpperCase();
+};
+
+// Format relative time
+const getRelativeTime = (timestamp) => {
+    const now = new Date();
+    const verifiedAt = new Date(timestamp);
+    const diffInMinutes = Math.floor((now - verifiedAt) / (1000 * 60));
+
+    if (diffInMinutes < 1) return 'a few seconds ago';
+    if (diffInMinutes < 60) return `${diffInMinutes} minute${diffInMinutes === 1 ? '' : 's'} ago`;
+    const diffInHours = Math.floor(diffInMinutes / 60);
+    if (diffInHours < 24) return `${diffInHours} hour${diffInHours === 1 ? '' : 's'} ago`;
+    const diffInDays = Math.floor(diffInHours / 24);
+    return `${diffInDays} day${diffInDays === 1 ? '' : 's'} ago`;
+};
+
 router.post('/validate-bulk-email', async (req, res) => {
     try {
         const { emails } = req.body;
 
-       
-        if (!emails || !Array.isArray(emails) || emails.length === 0) {
+        if (!emails || !Array.isArray(emails)) {
             return res.status(400).json({
-                error: 'Emails must be provided as an array with each item being an array of email and name.',
+                error: 'Input must be an array of email addresses'
             });
         }
 
-        const apiUrl = 'https://api.neverbounce.com/v4/jobs/create';
-
-       
-        const createResponse = await axios.post(apiUrl, {
+        // Create job
+        const createJobResponse = await axios.post('https://api.neverbounce.com/v4/jobs/create', {
             key: apiKey,
-            input_location: 'supplied',
-            filename: 'SampleNeverBounceAPI.csv',  
-            auto_start: true,
-            auto_parse: true,
             input: emails,
+            input_location: 'supplied',
+            filename: 'email_validation.csv',
+            auto_start: 1,
+            auto_parse: 1,
         });
 
-        console.log('Job created successfully:', createResponse.data);
-        const jobId = createResponse.data.job_id;
+        if (createJobResponse.data.status !== 'success') {
+            return res.status(400).json({
+                status: 'error',
+                message: createJobResponse.data.message
+            });
+        }
 
-        const statusUrl = 'https://api.neverbounce.com/v4/jobs/status';
-        let jobStatus;
-        do {
-            const statusResponse = await axios.get(statusUrl, {
+        const jobId = createJobResponse.data.job_id;
+        const jobStartTime = new Date();
+
+        // Poll job status
+        let isComplete = false;
+
+        while (!isComplete) {
+            const statusResponse = await axios.get('https://api.neverbounce.com/v4/jobs/status', {
                 params: {
                     key: apiKey,
-                    job_id: jobId,
-                },
+                    job_id: jobId
+                }
             });
-
-            jobStatus = statusResponse.data.job_status;
-            console.log(`Job status: ${jobStatus}`);
-
-            if (jobStatus === 'complete') {
-                break;
-            } else if (jobStatus === 'failed') {
-                throw new Error('Job failed during processing');
+            
+            if (statusResponse.data.job_status === 'complete') {
+                isComplete = true;
+            } else if (statusResponse.data.job_status === 'failed') {
+                return res.status(400).json({
+                    status: 'error',
+                    message: 'Job processing failed'
+                });
+            } else {
+                await new Promise(resolve => setTimeout(resolve, 5000));
             }
+        }
 
-           
-            await new Promise(resolve => setTimeout(resolve, 5000));
-        } while (jobStatus !== 'complete');
-
-        // Download job results
-        const downloadUrl = 'https://api.neverbounce.com/v4/jobs/download';
-        const resultsResponse = await axios.get(downloadUrl, {
+        // Get results
+        const resultsResponse = await axios.get('https://api.neverbounce.com/v4/jobs/results', {
             params: {
                 key: apiKey,
-                job_id: jobId,
-            },
+                job_id: jobId
+            }
         });
 
-        console.log('Raw bulk email results:', resultsResponse.data);
+        // Format results to match UI
+        const formattedResults = resultsResponse.data.results.map(item => ({
+            email: item.data.email,
+            result: formatResult(item.verification.result),
+            explanation: resultExplanation[item.verification.result],
+            time: getRelativeTime(jobStartTime)
+        }));
 
-        // Parse the raw results
-        const rawResults = resultsResponse.data.split('\r\n').filter(row => row.trim() !== '');
-        const parsedResults = rawResults.map(row => {
-            const [email, name, result] = row.replace(/"/g, '').split(',');
-            return { email, name, result };
-        });
-
-        console.log('Formatted bulk email results:', parsedResults);
-
-        // Send formatted results back to the client
         res.status(200).json({
-            message: 'Email validation completed successfully',
-            results: parsedResults,
+            status: 'success',
+            verification_results: formattedResults
+            
         });
+
     } catch (error) {
-        console.error('Error validating bulk emails:', error.response?.data || error.message);
+        console.error('API Error:', error.response?.data || error.message);
         res.status(500).json({
-            error: 'Failed to validate bulk emails',
-            details: error.response?.data || error.message,
+            status: 'error',
+            message: 'API Error',
+            details: error.response?.data?.message || error.message
         });
     }
 });

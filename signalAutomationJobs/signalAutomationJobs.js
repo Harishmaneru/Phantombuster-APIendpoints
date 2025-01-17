@@ -758,7 +758,7 @@ async function fetchJobsByStatus(req, res) {
         console.log('IN_PROGRESS jobs:', summary.IN_PROGRESS);
         console.log('SUCCESS jobs:', summary.SUCCESS);
         console.log('FAILED jobs:', summary.FAILED);
-        console.log('Total jobs:', Object.values(summary).reduce((a, b) => a + b, 0));
+ 
         console.log('========================\n');
 
         res.json({
