@@ -2,8 +2,8 @@
 // const express = require('express');
 // const router = express.Router();
 
-// const ADZUNA_APP_ID = 'eb7bd0b4';
-// const ADZUNA_APP_KEY = 'ece2b22a1999da408461f76e7e8560b4';
+// const ADZUNA_APP_ID = 'eb7bd0b4';  
+// const ADZUNA_APP_KEY = 'ece2b22a1999da408461f76e7e8560b4';  
 
 // router.post('/fetch-jobssignals', async (req, res) => {
 //     console.log('Received request with body:', req.body);
@@ -11,89 +11,44 @@
 //     res.status(200).send(response);
 // });
 
-// // Function to extract company name from LinkedIn URL
-// const extractCompanyFromLinkedInURL = (linkedinUrl) => {
-//     try {
-//         if (!linkedinUrl) return null;
-
-//         // Handle various LinkedIn URL formats
-//         const urlPatterns = [
-//             /linkedin\.com\/company\/([^\/\?]+)/i,    
-//             /linkedin\.com\/school\/([^\/\?]+)/i,     
-//             /linkedin\.com\/organization\/([^\/\?]+)/i  
-//         ];
-
-//         for (const pattern of urlPatterns) {
-//             const match = linkedinUrl.match(pattern);
-//             if (match && match[1]) {
-//                 // Convert URL-friendly format back to company name
-//                 const companyName = match[1]
-//                     .replace(/-/g, ' ')           
-//                     .replace(/\+/g, ' ')         
-//                     .replace(/%20/g, ' ')         
-//                     .trim();
-
-//                 return companyName;
-//             }
-//         }
-
-//         return null;
-//     } catch (error) {
-//         console.error('Error extracting company name from LinkedIn URL:', error);
-//         return null;
-//     }
-// };
-
 // const fetchAdzunaJobListings = async (body) => {
 //     console.log('Processing Adzuna job request with body:', body);
-//     const { companyName, linkedinUrl, jobType, location } = body;
+//     const { companyName } = body;
 
-//     // Try to get company name either directly or from LinkedIn URL
-//     let targetCompany = companyName;
-//     console.log('Company name:', targetCompany);
-//     if (!targetCompany && linkedinUrl) {
-//         targetCompany = extractCompanyFromLinkedInURL(linkedinUrl);
-//         console.log('Extracted company name from LinkedIn URL:', targetCompany);
-//     }
-
-//     // Validate required parameters
-//     if (!targetCompany && !jobType && !location) {
-//         console.log('Missing required parameters');
+//     // Validate company name
+//     if (!companyName || companyName.trim() === "") {
+//         console.log('Missing company name');
 //         return {
 //             status: "-1",
-//             message: "linkedinUrl is required.",
+//             message: "Company name is required.",
 //             data: {}
 //         };
 //     }
 
 //     const baseUrl = 'https://api.adzuna.com/v1/api/jobs';
-//     const country = 'us';
+//     const country = 'us'; // Adjust this based on the target country
 //     const url = `${baseUrl}/${country}/search/1`;
 
-//     // Building the query parameters
+//     // Build the query parameters
 //     const params = {
 //         app_id: ADZUNA_APP_ID,
 //         app_key: ADZUNA_APP_KEY,
-//         results_per_page: 5
+//         results_per_page: 5,
+//         company: companyName
 //     };
-
-//     if (targetCompany) params.company = targetCompany;
-//     if (jobType) params.what = jobType;
-//     if (location) params.where = location;
 
 //     console.log('Sending request to Adzuna API with params:', params);
 
 //     try {
 //         const response = await axios.get(url, { params });
 //         console.log('Received response from Adzuna API:', response.status, response.statusText);
-//         console.log('Response data:', response.data);
 //         const jobListings = response.data.results;
 
 //         if (!jobListings || jobListings.length === 0) {
-//             console.log('No job listings found for:', { targetCompany, jobType, location });
+//             console.log('No job listings found for company:', companyName);
 //             return {
 //                 status: "0",
-//                 message: `No job listings found for the given criteria`,
+//                 message: `No job listings found for the company "${companyName}"`,
 //                 data: []
 //             };
 //         }
@@ -217,7 +172,7 @@ async function scrapeJobDetails(url, queue) {
         const page = await browser.newPage();
 
         try {
-            await page.setDefaultNavigationTimeout(30000);
+            await page.setDefaultNavigationTimeout(60000);
             await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36');
 
             await page.goto(url, { waitUntil: 'networkidle0' });

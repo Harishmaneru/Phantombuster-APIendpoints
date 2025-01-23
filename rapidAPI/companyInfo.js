@@ -14,7 +14,7 @@ router.post('/getLinkedInCompanyData', async (req, res) => {
         method: 'GET',
         url: 'https://linkedin-data-scraper4.p.rapidapi.com/company.php',
         params: { url: companyUrl },
-        headers: {
+        headers: {               
             'x-rapidapi-host': 'linkedin-data-scraper4.p.rapidapi.com',
             'x-rapidapi-key': '989f4f415emsh61990bfbf21063fp14c1a4jsn58f1c4a73736'
         }

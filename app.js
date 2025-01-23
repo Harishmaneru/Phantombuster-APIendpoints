@@ -1,5 +1,6 @@
 const express = require('express');
 const https = require('https');
+const http = require('http');
 const fs = require('fs');
 const cors = require('cors');
 
@@ -70,6 +71,11 @@ const companyInfo = require('./rapidAPI/companyInfo.js');
 const getPostReactions = require('./rapidAPI/getPostReactions.js');
 
 const getpostComments = require('./rapidAPI/getpostComments.js');
+
+const virtualInterview = require('./virtualInterviewAPI/virtualInterview.js');
+
+const videoTotext = require('./virtualInterviewAPI/videoTotext.js');
+
 const app = express();
 const port = 3001;
 
@@ -77,6 +83,7 @@ app.use(
   cors({
     origin: [
       "http://localhost:4000",
+      "http://localhost:3000",
       "http://localhost:4200",
       "http://localhost:4201",
       "http://localhost:7860", //langflow test
@@ -128,7 +135,8 @@ app.use(personProfile);
 app.use(companyInfo);
 app.use(getPostReactions);
 app.use(getpostComments);
-
+app.use(virtualInterview);
+app.use(videoTotext.router);
 
 
 

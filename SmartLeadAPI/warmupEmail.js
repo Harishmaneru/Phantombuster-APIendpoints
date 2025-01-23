@@ -26,7 +26,7 @@ router.post('/enable-warmup', async (req, res) => {
         }
 
         const emailAccountId = emailResponse.data[0].id;
-
+        console.log('Email Account ID:', emailAccountId);
         // Step 2: Define default warm-up settings
         const defaultPayload = {
             warmup_enabled: true,
