@@ -16,7 +16,7 @@ const getLinkedInProfileData = async (profileUrl) => {
             }
         });
 
-        console.log('Response received:', response.data);
+        console.log('Response received:', response.data.username);
         return response.data;
     } catch (error) {
         console.error('Error fetching LinkedIn profile data:', error);

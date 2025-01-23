@@ -81,7 +81,7 @@
 
 //         // Identify the platform
 //         const platform = identifyPlatform(jobPostingUrl);
-        
+
 //         // Get platform-specific selectors
 //         const platformConfig = PLATFORM_SELECTORS[platform] || {
 //             selectors: [
@@ -127,7 +127,7 @@
 //                 const body = document.body;
 //                 const scriptTags = document.getElementsByTagName('script');
 //                 const styleTags = document.getElementsByTagName('style');
-                
+
 //                 // Clone body to remove script and style tags
 //                 const clone = body.cloneNode(true);
 //                 for (const tag of [...scriptTags, ...styleTags]) {
@@ -135,7 +135,7 @@
 //                         clone.removeChild(tag);
 //                     }
 //                 }
-                
+
 //                 return clone.innerText;
 //             });
 
@@ -189,10 +189,10 @@
 //     let questionNumber = 1;
 
 //     for (let question of questions) {
-      
+
 //         let cleanedQuestion = question.replace(/\*\*/g, '').trim();
 
-     
+
 //         cleanedQuestion = cleanedQuestion.replace(/^Technical Question \d+:/, `Question ${questionNumber}:`);
 //         cleanedQuestions.push(cleanedQuestion);
 
@@ -212,7 +212,7 @@
 
 //     try {
 //         console.log(`Generating questions for ${name} (${email}) using job posting URL: ${jobPostingUrl}`);
-        
+
 //         // Scrape the job description
 //         const jobDescription = await scrapeJobDescription(jobPostingUrl);
 
@@ -223,7 +223,7 @@
 //         const questions = cleanQuestions(rawQuestions);
 
 //         console.log(`Generated questions: ${questions}`);
-        
+
 //         res.json({ 
 //             questions,
 //             // jobDescription  
@@ -545,7 +545,26 @@ const { OpenAI } = require('openai');
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
 const router = express.Router();
-const upload = multer({ dest: 'uploads/' });
+
+const storage = multer.diskStorage({
+    destination: function (req, file, cb) {
+        cb(null, 'uploads/')
+    },
+    filename: function (req, file, cb) {
+        cb(null, file.fieldname + '-' + Date.now() + '.mp4')
+    }
+});
+
+const upload = multer({ 
+    storage: storage,
+    fileFilter: function (req, file, cb) {
+        if (file.mimetype === 'video/mp4') {
+            cb(null, true);
+        } else {
+            cb(new Error('Only MP4 videos are allowed'), false);
+        }
+    }
+});
 
 const mongoUri = 'mongodb+srv://harishmaneru:Xe2Mz13z83IDhbPW@cluster0.bu3exkw.mongodb.net/?retryWrites=true&w=majority&tls=true';
 const dbName = 'interviewApp';
@@ -652,10 +671,10 @@ const cleanQuestions = (questions) => {
     let questionNumber = 1;
 
     for (let question of questions) {
-      
+
         let cleanedQuestion = question.replace(/\*\*/g, '').trim();
 
-     
+
         cleanedQuestion = cleanedQuestion.replace(/^Technical Question \d+:/, `Question ${questionNumber}:`);
         cleanedQuestions.push(cleanedQuestion);
 
@@ -675,7 +694,7 @@ router.post('/generate-questions', async (req, res) => {
 
     try {
         console.log(`Generating questions for ${name} (${email}) using job posting URL: ${jobPostingUrl}`);
-        
+
         // Scrape the job description
         const jobDescription = await scrapeJobDescription(jobPostingUrl);
 
@@ -686,8 +705,8 @@ router.post('/generate-questions', async (req, res) => {
         const questions = cleanQuestions(rawQuestions);
 
         console.log(`Generated questions: ${questions}`);
-        
-        res.json({ 
+
+        res.json({
             questions,
             // jobDescription  
         });
@@ -697,37 +716,73 @@ router.post('/generate-questions', async (req, res) => {
     }
 });
 
-// Process applicant responses
+
 router.post('/submit-responses', upload.fields([
     { name: 'videoResponse1', maxCount: 1 },
     { name: 'videoResponse2', maxCount: 1 },
     { name: 'videoResponse3', maxCount: 1 }
 ]), async (req, res) => {
-    const { textAnswer, jobPostingUrl, emails } = req.body;
-    console.log(req.body)
+    console.log('Incoming request body:', req.body);
+    console.log('Incoming files:', req.files);
+
+    const { 
+        textAnswer, 
+        jobPostingUrl, 
+        replyEmails,  // Change from 'emails' to 'replyEmails'
+        linkType,
+        passcode 
+    } = req.body;
     const videos = req.files;
-    console.log(videos)
-    if (!textAnswer || !jobPostingUrl || !emails || !videos) {
-        return res.status(400).json({ error: 'Required fields are missing.' });
+
+    // Validate that all required fields are present
+    if (
+        !textAnswer ||
+        !jobPostingUrl ||
+        !replyEmails ||  // Use replyEmails instead of emails
+        !videos.videoResponse1 ||
+        !videos.videoResponse2 ||
+        !videos.videoResponse3
+    ) {
+        return res.status(400).json({ 
+            error: 'Required fields are missing.',
+            details: {
+                textAnswer: !!textAnswer,
+                jobPostingUrl: !!jobPostingUrl,
+                replyEmails: !!replyEmails,
+                videoResponse1: !!videos.videoResponse1,
+                videoResponse2: !!videos.videoResponse2,
+                videoResponse3: !!videos.videoResponse3
+            }
+        });
     }
 
+
     try {
+        console.log('Scraping job description...');
         const jobDescription = await scrapeJobDescription(jobPostingUrl);
 
+        console.log('Processing video responses...');
         const videoResponses = [];
         for (const key of ['videoResponse1', 'videoResponse2', 'videoResponse3']) {
             if (videos[key]) {
-                const videoPath = videos[key][0].path;
-                const audioPath = await convertVideoToAudio(videoPath);
-                const transcription = await transcribeAudio(audioPath);
-                videoResponses.push(transcription);
-                fs.unlinkSync(audioPath);
-                fs.unlinkSync(videoPath);
+                try {
+                    const videoPath = videos[key][0].path;
+                    const audioPath = await convertVideoToAudio(videoPath);
+                    const transcription = await transcribeAudio(audioPath);
+                    videoResponses.push(transcription);
+
+                    fs.unlinkSync(audioPath);
+                    fs.unlinkSync(videoPath);
+                } catch (error) {
+                    console.error(`Error processing video ${key}:`, error);
+                }
             }
         }
 
+        console.log('Generating rating...');
         const rating = await generateRating(jobDescription, [textAnswer, ...videoResponses]);
 
+        console.log('Saving to MongoDB...');
         const client = new MongoClient(mongoUri, { useUnifiedTopology: true });
         await client.connect();
         const db = client.db(dbName);
@@ -742,6 +797,7 @@ router.post('/submit-responses', upload.fields([
         });
         await client.close();
 
+        console.log('Sending email...');
         const emailRecipients = emails.split(',').map((email) => email.trim());
         const emailContent = `Applicant responses and ratings have been completed. View them here: [Link to Application]`;
 
@@ -754,6 +810,7 @@ router.post('/submit-responses', upload.fields([
 
         res.json({ message: 'Responses submitted and evaluated successfully.' });
     } catch (error) {
+        console.error('Error in /submit-responses:', error);
         res.status(500).json({ error: error.message });
     }
 });

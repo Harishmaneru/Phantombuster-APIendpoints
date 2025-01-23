@@ -88,6 +88,8 @@ app.use(
       "http://localhost:4201",
       "http://localhost:7860", //langflow test
       /\.onepgr\.com$/,
+      "https://videoresponse.onepgr.com", 
+      "https://virtual-interviewer-taupe.vercel.app",  
     ],
     methods: ["GET", "PUT", "POST", "DELETE", "OPTIONS"],
     allowedHeaders: ["Content-Type", "Authorization", "X-Requested-With"],
