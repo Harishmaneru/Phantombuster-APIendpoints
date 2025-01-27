@@ -76,6 +76,8 @@ const virtualInterview = require('./virtualInterviewAPI/virtualInterview.js');
 
 const videoTotext = require('./virtualInterviewAPI/videoTotext.js');
 
+const interviewLink = require('./virtualInterviewAPI/interviewLink.js');
+
 const app = express();
 const port = 3001;
 
@@ -86,7 +88,6 @@ app.use(
       "http://localhost:3000",
       "http://localhost:4200",
       "http://localhost:4201",
-      "http://localhost:7860", //langflow test
       /\.onepgr\.com$/,
       "https://videoresponse.onepgr.com", 
       "https://virtual-interviewer-taupe.vercel.app",  
@@ -139,7 +140,7 @@ app.use(getPostReactions);
 app.use(getpostComments);
 app.use(virtualInterview);
 app.use(videoTotext.router);
-
+app.use(interviewLink)
 
 
 const options = {

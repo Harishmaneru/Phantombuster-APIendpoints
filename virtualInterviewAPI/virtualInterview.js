@@ -66,7 +66,7 @@ const scrapeJobDescription = async (jobPostingUrl) => {
 
     try {
         await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36');
-        await page.goto(jobPostingUrl, { waitUntil: 'networkidle0', timeout: 30000 });
+        await page.goto(jobPostingUrl, { waitUntil: 'networkidle0', timeout: 60000 });
 
         const platform = identifyPlatform(jobPostingUrl);
         const platformConfig = PLATFORM_SELECTORS[platform] || {
@@ -91,15 +91,20 @@ const scrapeJobDescription = async (jobPostingUrl) => {
     }
 };
 
-const generateQuestions = async (jobDescription) => {
-    const prompt = `As an experienced technical interviewer, generate exactly 3 relevant and challenging technical interview questions based on this job description. Avoid including behavioral or general questions:\n\n${jobDescription}`;
+
+
+const generateQuestions = async (JobDescription) => {
+    
+
+   const prompt = `Generate exactly 3 relevant and challenging technical interview questions based on the following job description. The questions should focus on conceptual understanding and require detailed verbal explanations, not code-writing tasks. Avoid asking questions that involve solving problems by writing code. Provide only the questions, without any introductory text, explanations, or formatting:\n\n${JobDescription}`;
+
 
     const response = await openai.chat.completions.create({
         model: 'gpt-3.5-turbo',
         messages: [
             {
                 role: 'system',
-                content: 'You are an expert technical interviewer who creates relevant and challenging technical questions for candidates.'
+                content: 'You are an expert technical interviewer who creates concise, challenging technical questions for candidates.'
             },
             {
                 role: 'user',
@@ -111,6 +116,8 @@ const generateQuestions = async (jobDescription) => {
 
     return response.choices[0].message.content.split('\n').filter(q => q.trim());
 };
+
+
 // Function to clean the generated questions
 const cleanQuestions = (questions) => {
     let cleanedQuestions = [];
@@ -131,20 +138,22 @@ const cleanQuestions = (questions) => {
 };
 
 // Main route handler
-router.post('/generate-questions', async (req, res) => {
-    const { name, email, jobPostingUrl } = req.body;
 
-    if (!name || !email || !jobPostingUrl) {
-        return res.status(400).json({ error: 'Name, email, and job posting URL are required.' });
+router.post('/generate-questions', async (req, res) => {
+    const { jobPostingUrl } = req.body;
+
+    if (!jobPostingUrl) {
+        return res.status(400).json({ error: 'Job posting URL is required.' });
     }
 
     try {
-        console.log(`Generating questions for ${name} (${email}) using job posting URL: ${jobPostingUrl}`);
+        console.log(`Generating questions using job posting URL: ${jobPostingUrl}`);
 
         // Scrape the job description
         const jobDescription = await scrapeJobDescription(jobPostingUrl);
-
-        // Generate the raw questions
+        console.log('raw job description',jobDescription)
+  
+        // Generate raw questions based on the structured description
         const rawQuestions = await generateQuestions(jobDescription);
 
         // Clean the questions for UI display
@@ -152,9 +161,10 @@ router.post('/generate-questions', async (req, res) => {
 
         console.log(`Generated questions: ${questions}`);
 
+        // Respond with questions and the structured job description
         res.json({
             questions,
-            // jobDescription
+            JobDescription: jobDescription 
         });
     } catch (error) {
         console.error('Error in /generate-questions:', error.message);

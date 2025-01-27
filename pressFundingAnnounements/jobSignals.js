@@ -1,111 +1,3 @@
-// const axios = require('axios');
-// const express = require('express');
-// const router = express.Router();
-
-// const ADZUNA_APP_ID = 'eb7bd0b4';  
-// const ADZUNA_APP_KEY = 'ece2b22a1999da408461f76e7e8560b4';  
-
-// router.post('/fetch-jobssignals', async (req, res) => {
-//     console.log('Received request with body:', req.body);
-//     const response = await fetchAdzunaJobListings(req.body);
-//     res.status(200).send(response);
-// });
-
-// const fetchAdzunaJobListings = async (body) => {
-//     console.log('Processing Adzuna job request with body:', body);
-//     const { companyName } = body;
-
-//     // Validate company name
-//     if (!companyName || companyName.trim() === "") {
-//         console.log('Missing company name');
-//         return {
-//             status: "-1",
-//             message: "Company name is required.",
-//             data: {}
-//         };
-//     }
-
-//     const baseUrl = 'https://api.adzuna.com/v1/api/jobs';
-//     const country = 'us'; // Adjust this based on the target country
-//     const url = `${baseUrl}/${country}/search/1`;
-
-//     // Build the query parameters
-//     const params = {
-//         app_id: ADZUNA_APP_ID,
-//         app_key: ADZUNA_APP_KEY,
-//         results_per_page: 5,
-//         company: companyName
-//     };
-
-//     console.log('Sending request to Adzuna API with params:', params);
-
-//     try {
-//         const response = await axios.get(url, { params });
-//         console.log('Received response from Adzuna API:', response.status, response.statusText);
-//         const jobListings = response.data.results;
-
-//         if (!jobListings || jobListings.length === 0) {
-//             console.log('No job listings found for company:', companyName);
-//             return {
-//                 status: "0",
-//                 message: `No job listings found for the company "${companyName}"`,
-//                 data: []
-//             };
-//         }
-
-//         const enhancedResponse = jobListings.map(job => ({
-//             title: job.title,
-//             company: job.company.display_name,
-//             location: job.location.display_name,
-//             description: job.description,
-//             url: job.redirect_url,
-//             postedDate: job.created,
-//             salary: job.salary_min ? {
-//                 min: job.salary_min,
-//                 max: job.salary_max,
-//                 currency: job.salary_is_predicted ? 'Estimated' : job.currency
-//             } : null
-//         }));
-
-//         return {
-//             status: "1",
-//             message: "Successfully fetched job listings",
-//             data: enhancedResponse
-//         };
-
-//     } catch (error) {
-//         console.error('Error fetching job listings from Adzuna:', error.message);
-
-//         if (error.response) {
-//             console.error('API Error Status:', error.response.status);
-//             console.error('API Error Data:', error.response.data);
-
-//             return {
-//                 status: "-1",
-//                 message: `Job search failed with status ${error.response.status}. Please try again later`,
-//                 data: {}
-//             };
-//         } else if (error.request) {
-//             return {
-//                 status: "-1",
-//                 message: "No response received from the job search service",
-//                 data: {}
-//             };
-//         } else {
-//             return {
-//                 status: "-1",
-//                 message: `Error fetching job listings: ${error.message}`,
-//                 data: {}
-//             };
-//         }
-//     }
-// };
-
-// module.exports = {
-//     router,
-//     fetchAdzunaJobListings
-// };
-
 const axios = require('axios');
 const express = require('express');
 const puppeteer = require('puppeteer');
@@ -116,6 +8,15 @@ const ADZUNA_APP_KEY = 'ece2b22a1999da408461f76e7e8560b4';
 
 const { OpenAI } = require('openai');
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+
+// Validate LinkedIn URL format
+const isValidLinkedInUrl = (url) => {
+    if (!url || url === 'null' || url === 'N/A' || url === 'undefined') {
+        return false;
+    }
+    const linkedinUrlRegex = /^https?:\/\/([\w]+\.)?linkedin\.com\/company\/[\w\-]+\/?$/i;
+    return linkedinUrlRegex.test(url);
+};
 
 
 async function extractJobDescriptionWithAI(content) {
@@ -165,139 +66,14 @@ async function extractJobDescriptionWithAI(content) {
 }
 
 
-
-async function scrapeJobDetails(url, queue) {
-    return queue.add(async () => {
-        const browser = await getBrowser();
-        const page = await browser.newPage();
-
-        try {
-            await page.setDefaultNavigationTimeout(60000);
-            await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36');
-
-            await page.goto(url, { waitUntil: 'networkidle0' });
-
-            const rawContent = await page.evaluate(() => {
-                function cleanText(text) {
-                    return text.replace(/\s+/g, ' ').trim();
-                }
-
-                function processContent() {
-                    const sections = [];
-                    let currentSection = {
-                        heading: '',
-                        content: []
-                    };
-
-                    const walker = document.createTreeWalker(
-                        document.body,
-                        NodeFilter.SHOW_TEXT | NodeFilter.SHOW_ELEMENT,
-                        null,
-                        false
-                    );
-
-                    let node;
-                    while (node = walker.nextNode()) {
-                        if (node.nodeType === Node.ELEMENT_NODE &&
-                            window.getComputedStyle(node).display === 'none') {
-                            continue;
-                        }
-
-                        if (node.nodeType === Node.ELEMENT_NODE) {
-                            const style = window.getComputedStyle(node);
-                            const isBold = style.fontWeight >= 600;
-                            const isHeading = /^H[1-6]$/.test(node.tagName) ||
-                                node.tagName === 'B' ||
-                                node.tagName === 'STRONG' ||
-                                isBold;
-
-                            if (isHeading && node.textContent.trim()) {
-                                if (currentSection.heading || currentSection.content.length) {
-                                    sections.push({ ...currentSection });
-                                }
-                                currentSection = {
-                                    heading: cleanText(node.textContent),
-                                    content: []
-                                };
-                            }
-                        } else if (node.nodeType === Node.TEXT_NODE && node.textContent.trim()) {
-                            const text = cleanText(node.textContent);
-                            if (text && !currentSection.content.includes(text)) {
-                                currentSection.content.push(text);
-                            }
-                        }
-                    }
-
-                    if (currentSection.heading || currentSection.content.length) {
-                        sections.push(currentSection);
-                    }
-
-                    return sections.map(section => ({
-                        heading: section.heading,
-                        content: section.content.join(' ')
-                    }));
-                }
-
-                return processContent();
-            });
-
-            // Filter for job-related sections
-            const jobRelatedKeywords = [
-                'job description', 'responsibilities', 'qualifications', 'requirements', 'benefits'
-            ];
-
-            const filteredContent = rawContent.filter(section =>
-                jobRelatedKeywords.some(keyword =>
-                    section.heading.toLowerCase().includes(keyword) ||
-                    section.content.toLowerCase().includes(keyword)
-                ) &&
-                !section.heading.toLowerCase().includes('similar') && // Exclude "similar jobs"
-                !section.heading.toLowerCase().includes('alert') &&   // Exclude "alerts"
-                !section.content.toLowerCase().includes('not available') // Exclude regional restrictions
-            );
-
-            const formattedContent = {
-                mainContent: '',
-                structuredContent: filteredContent.map(section => ({
-                    heading: section.heading,
-                    content: section.content
-                }))
-            };
-
-            formattedContent.mainContent = filteredContent.map(section =>
-                `**${section.heading}**\n${section.content}\n\n`
-            ).join('');
-
-            return {
-                ...formattedContent,
-                scrapedAt: new Date().toISOString(),
-                success: true,
-                url: url
-            };
-
-        } catch (error) {
-            console.error(`Error scraping ${url}:`, error.message);
-            return {
-                mainContent: 'Failed to load detailed description',
-                structuredContent: [],
-                scrapedAt: new Date().toISOString(),
-                success: false,
-                error: error.message,
-                url: url
-            };
-        } finally {
-            await page.close();
-        }
-    });
-}
-
-
-
+// Enhanced company name extraction with validation
 const extractCompanyFromLinkedInURL = (linkedinUrl) => {
     try {
-        if (!linkedinUrl) return null;
+        if (!isValidLinkedInUrl(linkedinUrl)) {
+            console.log('Invalid LinkedIn URL format:', linkedinUrl);
+            return null;
+        }
 
-        // Handle various LinkedIn URL formats
         const urlPatterns = [
             /linkedin\.com\/company\/([^\/\?]+)/i,
             /linkedin\.com\/school\/([^\/\?]+)/i,
@@ -307,17 +83,24 @@ const extractCompanyFromLinkedInURL = (linkedinUrl) => {
         for (const pattern of urlPatterns) {
             const match = linkedinUrl.match(pattern);
             if (match && match[1]) {
-                // Convert URL-friendly format back to company name
                 const companyName = match[1]
                     .replace(/-/g, ' ')
                     .replace(/\+/g, ' ')
                     .replace(/%20/g, ' ')
                     .trim();
 
+                // Validate extracted company name
+                if (companyName.length < 2) {
+                    console.log('Extracted company name too short:', companyName);
+                    return null;
+                }
+
+                console.log('Successfully extracted company name:', companyName);
                 return companyName;
             }
         }
 
+        console.log('No company name pattern matched in URL:', linkedinUrl);
         return null;
     } catch (error) {
         console.error('Error extracting company name from LinkedIn URL:', error);
@@ -325,6 +108,129 @@ const extractCompanyFromLinkedInURL = (linkedinUrl) => {
     }
 };
 
+// Main function to fetch job listings with enhanced validation
+const fetchAdzunaJobListings = async (body) => {
+    try {
+        const { linkedinUrl } = body;
+
+        // Validate LinkedIn URL
+        if (!linkedinUrl) {
+            return {
+                status: "0",
+                message: "LinkedIn URL is required",
+                data: []
+            };
+        }
+
+        // Extract company name
+        const targetCompany = extractCompanyFromLinkedInURL(linkedinUrl);
+        console.log('Extracted company name:', targetCompany);
+
+        if (!targetCompany) {
+            return {
+                status: "0",
+                message: "Invalid LinkedIn URL or unable to extract company name",
+                data: []
+            };
+        }
+
+        const scrapingQueue = new ScrapingQueue(2);
+
+        const baseUrl = 'https://api.adzuna.com/v1/api/jobs/us/search/1';
+        const params = {
+            app_id: ADZUNA_APP_ID,
+            app_key: ADZUNA_APP_KEY,
+            results_per_page: 5,
+            company: targetCompany
+        };
+
+        console.log('Searching for jobs with params:', params);
+        const response = await axios.get(baseUrl, { params });
+        const jobListings = response.data.results;
+
+        if (!jobListings?.length) {
+            return {
+                status: "0",
+                message: `No job listings found for company: ${targetCompany}`,
+                data: []
+            };
+        }
+
+        const enhancedJobListings = await Promise.all(
+            jobListings.map(async (job) => {
+                const scrapedDetails = await scrapeJobDetails(job.redirect_url, scrapingQueue);
+
+                return {
+                    title: job.title,
+                    company: job.company?.display_name || 'Not specified',
+                    location: job.location?.display_name || 'Not specified',
+                    contract: {
+                        type: job.contract_type || 'Not specified',
+                        time: job.contract_time || 'Not specified'
+                    },
+                    salary: job.salary_min && job.salary_max ? {
+                        min: job.salary_min,
+                        max: job.salary_max,
+                        currency: 'USD',
+                        is_predicted: job.salary_is_predicted === "1"
+                    } : null,
+                    description: {
+                        original: job.description,
+                        "Full Job Description": scrapedDetails.aiProcessedDescription
+                    },
+                    url: job.redirect_url,
+                    postedDate: job.created
+                };
+            })
+        );
+
+        return {
+            status: "1",
+            message: "Successfully fetched job listings",
+            data: enhancedJobListings
+        };
+
+    } catch (error) {
+        console.error('Error fetching jobs:', error);
+        return {
+            status: "-1",
+            message: `Error: ${error.message}`,
+            data: []
+        };
+    }
+};
+
+// Enhanced route handler with input validation
+router.post('/fetch-jobssignals', async (req, res) => {
+    try {
+        console.log('Received request with body:', req.body);
+
+        // Basic request body validation
+        if (!req.body || typeof req.body !== 'object') {
+            return res.status(400).json({
+                status: "0",
+                message: "Invalid request body",
+                data: []
+            });
+        }
+
+        const response = await fetchAdzunaJobListings(req.body);
+
+        // Send appropriate HTTP status based on the operation status
+        const httpStatus = response.status === "1" ? 200 :
+            response.status === "0" ? 400 : 500;
+
+        res.status(httpStatus).json(response);
+
+    } catch (error) {
+        console.error('Route handler error:', error);
+        res.status(500).json({
+            status: "-1",
+            message: "Internal server error",
+            data: []
+        });
+    }
+});
 let browserInstance = null;
 async function getBrowser() {
     if (!browserInstance) {
@@ -486,6 +392,7 @@ async function scrapeJobDetails(url, queue) {
     });
 }
 
+// Rest of the code (ScrapingQueue, scrapeJobDetails, etc.) remains the same...
 class ScrapingQueue {
     constructor(maxConcurrent = 2) {
         this.queue = [];
@@ -510,89 +417,9 @@ class ScrapingQueue {
     }
 }
 
-
-
-const fetchAdzunaJobListings = async (body) => {
-    const { companyName, linkedinUrl, jobType, location } = body;
-
-    let targetCompany = companyName || extractCompanyFromLinkedInURL(linkedinUrl);
-    const scrapingQueue = new ScrapingQueue(2);
-
-    try {
-        const baseUrl = 'https://api.adzuna.com/v1/api/jobs/us/search/1';
-        const params = {
-            app_id: ADZUNA_APP_ID,
-            app_key: ADZUNA_APP_KEY,
-            results_per_page: 5,
-            ...(targetCompany && { company: targetCompany }),
-            ...(jobType && { what: jobType }),
-            ...(location && { where: location })
-        };
-
-        const response = await axios.get(baseUrl, { params });
-        const jobListings = response.data.results;
-
-        if (!jobListings?.length) {
-            return {
-                status: "0",
-                message: "No job listings found",
-                data: []
-            };
-        }
-
-        const enhancedJobListings = await Promise.all(
-            jobListings.map(async (job) => {
-                const scrapedDetails = await scrapeJobDetails(job.redirect_url, scrapingQueue);
-
-                return {
-                    title: job.title,
-                    company: job.company?.display_name || 'Not specified',
-                    location: job.location?.display_name || 'Not specified',
-                    contract: {
-                        type: job.contract_type || 'Not specified',
-                        time: job.contract_time || 'Not specified'
-                    },
-                    salary: job.salary_min && job.salary_max ? {
-                        min: job.salary_min,
-                        max: job.salary_max,
-                        currency: 'USD', // Default currency
-                        is_predicted: job.salary_is_predicted === "1"
-                    } : null,
-                    description: {
-                        original: job.description,
-                        "Full Job Description": scrapedDetails.aiProcessedDescription
-                    },
-                    url: job.redirect_url,
-                    postedDate: job.created
-                };
-            })
-        );
-
-        return {
-            status: "1",
-            message: "Successfully fetched job listings",
-            data: enhancedJobListings
-        };
-
-    } catch (error) {
-        console.error('Error fetching jobs:', error);
-        return {
-            status: "-1",
-            message: `Error: ${error.message}`,
-            data: []
-        };
-    }
-};
-
-
-// Route handler remains the same
-router.post('/fetch-jobssignals', async (req, res) => {
-    console.log('Received request with body:', req.body);
-    const response = await fetchAdzunaJobListings(req.body);
-    res.status(200).send(response);
-});
-
 module.exports = {
     router,
-    fetchAdzunaJobListings
+    fetchAdzunaJobListings,
+    isValidLinkedInUrl,  // Exported for testing
+    extractCompanyFromLinkedInURL  // Exported for testing
 };
