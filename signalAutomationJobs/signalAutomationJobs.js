@@ -3,7 +3,7 @@
 // const router = express.Router();
 // const { fetchLatestFiling } = require('../secFilings/filingController.js');
 // const { getComapnyInsights } = require('../pressFundingAnnounements/CompanyInsightsModule.js');
-// const { fetchAdzunaJobListings } = require('../pressFundingAnnounements/jobSignals.js');
+// const { processJobSignals } = require('../pressFundingAnnounements/jobSignals.js');
 // const { fetchYouTubeVideos } = require('../socialSignals/youtubeData.js');
 // const { fetchTwitterMentions } = require('../socialSignals/twitterMentions.js');
 // const { fetchCompanyNews } = require('../pressFundingAnnounements/newsAnnouncements.js');
@@ -120,7 +120,7 @@
 //                             break;
 //                             case 'job_openings':
 //                             case 'job_changes':
-//                             response = await fetchAdzunaJobListings({ linkedinUrl: job.contact_details.co_linkedin });
+//                             response = await processJobSignals({ linkedinUrl: job.contact_details.co_linkedin });
 //                             break;
 //                         case 'youtube_marketing_videos':
 //                             response = await fetchYouTubeVideos({ companyName: job.contact_company });
@@ -517,7 +517,7 @@ const express = require('express');
 const router = express.Router();
 const { fetchLatestFiling } = require('../secFilings/filingController.js');
 const { getCompanyInsights } = require('../pressFundingAnnounements/CompanyInsightsModule.js');
-const { fetchAdzunaJobListings } = require('../pressFundingAnnounements/jobSignals.js');
+const { processJobSignals } = require('../pressFundingAnnounements/jobSignals.js');
 const { fetchYouTubeVideos } = require('../socialSignals/youtubeData.js');
 const { fetchTwitterMentions } = require('../socialSignals/twitterMentions.js');
 const { fetchCompanyNews } = require('../pressFundingAnnounements/newsAnnouncements.js');
@@ -549,7 +549,8 @@ const signalAutomationJobsSchema = new mongoose.Schema({
     signal_data: { type: mongoose.Schema.Types.Mixed },
     signal_data_summary: { type: String },
     job_error: { type: mongoose.Schema.Types.Mixed },
-    job_body: { type: String }
+    job_body: { type: String },
+    request_id: { type: String, required: true }
 });
 
 const onepgrDB = mongoose.createConnection(url, { dbName: 'onepgr' });
@@ -557,8 +558,8 @@ const SignalAutomationJob = onepgrDB.model('signalAutomationJobs', signalAutomat
 
 async function fetchJobsByStatus(req, res) {
     try {
-        const { user_id, job_status } = req.query;
-        console.log('Received:', { user_id, job_status });
+        const { user_id, job_status, request_id } = req.query;
+        console.log('Received:', { user_id, job_status, request_id });
         if (!user_id) {
             return res.status(400).json({ message: 'user_id is required' });
         }
@@ -567,12 +568,18 @@ async function fetchJobsByStatus(req, res) {
             return res.status(400).json({ message: 'Valid job_status is required (NOT_STARTED, IN_PROGRESS, FAILED)' });
         }
 
+        const query = { user_id, job_status };
+        if (request_id) {
+            query.request_id = request_id;
+        }
+
         const jobs = await SignalAutomationJob.find({ job_status, user_id });
 
         if (jobs.length === 0) {
-            console.log(`No jobs found with status ${job_status}`);
-            return res.json({ message: `No jobs with status ${job_status} found for this user.` });
+            console.log(`No jobs found with status ${job_status}${request_id ? ` and request_id ${request_id}` : ''}`);
+            return res.json({ message: `No jobs with status ${job_status}${request_id ? ` and request_id ${request_id}` : ''} found for this user.` });
         }
+
 
         if (job_status === 'NOT_STARTED') {
             for (const job of jobs) {
@@ -623,7 +630,10 @@ async function fetchJobsByStatus(req, res) {
                             break;
                         case 'job_openings':
                         case 'job_changes':
-                            response = await fetchAdzunaJobListings({ linkedinUrl: job.contact_details.co_linkedin });
+                            response = await processJobSignals({
+                                linkedinUrl: job.contact_details?.co_linkedin,
+                                companyName: job.contact_company 
+                            });
                             break;
                         case 'youtube_marketing_videos':
                             response = await fetchYouTubeVideos({ companyName: job.contact_company });
@@ -708,11 +718,11 @@ async function fetchJobsByStatus(req, res) {
             }
 
             try {
-                await summarizeSignalData({ query: { user_id } }, {
+                await summarizeSignalData({ query: { user_id, request_id } }, {
                     json: () => { },
                     status: () => ({ json: () => { } })
                 });
-                console.log('Summarization completed for user:', user_id);
+                console.log('Summarization completed for user:', { user_id, request_id });
             } catch (summaryError) {
                 console.error('Error during summarization:', summaryError);
             }
@@ -726,13 +736,12 @@ async function fetchJobsByStatus(req, res) {
                 ...(job_status === 'NOT_STARTED' ? [
                     { job_status: 'IN_PROGRESS' },
                     { job_status: 'SUCCESS' }
-                ] : []),
-                { job_status: 'FAILED' }
+                ] : [])
             ]
         });
 
         const statusCounts = await SignalAutomationJob.aggregate([
-            { $match: { user_id } },
+            { $match: { user_id, ...(request_id ? { request_id } : {}) } },
             {
                 $group: {
                     _id: '$job_status',
@@ -758,13 +767,15 @@ async function fetchJobsByStatus(req, res) {
         console.log('IN_PROGRESS jobs:', summary.IN_PROGRESS);
         console.log('SUCCESS jobs:', summary.SUCCESS);
         console.log('FAILED jobs:', summary.FAILED);
- 
+
         console.log('========================\n');
 
+        console.log(`Fetched ${jobs.length} jobs for user_id: ${user_id}, job_status: ${job_status}${request_id ? `, request_id: ${request_id}` : ''}`);
         res.json({
-            jobs: updatedJobs,
-            message: `${jobs.length} jobs processed successfully`
+            jobs,
+            message: `${jobs.length} jobs fetched successfully.`
         });
+
 
     } catch (error) {
         console.error('Critical Error in fetchJobsByStatus:', error);
@@ -775,23 +786,23 @@ async function fetchJobsByStatus(req, res) {
     }
 }
 
-
 async function summarizeSignalData(req, res) {
     try {
-        const { user_id } = req.query;
+        const { user_id, request_id } = req.query;
 
-        if (!user_id) {
-            return res.status(400).json({ message: 'user_id is required' });
+        if (!user_id || !request_id) {
+            return res.status(400).json({ message: 'user_id and request_id are required' });
         }
 
-        console.log('Starting summarizeSignalData for user:', user_id);
-        const jobs = await SignalAutomationJob.find({ job_status: 'IN_PROGRESS', user_id });
+        console.log('Starting summarizeSignalData for user:', user_id, 'and request_id:', request_id);
+        const jobs = await SignalAutomationJob.find({ job_status: 'IN_PROGRESS', user_id, request_id });
 
         if (jobs.length === 0) {
-            return res.json({ message: `No IN_PROGRESS jobs found for user ${user_id}.` });
+            return res.json({ message: `No IN_PROGRESS jobs found for user ${user_id} with request_id ${request_id}.` });
         }
 
-        console.log(`Found ${jobs.length} jobs to summarize for user ${user_id}`);
+
+        console.log(`Found ${jobs.length} jobs to summarize for user ${user_id} with request_id ${request_id}`);
 
         for (const job of jobs) {
             try {
@@ -895,42 +906,47 @@ async function summarizeSignalData(req, res) {
 
 async function changeJobStatusToNotStarted(req, res) {
     try {
-        const { user_id, job_ids } = req.body;
+        const { user_id, request_id } = req.body;
+        console.log('Received:', { user_id, request_id });
 
-        if (!user_id || !Array.isArray(job_ids) || job_ids.length === 0) {
-            return res.status(400).json({ message: 'user_id and an array of job_ids are required' });
+        if (!user_id || !request_id) {
+            return res.status(400).json({ message: 'Both user_id and request_id are required.' });
         }
 
+        // Correcting the query to use $in for multiple job_status values
+        const query = {
+            user_id,
+            request_id,
+            job_status: { $in: ['FAILED', 'IN_PROGRESS', 'SUCCESS', 'COMPLETED'] }
+        };
+
         const updatedJobs = await SignalAutomationJob.updateMany(
-            { user_id, job_id: { $in: job_ids }, job_status: 'FAILED' },
-            {
-                job_status: 'NOT_STARTED',
-                signal_data: null,
-                signal_data_summary: null,
-                job_error: null
+            query,
+            { 
+                $set: {
+                    job_status: 'NOT_STARTED',
+                    signal_data: null,
+                    signal_data_summary: null,
+                    job_error: null
+                }
             }
         );
 
-        // const updatedJobs = await SignalAutomationJob.updateMany(
-        //     { user_id, job_id: { $in: job_ids }, job_status: { $in: ["FAILED", "2"] } },
-        //     {
-        //         job_status: 'NOT_STARTED',
-        //         signal_data: null,
-        //         signal_data_summary: null,
-        //         job_error: null
-        //     }
-        // );
-
         if (updatedJobs.modifiedCount === 0) {
-            return res.status(404).json({ message: 'No jobs updated. Ensure job IDs exist and are in FAILED status.' });
+            return res.status(404).json({ 
+                message: 'No jobs updated. Ensure jobs exist, match the user_id and request_id, and have the correct status.' 
+            });
         }
 
-        console.log(`Updated job status to NOT_STARTED for job IDs: ${job_ids.join(', ')}`);
-        res.json({ message: 'Jobs status updated to NOT_STARTED successfully.', updatedCount: updatedJobs.modifiedCount });
+        console.log(`Updated ${updatedJobs.modifiedCount} job(s) to NOT_STARTED for request_id: ${request_id}`);
+        res.json({ 
+            message: 'Jobs status updated to NOT_STARTED successfully.', 
+            updatedCount: updatedJobs.modifiedCount 
+        });
 
     } catch (error) {
         console.error('Error updating job status:', error);
-        res.status(500).json({ error: 'An error occurred while updating the job status.' });
+        res.status(500).json({ error: 'An internal error occurred while updating the job status.' });
     }
 }
 
@@ -957,7 +973,6 @@ async function resetAllJobsToNotStarted(req, res) {
     }
 }
 router.post('/resetAllJobsToNotStarted', resetAllJobsToNotStarted);
-
 
 async function fetchAllJobsByUser(req, res) {
     try {
