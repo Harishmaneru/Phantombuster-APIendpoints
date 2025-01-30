@@ -16,15 +16,15 @@ const ADZUNA_APP_KEY = process.env.ADZUNA_APP_KEY;
 // Status code definitions for better error handling
 const STATUS_CODES = {
     SUCCESS: {
-        code: "1",
+        status: "1",
         message: "Job listings retrieved successfully"
     },
     NOT_FOUND: {
-        code: "0",
+        status: "0",
         message: "No job listings found for provided company"
     },
     SERVER_ERROR: {
-        code: "-1",
+        status: "-1",
         message: "An error occurred while processing your request"
     }
 };
@@ -411,11 +411,16 @@ const processJobSignals = async ({ linkedinUrl, companyName }) => {
 
             const scrapedResults = await Promise.all(scrapingPromises);
 
+            // Track success/failure counts
+            let successCount = 0;
+            let failureCount = 0;
+
             // Clean and merge the data
             response.data = response.data.map((job, index) => {
                 const scrapedData = scrapedResults[index];
                 
                 if (!scrapedData.success) {
+                    failureCount++;
                     return {
                         title: job.title,
                         company: job.company,
@@ -423,10 +428,11 @@ const processJobSignals = async ({ linkedinUrl, companyName }) => {
                         salary: job.salary,
                         description: job.description,
                         url: job.url,
-                        posted_date: job.posted_date
+                        posted_date: job.posted_date,
+                        scraping_status: 'failed'
                     };
                 }
-
+                successCount++;
                 // Clean the scraped data
                 const cleanedData = cleanJobContent(scrapedData);
 
@@ -449,18 +455,26 @@ const processJobSignals = async ({ linkedinUrl, companyName }) => {
                         },
                         structuredContent: cleanedData.structuredContent,
                         scrapedAt: cleanedData.scrapedAt
-                    }
+                    },
+                    scraping_status: 'success'
                 };
             });
-        }
-        console.log(`\nScraping Summary:
-            Total jobs: ${response.data.length}
-            Successful: ${successCount}
-            Failed: ${failureCount}
-            Success rate: ${((successCount/response.data.length) * 100).toFixed(2)}%\n`);
+            console.log(`
+                📊 Scraping Summary:
+                   - Total jobs processed: ${response.data.length}
+                   - Successful scrapes: ${successCount}
+                   - Failed scrapes: ${failureCount}
+                   - Success rate: ${((successCount / response.data.length) * 100).toFixed(2)}%
+                   - Failure rate: ${((failureCount / response.data.length) * 100).toFixed(2)}%
                 
+                💡 Details:
+                   - Successful URLs: ${successCount > 0 ? successUrls.join(', ') : 'None'}
+                   - Failed URLs: ${failureCount > 0 ? failedUrls.join(', ') : 'None'}
+                `);
+                    
+        }                
         return {
-            status: response.code,
+            status: response.status,
             message: response.message,
             data: response.data
         };
@@ -698,7 +712,8 @@ router.post('/fetch-jobssignals', async (req, res) => {
     } catch (error) {
         res.status(500).json({
             status: 500,
-            message: "Internal server error occurred"
+            message: "Internal server error occurred",
+            error: error.message
         });
     }
 });
