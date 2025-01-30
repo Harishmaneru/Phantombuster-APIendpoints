@@ -1,4 +1,4 @@
-// Scraping Functionality Removed from the code
+
 
 require('dotenv').config();
 const axios = require('axios');
@@ -258,74 +258,6 @@ class ScrapingQueue {
 const scrapingQueue = new ScrapingQueue(2);
 
 
-// function cleanJobContent(content) {
-//     // Additional phrases to exclude
-//     const excludePhrases = [
-//       'Show full description',
-//         'Similar jobs',
-//         'ESTIMATED:',
-//         'per year',
-//         'Receive similar jobs',
-//         'creating an alert',
-//         'T&Cs',
-//         'sorry, this job',
-//         'not available in your region',
-//         'var',
-//         'try {',
-//         'Popular Jobs',
-//         'Top job',
-//         'Browse jobs',
-//         'Country selection',
-//         '#J-',
-//         '?',
-//         'Inside this Business Group',
-//         'Posting Statement'
-//     ];
-
-//     // Clean the structuredContent
-//     if (content.structuredContent) {
-//         content.structuredContent = content.structuredContent
-//             .filter(section => {
-//                 // Remove sections with unwanted headings
-//                 if (!section.heading || excludePhrases.some(phrase => 
-//                     section.heading.toLowerCase().includes(phrase.toLowerCase()))) {
-//                     return false;
-//                 }
-
-//                 // Clean content array
-//                 section.content = section.content
-//                     .filter(text => {
-//                         // Remove empty or short strings
-//                         if (!text || text.length < 5) return false;
-                        
-//                         // Remove content with excluded phrases
-//                         if (excludePhrases.some(phrase => 
-//                             text.toLowerCase().includes(phrase.toLowerCase()))) {
-//                             return false;
-//                         }
-
-//                         // Remove JSON strings
-//                         if (text.includes('{') && text.includes('}')) return false;
-                        
-//                         // Remove script-like content
-//                         if (text.includes('var ') || text.includes('function(')) return false;
-                        
-//                         // Remove duplicate headings
-//                         if (text === section.heading) return false;
-
-//                         return true;
-//                     })
-//                     // Remove duplicates
-//                     .filter((text, index, self) => self.indexOf(text) === index);
-
-//                 // Keep section only if it has content
-//                 return section.content.length > 0;
-//             });
-//     }
-
-//     return content;
-// }
-
 function cleanJobContent(content) {
     // Define section-specific content to keep
     const sectionFilters = {
@@ -503,7 +435,10 @@ const processJobSignals = async ({ linkedinUrl, companyName }) => {
                     company: job.company,
                     location: job.location,
                     salary: job.salary,
-                    description: scrapedData.aiProcessedDescription,
+                    description: job.description,
+                    ...(scrapedData.aiProcessedDescription?.split(/\s+/).length >= 60 && { 
+                        Fulldescription: scrapedData.aiProcessedDescription 
+                    }),
                     url: job.url,
                     posted_date: job.posted_date,
                     details: {
@@ -520,7 +455,7 @@ const processJobSignals = async ({ linkedinUrl, companyName }) => {
         }
 
         return {
-            code: response.code,
+            status: response.code,
             message: response.message,
             data: response.data
         };
@@ -535,16 +470,33 @@ const processJobSignals = async ({ linkedinUrl, companyName }) => {
 };
 
 
-let browserInstance = null;
+// let browserInstance = null;
 async function getBrowser() {
-    if (!browserInstance) {
-        browserInstance = await puppeteer.launch({
-            headless: 'new',
-            args: ['--no-sandbox', '--disable-setuid-sandbox']
-        });
-    }
-    return browserInstance;
+    const browser = await puppeteer.launch({
+        headless: true,  
+        args: [
+            '--no-sandbox',                
+            '--disable-setuid-sandbox',    
+            '--disable-dev-shm-usage',      
+            '--disable-gpu',              
+            '--single-process',            
+            '--no-zygote',                  
+            '--disable-software-rasterizer'
+        ],
+        executablePath: '/usr/bin/google-chrome'   
+    });
+
+    return browser;
 }
+// async function getBrowser() {
+//     if (!browserInstance) {
+//         browserInstance = await puppeteer.launch({
+//             headless: 'new',
+//             args: ['--no-sandbox', '--disable-setuid-sandbox']
+//         });
+//     }
+//     return browserInstance;
+// }
 async function scrapeJobDetails(url, queue) {
     return queue.add(async () => {
         console.log('Scraping details from:', url);
