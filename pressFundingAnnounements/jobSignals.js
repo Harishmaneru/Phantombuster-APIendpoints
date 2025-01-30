@@ -16,19 +16,36 @@ const ADZUNA_APP_KEY = process.env.ADZUNA_APP_KEY;
 // Status code definitions for better error handling
 const STATUS_CODES = {
     SUCCESS: {
-        status: "1",
+        httpStatus: 200,   
+        status: "1",       
         message: "Job listings retrieved successfully"
     },
     NOT_FOUND: {
+        httpStatus: 404,
         status: "0",
         message: "No job listings found for provided company"
     },
     SERVER_ERROR: {
+        httpStatus: 500,
         status: "-1",
         message: "An error occurred while processing your request"
+    },
+    RATE_LIMITED: {
+        httpStatus: 429,
+        status: "-1",
+        message: "Too many requests, please try again later"
+    },
+    SERVICE_UNAVAILABLE: {
+        httpStatus: 503,
+        status: "-1",
+        message: "Service temporarily unavailable"
+    },
+    UNAUTHORIZED: {
+        httpStatus: 401,
+        status: "-1",
+        message: "Authentication required"
     }
 };
-
 // Validate LinkedIn URL format
 const isValidLinkedInUrl = (url) => {
     console.log(`Validating LinkedIn URL: ${url}`);
@@ -702,11 +719,13 @@ router.post('/fetch-jobssignals', async (req, res) => {
     try {
         const response = await processJobSignals(req.body);
         res.setHeader('Content-Type', 'application/json');
-        res.status(response.status || 200).json(response);
+        // Use httpStatus for the response status code
+        res.status(response.httpStatus || 200).json(response);
         console.log('\nResponse sent successfully ✓\n');
     } catch (error) {
         res.status(500).json({
-            status: 500,
+            httpStatus: 500,
+            status: "-1",
             message: "Internal server error occurred",
             error: error.message
         });
