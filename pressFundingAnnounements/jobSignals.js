@@ -465,11 +465,6 @@ const processJobSignals = async ({ linkedinUrl, companyName }) => {
                    - Successful scrapes: ${successCount}
                    - Failed scrapes: ${failureCount}
                    - Success rate: ${((successCount / response.data.length) * 100).toFixed(2)}%
-                   - Failure rate: ${((failureCount / response.data.length) * 100).toFixed(2)}%
-                
-                💡 Details:
-                   - Successful URLs: ${successCount > 0 ? successUrls.join(', ') : 'None'}
-                   - Failed URLs: ${failureCount > 0 ? failedUrls.join(', ') : 'None'}
                 `);
                     
         }                
