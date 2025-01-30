@@ -60,7 +60,7 @@ async function extractJobDescriptionWithAI(content) {
         console.log('Starting AI processing for job description');
         console.log('Input content length for extractJobDescriptionWithAI:', content.length);
         if (content.length > 10000) {
-            console.warn('Content exceeds 10k characters');
+            console.log('Content exceeds 10k characters');
         }
 
 
@@ -453,7 +453,12 @@ const processJobSignals = async ({ linkedinUrl, companyName }) => {
                 };
             });
         }
-
+        console.log(`\nScraping Summary:
+            Total jobs: ${response.data.length}
+            Successful: ${successCount}
+            Failed: ${failureCount}
+            Success rate: ${((successCount/response.data.length) * 100).toFixed(2)}%\n`);
+                
         return {
             status: response.code,
             message: response.message,
@@ -684,14 +689,20 @@ async function scrapeJobDetails(url, queue) {
         }
     });
 }
-
-
 router.post('/fetch-jobssignals', async (req, res) => {
-    const response = await processJobSignals(req.body);
-    res.setHeader('Content-Type', 'application/json');
-    return res.status(response.httpStatus || 200).json(response);
-    // return res.status(response.httpStatus).json(response);
+    try {
+        const response = await processJobSignals(req.body);
+        res.setHeader('Content-Type', 'application/json');
+        res.status(response.status || 200).json(response);
+        console.log('\nResponse sent successfully ✓\n');
+    } catch (error) {
+        res.status(500).json({
+            status: 500,
+            message: "Internal server error occurred"
+        });
+    }
 });
+
 
 module.exports = {
     router,
