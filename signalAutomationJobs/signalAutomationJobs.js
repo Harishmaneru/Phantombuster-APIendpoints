@@ -1,6 +1,7 @@
-
+require('dotenv').config();
 const mongoose = require('mongoose');
 const express = require('express');
+
 const router = express.Router();
 const { fetchLatestFiling } = require('../secFilings/filingController.js');
 const { getCompanyInsights } = require('../pressFundingAnnounements/CompanyInsightsModule.js');
