@@ -349,6 +349,7 @@ async function summarizeSignalData(req, res) {
                 let promptTemplate;
                 if (job.business_objective_prompt && job.business_objective_prompt.trim().length > 0) {
                     promptTemplate = job.business_objective_prompt;
+                    console.log(`Using business objective prompt for job ${job.job_id}: ${promptTemplate}`);
                 } else {
                     switch (job.signal_flag) {
                         case 'financial_information':
