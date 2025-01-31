@@ -504,41 +504,41 @@ const processJobSignals = async ({ linkedinUrl, companyName }) => {
 
 
 let browserInstance = null;
-async function getBrowser() {
-    if (!browserInstance) {
-        const launchOptions = {
-            headless: true,
-            args: [
-                '--no-sandbox',
-                '--disable-setuid-sandbox',
-                '--disable-dev-shm-usage',
-                '--disable-gpu',
-                '--single-process',
-                '--no-zygote',
-                '--disable-software-rasterizer',
-                '--disable-extensions',
-                '--disable-web-security'
-            ],
-            executablePath: process.env.NODE_ENV === 'production' ? 
-                '/usr/bin/google-chrome' : 
-                puppeteer.executablePath()
-        };
+// async function getBrowser() {
+//     if (!browserInstance) {
+//         const launchOptions = {
+//             headless: true,
+//             args: [
+//                 '--no-sandbox',
+//                 '--disable-setuid-sandbox',
+//                 '--disable-dev-shm-usage',
+//                 '--disable-gpu',
+//                 '--single-process',
+//                 '--no-zygote',
+//                 '--disable-software-rasterizer',
+//                 '--disable-extensions',
+//                 '--disable-web-security'
+//             ],
+//             executablePath: process.env.NODE_ENV === 'production' ? 
+//                 '/usr/bin/google-chrome' : 
+//                 puppeteer.executablePath()
+//         };
 
-        try {
-            browserInstance = await puppeteer.launch(launchOptions);
-            console.log('Browser launched successfully');
+//         try {
+//             browserInstance = await puppeteer.launch(launchOptions);
+//             console.log('Browser launched successfully');
 
-            browserInstance.on('disconnected', () => {
-                console.log('Browser disconnected, cleaning up instance');
-                browserInstance = null;
-            });
-        } catch (error) {
-            console.error('Failed to launch browser:', error);
-            throw error;
-        }
-    }
-    return browserInstance;
-}
+//             browserInstance.on('disconnected', () => {
+//                 console.log('Browser disconnected, cleaning up instance');
+//                 browserInstance = null;
+//             });
+//         } catch (error) {
+//             console.error('Failed to launch browser:', error);
+//             throw error;
+//         }
+//     }
+//     return browserInstance;
+// }
 
 const userAgents = [
     'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/91.0.4472.124 Safari/537.36',
@@ -577,15 +577,15 @@ process.on('unhandledRejection', async (reason, promise) => {
 });
 
 //To Test Locally
-// async function getBrowser() {
-//     if (!browserInstance) {
-//         browserInstance = await puppeteer.launch({
-//             headless: 'new',
-//             args: ['--no-sandbox', '--disable-setuid-sandbox']
-//         });
-//     }
-//     return browserInstance;
-// }
+async function getBrowser() {
+    if (!browserInstance) {
+        browserInstance = await puppeteer.launch({
+            headless: 'new',
+            args: ['--no-sandbox', '--disable-setuid-sandbox']
+        });
+    }
+    return browserInstance;
+}
 
 // Add a delay utility function
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));

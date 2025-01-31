@@ -1,3 +1,4 @@
+
 const mongoose = require('mongoose');
 const express = require('express');
 const router = express.Router();
@@ -10,12 +11,11 @@ const { fetchCompanyNews } = require('../pressFundingAnnounements/newsAnnounceme
 const { fetchCompanyDetailsByLinkedInURL } = require('../pressFundingAnnounements/fetchCompanyByDomain.js');
 const { fetchProductLaunchSignals } = require('../pressFundingAnnounements/productLunchs.js');
 const { fetchPublicMentions } = require('../pressFundingAnnounements/publicMentions.js');
-const { fetchCompanyPosts } = require('../pressFundingAnnounements/fetchCompanyProfile.js')
+const { fetchCompanyPosts } = require('../pressFundingAnnounements/fetchCompanyProfile.js');
 
 const { OpenAI } = require('openai');
 
 const url = "mongodb://onepgrdb:onepgrdb123@pages.onepgr.com:27017/?authSource=admin";
-
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
 const signalAutomationJobsSchema = new mongoose.Schema({
@@ -41,6 +41,7 @@ const signalAutomationJobsSchema = new mongoose.Schema({
 
 const onepgrDB = mongoose.createConnection(url, { dbName: 'onepgr' });
 const SignalAutomationJob = onepgrDB.model('signalAutomationJobs', signalAutomationJobsSchema);
+
 
 async function fetchJobsByStatus(req, res) {
     try {
@@ -93,25 +94,56 @@ async function fetchJobsByStatus(req, res) {
                             newsResponse = await fetchCompanyNews({ companyName: job.contact_company });
                             response = { insightsResponse, newsResponse };
 
-                            if (insightsResponse.status === "-1") {
+                            // Check for errors first
+                            if (insightsResponse.status === "-1" || newsResponse.status === "-1") {
                                 hasError = true;
-                                errorMessage.push(`Insights Error: ${insightsResponse.message}`);
-                            }
-                            if (newsResponse.status === "-1") {
-                                hasError = true;
-                                errorMessage.push(`News Error: ${newsResponse.message}`);
-                            }
+                                if (insightsResponse.status === "-1") {
+                                    errorMessage.push(`Insights Error: ${insightsResponse.message}`);
+                                }
+                                if (newsResponse.status === "-1") {
+                                    errorMessage.push(`News Error: ${newsResponse.message}`);
+                                }
 
-                            if (hasError && insightsResponse.status === "-1" && newsResponse.status === "-1") {
                                 await SignalAutomationJob.updateOne(
                                     { _id: job._id },
                                     {
                                         job_status: 'FAILED',
                                         job_error: errorMessage.join(' | '),
-                                        signal_data: null
+                                        signal_data: response
                                     }
                                 );
                                 continue;
+                            }
+
+                            // If both responses have status "0", mark as SUCCESS
+                            if (insightsResponse.status === "0" && newsResponse.status === "0") {
+                                await SignalAutomationJob.updateOne(
+                                    { _id: job._id },
+                                    {
+                                        job_status: 'SUCCESS',
+                                        signal_data: response
+                                    }
+                                );
+                            }
+                            // If either response has status "1", mark as IN_PROGRESS
+                            else if (insightsResponse.status === "1" || newsResponse.status === "1") {
+                                await SignalAutomationJob.updateOne(
+                                    { _id: job._id },
+                                    {
+                                        job_status: 'IN_PROGRESS',
+                                        signal_data: response
+                                    }
+                                );
+                            }
+                            // For any other status combination, mark as IN_PROGRESS
+                            else {
+                                await SignalAutomationJob.updateOne(
+                                    { _id: job._id },
+                                    {
+                                        job_status: 'IN_PROGRESS',
+                                        signal_data: response
+                                    }
+                                );
                             }
                             break;
                         case 'job_openings':
@@ -162,7 +194,7 @@ async function fetchJobsByStatus(req, res) {
 
                     // New logic to handle status "0" as SUCCESS
                     // Handling the update based on the response status code
-                    if (response.status === "0") {   
+                    if (response.status === "0") {
                         await SignalAutomationJob.updateOne(
                             { _id: job._id },
                             {
@@ -170,17 +202,17 @@ async function fetchJobsByStatus(req, res) {
                                 signal_data: response
                             }
                         );
-                    } else if (response.status === "-1") {   
+                    } else if (response.status === "-1") {
                         await SignalAutomationJob.updateOne(
                             { _id: job._id },
                             {
                                 job_status: 'FAILED',
-                                job_error: response,   
+                                job_error: response,
                                 signal_data: response
                             }
                         );
-                    } else if (response.status === "1") {   
-                        
+                    } else if (response.status === "1") {
+
                         await SignalAutomationJob.updateOne(
                             { _id: job._id },
                             {
@@ -244,9 +276,9 @@ async function fetchJobsByStatus(req, res) {
                 }
             }
         ]);
-        
+
         console.log('Aggregated Status Counts:', statusCounts); // This will show what MongoDB is returning
-        
+
 
         console.log('\n=== Job Status Summary ===');
         console.log('User ID:', user_id);
@@ -284,6 +316,7 @@ async function fetchJobsByStatus(req, res) {
     }
 }
 
+
 async function summarizeSignalData(req, res) {
     try {
         const { user_id, request_id } = req.query;
@@ -299,55 +332,54 @@ async function summarizeSignalData(req, res) {
             return res.json({ message: `No IN_PROGRESS jobs found for user ${user_id} with request_id ${request_id}.` });
         }
 
-
         console.log(`Found ${jobs.length} jobs to summarize for user ${user_id} with request_id ${request_id}`);
 
         for (const job of jobs) {
             try {
-                // Skip if signal data is empty
                 if (!job.signal_data || Object.keys(job.signal_data).length === 0) {
                     console.log(`Skipping job ${job.job_id} - no signal data`);
                     continue;
                 }
 
-                // Skip if summary already exists
                 if (job.signal_data_summary && job.signal_data_summary.trim().length > 0) {
                     console.log(`Skipping job ${job.job_id} - summary already exists`);
                     continue;
                 }
 
                 let promptTemplate;
-                switch (job.signal_flag) {
-                    case 'financial_information':
-                        promptTemplate = `Analyze the following financial data for ${job.contact_company}. Focus on key metrics from 10-K and 10-Q filings, including revenue, profit, and significant changes: `;
-                        break;
-                    case 'press_announcements':
-                        promptTemplate = `Summarize the latest press announcements and funding rounds for ${job.contact_company}. Highlight major events, funding amounts, and key developments: `;
-                        break;
-                    case 'job_openings':
-                    case 'job_changes':
-                        promptTemplate = `Analyze the job market activity for ${job.contact_company}. Include total openings, key departments hiring, and notable positions: `;
-                        break;
-                    case 'youtube_marketing_videos':
-                        promptTemplate = `Summarize the recent YouTube content from ${job.contact_company}. Focus on video engagement, key themes, and notable metrics: `;
-                        break;
-                    case 'twitter_brand_mentions':
-                        promptTemplate = `Analyze Twitter engagement for ${job.contact_company}. Include mention volume, sentiment trends, and notable interactions: `;
-                        break;
-                    case 'public_mentions':
-                        promptTemplate = `Summarize the public mentions for ${job.contact_company}. Include sentiment analysis, volume trends, and key themes: `;
-                        break;
-                    case 'product_launches':
-                        promptTemplate = `Summarize the latest product launches for ${job.contact_company}. Include product details, launch dates, keyFeatures and market impact: `;
-                        break;
-                    case 'linkedin_company_updates':
-                    case 'activity_on_linkedin':
-                        promptTemplate = `Summarize the latest LinkedIn updates and activities for ${job.contact_company}. Highlight recent posts, articles, announcements, and key engagements. Include any insights on company initiatives, market trends, and industry impact: `;
-                        break
-                    case 'contact_profile_information':
-                        promptTemplate = `Summarize the following data for ${job.contact_company}: `;
-                    default:
-                        promptTemplate = `Summarize the following data for ${job.contact_company}: `;
+                if (job.business_objective_prompt && job.business_objective_prompt.trim().length > 0) {
+                    promptTemplate = job.business_objective_prompt;
+                } else {
+                    switch (job.signal_flag) {
+                        case 'financial_information':
+                            promptTemplate = `Analyze the following financial data for ${job.contact_company}. Focus on key metrics from 10-K and 10-Q filings, including revenue, profit, and significant changes: `;
+                            break;
+                        case 'press_announcements':
+                            promptTemplate = `Summarize the latest press announcements and funding rounds for ${job.contact_company}. Highlight major events, funding amounts, and key developments: `;
+                            break;
+                        case 'job_openings':
+                        case 'job_changes':
+                            promptTemplate = `Analyze the job market activity for ${job.contact_company}. Include total openings, key departments hiring, and notable positions: `;
+                            break;
+                        case 'youtube_marketing_videos':
+                            promptTemplate = `Summarize the recent YouTube content from ${job.contact_company}. Focus on video engagement, key themes, and notable metrics: `;
+                            break;
+                        case 'twitter_brand_mentions':
+                            promptTemplate = `Analyze Twitter engagement for ${job.contact_company}. Include mention volume, sentiment trends, and notable interactions: `;
+                            break;
+                        case 'public_mentions':
+                            promptTemplate = `Summarize the public mentions for ${job.contact_company}. Include sentiment analysis, volume trends, and key themes: `;
+                            break;
+                        case 'product_launches':
+                            promptTemplate = `Summarize the latest product launches for ${job.contact_company}. Include product details, launch dates, key features, and market impact: `;
+                            break;
+                        case 'linkedin_company_updates':
+                        case 'activity_on_linkedin':
+                            promptTemplate = `Summarize the latest LinkedIn updates and activities for ${job.contact_company}. Highlight recent posts, articles, announcements, and key engagements. Include any insights on company initiatives, market trends, and industry impact: `;
+                            break;
+                        default:
+                            promptTemplate = `Summarize the following data for ${job.contact_company}: `;
+                    }
                 }
 
                 const promptData = promptTemplate + JSON.stringify(job.signal_data, null, 2);
@@ -402,6 +434,34 @@ async function summarizeSignalData(req, res) {
     }
 }
 
+//fetchAllJobsByUser 
+async function fetchAllJobsByUser(req, res) {
+    try {
+        const { user_id } = req.query;
+
+        if (!user_id) {
+            return res.status(400).json({ message: 'user_id is required' });
+        }
+
+        const jobs = await SignalAutomationJob.find({ user_id });
+
+        if (jobs.length === 0) {
+            console.warn(`No jobs found for user_id: ${user_id}`);
+            return res.json({ message: `No jobs found for user_id ${user_id}.` });
+        }
+
+        console.log(`Fetched ${jobs.length} jobs for user_id: ${user_id}`);
+        jobs.forEach(job => console.log(`Job ID: ${job.job_id}, Job Status: ${job.job_status}`));
+
+        res.json({ jobs, message: `${jobs.length} jobs fetched successfully for user_id ${user_id}.` });
+
+    } catch (error) {
+        console.error('Error fetching jobs:', error);
+        res.status(500).json({ error: 'An error occurred while fetching the jobs.', details: error.message });
+    }
+}
+
+//changeJobStatusToNotStarted
 async function changeJobStatusToNotStarted(req, res) {
     try {
         const { user_id, request_id } = req.body;
@@ -415,7 +475,7 @@ async function changeJobStatusToNotStarted(req, res) {
         const query = {
             user_id,
             request_id,
-            job_status: { $in: ['FAILED','IN_PROGRESS', 'SUCCESS'] }
+            job_status: { $in: ['FAILED', 'IN_PROGRESS', 'SUCCESS'] }
         };
 
         const updatedJobs = await SignalAutomationJob.updateMany(
@@ -447,57 +507,7 @@ async function changeJobStatusToNotStarted(req, res) {
         res.status(500).json({ error: 'An internal error occurred while updating the job status.' });
     }
 }
-
-async function resetAllJobsToNotStarted(req, res) {
-    try {
-        const result = await SignalAutomationJob.updateMany(
-            {},
-            {
-                job_status: 'NOT_STARTED',
-                signal_data: null,
-                signal_data_summary: null,
-                job_error: null
-            }
-        );
-
-        if (result.modifiedCount === 0) {
-            return res.status(404).json({ message: 'No jobs were updated to NOT_STARTED status.' });
-        }
-
-        res.json({ message: `${result.modifiedCount} jobs have been reset to NOT_STARTED.` });
-
-    } catch (error) {
-        res.status(500).json({ error: 'An error occurred while resetting the jobs.' });
-    }
-}
-router.post('/resetAllJobsToNotStarted', resetAllJobsToNotStarted);
-
-async function fetchAllJobsByUser(req, res) {
-    try {
-        const { user_id } = req.query;
-
-        if (!user_id) {
-            return res.status(400).json({ message: 'user_id is required' });
-        }
-
-        const jobs = await SignalAutomationJob.find({ user_id });
-
-        if (jobs.length === 0) {
-            console.warn(`No jobs found for user_id: ${user_id}`);
-            return res.json({ message: `No jobs found for user_id ${user_id}.` });
-        }
-
-        console.log(`Fetched ${jobs.length} jobs for user_id: ${user_id}`);
-        jobs.forEach(job => console.log(`Job ID: ${job.job_id}, Job Status: ${job.job_status}`));
-
-        res.json({ jobs, message: `${jobs.length} jobs fetched successfully for user_id ${user_id}.` });
-
-    } catch (error) {
-        console.error('Error fetching jobs:', error);
-        res.status(500).json({ error: 'An error occurred while fetching the jobs.', details: error.message });
-    }
-}
-
+//fetchFailedJobs
 async function fetchFailedJobs(req, res) {
     try {
         const { user_id } = req.query;
@@ -535,11 +545,13 @@ async function fetchFailedJobs(req, res) {
         });
     }
 }
+
 router.get('/fetchFailedJobs', fetchFailedJobs);
 router.get('/fetchAllJobsByUser', fetchAllJobsByUser);
 router.get('/fetchJobsByStatus', fetchJobsByStatus);
 router.get('/summarizeSignalData', summarizeSignalData);
 router.post('/changeJobStatusToNotStarted', changeJobStatusToNotStarted);
+// router.post('/resetAllJobsToNotStarted', resetAllJobsToNotStarted);
 
 
 module.exports = {
