@@ -1,5 +1,4 @@
 
-
 require('dotenv').config();
 const axios = require('axios');
 const express = require('express');
@@ -198,6 +197,7 @@ const fetchJobListings = async (companyName) => {
 
         // Handle the successful response
         const jobResults = response.data?.results || [];
+        // console.log(`Retrieved: ${JSON.stringify(jobResults, null, 2)}`);
         console.log(`Retrieved ${jobResults.length} job results`);
 
         // Filter jobs by company name match
@@ -213,7 +213,7 @@ const fetchJobListings = async (companyName) => {
 
         // Process filtered jobs through AI
         const processedResults = await Promise.all(filteredJobs.map(async job => {
-            const aiProcessedDescription = await extractJobDescriptionWithAI(job.description || "");
+            // const aiProcessedDescription = await extractJobDescriptionWithAI(job.description || "");
 
             return {
                 title: job.title || "Title not available",
@@ -250,7 +250,7 @@ const fetchJobListings = async (companyName) => {
 // Main method that handles the entire job signals flow
 
 class ScrapingQueue {
-    constructor(maxConcurrent = 2) {
+    constructor(maxConcurrent = 1) { 
         this.queue = [];
         this.running = 0;
         this.maxConcurrent = maxConcurrent;
@@ -272,7 +272,8 @@ class ScrapingQueue {
         }
     }
 }
-const scrapingQueue = new ScrapingQueue(2);
+
+const scrapingQueue = new ScrapingQueue(1);
 
 
 function cleanJobContent(content) {
@@ -388,6 +389,7 @@ function cleanJobContent(content) {
 }
 
 const processJobSignals = async ({ linkedinUrl, companyName }) => {
+ 
     console.log('Starting job signals process:', {
         hasLinkedinUrl: !!linkedinUrl,
         hasCompanyName: !!companyName
@@ -501,24 +503,80 @@ const processJobSignals = async ({ linkedinUrl, companyName }) => {
 };
 
 
-// let browserInstance = null;
+let browserInstance = null;
 async function getBrowser() {
-    const browser = await puppeteer.launch({
-        headless: true,  
-        args: [
-            '--no-sandbox',                
-            '--disable-setuid-sandbox',    
-            '--disable-dev-shm-usage',      
-            '--disable-gpu',              
-            '--single-process',            
-            '--no-zygote',                  
-            '--disable-software-rasterizer'
-        ],
-        executablePath: '/usr/bin/google-chrome'   
-    });
+    if (!browserInstance) {
+        const launchOptions = {
+            headless: true,
+            args: [
+                '--no-sandbox',
+                '--disable-setuid-sandbox',
+                '--disable-dev-shm-usage',
+                '--disable-gpu',
+                '--single-process',
+                '--no-zygote',
+                '--disable-software-rasterizer',
+                '--disable-extensions',
+                '--disable-web-security'
+            ],
+            executablePath: process.env.NODE_ENV === 'production' ? 
+                '/usr/bin/google-chrome' : 
+                puppeteer.executablePath()
+        };
 
-    return browser;
+        try {
+            browserInstance = await puppeteer.launch(launchOptions);
+            console.log('Browser launched successfully');
+
+            browserInstance.on('disconnected', () => {
+                console.log('Browser disconnected, cleaning up instance');
+                browserInstance = null;
+            });
+        } catch (error) {
+            console.error('Failed to launch browser:', error);
+            throw error;
+        }
+    }
+    return browserInstance;
 }
+
+const userAgents = [
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/91.0.4472.124 Safari/537.36',
+    'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) Safari/605.1.15',
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Firefox/89.0',
+    'Mozilla/5.0 (X11; Linux x86_64) Chrome/92.0.4515.107 Safari/537.36'
+];
+const getRandomUserAgent = () => userAgents[Math.floor(Math.random() * userAgents.length)];
+async function cleanup() {
+    console.log('Starting cleanup...');
+    try {
+        if (browserInstance) {
+            console.log('Closing browser instance...');
+            await browserInstance.close();
+            browserInstance = null;
+            console.log('Browser instance closed successfully');
+        }
+
+        process.exit(0);
+    } catch (error) {
+        console.error('Error during cleanup:', error);
+        // Force exit even if there's an error
+        process.exit(1);
+    }
+}
+// Add cleanup handlers
+process.on('SIGINT', cleanup);  // Ctrl+C
+process.on('SIGTERM', cleanup); // Kill command
+process.on('uncaughtException', async (error) => {
+    console.error('Uncaught Exception:', error);
+    await cleanup();
+});
+process.on('unhandledRejection', async (reason, promise) => {
+    console.error('Unhandled Rejection at:', promise, 'reason:', reason);
+    await cleanup();
+});
+
+//To Test Locally
 // async function getBrowser() {
 //     if (!browserInstance) {
 //         browserInstance = await puppeteer.launch({
@@ -528,17 +586,87 @@ async function getBrowser() {
 //     }
 //     return browserInstance;
 // }
-async function scrapeJobDetails(url, queue) {
+
+// Add a delay utility function
+const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
+
+// Add randomization to make it more natural
+const getRandomDelay = (min, max) => {
+    return Math.floor(Math.random() * (max - min + 1) + min);
+};
+const formatDelay = ms => (ms / 1000).toFixed(1);
+
+const getAdaptiveDelay = (retryCount) => {
+    const baseDelay = getRandomDelay(2000, 5000);
+    return baseDelay * (retryCount + 1);
+};
+
+let totalRetryTime = 0;
+async function scrapeJobDetails(url, queue, retryCount = 0) {
+    const MAX_RETRY_DURATION_MS = 10000; // Define max retry duration
+
+    if (retryCount === 0) {
+        totalRetryTime = 0; // Reset on the first attempt of each new job
+    }
+
+    const delayBeforeRetry = getAdaptiveDelay(retryCount);
+    await delay(delayBeforeRetry);
+    totalRetryTime += delayBeforeRetry;
+
+    if (totalRetryTime > MAX_RETRY_DURATION_MS) {
+        console.log('Max retry duration exceeded, stopping retries.');
+        return {
+            error: 'Max retry duration exceeded, stopping retries.',
+            success: false,
+            url: url
+        };
+    }
     return queue.add(async () => {
-        console.log('Scraping details from:', url);
-        const browser = await getBrowser();
-        const page = await browser.newPage();
+        console.log(`Starting scrape for ${url} (Attempt ${retryCount + 1})`);
+        let browser = null;
+        let page = null;
 
         try {
-            await page.setDefaultNavigationTimeout(30000);
-            await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36');
+            // Initial delay with backoff
+            const initialDelay = getAdaptiveDelay(retryCount);
+            totalRetryTime += initialDelay;
+            if (totalRetryTime > MAX_RETRY_DURATION_MS) throw new Error("Max retry duration exceeded");
 
-            await page.goto(url, { waitUntil: 'networkidle0' });
+            console.log(`Waiting ${formatDelay(initialDelay)} seconds before scraping...`);
+            await delay(initialDelay);
+
+            browser = await getBrowser();
+            page = await browser.newPage();
+
+            await page.setDefaultNavigationTimeout(30000);
+            await page.setUserAgent(getRandomUserAgent());
+            await page.setRequestInterception(true);
+
+                // Optimize resource usage
+            page.on('request', (request) => {
+                if (['image', 'stylesheet', 'font', 'media'].includes(request.resourceType())) {
+                    request.abort();
+                } else {
+                    request.continue();
+                }
+            });
+
+            const response = await page.goto(url, { 
+                waitUntil: 'networkidle0',
+                timeout: 30000 
+            });
+
+            // Check for blocking or rate limiting
+            if (response.status() === 429 || response.status() === 403) {
+                const backoffDelay = getRandomDelay(5000, 10000) * Math.pow(2, retryCount);
+                console.log(`Rate limited, backing off for ${formatDelay(backoffDelay)} seconds...`);
+                await delay(backoffDelay);
+                
+                if (retryCount < 3) {
+                    return scrapeJobDetails(url, queue, retryCount + 1);
+                }
+                throw new Error('Maximum retry attempts reached');
+            }
 
             const jobContent = await page.evaluate(() => {
                 function cleanText(text) {
@@ -685,6 +813,9 @@ async function scrapeJobDetails(url, queue) {
             jobContent.sections = jobContent.sections.filter(section => 
                 section.content.some(content => content.length > 10) // Remove sections with only short content
             );
+            
+             // Add small delay before processing content
+            await delay(500);
 
             // Process content for AI
             const contentForAI = jobContent.sections
@@ -704,14 +835,21 @@ async function scrapeJobDetails(url, queue) {
             };
 
         } catch (error) {
-            console.error(`Error scraping ${url}:`, error.message);
+            console.error(`Scraping error (Attempt ${retryCount + 1}):`, error.message);
+            if (retryCount < 3 && totalRetryTime < MAX_RETRY_DURATION_MS) {
+                return scrapeJobDetails(url, queue, retryCount + 1);
+            }
             return {
                 error: error.message,
                 success: false,
                 url: url
             };
         } finally {
-            await page.close();
+            if (page) await page.close();
+            const cooldownDelay = getRandomDelay(1000, 2000);
+            totalRetryTime += cooldownDelay;
+            console.log(`Waiting for ${formatDelay(cooldownDelay)} seconds...`);
+            await delay(cooldownDelay);
         }
     });
 }
@@ -738,7 +876,8 @@ module.exports = {
     processJobSignals,  // Main method for external use
     fetchJobListings,
     extractCompanyNameFromLinkedInUrl,
-    STATUS_CODES
+    STATUS_CODES,
+    cleanup  
 };
 
 //Scraping part removed from the code

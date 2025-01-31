@@ -118,7 +118,7 @@ async function fetchJobsByStatus(req, res) {
                         case 'job_changes':
                             response = await processJobSignals({
                                 linkedinUrl: job.contact_details?.co_linkedin,
-                                companyName: job.contact_company 
+                                companyName: job.contact_company
                             });
                             break;
                         case 'youtube_marketing_videos':
@@ -161,21 +161,30 @@ async function fetchJobsByStatus(req, res) {
                     }
 
                     // New logic to handle status "0" as SUCCESS
-                    if (response.status === "0") {
+                    // Handling the update based on the response status code
+                    if (response.status === "0") {   
                         await SignalAutomationJob.updateOne(
                             { _id: job._id },
                             {
                                 job_status: 'SUCCESS',
-                                signal_data: response,
                                 signal_data: response
                             }
                         );
-                    } else if (response.status === "-1") {
+                    } else if (response.status === "-1") {   
                         await SignalAutomationJob.updateOne(
                             { _id: job._id },
                             {
                                 job_status: 'FAILED',
-                                job_error: response,
+                                job_error: response,   
+                                signal_data: response
+                            }
+                        );
+                    } else if (response.status === "1") {   
+                        
+                        await SignalAutomationJob.updateOne(
+                            { _id: job._id },
+                            {
+                                job_status: 'IN_PROGRESS',
                                 signal_data: response
                             }
                         );
@@ -186,7 +195,7 @@ async function fetchJobsByStatus(req, res) {
                                 signal_data: response,
                                 job_status: 'IN_PROGRESS'
                             }
-                        );
+                        )
                     }
                 } catch (jobError) {
                     console.error(`Error occurred while processing job ID: ${job.job_id}`, jobError);
@@ -214,17 +223,17 @@ async function fetchJobsByStatus(req, res) {
             }
         }
 
-        // Update query to include SUCCESS status in results
-        const updatedJobs = await SignalAutomationJob.find({
-            user_id,
-            $or: [
-                { job_status: job_status },
-                ...(job_status === 'NOT_STARTED' ? [
-                    { job_status: 'IN_PROGRESS' },
-                    { job_status: 'SUCCESS' }
-                ] : [])
-            ]
-        });
+        // // Update query to include SUCCESS status in results
+        // const updatedJobs = await SignalAutomationJob.find({
+        //     user_id,
+        //     $or: [
+        //         { job_status: job_status },
+        //         ...(job_status === 'NOT_STARTED' ? [
+        //             { job_status: 'IN_PROGRESS' },
+        //             { job_status: 'SUCCESS' }
+        //         ] : [])
+        //     ]
+        // });
 
         const statusCounts = await SignalAutomationJob.aggregate([
             { $match: { user_id, ...(request_id ? { request_id } : {}) } },
@@ -235,6 +244,9 @@ async function fetchJobsByStatus(req, res) {
                 }
             }
         ]);
+        
+        console.log('Aggregated Status Counts:', statusCounts); // This will show what MongoDB is returning
+        
 
         console.log('\n=== Job Status Summary ===');
         console.log('User ID:', user_id);
@@ -403,12 +415,12 @@ async function changeJobStatusToNotStarted(req, res) {
         const query = {
             user_id,
             request_id,
-            job_status: { $in: ['FAILED',  'SUCCESS'] }
+            job_status: { $in: ['FAILED','IN_PROGRESS', 'SUCCESS'] }
         };
 
         const updatedJobs = await SignalAutomationJob.updateMany(
             query,
-            { 
+            {
                 $set: {
                     job_status: 'NOT_STARTED',
                     signal_data: null,
@@ -419,15 +431,15 @@ async function changeJobStatusToNotStarted(req, res) {
         );
 
         if (updatedJobs.modifiedCount === 0) {
-            return res.status(404).json({ 
-                message: 'No jobs updated. Ensure jobs exist, match the user_id and request_id, and have the correct status.' 
+            return res.status(404).json({
+                message: 'No jobs updated. Ensure jobs exist, match the user_id and request_id, and have the correct status.'
             });
         }
 
         console.log(`Updated ${updatedJobs.modifiedCount} job(s) to NOT_STARTED for request_id: ${request_id}`);
-        res.json({ 
-            message: 'Jobs status updated to NOT_STARTED successfully.', 
-            updatedCount: updatedJobs.modifiedCount 
+        res.json({
+            message: 'Jobs status updated to NOT_STARTED successfully.',
+            updatedCount: updatedJobs.modifiedCount
         });
 
     } catch (error) {
