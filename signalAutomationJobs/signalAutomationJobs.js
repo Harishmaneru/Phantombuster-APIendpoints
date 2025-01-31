@@ -75,7 +75,7 @@ async function fetchJobsByStatus(req, res) {
                     let insightsResponse = null;
                     let newsResponse = null;
                     let response;
-                    let hasError = false;
+                    // let hasError = false;
                     let errorMessage = [];
 
                     const getLinkedInUrl = (contactDetails) => {
