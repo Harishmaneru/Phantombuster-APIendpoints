@@ -102,7 +102,7 @@ async function fetchJobsByStatus(req, res) {
                             response = await fetchPublicMentions({ companyName: job.contact_company });
                             break;
                         case 'product_launches':
-                            response = await fetchProductLaunchSignals({ linkedinUrl: job.contact_company });
+                            response = await fetchProductLaunchSignals({ companyName: job.contact_company });
                             break;
                         case 'linkedin_company_updates':
                         case 'activity_on_linkedin':
