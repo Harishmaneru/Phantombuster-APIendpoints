@@ -48,6 +48,7 @@ async function fetchJobsByStatus(req, res) {
     try {
         const { user_id, job_status, request_id } = req.query;
         console.log('Received:', { user_id, job_status, request_id });
+
         if (!user_id) {
             return res.status(400).json({ message: 'user_id is required' });
         }
@@ -61,29 +62,18 @@ async function fetchJobsByStatus(req, res) {
             query.request_id = request_id;
         }
 
-        const jobs = await SignalAutomationJob.find({ job_status, user_id });
+        const jobs = await SignalAutomationJob.find(query);
 
         if (jobs.length === 0) {
             console.log(`No jobs found with status ${job_status}${request_id ? ` and request_id ${request_id}` : ''}`);
             return res.json({ message: `No jobs with status ${job_status}${request_id ? ` and request_id ${request_id}` : ''} found for this user.` });
         }
 
-
         if (job_status === 'NOT_STARTED') {
             for (const job of jobs) {
                 try {
-                    let insightsResponse = null;
-                    let newsResponse = null;
                     let response;
-                    // let hasError = false;
-                    let errorMessage = [];
-
-                    const getLinkedInUrl = (contactDetails) => {
-                        if (!contactDetails || !contactDetails.co_linkedin) return null;
-                        const url = contactDetails.co_linkedin;
-                        return typeof url === 'string' ? url.trim() : null;
-                    };
-
+                    
                     switch (job.signal_flag) {
                         case 'financial_information':
                             const response10K = await fetchLatestFiling({ companyName: job.contact_company, formType: '10-K' });
@@ -91,61 +81,9 @@ async function fetchJobsByStatus(req, res) {
                             response = { form10K: response10K, form10Q: response10Q };
                             break;
                         case 'press_announcements':
-                            insightsResponse = await getCompanyInsights({ companyName: job.contact_company });
-                            newsResponse = await fetchCompanyNews({ companyName: job.contact_company });
+                            const insightsResponse = await getCompanyInsights({ companyName: job.contact_company });
+                            const newsResponse = await fetchCompanyNews({ companyName: job.contact_company });
                             response = { insightsResponse, newsResponse };
-
-                            // Check for errors first
-                            if (insightsResponse.status === "-1" || newsResponse.status === "-1") {
-                                hasError = true;
-                                if (insightsResponse.status === "-1") {
-                                    errorMessage.push(`Insights Error: ${insightsResponse.message}`);
-                                }
-                                if (newsResponse.status === "-1") {
-                                    errorMessage.push(`News Error: ${newsResponse.message}`);
-                                }
-
-                                await SignalAutomationJob.updateOne(
-                                    { _id: job._id },
-                                    {
-                                        job_status: 'FAILED',
-                                        job_error: errorMessage.join(' | '),
-                                        signal_data: response
-                                    }
-                                );
-                                continue;
-                            }
-
-                            // If both responses have status "0", mark as SUCCESS
-                            if (insightsResponse.status === "0" && newsResponse.status === "0") {
-                                await SignalAutomationJob.updateOne(
-                                    { _id: job._id },
-                                    {
-                                        job_status: 'SUCCESS',
-                                        signal_data: response
-                                    }
-                                );
-                            }
-                            // If either response has status "1", mark as IN_PROGRESS
-                            else if (insightsResponse.status === "1" || newsResponse.status === "1") {
-                                await SignalAutomationJob.updateOne(
-                                    { _id: job._id },
-                                    {
-                                        job_status: 'IN_PROGRESS',
-                                        signal_data: response
-                                    }
-                                );
-                            }
-                            // For any other status combination, mark as IN_PROGRESS
-                            else {
-                                await SignalAutomationJob.updateOne(
-                                    { _id: job._id },
-                                    {
-                                        job_status: 'IN_PROGRESS',
-                                        signal_data: response
-                                    }
-                                );
-                            }
                             break;
                         case 'job_openings':
                         case 'job_changes':
@@ -168,68 +106,31 @@ async function fetchJobsByStatus(req, res) {
                             break;
                         case 'linkedin_company_updates':
                         case 'activity_on_linkedin':
-                            const postsUrl = getLinkedInUrl(job.contact_details);
-                            if (!postsUrl) {
-                                throw new Error('Invalid LinkedIn URL for company posts');
-                            }
-                            console.log('Fetching company posts for LinkedIn URL:', postsUrl);
+                            const postsUrl = job.contact_details?.co_linkedin?.trim();
+                            if (!postsUrl) throw new Error('Invalid LinkedIn URL for company posts');
                             response = await fetchCompanyPosts(postsUrl);
                             break;
-
                         case 'contact_profile_information':
-                            const companyUrl = getLinkedInUrl(job.contact_details);
-                            if (!companyUrl) {
-                                throw new Error('Invalid LinkedIn URL for company details');
-                            }
-                            console.log('Fetching company details for LinkedIn URL:', companyUrl);
-                            // Pass URL string directly instead of object
+                            const companyUrl = job.contact_details?.co_linkedin?.trim();
+                            if (!companyUrl) throw new Error('Invalid LinkedIn URL for company details');
                             response = await fetchCompanyDetailsByLinkedInURL(companyUrl);
                             break;
-
-
-
                         default:
                             console.warn(`Unknown signal_flag for job ID: ${job.job_id}`);
                             continue;
                     }
 
-                    // New logic to handle status "0" as SUCCESS
-                    // Handling the update based on the response status code
-                    if (response.status === "0") {
-                        await SignalAutomationJob.updateOne(
-                            { _id: job._id },
-                            {
-                                job_status: 'SUCCESS',
-                                signal_data: response
-                            }
-                        );
-                    } else if (response.status === "-1") {
-                        await SignalAutomationJob.updateOne(
-                            { _id: job._id },
-                            {
-                                job_status: 'FAILED',
-                                job_error: response,
-                                signal_data: response
-                            }
-                        );
-                    } else if (response.status === "1") {
+                    const jobStatus = determineJobStatus(response);
+                    
+                    await SignalAutomationJob.updateOne(
+                        { _id: job._id },
+                        {
+                            job_status: jobStatus,
+                            signal_data: response
+                        }
+                    );
+                    console.log(`Job ID: ${job.job_id} updated with status: ${jobStatus}`);
 
-                        await SignalAutomationJob.updateOne(
-                            { _id: job._id },
-                            {
-                                job_status: 'IN_PROGRESS',
-                                signal_data: response
-                            }
-                        );
-                    } else {
-                        await SignalAutomationJob.updateOne(
-                            { _id: job._id },
-                            {
-                                signal_data: response,
-                                job_status: 'IN_PROGRESS'
-                            }
-                        )
-                    }
                 } catch (jobError) {
                     console.error(`Error occurred while processing job ID: ${job.job_id}`, jobError);
                     await SignalAutomationJob.updateOne(
@@ -256,18 +157,6 @@ async function fetchJobsByStatus(req, res) {
             }
         }
 
-        // // Update query to include SUCCESS status in results
-        // const updatedJobs = await SignalAutomationJob.find({
-        //     user_id,
-        //     $or: [
-        //         { job_status: job_status },
-        //         ...(job_status === 'NOT_STARTED' ? [
-        //             { job_status: 'IN_PROGRESS' },
-        //             { job_status: 'SUCCESS' }
-        //         ] : [])
-        //     ]
-        // });
-
         const statusCounts = await SignalAutomationJob.aggregate([
             { $match: { user_id, ...(request_id ? { request_id } : {}) } },
             {
@@ -278,11 +167,6 @@ async function fetchJobsByStatus(req, res) {
             }
         ]);
 
-        console.log('Aggregated Status Counts:', statusCounts); // This will show what MongoDB is returning
-
-
-        console.log('\n=== Job Status Summary ===');
-        console.log('User ID:', user_id);
         const summary = {
             NOT_STARTED: 0,
             IN_PROGRESS: 0,
@@ -294,19 +178,12 @@ async function fetchJobsByStatus(req, res) {
             summary[status._id] = status.count;
         });
 
-        console.log('NOT_STARTED jobs:', summary.NOT_STARTED);
-        console.log('IN_PROGRESS jobs:', summary.IN_PROGRESS);
-        console.log('SUCCESS jobs:', summary.SUCCESS);
-        console.log('FAILED jobs:', summary.FAILED);
+        console.log('Summary of job statuses:', summary);
 
-        console.log('========================\n');
-
-        console.log(`Fetched ${jobs.length} jobs for user_id: ${user_id}, job_status: ${job_status}${request_id ? `, request_id: ${request_id}` : ''}`);
         res.json({
             jobs,
             message: `${jobs.length} jobs fetched successfully.`
         });
-
 
     } catch (error) {
         console.error('Critical Error in fetchJobsByStatus:', error);
@@ -316,6 +193,313 @@ async function fetchJobsByStatus(req, res) {
         });
     }
 }
+
+// Function to determine job status by checking all nested statuses
+function determineJobStatus(response) {
+    let hasError = false;
+    let hasInProgress = false;
+    let allSuccess = true;
+
+    // Recursive function to check status within nested objects
+    function checkStatus(obj) {
+        if (typeof obj !== 'object' || obj === null) return;
+
+        for (const key in obj) {
+            if (typeof obj[key] === 'object') {
+                checkStatus(obj[key]);
+            } else if (key === 'status') {
+                if (obj[key] === "-1") {
+                    hasError = true;
+                } else if (obj[key] === "1") {
+                    hasInProgress = true;
+                    allSuccess = false;
+                } else if (obj[key] !== "0") {
+                    allSuccess = false;
+                }
+            }
+        }
+    }
+
+    checkStatus(response);
+
+    if (hasError) return 'FAILED';
+    if (hasInProgress) return 'IN_PROGRESS';
+    return allSuccess ? 'SUCCESS' : 'IN_PROGRESS';
+}
+
+
+// async function fetchJobsByStatus(req, res) {
+//     try {
+//         const { user_id, job_status, request_id } = req.query;
+//         console.log('Received:', { user_id, job_status, request_id });
+//         if (!user_id) {
+//             return res.status(400).json({ message: 'user_id is required' });
+//         }
+
+//         if (!job_status || !["NOT_STARTED", "IN_PROGRESS", "FAILED"].includes(job_status)) {
+//             return res.status(400).json({ message: 'Valid job_status is required (NOT_STARTED, IN_PROGRESS, FAILED)' });
+//         }
+
+//         const query = { user_id, job_status };
+//         if (request_id) {
+//             query.request_id = request_id;
+//         }
+
+//         const jobs = await SignalAutomationJob.find({ job_status, user_id });
+
+//         if (jobs.length === 0) {
+//             console.log(`No jobs found with status ${job_status}${request_id ? ` and request_id ${request_id}` : ''}`);
+//             return res.json({ message: `No jobs with status ${job_status}${request_id ? ` and request_id ${request_id}` : ''} found for this user.` });
+//         }
+
+
+//         if (job_status === 'NOT_STARTED') {
+//             for (const job of jobs) {
+//                 try {
+//                     let insightsResponse = null;
+//                     let newsResponse = null;
+//                     let response;
+//                     // let hasError = false;
+//                     let errorMessage = [];
+
+//                     const getLinkedInUrl = (contactDetails) => {
+//                         if (!contactDetails || !contactDetails.co_linkedin) return null;
+//                         const url = contactDetails.co_linkedin;
+//                         return typeof url === 'string' ? url.trim() : null;
+//                     };
+
+//                     switch (job.signal_flag) {
+//                         case 'financial_information':
+//                             const response10K = await fetchLatestFiling({ companyName: job.contact_company, formType: '10-K' });
+//                             const response10Q = await fetchLatestFiling({ companyName: job.contact_company, formType: '10-Q' });
+//                             response = { form10K: response10K, form10Q: response10Q };
+//                             break;
+//                         case 'press_announcements':
+//                             insightsResponse = await getCompanyInsights({ companyName: job.contact_company });
+//                             newsResponse = await fetchCompanyNews({ companyName: job.contact_company });
+//                             response = { insightsResponse, newsResponse };
+
+//                             // Check for errors first
+//                             if (insightsResponse.status === "-1" || newsResponse.status === "-1") {
+//                                 hasError = true;
+//                                 if (insightsResponse.status === "-1") {
+//                                     errorMessage.push(`Insights Error: ${insightsResponse.message}`);
+//                                 }
+//                                 if (newsResponse.status === "-1") {
+//                                     errorMessage.push(`News Error: ${newsResponse.message}`);
+//                                 }
+
+//                                 await SignalAutomationJob.updateOne(
+//                                     { _id: job._id },
+//                                     {
+//                                         job_status: 'FAILED',
+//                                         job_error: errorMessage.join(' | '),
+//                                         signal_data: response
+//                                     }
+//                                 );
+//                                 continue;
+//                             }
+
+//                             // If both responses have status "0", mark as SUCCESS
+//                             if (insightsResponse.status === "0" && newsResponse.status === "0") {
+//                                 await SignalAutomationJob.updateOne(
+//                                     { _id: job._id },
+//                                     {
+//                                         job_status: 'SUCCESS',
+//                                         signal_data: response
+//                                     }
+//                                 );
+//                             }
+//                             // If either response has status "1", mark as IN_PROGRESS
+//                             else if (insightsResponse.status === "1" || newsResponse.status === "1") {
+//                                 await SignalAutomationJob.updateOne(
+//                                     { _id: job._id },
+//                                     {
+//                                         job_status: 'IN_PROGRESS',
+//                                         signal_data: response
+//                                     }
+//                                 );
+//                             }
+//                             // For any other status combination, mark as IN_PROGRESS
+//                             else {
+//                                 await SignalAutomationJob.updateOne(
+//                                     { _id: job._id },
+//                                     {
+//                                         job_status: 'IN_PROGRESS',
+//                                         signal_data: response
+//                                     }
+//                                 );
+//                             }
+//                             break;
+//                         case 'job_openings':
+//                         case 'job_changes':
+//                             response = await processJobSignals({
+//                                 linkedinUrl: job.contact_details?.co_linkedin,
+//                                 companyName: job.contact_company
+//                             });
+//                             break;
+//                         case 'youtube_marketing_videos':
+//                             response = await fetchYouTubeVideos({ companyName: job.contact_company });
+//                             break;
+//                         case 'twitter_brand_mentions':
+//                             response = await fetchTwitterMentions({ companyName: job.contact_company });
+//                             break;
+//                         case 'public_mentions':
+//                             response = await fetchPublicMentions({ companyName: job.contact_company });
+//                             break;
+//                         case 'product_launches':
+//                             response = await fetchProductLaunchSignals({ linkedinUrl: job.contact_company });
+//                             break;
+//                         case 'linkedin_company_updates':
+//                         case 'activity_on_linkedin':
+//                             const postsUrl = getLinkedInUrl(job.contact_details);
+//                             if (!postsUrl) {
+//                                 throw new Error('Invalid LinkedIn URL for company posts');
+//                             }
+//                             console.log('Fetching company posts for LinkedIn URL:', postsUrl);
+//                             response = await fetchCompanyPosts(postsUrl);
+//                             break;
+
+//                         case 'contact_profile_information':
+//                             const companyUrl = getLinkedInUrl(job.contact_details);
+//                             if (!companyUrl) {
+//                                 throw new Error('Invalid LinkedIn URL for company details');
+//                             }
+//                             console.log('Fetching company details for LinkedIn URL:', companyUrl);
+//                             // Pass URL string directly instead of object
+//                             response = await fetchCompanyDetailsByLinkedInURL(companyUrl);
+//                             break;
+
+
+
+//                         default:
+//                             console.warn(`Unknown signal_flag for job ID: ${job.job_id}`);
+//                             continue;
+//                     }
+
+//                     // New logic to handle status "0" as SUCCESS
+//                     // Handling the update based on the response status code
+//                     if (response.status === "0") {
+//                         await SignalAutomationJob.updateOne(
+//                             { _id: job._id },
+//                             {
+//                                 job_status: 'SUCCESS',
+//                                 signal_data: response
+//                             }
+//                         );
+//                     } else if (response.status === "-1") {
+//                         await SignalAutomationJob.updateOne(
+//                             { _id: job._id },
+//                             {
+//                                 job_status: 'FAILED',
+//                                 job_error: response,
+//                                 signal_data: response
+//                             }
+//                         );
+//                     } else if (response.status === "1") {
+
+//                         await SignalAutomationJob.updateOne(
+//                             { _id: job._id },
+//                             {
+//                                 job_status: 'IN_PROGRESS',
+//                                 signal_data: response
+//                             }
+//                         );
+//                     } else {
+//                         await SignalAutomationJob.updateOne(
+//                             { _id: job._id },
+//                             {
+//                                 signal_data: response,
+//                                 job_status: 'IN_PROGRESS'
+//                             }
+//                         )
+//                     }
+//                 } catch (jobError) {
+//                     console.error(`Error occurred while processing job ID: ${job.job_id}`, jobError);
+//                     await SignalAutomationJob.updateOne(
+//                         { _id: job._id },
+//                         {
+//                             job_status: 'FAILED',
+//                             job_error: {
+//                                 message: jobError.message,
+//                                 timestamp: new Date()
+//                             }
+//                         }
+//                     );
+//                 }
+//             }
+
+//             try {
+//                 await summarizeSignalData({ query: { user_id, request_id } }, {
+//                     json: () => { },
+//                     status: () => ({ json: () => { } })
+//                 });
+//                 console.log('Summarization completed for user:', { user_id, request_id });
+//             } catch (summaryError) {
+//                 console.error('Error during summarization:', summaryError);
+//             }
+//         }
+
+//         // // Update query to include SUCCESS status in results
+//         // const updatedJobs = await SignalAutomationJob.find({
+//         //     user_id,
+//         //     $or: [
+//         //         { job_status: job_status },
+//         //         ...(job_status === 'NOT_STARTED' ? [
+//         //             { job_status: 'IN_PROGRESS' },
+//         //             { job_status: 'SUCCESS' }
+//         //         ] : [])
+//         //     ]
+//         // });
+
+//         const statusCounts = await SignalAutomationJob.aggregate([
+//             { $match: { user_id, ...(request_id ? { request_id } : {}) } },
+//             {
+//                 $group: {
+//                     _id: '$job_status',
+//                     count: { $sum: 1 }
+//                 }
+//             }
+//         ]);
+
+//         console.log('Aggregated Status Counts:', statusCounts); // This will show what MongoDB is returning
+
+
+//         console.log('\n=== Job Status Summary ===');
+//         console.log('User ID:', user_id);
+//         const summary = {
+//             NOT_STARTED: 0,
+//             IN_PROGRESS: 0,
+//             SUCCESS: 0,
+//             FAILED: 0
+//         };
+
+//         statusCounts.forEach(status => {
+//             summary[status._id] = status.count;
+//         });
+
+//         console.log('NOT_STARTED jobs:', summary.NOT_STARTED);
+//         console.log('IN_PROGRESS jobs:', summary.IN_PROGRESS);
+//         console.log('SUCCESS jobs:', summary.SUCCESS);
+//         console.log('FAILED jobs:', summary.FAILED);
+
+//         console.log('========================\n');
+
+//         console.log(`Fetched ${jobs.length} jobs for user_id: ${user_id}, job_status: ${job_status}${request_id ? `, request_id: ${request_id}` : ''}`);
+//         res.json({
+//             jobs,
+//             message: `${jobs.length} jobs fetched successfully.`
+//         });
+
+
+//     } catch (error) {
+//         console.error('Critical Error in fetchJobsByStatus:', error);
+//         res.status(500).json({
+//             error: 'An error occurred while fetching the jobs.',
+//             details: error.message
+//         });
+//     }
+// }
 
 
 async function summarizeSignalData(req, res) {
@@ -439,29 +623,42 @@ async function summarizeSignalData(req, res) {
 //fetchAllJobsByUser 
 async function fetchAllJobsByUser(req, res) {
     try {
-        const { user_id } = req.query;
+        const { user_id, request_id } = req.query;
 
-        if (!user_id) {
-            return res.status(400).json({ message: 'user_id is required' });
+        // Validate query parameters
+        if (!user_id || !request_id) {
+            return res.status(400).json({ 
+                message: 'Both user_id and request_id are required.' 
+            });
         }
 
-        const jobs = await SignalAutomationJob.find({ user_id });
+        // Fetch jobs based on user_id and request_id
+        const jobs = await SignalAutomationJob.find({ user_id, request_id });
 
         if (jobs.length === 0) {
-            console.warn(`No jobs found for user_id: ${user_id}`);
-            return res.json({ message: `No jobs found for user_id ${user_id}.` });
+            console.warn(`No jobs found for user_id: ${user_id} and request_id: ${request_id}`);
+            return res.json({ 
+                message: `No jobs found for user_id ${user_id} and request_id ${request_id}.` 
+            });
         }
 
-        console.log(`Fetched ${jobs.length} jobs for user_id: ${user_id}`);
+        console.log(`Fetched ${jobs.length} jobs for user_id: ${user_id} and request_id: ${request_id}`);
         jobs.forEach(job => console.log(`Job ID: ${job.job_id}, Job Status: ${job.job_status}`));
 
-        res.json({ jobs, message: `${jobs.length} jobs fetched successfully for user_id ${user_id}.` });
+        res.json({ 
+            jobs, 
+            message: `${jobs.length} jobs fetched successfully for user_id ${user_id} and request_id ${request_id}.` 
+        });
 
     } catch (error) {
         console.error('Error fetching jobs:', error);
-        res.status(500).json({ error: 'An error occurred while fetching the jobs.', details: error.message });
+        res.status(500).json({ 
+            error: 'An error occurred while fetching the jobs.', 
+            details: error.message 
+        });
     }
 }
+
 
 //changeJobStatusToNotStarted
 async function changeJobStatusToNotStarted(req, res) {

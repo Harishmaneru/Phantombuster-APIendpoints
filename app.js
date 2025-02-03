@@ -93,6 +93,7 @@ app.use(
       /\.onepgr\.com$/,
       "https://videoresponse.onepgr.com", 
       "https://virtual-interviewer-taupe.vercel.app",  
+      "https://virtual-interviewer-igmc.vercel.app"
     ],
     methods: ["GET", "PUT", "POST", "DELETE", "OPTIONS"],
     allowedHeaders: ["Content-Type", "Authorization", "X-Requested-With"],
