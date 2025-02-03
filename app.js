@@ -3,6 +3,7 @@ const https = require('https');
 const http = require('http');
 const fs = require('fs');
 const cors = require('cors');
+require('dotenv').config();
 
 const accountScraper = require('./PhantombusterAPI/AccountScraper.js');
 const companyEmployesScrap = require('./PhantombusterAPI/companyEmployesScrap.js');
