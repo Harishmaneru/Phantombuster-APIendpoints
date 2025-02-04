@@ -80,6 +80,9 @@ const videoTotext = require('./virtualInterviewAPI/videoTotext.js');
 const interviewLink = require('./virtualInterviewAPI/interviewLink.js');
 
 
+const submissionRoutes = require('./virtualInterviewAPI/submissionRoutes.js');
+const { Http2ServerRequest } = require('http2');
+
 
 const app = express();
 const port = 3001;
@@ -146,7 +149,8 @@ app.use(getPostReactions);
 app.use(getpostComments);
 app.use(virtualInterview);
 app.use(videoTotext.router);
-app.use(interviewLink)
+app.use(interviewLink);
+app.use(submissionRoutes)
 
 
 const options = {

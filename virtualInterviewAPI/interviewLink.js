@@ -73,7 +73,7 @@ router.post('/interviewlink', upload.single('companyLogo'), async (req, res) => 
             success: true,
             message: 'Interview created successfully',
             data: {
-                applicationLink: `https://vdoqo.vercel.app/application/${applicationLink}`,
+                applicationLink: `https://www.recordedinterview.com/InterviewPage/${applicationLink}`,
                 expiresAt,
                 interviewTitle,
                 jobPostingUrl,
@@ -88,48 +88,6 @@ router.post('/interviewlink', upload.single('companyLogo'), async (req, res) => 
     }
 });
 
-
-// router.post('/interviewlink', upload.single('companyLogo'), async (req, res) => {
-//     try {
-//         const { userId, interviewTitle, jobPostingUrl, companyUrl, questions, replyEmails } = req.body;
-
-//         if (!userId || !interviewTitle || !jobPostingUrl || !questions) {
-//             return res.status(400).json({ success: false, message: 'Missing required fields' });
-//         }
-
-//         const applicationLink = generateUniqueLink();
-//         const expiresAt = new Date();
-//         expiresAt.setDate(expiresAt.getDate() + 30);
-
-//         const companyLogoUrl = req.file ? `data:${req.file.mimetype};base64,${req.file.buffer.toString('base64')}` : null;
-
-//         const interview = new Interview({
-//             userId,
-//             interviewTitle,
-//             jobPostingUrl,
-//             companyUrl,
-//             companyLogoUrl,
-//             questions: Array.isArray(questions) ? questions : JSON.parse(questions),
-//             replyEmails: replyEmails ? replyEmails.split(',').map(email => email.trim()) : [],
-//             applicationLink,
-//             expiresAt
-//         });
-
-//         await interview.save();
-
-//         res.status(201).json({
-//             success: true,
-//             message: 'Interview created successfully',
-//             data: {
-//                 applicationLink: `https://vdoqo.vercel.app/application/${applicationLink}`,
-//                 expiresAt
-//             }
-//         });
-//     } catch (err) {
-//         console.error('Error creating interview:', err);
-//         res.status(500).json({ success: false, message: 'Failed to create interview' });
-//     }
-// });
 
 // Fetch interview details route
 router.get('/interview/:linkId', async (req, res) => {
