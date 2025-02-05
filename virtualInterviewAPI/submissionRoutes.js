@@ -10,53 +10,44 @@ const upload = multer({
     limits: {
         fileSize: 500 * 1024 * 1024 // 500MB limit for video files
     }
-});
+}).any();
 
-// Schema definitions
+// Schema for storing interview submissions
 const SubmissionSchema = new mongoose.Schema({
     userId: { type: String, required: true },
-    interviewId: { 
-        type: mongoose.Schema.Types.ObjectId, 
-        ref: 'Interview',
-        required: true 
-    },
-    applicationLink: { type: String, required: true },
-    textAnswer: { type: String, required: true },
+    textResponse: { type: String, required: true },
     videoResponses: [{
         questionIndex: { type: Number, required: true },
         videoUrl: { type: String, required: true },
-        duration: { type: Number },
+        fileName: { type: String },
         mimeType: { type: String }
     }],
-    submittedAt: { type: Date, default: Date.now },
-    status: { 
-        type: String, 
-        enum: ['pending', 'reviewed', 'shortlisted', 'rejected'], 
-        default: 'pending' 
-    }
+    submittedAt: { type: Date, default: Date.now }
+}, { 
+    writeConcern: { w: 1, j: false }, // Write without waiting for journal
+    bufferCommands: false // Disable buffering
 });
-
-// Create index for faster querying
-SubmissionSchema.index({ userId: 1, interviewId: 1 });
-SubmissionSchema.index({ applicationLink: 1 });
 
 const Submission = mongoose.model('Submission', SubmissionSchema);
 
-// MongoDB connection function
+// MongoDB connection with optimized settings
 async function connectDB() {
-    if (mongoose.connection.readyState === 1) {
-        return; // Already connected
-    }
-
+    if (mongoose.connection.readyState === 1) return;
+    
     const mongoURI = process.env.MONGODB_URI;
+    const options = {
+        serverSelectionTimeoutMS: 60000,
+        socketTimeoutMS: 90000,
+        connectTimeoutMS: 60000,
+        maxPoolSize: 10,
+        wtimeoutMS: 30000,
+        keepAlive: true,
+        keepAliveInitialDelay: 300000
+    };
+
     try {
-        await mongoose.connect(mongoURI, {
-            serverSelectionTimeoutMS: 15000,
-            socketTimeoutMS: 45000,
-            useNewUrlParser: true,
-            useUnifiedTopology: true,
-        });
-        console.log('submissionRoutes: MongoDB connected');
+        await mongoose.connect(mongoURI, options);
+        console.log('MongoDB connected');
     } catch (err) {
         console.error('MongoDB connection error:', err);
         throw err;
@@ -76,134 +67,111 @@ const ensureDbConnection = async (req, res, next) => {
     }
 };
 
-// Create submission endpoint
-router.post('/submit', ensureDbConnection, upload.array('videoResponses', 3), async (req, res) => {
-    try {
-        const { userId, applicationLink, textAnswer } = req.body;
-
-        if (!userId || !applicationLink || !textAnswer || !req.files || req.files.length !== 3) {
+// Handle file upload
+const handleUpload = (req, res, next) => {
+    upload(req, res, function(err) {
+        if (err) {
             return res.status(400).json({
                 success: false,
-                message: 'Missing required fields or videos'
+                message: err.message
             });
         }
+        next();
+    });
+};
 
-        // Find the associated interview
-        const interview = await mongoose.model('Interview').findOne({
-            applicationLink,
-            status: 'active',
-            expiresAt: { $gt: new Date() }
-        });
+// Submit endpoint with optimized saving
+router.post('/submit', ensureDbConnection, handleUpload, async (req, res) => {
+    const session = await mongoose.startSession();
+    let savedId = null;
 
-        if (!interview) {
-            return res.status(404).json({
+    try {
+        const { userId, textResponse } = req.body;
+
+        if (!userId || !textResponse || !req.files || req.files.length === 0) {
+            return res.status(400).json({
                 success: false,
-                message: 'Interview not found or expired'
+                message: 'Missing required fields'
             });
         }
 
         // Process video files
         const videoResponses = req.files.map((file, index) => ({
-            questionIndex: index,
+            questionIndex: index + 1,
             videoUrl: `data:${file.mimetype};base64,${file.buffer.toString('base64')}`,
-            duration: req.body[`duration${index}`],
+            fileName: file.originalname,
             mimeType: file.mimetype
         }));
 
-        // Create submission
+        // Start transaction
+        session.startTransaction();
+
+        // Create submission with minimal waiting
         const submission = new Submission({
             userId,
-            interviewId: interview._id,
-            applicationLink,
-            textAnswer,
+            textResponse,
             videoResponses
         });
 
-        await submission.save();
+        // Save without waiting for response
+        submission.save({ session, w: 0 }) // w: 0 means don't wait for acknowledgment
+            .then(() => {
+                console.log('Interview Submission Successfully Saved');
+            })
+            .catch(err => {
+                console.error('Async save error:', err);
+            });
 
+        savedId = submission._id;
+
+        // Send success response immediately
         res.status(201).json({
             success: true,
-            message: 'Submission created successfully',
+            message: 'Submission is being processed',
             data: {
-                submissionId: submission._id,
-                submittedAt: submission.submittedAt
+                submissionId: savedId,
+                submittedAt: new Date()
             }
         });
+
+        // Commit transaction in background
+        await session.commitTransaction();
     } catch (err) {
-        console.error('Error creating submission:', err);
-        res.status(500).json({
-            success: false,
-            message: 'Failed to create submission'
-        });
+        console.error('Error in submission:', err);
+        await session.abortTransaction();
+        
+        // Only send error response if we haven't sent success response
+        if (!res.headersSent) {
+            res.status(500).json({
+                success: false,
+                message: 'Failed to process submission'
+            });
+        }
+    } finally {
+        session.endSession();
     }
 });
 
-// Get submissions list
+// Get submissions list (optimized query)
 router.get('/submissions/:userId', ensureDbConnection, async (req, res) => {
     try {
         const { userId } = req.params;
-        const { status, page = 1, limit = 10 } = req.query;
-
-        const query = { userId };
-        if (status) {
-            query.status = status;
-        }
-
-        const skip = (page - 1) * limit;
-
-        const submissions = await Submission.find(query)
-            .populate('interviewId', 'interviewTitle companyUrl jobPostingUrl')
-            .sort({ submittedAt: -1 })
-            .skip(skip)
-            .limit(parseInt(limit))
-            .select('-videoResponses');
-
-        const total = await Submission.countDocuments(query);
+        const submissions = await Submission.find(
+            { userId },
+            { videoResponses: 0 } // Exclude video data
+        )
+        .lean()
+        .sort({ submittedAt: -1 });
 
         res.status(200).json({
             success: true,
-            data: {
-                submissions,
-                pagination: {
-                    currentPage: parseInt(page),
-                    totalPages: Math.ceil(total / limit),
-                    totalSubmissions: total
-                }
-            }
+            data: submissions
         });
     } catch (err) {
         console.error('Error fetching submissions:', err);
         res.status(500).json({
             success: false,
             message: 'Failed to fetch submissions'
-        });
-    }
-});
-
-// Get single submission
-router.get('/submission/:submissionId', ensureDbConnection, async (req, res) => {
-    try {
-        const { submissionId } = req.params;
-
-        const submission = await Submission.findById(submissionId)
-            .populate('interviewId', 'interviewTitle companyUrl jobPostingUrl questions');
-
-        if (!submission) {
-            return res.status(404).json({
-                success: false,
-                message: 'Submission not found'
-            });
-        }
-
-        res.status(200).json({
-            success: true,
-            data: submission
-        });
-    } catch (err) {
-        console.error('Error fetching submission details:', err);
-        res.status(500).json({
-            success: false,
-            message: 'Failed to fetch submission details'
         });
     }
 });
