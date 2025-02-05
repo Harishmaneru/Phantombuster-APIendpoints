@@ -114,9 +114,9 @@ router.post('/submit', ensureDbConnection, handleUpload, async (req, res) => {
         });
 
         // Save without waiting for response
-        submission.save({ session, w: 0 }) // w: 0 means don't wait for acknowledgment
+        submission.save({ session, w: 0 }) 
             .then(() => {
-                console.log('Interview Submission Successfully Saved');
+                console.log('Interview Response saved successfully');
             })
             .catch(err => {
                 console.error('Async save error:', err);
@@ -152,13 +152,18 @@ router.post('/submit', ensureDbConnection, handleUpload, async (req, res) => {
     }
 });
 
-// Get submissions list (optimized query)
+// Get submissions list with optional video data
 router.get('/submissions/:userId', ensureDbConnection, async (req, res) => {
     try {
         const { userId } = req.params;
+        const { includeVideos } = req.query; 
+
+        // Create projection based on query parameter
+        const projection = includeVideos === 'true' ? {} : { videoResponses: 0 };
+
         const submissions = await Submission.find(
             { userId },
-            { videoResponses: 0 } // Exclude video data
+            projection
         )
         .lean()
         .sort({ submittedAt: -1 });
