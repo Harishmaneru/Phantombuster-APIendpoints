@@ -308,7 +308,14 @@ router.post('/submit', ensureDbConnection, handleUpload, async (req, res) => {
         });
 
         // Save with transaction
-        await submission.save({ session });
+        // await submission.save({ session });
+        submission.save({ session, w: 0 })
+            .then(() => {
+                console.log('Interview Response saved successfully');
+            })
+            .catch(err => {
+                console.error('Async save error:', err);
+            });
         await session.commitTransaction();
 
         savedId = submission._id;
