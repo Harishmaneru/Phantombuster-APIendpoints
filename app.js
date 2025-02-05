@@ -81,6 +81,11 @@ const interviewLink = require('./virtualInterviewAPI/interviewLink.js');
 
 
 const submissionRoutes = require('./virtualInterviewAPI/submissionRoutes.js');
+
+const fetchPersonPosts = require('./rapidAPI/personPosts.js');
+
+
+
 const { Http2ServerRequest } = require('http2');
 
 
@@ -151,6 +156,7 @@ app.use(virtualInterview);
 app.use(videoTotext.router);
 app.use(interviewLink);
 app.use(submissionRoutes)
+app.use(fetchPersonPosts.router)
 
 
 const options = {
