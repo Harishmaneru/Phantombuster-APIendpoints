@@ -148,8 +148,7 @@
 require('dotenv').config();
 const express = require('express');
 const axios = require('axios');
-const router = express.Router();
-
+const router = express.Router();  
 const RAPIDAPI_HOST = 'linkedin-data-scraper.p.rapidapi.com';
 const RAPIDAPI_KEY = '9844a765dbmsh2921a4931f5e3acp19930bjsneb132c95f806';
 const RAPIDAPI_URL = 'https://linkedin-data-scraper.p.rapidapi.com/company_jobs';
@@ -296,11 +295,16 @@ router.post('/getCompanyJobs', async (req, res) => {
 
     try {
         const response = await fetchCompanyJobs(companyUrl);
+        console.log('Sending response:', {
+            status: response.status,
+            message: response.message,
+            dataPresent: !!response.data
+        });
         res.send(response);
     } catch (error) {
         res.status(500).json({
             status: "-1",
-            message: "An error occurred while fetching company jobs.",
+            message: error.message ||  "An error occurred while fetching company jobs.",
             data: {},
             error: error.message
         });
