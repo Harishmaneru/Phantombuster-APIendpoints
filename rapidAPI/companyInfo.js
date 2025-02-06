@@ -1,44 +1,143 @@
+require('dotenv').config();
 const express = require('express');
 const axios = require('axios');
 const router = express.Router();
 
-router.post('/getLinkedInCompanyData', async (req, res) => {
-    console.log('Received request to fetch LinkedIn company data');
-    const companyUrl = req.query.url;
-    if (!companyUrl) {
-        console.log('Company URL missing in request');
-        return res.status(400).json({ error: 'Company URL is required as a query parameter' });
+const RAPIDAPI_HOST = 'fresh-linkedin-profile-data.p.rapidapi.com';
+const RAPIDAPI_KEY = '9844a765dbmsh2921a4931f5e3acp19930bjsneb132c95f806'; //Rajiv Pro plan key
+const RAPIDAPI_URL = 'https://fresh-linkedin-profile-data.p.rapidapi.com/get-company-by-linkedinurl';
+
+const fetchCompanyInfo = async (linkedinUrl) => {
+    console.log('Input parameters:', { linkedinUrl });
+
+    if (!linkedinUrl) {
+        console.log('Error: Missing LinkedIn URL');
+        return {
+            status: "-1",
+            message: "LinkedIn URL is required.",
+            data: {}
+        };
     }
 
-    const options = {
-        method: 'GET',
-        url: 'https://linkedin-data-scraper4.p.rapidapi.com/company.php',
-        params: { url: companyUrl },
-        headers: {               
-            'x-rapidapi-host': 'linkedin-data-scraper4.p.rapidapi.com',
-            'x-rapidapi-key': '989f4f415emsh61990bfbf21063fp14c1a4jsn58f1c4a73736'
-        }
-    };
-
     try {
-        console.log('Sending request to RapidAPI endpoint');
-        const response = await axios.request(options);
-        if (response.data && Object.keys(response.data).length > 0) {
-            console.log('Received valid response from API');
-            res.status(200).json(response.data);
+        const response = await axios.get(RAPIDAPI_URL, {
+            headers: {
+                'x-rapidapi-host': RAPIDAPI_HOST,
+                'x-rapidapi-key': RAPIDAPI_KEY
+            },
+            params: {
+                linkedin_url: linkedinUrl
+            }
+        });
+
+        // console.log('API Response:', response.data);  
+
+        // Check if we have a valid response
+        if (response.data) {
+            // Check for specific error indicators in response
+            if (response.data.error) {
+                return {
+                    status: "-1",
+                    message: response.data.error,
+                    data: {}
+                };
+            }
+
+            // Check if we have company data
+            if (Object.keys(response.data).length > 0) {
+                return {
+                    status: "1",
+                    message: "Successfully fetched company information.",
+                    data: response.data
+                };
+            } else {
+                return {
+                    status: "0",
+                    message: "No company information found.",
+                    data: {}
+                };
+            }
         } else {
-            console.log('API returned an empty response');
-            res.status(404).json({ error: 'No data found for the provided URL' });
+            console.log('Empty response from API');
+            return {
+                status: "0",
+                message: "No company information found.",
+                data: {}
+            };
         }
     } catch (error) {
-        console.error('Error fetching company data:', error.message);
+        console.error('API Request Error:', {
+            message: error.message,
+            code: error.code,
+            stack: error.stack
+        });
+
         if (error.response) {
-            console.error('API response error:', error.response.data);
-            res.status(error.response.status).json({ error: error.response.data });
-        } else {
-            res.status(500).json({ error: 'Failed to fetch company data', details: error.message });
+            console.error('API Error Response:', {
+                status: error.response.status,
+                statusText: error.response.statusText,
+                data: error.response.data
+            });
+
+            return {
+                status: "-1",
+                message: error.response.data.message || error.response.statusText || "Failed to fetch company information",
+                error: error.response.data,
+                data: {}
+            };
         }
+
+        return {
+            status: "-1",
+            message: error.message || "Failed to fetch company information.",
+            error: error.message,
+            data: {}
+        };
+    }
+};
+
+router.post('/getCompanyInfo', async (req, res) => {
+    console.log('Received GET request to /getCompanyInfo');
+    console.log('Request Query:', req.query);
+
+    const { linkedinUrl } = req.query;
+
+    if (!linkedinUrl) {
+        console.log('Bad Request: Missing LinkedIn URL');
+        return res.status(400).json({
+            status: "-1",
+            message: "LinkedIn URL is required.",
+            data: {}
+        });
+    }
+
+    try {
+        console.log('Processing request for URL:', linkedinUrl);
+        const response = await fetchCompanyInfo(linkedinUrl);
+        
+        console.log('Sending response:', {
+            status: response.status,
+            message: response.message,
+            dataPresent: !!response.data
+        });
+        
+        res.send(response);
+    } catch (error) {
+        console.error('Route Handler Error:', {
+            message: error.message,
+            stack: error.stack
+        });
+        
+        res.status(500).json({
+            status: "-1",
+            message: error.message || "An error occurred while fetching company information.",
+            data: {},
+            error: error.message
+        });
     }
 });
 
-module.exports = router;
+module.exports = {
+    router,
+    fetchCompanyInfo
+};

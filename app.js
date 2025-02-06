@@ -67,7 +67,7 @@ const publicMentions = require('./pressFundingAnnounements/publicMentions.js');
 
 const personProfile = require('./rapidAPI/personProfile.js');
 
-const companyInfo = require('./rapidAPI/companyInfo.js');
+const getCompanyInfo = require('./rapidAPI/companyInfo.js');
 
 const getPostReactions = require('./rapidAPI/getPostReactions.js');
 
@@ -84,7 +84,7 @@ const submissionRoutes = require('./virtualInterviewAPI/submissionRoutes.js');
 
 const fetchPersonPosts = require('./rapidAPI/personPosts.js');
 
-
+const fetchCompanyJobs = require('./rapidAPI/companyJobs.js');
 
 const { Http2ServerRequest } = require('http2');
 
@@ -149,7 +149,7 @@ app.use(signalAutomationJobs.router);
 app.use(productLunchs.router);
 app.use(publicMentions.router);
 app.use(personProfile);
-app.use(companyInfo);
+app.use(getCompanyInfo.router);
 app.use(getPostReactions);
 app.use(getpostComments);
 app.use(virtualInterview);
@@ -157,6 +157,7 @@ app.use(videoTotext.router);
 app.use(interviewLink);
 app.use(submissionRoutes)
 app.use(fetchPersonPosts.router)
+app.use(fetchCompanyJobs.router)
 
 
 const options = {

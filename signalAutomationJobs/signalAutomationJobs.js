@@ -35,6 +35,7 @@ const signalAutomationJobsSchema = new mongoose.Schema({
     job_created_at: { type: Date, default: Date.now, required: true },
     signal_data: { type: mongoose.Schema.Types.Mixed },
     signal_data_summary: { type: String },
+    business_objective_prompt: { type: String },
     job_error: { type: mongoose.Schema.Types.Mixed },
     job_body: { type: String },
     request_id: { type: String, required: true }
@@ -181,7 +182,7 @@ async function fetchJobsByStatus(req, res) {
         console.log('Summary of job statuses:', summary);
 
         res.json({
-            jobs,
+            summary,
             message: `${jobs.length} jobs fetched successfully.`
         });
 
