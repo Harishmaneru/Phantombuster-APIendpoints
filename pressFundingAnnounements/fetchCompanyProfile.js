@@ -45,7 +45,7 @@ const fetchCompanyPosts = async (linkedinUrl) => {
 
             return {
                 status: "1",
-                message: "Successfully fetched last 3 company posts.",
+                message: "Successfully fetched company posts.",
                 data: limitedPosts
             };
         } else {
