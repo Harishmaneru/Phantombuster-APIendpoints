@@ -150,7 +150,7 @@ const express = require('express');
 const axios = require('axios');
 const router = express.Router();  
 const RAPIDAPI_HOST = 'linkedin-data-scraper.p.rapidapi.com';
-const RAPIDAPI_KEY = '9844a765dbmsh2921a4931f5e3acp19930bjsneb132c95f806';
+const RAPIDAPI_KEY = '265efbe094msh21bc518404ee2cep1ac560jsn3281b82d3aed';
 const RAPIDAPI_URL = 'https://linkedin-data-scraper.p.rapidapi.com/company_jobs';
 
 // Helper function to convert "listedAt" to minutes

@@ -4,20 +4,37 @@ const router = express.Router();
 
 const getLinkedInProfileData = async (profileUrl) => {
     try {
-        const apiUrl = 'https://linkedin-data-api.p.rapidapi.com/get-profile-data-by-url';
+        const apiUrl = 'https://fresh-linkedin-profile-data.p.rapidapi.com/get-linkedin-profile';
 
         console.log('Requesting LinkedIn profile data for URL:', profileUrl);
 
         const response = await axios.get(apiUrl, {
-            params: { url: profileUrl },
+            params: {
+                linkedin_url: profileUrl,
+                include_skills: true,
+                include_certifications: true,
+                include_publications: false,
+                include_honors: true,
+                include_volunteers: false,
+                include_projects: true,
+                include_patents: false,
+                include_courses: true,
+                include_organizations: true,
+                include_profile_status: true,
+                include_company_public_url: true
+            },
             headers: {
-                'x-rapidapi-host': 'linkedin-data-api.p.rapidapi.com',
-                'x-rapidapi-key': '9844a765dbmsh2921a4931f5e3acp19930bjsneb132c95f806'  
+                'x-rapidapi-host': 'fresh-linkedin-profile-data.p.rapidapi.com',
+                'x-rapidapi-key': '989f4f415emsh61990bfbf21063fp14c1a4jsn58f1c4a73736'
             }
         });
 
-        console.log('Response received:', response.data.username);
-        return response.data;
+        console.log('Response received:', response.data.message);
+        if (Object.keys(response.data).length === 0) {
+            return { status: 0, message: 'No data found for the provided profile URL.' };
+        }
+
+        return { status: 1, data: response.data };
     } catch (error) {
         console.error('Error fetching LinkedIn profile data:', error);
         if (error.response) {
@@ -33,20 +50,39 @@ const getLinkedInProfileData = async (profileUrl) => {
     }
 };
 
-router.post('/getProfileData', async (req, res) => {
-    const { url } = req.query;
-
+const getProfileData = async (url) => {
     if (!url) {
-        return res.status(400).json({ error: 'Profile URL is required' });
+        return { status: -1, message: 'Profile URL is required to fetch LinkedIn data.' };
     }
 
     try {
-        const profileData = await getLinkedInProfileData(url);
-        res.json({ success: true, data: profileData });
+        return await getLinkedInProfileData(url);
     } catch (error) {
-        console.error('Error handling API endpoint:', error);
-        res.status(500).json({ success: false, error: error.message });
+        return { status: -1, message: error.message };
     }
+};
+
+router.post('/getProfileData', async (req, res) => {
+    const { url } = req.query;
+    const startTime = Date.now();
+
+    console.log('Received request for LinkedIn profile data', { url });
+
+    const result = await getProfileData(url);
+    const responseTime = Date.now() - startTime;
+
+    res.status(result.status === -1 ? 400 : 200).json({
+        status: result.status,
+        message: result.message,
+        data: result.status === 1 ? result.data : null,
+        metadata: {
+            responseTime,
+            timestamp: new Date().toISOString()
+        }
+    });
 });
 
-module.exports = router;
+module.exports = {
+    router,
+    getProfileData
+};

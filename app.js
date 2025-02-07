@@ -146,7 +146,7 @@ app.use(fetchCompanyByDomain.router);
 app.use(signalAutomationJobs.router);
 app.use(productLunchs.router);
 app.use(publicMentions.router);
-app.use(personProfile);
+app.use(personProfile.router);
 app.use(getCompanyInfo.router);
 app.use(virtualInterview);
 app.use(videoTotext.router);
