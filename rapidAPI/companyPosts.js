@@ -7,11 +7,11 @@ const RAPIDAPI_HOST = 'fresh-linkedin-profile-data.p.rapidapi.com';
 const RAPIDAPI_KEY = '9844a765dbmsh2921a4931f5e3acp19930bjsneb132c95f806' //Rajiv Account (pro plan)
 const RAPIDAPI_URL = 'https://fresh-linkedin-profile-data.p.rapidapi.com/get-company-posts';
 
-const fetchCompanyPosts = async (linkedinUrl) => {
+const fetchCompanyPosts = async (companyUrl) => {
 
-    console.log('Input LinkedIn URL:', linkedinUrl);
+    console.log('Input LinkedIn URL:', companyUrl);
 
-    if (!linkedinUrl) {
+    if (!companyUrl) {
         console.log('Error: Missing LinkedIn URL');
         return {
             status: "-1",
@@ -27,7 +27,7 @@ const fetchCompanyPosts = async (linkedinUrl) => {
                 'x-rapidapi-key': RAPIDAPI_KEY
             },
             params: {
-                linkedin_url: linkedinUrl,
+                linkedin_url: companyUrl,
                 start: 0,
                 sort_by: 'top'
             }
@@ -93,9 +93,9 @@ router.post('/getCompanyPosts', async (req, res) => {
     console.log('Received POST request to /getCompanyPosts');
     console.log('Request Body:', req.body);
 
-    const { linkedinUrl } = req.body;
+    const { companyUrl } = req.body;
 
-    if (!linkedinUrl) {
+    if (!companyUrl) {
         console.log('Bad Request: Missing LinkedIn URL');
         return res.status(400).json({
             status: "-1",
@@ -105,8 +105,8 @@ router.post('/getCompanyPosts', async (req, res) => {
     }
 
     try {
-        console.log('Processing request for URL:', linkedinUrl);
-        const response = await fetchCompanyPosts(linkedinUrl);
+        console.log('Processing request for URL:', companyUrl);
+        const response = await fetchCompanyPosts(companyUrl);
         
         // Set appropriate HTTP status code
         // const httpStatus = response.status === "-1" ? 500 : 200;
