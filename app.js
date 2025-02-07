@@ -53,7 +53,7 @@ const twitterMentions = require('./socialSignals/twitterMentions.js');
 
 const jobSignals = require('./pressFundingAnnounements/jobSignals.js');
 
-const fetchCompanyProfile = require('./pressFundingAnnounements/fetchCompanyProfile.js');
+const companyPosts = require('./rapidAPI/companyPosts.js');
 
 const getCompanyArticles  = require('./pressFundingAnnounements/getCompanyArticles.js');
 
@@ -69,10 +69,6 @@ const personProfile = require('./rapidAPI/personProfile.js');
 
 const getCompanyInfo = require('./rapidAPI/companyInfo.js');
 
-const getPostReactions = require('./rapidAPI/getPostReactions.js');
-
-const getpostComments = require('./rapidAPI/getpostComments.js');
-
 const virtualInterview = require('./virtualInterviewAPI/virtualInterview.js');
 
 const videoTotext = require('./virtualInterviewAPI/videoTotext.js');
@@ -85,6 +81,8 @@ const submissionRoutes = require('./virtualInterviewAPI/submissionRoutes.js');
 const fetchPersonPosts = require('./rapidAPI/personPosts.js');
 
 const fetchCompanyJobs = require('./rapidAPI/companyJobs.js');
+
+const getPostDetails = require('./rapidAPI/getPostDetails.js');
 
 const { Http2ServerRequest } = require('http2');
 
@@ -142,7 +140,7 @@ app.use(twitterMentions.router);
 app.use(CompanyInsightsModule.router);
 app.use(youtubeData.router);
 app.use(jobSignals.router);
-app.use(fetchCompanyProfile.router);
+app.use(companyPosts.router);
 app.use(getCompanyArticles.router);
 app.use(fetchCompanyByDomain.router);
 app.use(signalAutomationJobs.router);
@@ -150,14 +148,13 @@ app.use(productLunchs.router);
 app.use(publicMentions.router);
 app.use(personProfile);
 app.use(getCompanyInfo.router);
-app.use(getPostReactions);
-app.use(getpostComments);
 app.use(virtualInterview);
 app.use(videoTotext.router);
 app.use(interviewLink);
 app.use(submissionRoutes)
 app.use(fetchPersonPosts.router)
 app.use(fetchCompanyJobs.router)
+app.use(getPostDetails.router)
 
 
 const options = {

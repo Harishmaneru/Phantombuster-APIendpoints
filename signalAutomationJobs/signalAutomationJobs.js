@@ -12,7 +12,7 @@ const { fetchCompanyNews } = require('../pressFundingAnnounements/newsAnnounceme
 const { fetchCompanyDetailsByLinkedInURL } = require('../pressFundingAnnounements/fetchCompanyByDomain.js');
 const { fetchProductLaunchSignals } = require('../pressFundingAnnounements/productLunchs.js');
 const { fetchPublicMentions } = require('../pressFundingAnnounements/publicMentions.js');
-const { fetchCompanyPosts } = require('../pressFundingAnnounements/fetchCompanyProfile.js');
+const { fetchCompanyPosts } = require('../rapidAPI/companyPosts.js');
 
 const { OpenAI } = require('openai');
 

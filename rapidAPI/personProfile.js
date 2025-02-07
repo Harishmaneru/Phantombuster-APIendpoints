@@ -12,7 +12,7 @@ const getLinkedInProfileData = async (profileUrl) => {
             params: { url: profileUrl },
             headers: {
                 'x-rapidapi-host': 'linkedin-data-api.p.rapidapi.com',
-                'x-rapidapi-key': '9844a765dbmsh2921a4931f5e3acp19930bjsneb132c95f806' //Rajiv Account (pro plan)
+                'x-rapidapi-key': '9844a765dbmsh2921a4931f5e3acp19930bjsneb132c95f806'  
             }
         });
 
