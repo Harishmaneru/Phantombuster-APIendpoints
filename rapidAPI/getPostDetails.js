@@ -63,7 +63,7 @@ const getLinkedInPostData = async (urn) => {
         // API calls for reactions and comments
         const [reactionsResponse, commentsResponse] = await Promise.all([
             axios.get(`https://fresh-linkedin-profile-data.p.rapidapi.com/get-post-reactions`, {
-                params: { urn: urn, type: 'ALL', page: 1 },
+                params: { urn: urn, type: 'LIKE', page: 1 },
                 headers: {
                     'x-rapidapi-host': 'fresh-linkedin-profile-data.p.rapidapi.com',
                     'x-rapidapi-key': '9844a765dbmsh2921a4931f5e3acp19930bjsneb132c95f806' //Rajiv Account pro plan
