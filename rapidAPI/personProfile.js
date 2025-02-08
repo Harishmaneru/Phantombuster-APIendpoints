@@ -25,7 +25,7 @@ const getLinkedInProfileData = async (profileUrl) => {
             },
             headers: {
                 'x-rapidapi-host': 'fresh-linkedin-profile-data.p.rapidapi.com',
-                'x-rapidapi-key': '989f4f415emsh61990bfbf21063fp14c1a4jsn58f1c4a73736'
+                'x-rapidapi-key': '9844a765dbmsh2921a4931f5e3acp19930bjsneb132c95f806'
             }
         });
 
