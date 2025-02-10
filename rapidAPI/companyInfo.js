@@ -107,7 +107,7 @@ router.post('/getCompanyInfo', async (req, res) => {
         return res.status(400).json({
             status: "-1",
             message: "LinkedIn URL is required.",
-            Company_Profile: {}
+            data: {}
         });
     }
 
@@ -131,7 +131,7 @@ router.post('/getCompanyInfo', async (req, res) => {
         res.status(500).json({
             status: "-1",
             message: error.message || "An error occurred while fetching company information.",
-            data: {},
+            Company_Profile: {},
             error: error.message
         });
     }
