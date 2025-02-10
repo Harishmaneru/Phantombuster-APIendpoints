@@ -39,7 +39,7 @@ const fetchCompanyInfo = async (linkedinUrl) => {
                 return {
                     status: "-1",
                     message: response.data.error,
-                    data: {}
+                    Company_Profile: {}
                 };
             }
 
@@ -48,13 +48,13 @@ const fetchCompanyInfo = async (linkedinUrl) => {
                 return {
                     status: "1",
                     message: "Successfully fetched company information.",
-                    data: response.data
+                    Company_Profile: response.data
                 };
             } else {
                 return {
                     status: "0",
                     message: "No company information found.",
-                    data: {}
+                    Company_Profile: {}
                 };
             }
         } else {
@@ -62,7 +62,7 @@ const fetchCompanyInfo = async (linkedinUrl) => {
             return {
                 status: "0",
                 message: "No company information found.",
-                data: {}
+                Company_Profile: {}
             };
         }
     } catch (error) {
@@ -76,14 +76,14 @@ const fetchCompanyInfo = async (linkedinUrl) => {
             console.error('API Error Response:', {
                 status: error.response.status,
                 statusText: error.response.statusText,
-                data: error.response.data
+                Company_Profile: error.response.data
             });
 
             return {
                 status: "-1",
                 message: error.response.data.message || error.response.statusText || "Failed to fetch company information",
                 error: error.response.data,
-                data: {}
+                Company_Profile: {}
             };
         }
 
@@ -91,7 +91,7 @@ const fetchCompanyInfo = async (linkedinUrl) => {
             status: "-1",
             message: error.message || "Failed to fetch company information.",
             error: error.message,
-            data: {}
+            Company_Profile: {}
         };
     }
 };
@@ -107,7 +107,7 @@ router.post('/getCompanyInfo', async (req, res) => {
         return res.status(400).json({
             status: "-1",
             message: "LinkedIn URL is required.",
-            data: {}
+            Company_Profile: {}
         });
     }
 
