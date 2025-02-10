@@ -159,7 +159,7 @@ router.post('/getPostDetails', async (req, res) => {
     res.status(result.status === -1 ? 400 : 200).json({
         status: result.status,
         message: result.message,
-        data: result.status === 1 ? result : null,
+        post_LikesComments: result.status === 1 ? result : null,
         metadata: {
             responseTime,
             timestamp: new Date().toISOString()

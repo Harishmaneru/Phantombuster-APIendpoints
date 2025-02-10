@@ -107,7 +107,7 @@ router.post('/getCompanyInfo', async (req, res) => {
         return res.status(400).json({
             status: "-1",
             message: "LinkedIn URL is required.",
-            data: {}
+            Company_Profile: {}
         });
     }
 

@@ -84,6 +84,8 @@ const fetchCompanyJobs = require('./rapidAPI/companyJobs.js');
 
 const getPostDetails = require('./rapidAPI/getPostDetails.js');
 
+const getLinkedInEmployees = require('./rapidAPI/linkedinEmployeesScraper.js');
+
 const { Http2ServerRequest } = require('http2');
 
 
@@ -155,6 +157,7 @@ app.use(submissionRoutes)
 app.use(fetchPersonPosts.router)
 app.use(fetchCompanyJobs.router)
 app.use(getPostDetails.router)
+app.use(getLinkedInEmployees.router)
 
 
 const options = {
