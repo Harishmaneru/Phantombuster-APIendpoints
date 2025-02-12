@@ -3,68 +3,81 @@ const router = express.Router();
 const mongoose = require('mongoose');
 const multer = require('multer');
 const storage = multer.memoryStorage();
-const compression = require('compression');
-
-router.use(compression());
-
 const upload = multer({
     storage,
     limits: {
-        fileSize: 200 * 1024 * 1024 
+        fileSize: 500 * 1024 * 1024 
     }
 }).any();
+
+const logSubmissionActivity = (stage, data) => {
+    console.log(`[${new Date().toISOString()}] Submission ${stage}:`, JSON.stringify(data, null, 2));
+};
+
+// Verify database connection
+const verifyDbConnection = () => {
+    const state = mongoose.connection.readyState;
+    const states = {
+        0: 'disconnected',
+        1: 'connected',
+        2: 'connecting',
+        3: 'disconnecting'
+    };
+    return states[state] || 'unknown';
+};
 
  
 const SubmissionSchema = new mongoose.Schema({
     userId: { type: String, required: true },
     applicantName: { type: String, required: true },
     email: { type: String, required: true },
+    textQuestion: { type: String, required: true },
     textResponse: { type: String, required: true },
     videoResponses: [{
         questionIndex: { type: Number, required: true },
-        question: { type: String, required: true }, 
+        question: { type: String, required: true },
         videoUrl: { type: String, required: true },
         fileName: { type: String },
         mimeType: { type: String }
     }],
     submittedAt: { type: Date, default: Date.now }
 }, {
-    writeConcern: { w: 1, j: true },  
-    timestamps: true
-    
+    writeConcern: { w: 1, j: false },
+    bufferCommands: false
 });
-SubmissionSchema.index({ userId: 1, submittedAt: -1 });
+
+
 const Submission = mongoose.model('Submission', SubmissionSchema);
 
-const connectDB = async () => {
-    if (mongoose.connection.readyState === 1) return;
+async function connectDB() {
+    if (mongoose.connection.readyState === 1) {
+        logSubmissionActivity('DB Status', { status: 'Already connected' });
+        return;
+    }
 
     const mongoURI = process.env.MONGODB_URI;
     const options = {
-        serverSelectionTimeoutMS: 30000,
-        socketTimeoutMS: 45000,
-        connectTimeoutMS: 30000,
-        maxPoolSize: 50,
-        minPoolSize: 10,
-        wtimeoutMS: 2500,
+        serverSelectionTimeoutMS: 60000,
+        socketTimeoutMS: 120000,
+        connectTimeoutMS: 60000,
+        maxPoolSize: 10,
+        wtimeoutMS: 30000,
         keepAlive: true,
-        keepAliveInitialDelay: 300000,
-        retryWrites: true,
-        useNewUrlParser: true,
-        useUnifiedTopology: true
+        keepAliveInitialDelay: 300000
     };
 
     try {
+        logSubmissionActivity('DB Connection Attempt', { uri: mongoURI.replace(/\/\/.*@/, '//****@') });
         await mongoose.connect(mongoURI, options);
-        console.log('MongoDB connected successfully');
+        logSubmissionActivity('DB Connection', { status: 'success' });
     } catch (err) {
-        console.error('MongoDB connection error:', err);
+        logSubmissionActivity('DB Connection Error', { 
+            error: err.message,
+            stack: err.stack
+        });
         throw err;
     }
-};
-
-const processedRequests = new Set();
-const DEDUP_TIMEOUT = 3600000; // 1 hour
+}
 
 // Middleware to ensure database connection
 const ensureDbConnection = async (req, res, next) => {
@@ -92,68 +105,134 @@ const handleUpload = (req, res, next) => {
     });
 };
 
+router.post('/submit', ensureDbConnection, handleUpload, async (req, res) => {
+    const session = await mongoose.startSession();
+    let savedId = null;
 
-router.post('/submit', async (req, res) => {
-    const requestId = req.headers['x-request-id'];
-    
-    if (processedRequests.has(requestId)) {
-        return res.status(200).json({
-            success: true,
-            message: 'Submission already processed',
-            duplicate: true
-        });
-    }
-
-    let session;
     try {
-        session = await mongoose.startSession();
+        logSubmissionActivity('Request Received', {
+            userId: req.body.userId,
+            applicantName: req.body.applicantName,
+            email: req.body.email,
+            filesCount: req?.files?.length || 0
+        });
+
+        const dbState = verifyDbConnection();
+        logSubmissionActivity('DB State Check', { state: dbState });
+        
+        if (dbState !== 'connected') {
+            throw new Error(`Database not properly connected. Current state: ${dbState}`);
+        }
+
+        const { 
+            userId, 
+            applicantName, 
+            email, 
+            textResponse, 
+            textQuestion 
+        } = req.body;
+
+        // Enhanced validation
+        if (!userId || !applicantName || !email || !textResponse || !textQuestion || !req.files || req.files.length === 0) {
+            logSubmissionActivity('Validation Error', { 
+                missing: {
+                    userId: !userId,
+                    applicantName: !applicantName,
+                    email: !email,
+                    textResponse: !textResponse,
+                    textQuestion: !textQuestion,
+                    files: !req.files || req.files.length === 0
+                }
+            });
+            return res.status(400).json({
+                success: false,
+                message: 'Missing required fields'
+            });
+        }
+
+        // Process video files with questions
+        const videoResponses = req.files.map((file, index) => {
+            const questionNumber = index + 1;
+            const question = req.body[`videoQuestion${questionNumber}`];
+
+            logSubmissionActivity('Processing File', {
+                index,
+                fileName: file.originalname,
+                mimeType: file.mimetype,
+                size: file.size,
+                question
+            });
+
+            return {
+                questionIndex: questionNumber,
+                question: question,
+                videoUrl: `data:${file.mimetype};base64,${file.buffer.toString('base64')}`,
+                fileName: file.originalname,
+                mimeType: file.mimetype
+            };
+        });
+
+        logSubmissionActivity('Transaction Start', { sessionId: session.id });
         session.startTransaction();
-
-        const { userId, applicantName, email, textResponse } = req.body;
-        const questions = JSON.parse(req.body.questions);
-        const videoMetadata = JSON.parse(req.body.videoMetadata);
-
-        const videoResponses = req.files.map((file, index) => ({
-            questionIndex: videoMetadata[index].index + 1,
-            question: videoMetadata[index].question,
-            videoUrl: `data:${file.mimetype};base64,${file.buffer.toString('base64')}`,
-            fileName: file.originalname,
-            mimeType: file.mimetype
-        }));
 
         const submission = new Submission({
             userId,
             applicantName,
             email,
+            textQuestion,
             textResponse,
             videoResponses
         });
 
-        await submission.save({ session });
-        await session.commitTransaction();
+        const savedSubmission = await submission.save({ session });
+        savedId = savedSubmission._id;
+        
+        const verifySubmission = await Submission.findById(savedId).session(session);
+        
+        if (!verifySubmission) {
+            throw new Error('Submission verification failed');
+        }
 
-        processedRequests.add(requestId);
-        setTimeout(() => processedRequests.delete(requestId), DEDUP_TIMEOUT);
+        logSubmissionActivity('Submission Saved', { 
+            submissionId: savedId,
+            verified: !!verifySubmission
+        });
+
+        await session.commitTransaction();
+        logSubmissionActivity('Transaction Committed', { submissionId: savedId });
 
         res.status(201).json({
             success: true,
             message: 'Submission saved successfully',
-            submissionId: submission._id
+            data: {
+                submissionId: savedId,
+                submittedAt: new Date()
+            }
         });
 
-    } catch (error) {
-        if (session) {
-            await session.abortTransaction();
-        }
-        console.error('Submission error:', error);
-        res.status(500).json({
-            success: false,
-            message: error.message || 'Failed to process submission'
+    } catch (err) {
+        logSubmissionActivity('Error', {
+            error: err.message,
+            stack: err.stack,
+            phase: savedId ? 'post-save' : 'pre-save'
         });
-    } finally {
-        if (session) {
-            session.endSession();
+
+        await session.abortTransaction();
+        logSubmissionActivity('Transaction Aborted', { error: err.message });
+
+        if (!res.headersSent) {
+            res.status(500).json({
+                success: false,
+                message: 'Failed to process submission',
+                error: err.message
+            });
         }
+    } finally {
+        session.endSession();
+        logSubmissionActivity('Session Ended', { 
+            submissionId: savedId,
+            success: !!savedId 
+        });
     }
 });
 
@@ -179,12 +258,12 @@ router.get('/submissions/:userId', ensureDbConnection, async (req, res) => {
         console.log('Query params:', { userId, includeVideos, page, limit });
         console.log('Skip:', skip);
 
-        // Projection based on query parameter
+ 
         const projection = includeVideos === 'true' ? {} : { videoResponses: 0 };
 
-        // Execute query with disk-based sorting enabled
+        
         const submissions = await Submission.collection.find(
-            { userId: userId.toString() }, // Ensure userId is string
+            { userId: userId.toString() },  
             { projection }
         )
             .sort({ submittedAt: -1 })
