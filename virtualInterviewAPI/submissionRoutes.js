@@ -143,36 +143,94 @@ router.post('/submit', ensureDbConnection, handleUpload, async (req, res) => {
     }
 });
 // Get submissions list with pagination and optional video data
+// router.get('/submissions/:userId', ensureDbConnection, async (req, res) => {
+//     try {
+//         const { userId } = req.params;
+//         const { includeVideos, page = 1, limit = 50 } = req.query;
+
+//         const skip = (page - 1) * limit;
+
+//         // Projection based on query parameter
+//         const projection = includeVideos === 'true' ? {} : { videoResponses: 0 };
+
+//         // Execute query with disk-based sorting enabled
+//         const submissions = await Submission.collection.find(
+//             { userId },
+//             { projection }
+//         )
+//             .sort({ submittedAt: -1 })
+//             .skip(skip)
+//             .limit(parseInt(limit))
+//             .allowDiskUse(true)   
+//             .toArray();
+
+//         res.status(200).json({
+//             success: true,
+//             data: submissions
+//         });
+//     } catch (err) {
+//         console.error('Error fetching submissions:', err);
+//         res.status(500).json({
+//             success: false,
+//             message: 'Failed to fetch submissions'
+//         });
+//     }
+// });
+
 router.get('/submissions/:userId', ensureDbConnection, async (req, res) => {
     try {
         const { userId } = req.params;
         const { includeVideos, page = 1, limit = 50 } = req.query;
 
-        const skip = (page - 1) * limit;
+        // Add input validation
+        if (!userId) {
+            return res.status(400).json({
+                success: false,
+                message: 'User ID is required'
+            });
+        }
+
+        // Convert page and limit to numbers
+        const pageNum = parseInt(page);
+        const limitNum = parseInt(limit);
+        const skip = (pageNum - 1) * limitNum;
+
+        // Add logging for debugging
+        console.log('Query params:', { userId, includeVideos, page, limit });
+        console.log('Skip:', skip);
 
         // Projection based on query parameter
         const projection = includeVideos === 'true' ? {} : { videoResponses: 0 };
 
         // Execute query with disk-based sorting enabled
         const submissions = await Submission.collection.find(
-            { userId },
+            { userId: userId.toString() }, // Ensure userId is string
             { projection }
         )
             .sort({ submittedAt: -1 })
             .skip(skip)
-            .limit(parseInt(limit))
-            .allowDiskUse(true)  // Enable disk-based sorting
+            .limit(limitNum)
+            .allowDiskUse(true)   
             .toArray();
 
+        // Add logging for debugging
+        console.log('Found submissions:', submissions.length);
+
+        // Send response with more details
         res.status(200).json({
             success: true,
-            data: submissions
+            data: submissions,
+            pagination: {
+                page: pageNum,
+                limit: limitNum,
+                total: submissions.length
+            }
         });
     } catch (err) {
         console.error('Error fetching submissions:', err);
         res.status(500).json({
             success: false,
-            message: 'Failed to fetch submissions'
+            message: err.message || 'Failed to fetch submissions'
         });
     }
 });
