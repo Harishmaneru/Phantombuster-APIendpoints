@@ -177,61 +177,46 @@ router.post('/submit', ensureDbConnection, handleUpload, async (req, res) => {
 //     }
 // });
 
-router.get('/submissions/:userId', ensureDbConnection, async (req, res) => {
+
+// Split into two endpoints
+router.get('/submissions/:userId', async (req, res) => {
     try {
-        const { userId } = req.params;
-        const { includeVideos, page = 1, limit = 50 } = req.query;
+        const { page = 1, limit = 50 } = req.query;
+        const skip = (page - 1) * limit;
 
-        // Add input validation
-        if (!userId) {
-            return res.status(400).json({
-                success: false,
-                message: 'User ID is required'
-            });
-        }
-
-        // Convert page and limit to numbers
-        const pageNum = parseInt(page);
-        const limitNum = parseInt(limit);
-        const skip = (pageNum - 1) * limitNum;
-
-        // Add logging for debugging
-        console.log('Query params:', { userId, includeVideos, page, limit });
-        console.log('Skip:', skip);
-
-        // Projection based on query parameter
-        const projection = includeVideos === 'true' ? {} : { videoResponses: 0 };
-
-        // Execute query with disk-based sorting enabled
+        // Return only basic submission data first (without videos)
         const submissions = await Submission.collection.find(
-            { userId: userId.toString() }, // Ensure userId is string
-            { projection }
+            { userId },
+            { projection: { videoResponses: 0 } } // Exclude video data
         )
-            .sort({ submittedAt: -1 })
-            .skip(skip)
-            .limit(limitNum)
-            .allowDiskUse(true)   
-            .toArray();
+        .sort({ submittedAt: -1 })
+        .skip(skip)
+        .limit(parseInt(limit))
+        .toArray();
 
-        // Add logging for debugging
-        console.log('Found submissions:', submissions.length);
-
-        // Send response with more details
-        res.status(200).json({
+        res.json({
             success: true,
-            data: submissions,
-            pagination: {
-                page: pageNum,
-                limit: limitNum,
-                total: submissions.length
-            }
+            data: submissions
         });
     } catch (err) {
-        console.error('Error fetching submissions:', err);
-        res.status(500).json({
-            success: false,
-            message: err.message || 'Failed to fetch submissions'
+        res.status(500).json({ success: false, message: err.message });
+    }
+});
+
+// Separate endpoint for video data
+router.get('/submissions/:submissionId/videos', async (req, res) => {
+    try {
+        const { submissionId } = req.params;
+        const submission = await Submission.collection.findOne(
+            { _id: submissionId },
+            { projection: { videoResponses: 1 } }
+        );
+        res.json({
+            success: true,
+            data: submission.videoResponses
         });
+    } catch (err) {
+        res.status(500).json({ success: false, message: err.message });
     }
 });
 
