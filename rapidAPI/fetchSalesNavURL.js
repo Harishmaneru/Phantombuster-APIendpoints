@@ -361,7 +361,7 @@ router.post('/find-employees', async (req, res) => {
 
         res.status(200).json({
             status: 1,
-            salesNavUrl: result
+            salesNavigatorData: result
         });
 
     } catch (error) {
@@ -403,7 +403,7 @@ router.get('/search-results/:requestId', async (req, res) => {
 
         res.status(200).json({
             status: 1,
-            salesNavUrl: result.data
+            salesNavigatorData: result.data
         });
 
     } catch (error) {
