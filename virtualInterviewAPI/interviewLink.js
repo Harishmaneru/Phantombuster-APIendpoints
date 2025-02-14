@@ -266,6 +266,7 @@ router.get('/allinterviews', async (req, res) => {
         // Transform the data for response
         const transformedInterviews = interviews.map(interview => ({
             id: interview._id,
+            userId: interview.userId,
             interviewTitle: interview.interviewTitle,
             email: interview.email,
             jobPostingUrl: interview.jobPostingUrl,
