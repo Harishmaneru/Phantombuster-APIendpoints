@@ -236,46 +236,99 @@ router.post('/submit', ensureDbConnection, handleUpload, async (req, res) => {
     }
 });
 
-router.get('/submissions/:userId', ensureDbConnection, async (req, res) => {
-    try {
-        const { userId } = req.params;
-        const { includeVideos, page = 1, limit = 50 } = req.query;
+// router.get('/submissions/:userId', ensureDbConnection, async (req, res) => {
+//     try {
+//         const { userId } = req.params;
+//         const { includeVideos, page = 1, limit = 50 } = req.query;
 
-        // Add input validation
-        if (!userId) {
+//         // Add input validation
+//         if (!userId) {
+//             return res.status(400).json({
+//                 success: false,
+//                 message: 'User ID is required'
+//             });
+//         }
+
+//         // Convert page and limit to numbers
+//         const pageNum = parseInt(page);
+//         const limitNum = parseInt(limit);
+//         const skip = (pageNum - 1) * limitNum;
+
+//         // Add logging for debugging
+//         console.log('Query params:', { userId, includeVideos, page, limit });
+//         console.log('Skip:', skip);
+
+ 
+//         const projection = includeVideos === 'true' ? {} : { videoResponses: 0 };
+
+        
+//         const submissions = await Submission.collection.find(
+//             { userId: userId.toString() },  
+//             { projection }
+//         )
+//             .sort({ submittedAt: -1 })
+//             .skip(skip)
+//             .limit(limitNum)
+//             .allowDiskUse(true)   
+//             .toArray();
+
+//         // Add logging for debugging
+//         console.log('Found submissions:', submissions.length);
+
+//         // Send response with more details
+//         res.status(200).json({
+//             success: true,
+//             data: submissions,
+//             pagination: {
+//                 page: pageNum,
+//                 limit: limitNum,
+//                 total: submissions.length
+//             }
+//         });
+//     } catch (err) {
+//         console.error('Error fetching submissions:', err);
+//         res.status(500).json({
+//             success: false,
+//             message: err.message || 'Failed to fetch submissions'
+//         });
+//     }
+// });
+
+
+router.get('/submissions', ensureDbConnection, async (req, res) => {
+    try {
+        const { userId, interviewId, includeVideos, page = 1, limit = 50 } = req.query;
+
+        if (!userId || !interviewId) {
             return res.status(400).json({
                 success: false,
-                message: 'User ID is required'
+                message: 'User ID and Interview ID are required'
             });
         }
 
-        // Convert page and limit to numbers
         const pageNum = parseInt(page);
         const limitNum = parseInt(limit);
         const skip = (pageNum - 1) * limitNum;
 
-        // Add logging for debugging
-        console.log('Query params:', { userId, includeVideos, page, limit });
+        console.log('Query params:', { userId, interviewId, includeVideos, page, limit });
         console.log('Skip:', skip);
 
- 
+        // Projection to exclude video data when not needed
         const projection = includeVideos === 'true' ? {} : { videoResponses: 0 };
 
-        
-        const submissions = await Submission.collection.find(
-            { userId: userId.toString() },  
-            { projection }
-        )
+        // Query submissions based on userId and interviewId
+        const submissions = await Submission.find({ 
+            userId: userId.toString(),
+            interviewId: interviewId.toString()
+        })
+            .select(projection)
             .sort({ submittedAt: -1 })
             .skip(skip)
             .limit(limitNum)
-            .allowDiskUse(true)   
-            .toArray();
+            .lean();
 
-        // Add logging for debugging
         console.log('Found submissions:', submissions.length);
 
-        // Send response with more details
         res.status(200).json({
             success: true,
             data: submissions,
@@ -293,5 +346,6 @@ router.get('/submissions/:userId', ensureDbConnection, async (req, res) => {
         });
     }
 });
+
 
 module.exports = router;
