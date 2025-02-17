@@ -224,46 +224,104 @@ router.post('/interviewlink', upload.single('companyLogo'), async (req, res) => 
 
 // Add this endpoint to your existing router file
 
+// router.get('/allinterviews', async (req, res) => {
+//     try {
+//         // Extract query parameters with default values
+//         const page = parseInt(req.query.page) || 1;
+//         const limit = parseInt(req.query.limit) || 10;
+//         const status = req.query.status || 'active';
+//         const userId = req.query.userId;
+        
+//         // Calculate skip value for pagination
+//         const skip = (page - 1) * limit;
+        
+//         // Build the filter object
+//         const filter = { status };
+        
+//         // Add userId filter if provided
+//         if (userId) {
+//             filter.userId = userId;
+//         }
+        
+//         // Add date filter to exclude expired interviews if status is active
+//         if (status === 'active') {
+//             filter.expiresAt = { $gt: new Date() };
+//         }
+        
+//         // Execute the query with pagination
+//         const interviews = await Interview.find(filter)
+//             .select('-companyLogoUrl') // Exclude large binary data
+//             .sort({ createdAt: -1 }) // Sort by creation date, newest first
+//             .skip(skip)
+//             .limit(limit);
+            
+//         // Get total count for pagination
+//         const totalCount = await Interview.countDocuments(filter);
+        
+//         // Calculate pagination metadata
+//         const totalPages = Math.ceil(totalCount / limit);
+//         const hasNextPage = page < totalPages;
+//         const hasPreviousPage = page > 1;
+        
+//         // Transform the data for response
+//         const transformedInterviews = interviews.map(interview => ({
+//             id: interview._id,
+//             userId: interview.userId,
+//             interviewTitle: interview.interviewTitle,
+//             email: interview.email,
+//             jobPostingUrl: interview.jobPostingUrl,
+//             questions: interview.questions,
+//             applicationLink: `https://www.recordedinterview.com/InterviewPage/${interview.applicationLink}`,
+//             createdAt: interview.createdAt,
+//             expiresAt: interview.expiresAt,
+//             status: interview.status,
+//             numberOfQuestions: interview.questions.length
+//         }));
+        
+//         res.status(200).json({
+//             success: true,
+//             data: {
+//                 interviews: transformedInterviews,
+//                 pagination: {
+//                     currentPage: page,
+//                     totalPages,
+//                     totalItems: totalCount,
+//                     hasNextPage,
+//                     hasPreviousPage,
+//                     pageSize: limit
+//                 }
+//             }
+//         });
+//     } catch (err) {
+//         console.error('Error fetching interviews:', err);
+//         res.status(500).json({ 
+//             success: false, 
+//             message: 'Failed to fetch interviews',
+//             error: process.env.NODE_ENV === 'development' ? err.message : undefined
+//         });
+//     }
+// });
+
 router.get('/allinterviews', async (req, res) => {
     try {
-        // Extract query parameters with default values
-        const page = parseInt(req.query.page) || 1;
-        const limit = parseInt(req.query.limit) || 10;
         const status = req.query.status || 'active';
         const userId = req.query.userId;
-        
-        // Calculate skip value for pagination
-        const skip = (page - 1) * limit;
-        
+
         // Build the filter object
         const filter = { status };
-        
-        // Add userId filter if provided
         if (userId) {
             filter.userId = userId;
         }
-        
-        // Add date filter to exclude expired interviews if status is active
         if (status === 'active') {
             filter.expiresAt = { $gt: new Date() };
         }
-        
-        // Execute the query with pagination
+
+        // Fetch all interviews without pagination
         const interviews = await Interview.find(filter)
-            .select('-companyLogoUrl') // Exclude large binary data
-            .sort({ createdAt: -1 }) // Sort by creation date, newest first
-            .skip(skip)
-            .limit(limit);
-            
-        // Get total count for pagination
-        const totalCount = await Interview.countDocuments(filter);
-        
-        // Calculate pagination metadata
-        const totalPages = Math.ceil(totalCount / limit);
-        const hasNextPage = page < totalPages;
-        const hasPreviousPage = page > 1;
-        
-        // Transform the data for response
+            .select('-companyLogoUrl')
+            .sort({ createdAt: -1 });
+
+        // Transform the data
         const transformedInterviews = interviews.map(interview => ({
             id: interview._id,
             userId: interview.userId,
@@ -277,30 +335,25 @@ router.get('/allinterviews', async (req, res) => {
             status: interview.status,
             numberOfQuestions: interview.questions.length
         }));
-        
+
         res.status(200).json({
             success: true,
             data: {
                 interviews: transformedInterviews,
-                pagination: {
-                    currentPage: page,
-                    totalPages,
-                    totalItems: totalCount,
-                    hasNextPage,
-                    hasPreviousPage,
-                    pageSize: limit
-                }
+                totalCount: interviews.length
             }
         });
+
     } catch (err) {
-        console.error('Error fetching interviews:', err);
-        res.status(500).json({ 
-            success: false, 
+        console.error('Error fetching all interviews:', err);
+        res.status(500).json({
+            success: false,
             message: 'Failed to fetch interviews',
             error: process.env.NODE_ENV === 'development' ? err.message : undefined
         });
     }
 });
+
 
 // Fetch interview details route
 router.get('/interview/:linkId', async (req, res) => {
