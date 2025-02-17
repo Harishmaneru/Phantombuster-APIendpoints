@@ -301,11 +301,13 @@ router.post('/interviewlink', upload.single('companyLogo'), async (req, res) => 
 //         });
 //     }
 // });
-
 router.get('/allinterviews', async (req, res) => {
     try {
+        // Extract query parameters
         const status = req.query.status || 'active';
         const userId = req.query.userId;
+        const page = Math.max(parseInt(req.query.page) || 1, 1); // Ensure page is at least 1
+        const limit = Math.min(Math.max(parseInt(req.query.limit) || 10, 1), 100); // Limit between 1 and 100
 
         // Build the filter object
         const filter = { status };
@@ -316,10 +318,21 @@ router.get('/allinterviews', async (req, res) => {
             filter.expiresAt = { $gt: new Date() };
         }
 
-        // Fetch all interviews without pagination
+        // Calculate skip value for pagination
+        const skip = (page - 1) * limit;
+
+        // Fetch paginated interviews
         const interviews = await Interview.find(filter)
-            .select('-companyLogoUrl')
-            .sort({ createdAt: -1 });
+            .select('-companyLogoUrl') // Exclude large binary data
+            .sort({ createdAt: -1 }) // Sort by newest first
+            .skip(skip)
+            .limit(limit);
+
+        // Get total count for pagination
+        const totalCount = await Interview.countDocuments(filter);
+        const totalPages = Math.ceil(totalCount / limit);
+        const hasNextPage = page < totalPages;
+        const hasPreviousPage = page > 1;
 
         // Transform the data
         const transformedInterviews = interviews.map(interview => ({
@@ -336,16 +349,24 @@ router.get('/allinterviews', async (req, res) => {
             numberOfQuestions: interview.questions.length
         }));
 
+        // Send paginated response
         res.status(200).json({
             success: true,
             data: {
                 interviews: transformedInterviews,
-                totalCount: interviews.length
+                pagination: {
+                    currentPage: page,
+                    totalPages,
+                    totalItems: totalCount,
+                    hasNextPage,
+                    hasPreviousPage,
+                    pageSize: limit
+                }
             }
         });
 
     } catch (err) {
-        console.error('Error fetching all interviews:', err);
+        console.error('Error fetching interviews:', err);
         res.status(500).json({
             success: false,
             message: 'Failed to fetch interviews',
@@ -353,6 +374,7 @@ router.get('/allinterviews', async (req, res) => {
         });
     }
 });
+
 
 
 // Fetch interview details route
