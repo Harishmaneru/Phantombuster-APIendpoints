@@ -236,7 +236,8 @@ router.get('/interview/:linkId', async (req, res) => {
                 email: interview.email,
                 jobPostingUrl: interview.jobPostingUrl,
                 companyUrl: interview.companyUrl,
-                questions: interview.questions,
+                questions: interview.questions || [],
+                applicationLink:interview.applicationLink,
                 companyLogoUrl: interview.companyLogoUrl,
                 expiresAt: interview.expiresAt
             }
