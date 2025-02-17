@@ -29,7 +29,7 @@ const verifyDbConnection = () => {
 
 const SubmissionSchema = new mongoose.Schema({
     userId: { type: String, required: true },
-    interviewId: { type: String, required: true },
+    applicationLink: { type: String, required: true },
     applicantName: { type: String, required: true },
     email: { type: String, required: true },
     textQuestion: { type: String, required: true },
@@ -113,7 +113,7 @@ router.post('/submit', ensureDbConnection, handleUpload, async (req, res) => {
     try {
         logSubmissionActivity('Request Received', {
             userId: req.body.userId,
-            interviewId: req.body.interviewId,  
+            applicationLink: req.body.applicationLink,
             applicantName: req.body.applicantName,
             email: req.body.email,
             filesCount: req?.files?.length || 0
@@ -126,21 +126,21 @@ router.post('/submit', ensureDbConnection, handleUpload, async (req, res) => {
             throw new Error(`Database not properly connected. Current state: ${dbState}`);
         }
 
-        const {
-            userId,
-            interviewId,   
-            applicantName,
-            email,
-            textResponse,
-            textQuestion
+        const { 
+            userId, 
+            applicationLink,  
+            applicantName, 
+            email, 
+            textResponse, 
+            textQuestion 
         } = req.body;
 
-     
-        if (!userId || !interviewId || !applicantName || !email || !textResponse || !textQuestion || !req.files || req.files.length === 0) {
-            logSubmissionActivity('Validation Error', {
+        // Enhanced validation
+        if (!userId || !applicationLink || !applicantName || !email || !textResponse || !textQuestion || !req.files || req.files.length === 0) {
+            logSubmissionActivity('Validation Error', { 
                 missing: {
                     userId: !userId,
-                    interviewId: !interviewId,
+                    applicationLink: !applicationLink,
                     applicantName: !applicantName,
                     email: !email,
                     textResponse: !textResponse,
@@ -150,14 +150,14 @@ router.post('/submit', ensureDbConnection, handleUpload, async (req, res) => {
             });
             return res.status(400).json({
                 success: false,
-                message: 'Missing required fields (userId, interviewId, applicantName, email, textResponse, textQuestion, or files)'
+                message: 'Missing required fields'
             });
         }
 
-        // 🛠 **Process uploaded video files**
+        // Process video files with questions
         const videoResponses = req.files.map((file, index) => {
             const questionNumber = index + 1;
-            const question = req.body[`videoQuestion${questionNumber}`] || `Question ${questionNumber}`;
+            const question = req.body[`videoQuestion${questionNumber}`];
 
             logSubmissionActivity('Processing File', {
                 index,
@@ -179,10 +179,9 @@ router.post('/submit', ensureDbConnection, handleUpload, async (req, res) => {
         logSubmissionActivity('Transaction Start', { sessionId: session.id });
         session.startTransaction();
 
-        // ✅ **Include interviewId when saving submission**
         const submission = new Submission({
             userId,
-            interviewId,  // ✅ Now included
+            applicationLink,   
             applicantName,
             email,
             textQuestion,
@@ -192,14 +191,14 @@ router.post('/submit', ensureDbConnection, handleUpload, async (req, res) => {
 
         const savedSubmission = await submission.save({ session });
         savedId = savedSubmission._id;
-
+        
         const verifySubmission = await Submission.findById(savedId).session(session);
-
+        
         if (!verifySubmission) {
             throw new Error('Submission verification failed');
         }
 
-        logSubmissionActivity('Submission Saved', {
+        logSubmissionActivity('Submission Saved', { 
             submissionId: savedId,
             verified: !!verifySubmission
         });
@@ -235,48 +234,48 @@ router.post('/submit', ensureDbConnection, handleUpload, async (req, res) => {
         }
     } finally {
         session.endSession();
-        logSubmissionActivity('Session Ended', {
+        logSubmissionActivity('Session Ended', { 
             submissionId: savedId,
-            success: !!savedId
+            success: !!savedId 
         });
     }
 });
-
-
 router.get('/submissions', ensureDbConnection, async (req, res) => {
     try {
-        const { userId, interviewId, includeVideos, page = 1, limit = 50 } = req.query;
+        const { userId, applicationLink, includeVideos = false, page = 1, limit = 50 } = req.query;
 
-        if (!userId || !interviewId) {
+        // Input validation
+        if (!userId || !applicationLink) {
             return res.status(400).json({
                 success: false,
-                message: 'User ID and Interview ID are required'
+                message: 'Both userId and applicationLink are required'
             });
         }
 
-        const pageNum = parseInt(page);
-        const limitNum = parseInt(limit);
+        // Convert pagination values to numbers
+        const pageNum = parseInt(page, 10);
+        const limitNum = parseInt(limit, 10);
         const skip = (pageNum - 1) * limitNum;
 
-        console.log('Query params:', { userId, interviewId, includeVideos, page, limit });
-        console.log('Skip:', skip);
+        // Log the incoming request details
+        logSubmissionActivity('Fetching Submissions', { userId, applicationLink, includeVideos, page, limit });
 
-        // Projection to exclude video data when not needed
+        // Define projection to exclude video responses if not requested
         const projection = includeVideos === 'true' ? {} : { videoResponses: 0 };
 
-        // Query submissions based on userId and interviewId
-        const submissions = await Submission.find({
-            userId: userId.toString(),
-            interviewId: interviewId.toString()
-        })
-            .select(projection)
-            .sort({ submittedAt: -1 })
-            .skip(skip)
-            .limit(limitNum)
-            .lean();
+        // Query submissions
+        const submissions = await Submission.find(
+            { userId, applicationLink }, // Query by userId and applicationLink
+            projection
+        )
+        .sort({ submittedAt: -1 })
+        .skip(skip)
+        .limit(limitNum);
 
-        console.log('Found submissions:', submissions.length);
+        // Log results
+        logSubmissionActivity('Fetched Submissions', { count: submissions.length });
 
+        // Return results
         res.status(200).json({
             success: true,
             data: submissions,
@@ -290,10 +289,64 @@ router.get('/submissions', ensureDbConnection, async (req, res) => {
         console.error('Error fetching submissions:', err);
         res.status(500).json({
             success: false,
-            message: err.message || 'Failed to fetch submissions'
+            message: 'Failed to fetch submissions',
+            error: err.message
         });
     }
 });
+
+
+// router.get('/submissions', ensureDbConnection, async (req, res) => {
+//     try {
+//         const { userId, interviewId, includeVideos, page = 1, limit = 50 } = req.query;
+
+//         if (!userId || !interviewId) {
+//             return res.status(400).json({
+//                 success: false,
+//                 message: 'User ID and Interview ID are required'
+//             });
+//         }
+
+//         const pageNum = parseInt(page);
+//         const limitNum = parseInt(limit);
+//         const skip = (pageNum - 1) * limitNum;
+
+//         console.log('Query params:', { userId, interviewId, includeVideos, page, limit });
+//         console.log('Skip:', skip);
+
+//         // Projection to exclude video data when not needed
+//         const projection = includeVideos === 'true' ? {} : { videoResponses: 0 };
+
+//         // Query submissions based on userId and interviewId
+//         const submissions = await Submission.find({
+//             userId: userId.toString(),
+//             interviewId: interviewId.toString()
+//         })
+//             .select(projection)
+//             .sort({ submittedAt: -1 })
+//             .skip(skip)
+//             .limit(limitNum)
+//             .lean();
+
+//         console.log('Found submissions:', submissions.length);
+
+//         res.status(200).json({
+//             success: true,
+//             data: submissions,
+//             pagination: {
+//                 page: pageNum,
+//                 limit: limitNum,
+//                 total: submissions.length
+//             }
+//         });
+//     } catch (err) {
+//         console.error('Error fetching submissions:', err);
+//         res.status(500).json({
+//             success: false,
+//             message: err.message || 'Failed to fetch submissions'
+//         });
+//     }
+// });
 
 
 module.exports = router;
