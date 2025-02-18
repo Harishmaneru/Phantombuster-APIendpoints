@@ -448,7 +448,7 @@ const processJobSignals = async ({ linkedinUrl, companyName }) => {
                         description: job.description,
                         url: job.url,
                         posted_date: job.posted_date,
-                        scraping_status: 'failed'
+                        // scraping_status: 'failed'
                     };
                 }
                 successCount++;
@@ -475,7 +475,7 @@ const processJobSignals = async ({ linkedinUrl, companyName }) => {
                         structuredContent: cleanedData.structuredContent,
                         scrapedAt: cleanedData.scrapedAt
                     },
-                    scraping_status: 'success'
+                    // scraping_status: 'success'
                 };
             });
             console.log(`
