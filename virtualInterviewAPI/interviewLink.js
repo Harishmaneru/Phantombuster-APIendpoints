@@ -141,9 +141,6 @@ router.delete('/deleteinterview/:id', async (req, res) => {
     }
 });
 
-
-
-
 router.get('/allinterviews', async (req, res) => {
     try {
         // Extract query parameters

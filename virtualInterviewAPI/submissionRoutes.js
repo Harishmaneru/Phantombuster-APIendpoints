@@ -30,6 +30,7 @@ const verifyDbConnection = () => {
 const SubmissionSchema = new mongoose.Schema({
     userId: { type: String, required: true },
     applicationLink: { type: String, required: true },
+    hiringManagerEmail: { type: String, required: true },
     applicantName: { type: String, required: true },
     email: { type: String, required: true },
     linkedInUrl: { type: String, required: true },
@@ -115,6 +116,7 @@ router.post('/submit', ensureDbConnection, handleUpload, async (req, res) => {
         logSubmissionActivity('Request Received', {
             userId: req.body.userId,
             applicationLink: req.body.applicationLink,
+            hiringManagerEmail: req.body.hiringManagerEmail,
             applicantName: req.body.applicantName,
             email: req.body.email,
             linkedInUrl: req.body.linkedInUrl,
@@ -131,6 +133,7 @@ router.post('/submit', ensureDbConnection, handleUpload, async (req, res) => {
         const { 
             userId, 
             applicationLink,  
+            hiringManagerEmail,
             applicantName, 
             email, 
             linkedInUrl,
@@ -139,11 +142,12 @@ router.post('/submit', ensureDbConnection, handleUpload, async (req, res) => {
         } = req.body;
 
         // Enhanced validation
-        if (!userId || !applicationLink || !applicantName || !email || !linkedInUrl || !textResponse || !textQuestion || !req.files || req.files.length === 0) {
+        if (!userId || !applicationLink || !hiringManagerEmail || !applicantName || !email || !linkedInUrl || !textResponse || !textQuestion || !req.files || req.files.length === 0) {
             logSubmissionActivity('Validation Error', { 
                 missing: {
                     userId: !userId,
                     applicationLink: !applicationLink,
+                    hiringManagerEmail: !hiringManagerEmail,
                     applicantName: !applicantName,
                     email: !email,
                     linkedInUrl: !linkedInUrl,
@@ -186,6 +190,7 @@ router.post('/submit', ensureDbConnection, handleUpload, async (req, res) => {
         const submission = new Submission({
             userId,
             applicationLink,   
+            hiringManagerEmail,
             applicantName,
             email,
             linkedInUrl,
