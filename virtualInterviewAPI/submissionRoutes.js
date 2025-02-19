@@ -32,6 +32,7 @@ const SubmissionSchema = new mongoose.Schema({
     applicationLink: { type: String, required: true },
     applicantName: { type: String, required: true },
     email: { type: String, required: true },
+    linkedInUrl: { type: String, required: true },
     textQuestion: { type: String, required: true },
     textResponse: { type: String, required: true },
     videoResponses: [{
@@ -116,6 +117,7 @@ router.post('/submit', ensureDbConnection, handleUpload, async (req, res) => {
             applicationLink: req.body.applicationLink,
             applicantName: req.body.applicantName,
             email: req.body.email,
+            linkedInUrl: req.body.linkedInUrl,
             filesCount: req?.files?.length || 0
         });
 
@@ -131,18 +133,20 @@ router.post('/submit', ensureDbConnection, handleUpload, async (req, res) => {
             applicationLink,  
             applicantName, 
             email, 
+            linkedInUrl,
             textResponse, 
             textQuestion 
         } = req.body;
 
         // Enhanced validation
-        if (!userId || !applicationLink || !applicantName || !email || !textResponse || !textQuestion || !req.files || req.files.length === 0) {
+        if (!userId || !applicationLink || !applicantName || !email || !linkedInUrl || !textResponse || !textQuestion || !req.files || req.files.length === 0) {
             logSubmissionActivity('Validation Error', { 
                 missing: {
                     userId: !userId,
                     applicationLink: !applicationLink,
                     applicantName: !applicantName,
                     email: !email,
+                    linkedInUrl: !linkedInUrl,
                     textResponse: !textResponse,
                     textQuestion: !textQuestion,
                     files: !req.files || req.files.length === 0
@@ -184,6 +188,7 @@ router.post('/submit', ensureDbConnection, handleUpload, async (req, res) => {
             applicationLink,   
             applicantName,
             email,
+            linkedInUrl,
             textQuestion,
             textResponse,
             videoResponses
