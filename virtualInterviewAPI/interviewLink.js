@@ -233,7 +233,7 @@ router.get('/interview/:linkId', async (req, res) => {
             data: {
                 userId: interview.userId,
                 interviewTitle: interview.interviewTitle,
-                email: interview.email,
+                hiringManagerEmail: interview.email,
                 jobPostingUrl: interview.jobPostingUrl,
                 companyUrl: interview.companyUrl,
                 questions: interview.questions || [],
