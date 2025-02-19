@@ -439,18 +439,18 @@ async function sendSubmissionEmails(submission, sendSummary) {
     
     // Email to Hiring Manager
     const hmEmailBody = `
-      <h3>New Application Submission Received</h3>
+      <h4>New Application Submission Received</h4>
       <p><strong>Applicant Name:</strong> ${applicantName}</p>
       <p><strong>Applicant Email:</strong> ${email}</p>
       <p><strong>LinkedIn URL:</strong> ${linkedInUrl}</p>
-      <p><strong>Application Link:</strong> ${applicationLink}</p>
+      <p><strong>Application Link:</strong> https://www.recordedinterview.com/InterviewPage${applicationLink}</p>
       <p><strong>Submitted At:</strong> ${submittedAt}</p>
     `;
   
     const hmMailOptions = {
       from: 'harish@onepgr.us',
       to: hiringManagerEmail,
-      bcc: 'harishmaneru@gmail.com',
+    //   bcc: 'harishmaneru@gmail.com',
       subject: 'New Application Submission Received',
       html: hmEmailBody
     };
