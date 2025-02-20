@@ -719,8 +719,7 @@ const nodemailer = require('nodemailer');
 const AWS = require('aws-sdk');
 const multerS3 = require('multer-s3');
 
-// -------------------------
-// AWS S3 Configuration
+ 
  
 const s3 = new AWS.S3({
   accessKeyId: process.env.AWS_ACCESS_KEY_ID,
@@ -733,7 +732,7 @@ const upload = multer({
   storage: multerS3({
     s3: s3,
     bucket: process.env.AWS_BUCKET_NAME,
-    acl: 'public-read',
+  
     key: function (req, file, cb) {
       cb(null, `videos/${Date.now()}-${file.originalname}`);
     }
@@ -759,7 +758,7 @@ const verifyDbConnection = () => {
   };
   return states[state] || 'unknown';
 };
-// Define Mongoose schema and model
+ 
 const SubmissionSchema = new mongoose.Schema({
     userId: { type: String, required: true },
     applicationLink: { type: String, required: true },
