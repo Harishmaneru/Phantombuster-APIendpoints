@@ -305,8 +305,9 @@
 //     }
 // });
 
+//------------------------------------
 // module.exports = router;
-
+//-------------------------------------
 
 // const express = require('express');
 // const router = express.Router();
@@ -708,6 +709,7 @@
 // module.exports = router;
 
 
+require('dotenv').config();
 
 const express = require('express');
 const router = express.Router();
@@ -720,26 +722,24 @@ const multerS3 = require('multer-s3');
 // -------------------------
 // AWS S3 Configuration
  
-AWS.config.update({
-  accessKeyId: process.env.AWS_ACCESS_KEY_ID,          
-  secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY,  
-  region: process.env.AWS_REGION                       
+const s3 = new AWS.S3({
+  accessKeyId: process.env.AWS_ACCESS_KEY_ID,
+  secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY,
+  region: process.env.AWS_REGION
 });
-const s3 = new AWS.S3();
 
 // Configure multer to use multer-s3 storage
 const upload = multer({
   storage: multerS3({
-    s3,
-    bucket: process.env.AWS_BUCKET_NAME,  
-    acl: 'public-read',  
+    s3: s3,
+    bucket: process.env.AWS_BUCKET_NAME,
+    acl: 'public-read',
     key: function (req, file, cb) {
-   
       cb(null, `videos/${Date.now()}-${file.originalname}`);
     }
   }),
   limits: {
-    fileSize: 500 * 1024 * 1024  
+    fileSize: 500 * 1024 * 1024
   }
 }).any();
 
@@ -828,14 +828,16 @@ const SubmissionSchema = new mongoose.Schema({
     }
   };
   
-const transporter = nodemailer.createTransport({
-  service: 'gmail',
-  auth: {
-    user: 'harish@onepgr.us',
-    pass: process.env.EMAIL_PASSWORD
-  }
-});
-
+  const transporter = nodemailer.createTransport({
+    host: 'smtp.gmail.com',
+    port: 465,
+    secure: true,
+    auth: {
+      user: 'harish@onepgr.us',
+      pass: process.env.EMAIL_PASSWORD,
+    },
+  });
+  
 // Helper function to send emails (unchanged)
 async function sendSubmissionEmails(submission, sendSummary) {
     const { applicantName, email, applicationLink, hiringManagerEmail, linkedInUrl, submittedAt } = submission;
