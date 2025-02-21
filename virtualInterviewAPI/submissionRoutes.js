@@ -1169,7 +1169,7 @@ function convertVideoToAudio(videoPath, outputAudioPath) {
     });
 
     ffmpeg.on('close', (code) => {
-      if (fs.existsSync(outputPathWithExtension) {
+      if (fs.existsSync(outputPathWithExtension)){
         console.log(`Audio extraction successful: ${outputPathWithExtension}`);
         resolve(outputPathWithExtension);
       } else {
