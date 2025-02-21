@@ -1149,18 +1149,28 @@ function convertVideoToAudio(videoPath, outputAudioPath) {
       ? outputAudioPath
       : `${outputAudioPath}.mp3`;
 
-    const ffmpegArgs = ['-y', '-i', videoPath, '-vn', '-q:a', '0', '-map', 'a', outputPathWithExtension];
-    console.log('Running FFmpeg command:', `ffmpeg ${ffmpegArgs.join(' ')}`);
+    const ffmpegArgs = [
+      '-y',  
+      '-i', videoPath,
+      '-vn',  
+      '-q:a', '0', 
+      '-map', 'a',  
+      outputPathWithExtension
+    ];
 
     const ffmpeg = spawn('ffmpeg', ffmpegArgs);
 
+    // Log only errors
     ffmpeg.stderr.on('data', (data) => {
-      console.error(`FFmpeg error output: ${data.toString()}`);
+      const output = data.toString();
+      if (output.toLowerCase().includes('error')) {
+        console.error(`FFmpeg error: ${output}`);
+      }
     });
 
     ffmpeg.on('close', (code) => {
-      if (fs.existsSync(outputPathWithExtension) && fs.statSync(outputPathWithExtension).size > 0) {
-        console.log('Audio extraction successful:', outputPathWithExtension);
+      if (fs.existsSync(outputPathWithExtension) {
+        console.log(`Audio extraction successful: ${outputPathWithExtension}`);
         resolve(outputPathWithExtension);
       } else {
         reject(new Error(`FFmpeg failed with exit code ${code}`));
@@ -1172,6 +1182,36 @@ function convertVideoToAudio(videoPath, outputAudioPath) {
     });
   });
 }
+
+// function convertVideoToAudio(videoPath, outputAudioPath) {
+//   return new Promise((resolve, reject) => {
+//     const outputPathWithExtension = outputAudioPath.endsWith('.mp3')
+//       ? outputAudioPath
+//       : `${outputAudioPath}.mp3`;
+
+//     const ffmpegArgs = ['-y', '-i', videoPath, '-vn', '-q:a', '0', '-map', 'a', outputPathWithExtension];
+//     console.log('Running FFmpeg command:', `ffmpeg ${ffmpegArgs.join(' ')}`);
+
+//     const ffmpeg = spawn('ffmpeg', ffmpegArgs);
+
+//     ffmpeg.stderr.on('data', (data) => {
+//       console.error(`FFmpeg error output: ${data.toString()}`);
+//     });
+
+//     ffmpeg.on('close', (code) => {
+//       if (fs.existsSync(outputPathWithExtension) && fs.statSync(outputPathWithExtension).size > 0) {
+//         console.log('Audio extraction successful:', outputPathWithExtension);
+//         resolve(outputPathWithExtension);
+//       } else {
+//         reject(new Error(`FFmpeg failed with exit code ${code}`));
+//       }
+//     });
+
+//     ffmpeg.on('error', (err) => {
+//       reject(new Error(`FFmpeg encountered an error: ${err.message}`));
+//     });
+//   });
+// }
 
 // Get duration of an audio file using ffmpeg
 function getAudioDuration(inputPath) {
@@ -1282,9 +1322,45 @@ async function transcribeAudioToText(audioPath) {
   }
 }
 
+
+function getFileDuration(filePath) {
+  return new Promise((resolve, reject) => {
+    const ffprobe = spawn('ffprobe', [
+      '-v', 'error',
+      '-show_entries', 'format=duration',
+      '-of', 'default=noprint_wrappers=1:nokey=1',
+      filePath
+    ]);
+
+    let duration = '';
+    ffprobe.stdout.on('data', (data) => {
+      duration += data.toString();
+    });
+
+    ffprobe.on('close', (code) => {
+      if (code === 0) {
+        resolve(parseFloat(duration));
+      } else {
+        reject(new Error(`FFprobe failed with exit code ${code}`));
+      }
+    });
+
+    ffprobe.on('error', (err) => {
+      reject(new Error(`FFprobe encountered an error: ${err.message}`));
+    });
+  });
+}
+
+
 // Process audio/video file by extracting audio, splitting into chunks, and transcribing each chunk
 async function processAudioVideo(filePath, originalName) {
   try {
+    const duration = await getFileDuration(filePath);
+    if (isNaN(duration)){
+      throw new Error('Invalid file duration');
+    }
+    console.log(`File duration: ${duration} seconds`);
+    
     let textContent = '';
 
     if (originalName.endsWith('.mp4') || originalName.endsWith('.mkv') || originalName.endsWith('.webm')) {
@@ -1305,11 +1381,14 @@ async function processAudioVideo(filePath, originalName) {
           const chunkText = await transcribeAudioToText(chunk);
           textContent += chunkText + ' ';
           fs.unlinkSync(chunk);
+          console.log(`Deleted temporary chunk: ${chunk}`);
         }
         fs.rmSync(tempDir, { recursive: true, force: true });
+        console.log(`Deleted temporary directory: ${tempDir}`);
       }
 
       fs.unlinkSync(audioPath);
+      console.log(`Deleted temporary audio file: ${audioPath}`);
     } else {
       throw new Error('Unsupported file format for audio/video processing');
     }
@@ -1324,47 +1403,39 @@ async function processAudioVideo(filePath, originalName) {
 //   try {
 //     let textContent = '';
 
-//     // Include .webm as a supported video format
 //     if (originalName.endsWith('.mp4') || originalName.endsWith('.mkv') || originalName.endsWith('.webm')) {
 //       const audioPath = filePath.replace(/\.[^/.]+$/, ".mp3");
 //       await convertVideoToAudio(filePath, audioPath);
 
-//       const tempDir = path.join(path.dirname(audioPath), 'temp_chunks');
-//       if (!fs.existsSync(tempDir)) fs.mkdirSync(tempDir, { recursive: true });
-//       const audioChunks = await splitAudioFile(audioPath, tempDir, 20);
+//       const fileSizeMB = fs.statSync(audioPath).size / (1024 * 1024);
+//       if (fileSizeMB <= 20) {
+//         // If the file is small, transcribe it directly
+//         textContent = await transcribeAudioToText(audioPath);
+//       } else {
+//         // Split the file into chunks
+//         const tempDir = path.join(path.dirname(audioPath), 'temp_chunks');
+//         if (!fs.existsSync(tempDir)) fs.mkdirSync(tempDir, { recursive: true });
 
-//       for (const chunk of audioChunks) {
-//         const chunkText = await transcribeAudioToText(chunk);
-//         textContent += chunkText + ' ';
-//         fs.unlinkSync(chunk);
+//         const audioChunks = await splitAudioFile(audioPath, tempDir, 20);
+//         for (const chunk of audioChunks) {
+//           const chunkText = await transcribeAudioToText(chunk);
+//           textContent += chunkText + ' ';
+//           fs.unlinkSync(chunk);
+//         }
+//         fs.rmSync(tempDir, { recursive: true, force: true });
 //       }
-//       fs.rmSync(tempDir, { recursive: true, force: true });
+
 //       fs.unlinkSync(audioPath);
-//     } else if (originalName.endsWith('.mp3') || originalName.endsWith('.wav')) {
-//       const tempDir = path.join(path.dirname(filePath), 'temp_chunks');
-//       if (!fs.existsSync(tempDir)) fs.mkdirSync(tempDir, { recursive: true });
-//       const audioChunks = await splitAudioFile(filePath, tempDir, 20);
-
-//       for (const chunk of audioChunks) {
-//         const chunkText = await transcribeAudioToText(chunk);
-//         textContent += chunkText + ' ';
-//         fs.unlinkSync(chunk);
-//       }
-//       fs.rmSync(tempDir, { recursive: true, force: true });
 //     } else {
 //       throw new Error('Unsupported file format for audio/video processing');
 //     }
 
-//     if (!textContent || textContent.trim().length === 0) {
-//       throw new Error('Transcription resulted in empty text');
-//     }
 //     return textContent;
 //   } catch (error) {
 //     console.error('Error processing audio/video file:', error);
 //     throw error;
 //   }
 // }
-
 
 // -------------------------------------
 // Endpoint for Video Evaluation using New Transcription Logic
