@@ -1152,7 +1152,7 @@ function convertVideoToAudio(videoPath, outputAudioPath) {
     const ffmpeg = spawn('ffmpeg', ['-y', '-i', videoPath, '-q:a', '0', '-map', 'a', outputPathWithExtension]);
 
     ffmpeg.stderr.on('data', (data) => {
-      // console.log(`FFmpeg output: ${data}`);
+      console.error(`FFmpeg error output: ${data.toString()}`);
     });
 
     ffmpeg.on('close', (code) => {
