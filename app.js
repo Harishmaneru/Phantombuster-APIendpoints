@@ -169,7 +169,7 @@ const options = {
   ca: fs.readFileSync('./STAR_onepgr_com.ca-bundle', 'utf8'),
 };
 
-const server = http.createServer(options, app);
+const server = https.createServer(options, app);
 
 server.listen(port, () => {
   console.log(`Server running on port:${port}`);
