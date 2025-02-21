@@ -1173,35 +1173,6 @@ function convertVideoToAudio(videoPath, outputAudioPath) {
   });
 }
 
-// function convertVideoToAudio(videoPath, outputAudioPath) {
-//   return new Promise((resolve, reject) => {
-//     const outputPathWithExtension = outputAudioPath.endsWith('.mp3')
-//       ? outputAudioPath
-//       : `${outputAudioPath}.mp3`;
-
-//     // Add the "-y" flag to auto-confirm overwrite
-//     const ffmpeg = spawn('ffmpeg', ['-y', '-i', videoPath, '-q:a', '0', '-map', 'a', outputPathWithExtension]);
-
-//     ffmpeg.stderr.on('data', (data) => {
-//       console.error(`FFmpeg error output: ${data.toString()}`);
-//     });
-
-//     ffmpeg.on('close', (code) => {
-//       if (code === 0) {
-//         // console.log('Audio extraction successful:', outputPathWithExtension);
-//         resolve(outputPathWithExtension);
-//       } else {
-//         reject(new Error(`FFmpeg failed with exit code ${code}`));
-//       }
-//     });
-
-//     ffmpeg.on('error', (err) => {
-//       reject(new Error(`FFmpeg encountered an error: ${err.message}`));
-//     });
-//   });
-// }
-
-
 // Get duration of an audio file using ffmpeg
 function getAudioDuration(inputPath) {
   return new Promise((resolve, reject) => {
@@ -1226,47 +1197,7 @@ function getAudioDuration(inputPath) {
 }
 
 // Split audio file into chunks based on a max size (in MB)
-// function splitAudioFile(inputPath, outputDir, maxChunkSizeMB = 20) {
-//   return new Promise(async (resolve, reject) => {
-//     try {
-//       const duration = await getAudioDuration(inputPath);
-//       const fileSizeMB = fs.statSync(inputPath).size / (1024 * 1024);
-//       const bitrate = (fileSizeMB * 8) / duration;
-//       const chunkDuration = (maxChunkSizeMB * 8) / bitrate;
-//       const outputPattern = path.join(outputDir, 'chunk_%03d.mp3');
 
-//       const ffmpegProcess = spawn('ffmpeg', [
-//         '-i', inputPath,
-//         '-f', 'segment',
-//         '-segment_time', chunkDuration.toString(),
-//         '-c', 'copy',
-//         outputPattern
-//       ]);
-
-//       ffmpegProcess.stderr.on('data', (data) => {
-//         //  console.log(`FFmpeg split output: ${data}`);
-//       });
-
-//       ffmpegProcess.on('close', (code) => {
-//         if (code === 0) {
-//           fs.readdir(outputDir, (err, files) => {
-//             if (err) reject(err);
-//             else {
-//               const chunkPaths = files
-//                 .filter(file => file.startsWith('chunk_'))
-//                 .map(file => path.join(outputDir, file));
-//               resolve(chunkPaths);
-//             }
-//           });
-//         } else {
-//           reject(new Error(`FFmpeg process exited with code ${code}`));
-//         }
-//       });
-//     } catch (error) {
-//       reject(error);
-//     }
-//   });
-// }
 function splitAudioFile(inputPath, outputDir, maxChunkSizeMB = 20) {
   return new Promise(async (resolve, reject) => {
     try {
@@ -1356,34 +1287,59 @@ async function processAudioVideo(filePath, originalName) {
   try {
     let textContent = '';
 
+    // Include .webm as a supported video format
     if (originalName.endsWith('.mp4') || originalName.endsWith('.mkv') || originalName.endsWith('.webm')) {
       const audioPath = filePath.replace(/\.[^/.]+$/, ".mp3");
-      try {
-        await convertVideoToAudio(filePath, audioPath);
-      } catch (err) {
-        console.error('Failed to convert video to audio:', err);
-        throw new Error('Video conversion failed');
-      }
+      console.log(`Extracting audio from video: ${filePath} -> ${audioPath}`);
+      await convertVideoToAudio(filePath, audioPath);
 
       const tempDir = path.join(path.dirname(audioPath), 'temp_chunks');
-      if (!fs.existsSync(tempDir)) fs.mkdirSync(tempDir, { recursive: true });
-
-      try {
-        const audioChunks = await splitAudioFile(audioPath, tempDir, 20);
-        for (const chunk of audioChunks) {
-          const chunkText = await transcribeAudioToText(chunk);
-          textContent += chunkText + ' ';
-          fs.unlinkSync(chunk);
-        }
-      } catch (err) {
-        console.error('Failed to split or transcribe audio:', err);
-        throw new Error('Audio processing failed');
-      } finally {
-        fs.rmSync(tempDir, { recursive: true, force: true });
-        fs.unlinkSync(audioPath);
+      if (!fs.existsSync(tempDir)) {
+        fs.mkdirSync(tempDir, { recursive: true });
+        console.log(`Created temporary directory: ${tempDir}`);
       }
+
+      console.log(`Splitting audio into chunks: ${audioPath}`);
+      const audioChunks = await splitAudioFile(audioPath, tempDir, 20);
+
+      for (const chunk of audioChunks) {
+        console.log(`Transcribing chunk: ${chunk}`);
+        const chunkText = await transcribeAudioToText(chunk);
+        textContent += chunkText + ' ';
+        fs.unlinkSync(chunk);
+        console.log(`Deleted temporary chunk: ${chunk}`);
+      }
+
+      fs.rmSync(tempDir, { recursive: true, force: true });
+      console.log(`Deleted temporary directory: ${tempDir}`);
+      fs.unlinkSync(audioPath);
+      console.log(`Deleted temporary audio file: ${audioPath}`);
+    } else if (originalName.endsWith('.mp3') || originalName.endsWith('.wav')) {
+      const tempDir = path.join(path.dirname(filePath), 'temp_chunks');
+      if (!fs.existsSync(tempDir)) {
+        fs.mkdirSync(tempDir, { recursive: true });
+        console.log(`Created temporary directory: ${tempDir}`);
+      }
+
+      console.log(`Splitting audio into chunks: ${filePath}`);
+      const audioChunks = await splitAudioFile(filePath, tempDir, 20);
+
+      for (const chunk of audioChunks) {
+        console.log(`Transcribing chunk: ${chunk}`);
+        const chunkText = await transcribeAudioToText(chunk);
+        textContent += chunkText + ' ';
+        fs.unlinkSync(chunk);
+        console.log(`Deleted temporary chunk: ${chunk}`);
+      }
+
+      fs.rmSync(tempDir, { recursive: true, force: true });
+      console.log(`Deleted temporary directory: ${tempDir}`);
     } else {
       throw new Error('Unsupported file format for audio/video processing');
+    }
+
+    if (!textContent || textContent.trim().length === 0) {
+      throw new Error('Transcription resulted in empty text');
     }
 
     return textContent;
