@@ -1225,6 +1225,47 @@ function getAudioDuration(inputPath) {
 }
 
 // Split audio file into chunks based on a max size (in MB)
+// function splitAudioFile(inputPath, outputDir, maxChunkSizeMB = 20) {
+//   return new Promise(async (resolve, reject) => {
+//     try {
+//       const duration = await getAudioDuration(inputPath);
+//       const fileSizeMB = fs.statSync(inputPath).size / (1024 * 1024);
+//       const bitrate = (fileSizeMB * 8) / duration;
+//       const chunkDuration = (maxChunkSizeMB * 8) / bitrate;
+//       const outputPattern = path.join(outputDir, 'chunk_%03d.mp3');
+
+//       const ffmpegProcess = spawn('ffmpeg', [
+//         '-i', inputPath,
+//         '-f', 'segment',
+//         '-segment_time', chunkDuration.toString(),
+//         '-c', 'copy',
+//         outputPattern
+//       ]);
+
+//       ffmpegProcess.stderr.on('data', (data) => {
+//         //  console.log(`FFmpeg split output: ${data}`);
+//       });
+
+//       ffmpegProcess.on('close', (code) => {
+//         if (code === 0) {
+//           fs.readdir(outputDir, (err, files) => {
+//             if (err) reject(err);
+//             else {
+//               const chunkPaths = files
+//                 .filter(file => file.startsWith('chunk_'))
+//                 .map(file => path.join(outputDir, file));
+//               resolve(chunkPaths);
+//             }
+//           });
+//         } else {
+//           reject(new Error(`FFmpeg process exited with code ${code}`));
+//         }
+//       });
+//     } catch (error) {
+//       reject(error);
+//     }
+//   });
+// }
 function splitAudioFile(inputPath, outputDir, maxChunkSizeMB = 20) {
   return new Promise(async (resolve, reject) => {
     try {
@@ -1243,23 +1284,26 @@ function splitAudioFile(inputPath, outputDir, maxChunkSizeMB = 20) {
       ]);
 
       ffmpegProcess.stderr.on('data', (data) => {
-        //  console.log(`FFmpeg split output: ${data}`);
+        // Optionally log data for debugging
+        // console.log(`FFmpeg split output: ${data.toString()}`);
       });
 
       ffmpegProcess.on('close', (code) => {
-        if (code === 0) {
-          fs.readdir(outputDir, (err, files) => {
-            if (err) reject(err);
-            else {
-              const chunkPaths = files
-                .filter(file => file.startsWith('chunk_'))
-                .map(file => path.join(outputDir, file));
-              resolve(chunkPaths);
-            }
-          });
-        } else {
-          reject(new Error(`FFmpeg process exited with code ${code}`));
-        }
+        // Check if output files exist regardless of exit code
+        fs.readdir(outputDir, (err, files) => {
+          if (err) {
+            return reject(err);
+          }
+          const chunkPaths = files
+            .filter(file => file.startsWith('chunk_'))
+            .map(file => path.join(outputDir, file));
+          if (chunkPaths.length > 0) {
+            // Even if ffmpeg returned a non-zero code, we consider it a success if chunks exist.
+            resolve(chunkPaths);
+          } else {
+            reject(new Error(`FFmpeg process exited with code ${code} and no chunks were created.`));
+          }
+        });
       });
     } catch (error) {
       reject(error);
