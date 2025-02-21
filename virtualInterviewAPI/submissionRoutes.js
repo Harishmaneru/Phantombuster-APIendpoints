@@ -1287,59 +1287,31 @@ async function processAudioVideo(filePath, originalName) {
   try {
     let textContent = '';
 
-    // Include .webm as a supported video format
     if (originalName.endsWith('.mp4') || originalName.endsWith('.mkv') || originalName.endsWith('.webm')) {
       const audioPath = filePath.replace(/\.[^/.]+$/, ".mp3");
-      console.log(`Extracting audio from video: ${filePath} -> ${audioPath}`);
       await convertVideoToAudio(filePath, audioPath);
 
-      const tempDir = path.join(path.dirname(audioPath), 'temp_chunks');
-      if (!fs.existsSync(tempDir)) {
-        fs.mkdirSync(tempDir, { recursive: true });
-        console.log(`Created temporary directory: ${tempDir}`);
+      const fileSizeMB = fs.statSync(audioPath).size / (1024 * 1024);
+      if (fileSizeMB <= 20) {
+        // If the file is small, transcribe it directly
+        textContent = await transcribeAudioToText(audioPath);
+      } else {
+        // Split the file into chunks
+        const tempDir = path.join(path.dirname(audioPath), 'temp_chunks');
+        if (!fs.existsSync(tempDir)) fs.mkdirSync(tempDir, { recursive: true });
+
+        const audioChunks = await splitAudioFile(audioPath, tempDir, 20);
+        for (const chunk of audioChunks) {
+          const chunkText = await transcribeAudioToText(chunk);
+          textContent += chunkText + ' ';
+          fs.unlinkSync(chunk);
+        }
+        fs.rmSync(tempDir, { recursive: true, force: true });
       }
 
-      console.log(`Splitting audio into chunks: ${audioPath}`);
-      const audioChunks = await splitAudioFile(audioPath, tempDir, 20);
-
-      for (const chunk of audioChunks) {
-        console.log(`Transcribing chunk: ${chunk}`);
-        const chunkText = await transcribeAudioToText(chunk);
-        textContent += chunkText + ' ';
-        fs.unlinkSync(chunk);
-        console.log(`Deleted temporary chunk: ${chunk}`);
-      }
-
-      fs.rmSync(tempDir, { recursive: true, force: true });
-      console.log(`Deleted temporary directory: ${tempDir}`);
       fs.unlinkSync(audioPath);
-      console.log(`Deleted temporary audio file: ${audioPath}`);
-    } else if (originalName.endsWith('.mp3') || originalName.endsWith('.wav')) {
-      const tempDir = path.join(path.dirname(filePath), 'temp_chunks');
-      if (!fs.existsSync(tempDir)) {
-        fs.mkdirSync(tempDir, { recursive: true });
-        console.log(`Created temporary directory: ${tempDir}`);
-      }
-
-      console.log(`Splitting audio into chunks: ${filePath}`);
-      const audioChunks = await splitAudioFile(filePath, tempDir, 20);
-
-      for (const chunk of audioChunks) {
-        console.log(`Transcribing chunk: ${chunk}`);
-        const chunkText = await transcribeAudioToText(chunk);
-        textContent += chunkText + ' ';
-        fs.unlinkSync(chunk);
-        console.log(`Deleted temporary chunk: ${chunk}`);
-      }
-
-      fs.rmSync(tempDir, { recursive: true, force: true });
-      console.log(`Deleted temporary directory: ${tempDir}`);
     } else {
       throw new Error('Unsupported file format for audio/video processing');
-    }
-
-    if (!textContent || textContent.trim().length === 0) {
-      throw new Error('Transcription resulted in empty text');
     }
 
     return textContent;
