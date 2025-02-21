@@ -1142,22 +1142,24 @@ router.get('/submissions', ensureDbConnection, async (req, res) => {
 // -------------------------------------
 
 // Convert video to audio (.mp3) using ffmpeg
+
 function convertVideoToAudio(videoPath, outputAudioPath) {
   return new Promise((resolve, reject) => {
     const outputPathWithExtension = outputAudioPath.endsWith('.mp3')
       ? outputAudioPath
       : `${outputAudioPath}.mp3`;
-
-    // Add the "-y" flag to auto-confirm overwrite
-    const ffmpeg = spawn('ffmpeg', ['-y', '-i', videoPath, '-q:a', '0', '-map', 'a', outputPathWithExtension]);
+      
+    // Add the "-y" flag to auto-confirm overwrite and "-vn" to disable video
+    const ffmpeg = spawn('ffmpeg', ['-y', '-i', videoPath, '-vn', '-q:a', '0', '-map', 'a', outputPathWithExtension]);
 
     ffmpeg.stderr.on('data', (data) => {
-      console.error(`FFmpeg error output: ${data.toString()}`);
+      console.log(`FFmpeg output: ${data.toString()}`);
     });
 
     ffmpeg.on('close', (code) => {
-      if (code === 0) {
-        // console.log('Audio extraction successful:', outputPathWithExtension);
+      // Check if the output file exists and has a non-zero size
+      if (fs.existsSync(outputPathWithExtension) && fs.statSync(outputPathWithExtension).size > 0) {
+        console.log('Audio extraction successful:', outputPathWithExtension);
         resolve(outputPathWithExtension);
       } else {
         reject(new Error(`FFmpeg failed with exit code ${code}`));
@@ -1169,6 +1171,34 @@ function convertVideoToAudio(videoPath, outputAudioPath) {
     });
   });
 }
+
+// function convertVideoToAudio(videoPath, outputAudioPath) {
+//   return new Promise((resolve, reject) => {
+//     const outputPathWithExtension = outputAudioPath.endsWith('.mp3')
+//       ? outputAudioPath
+//       : `${outputAudioPath}.mp3`;
+
+//     // Add the "-y" flag to auto-confirm overwrite
+//     const ffmpeg = spawn('ffmpeg', ['-y', '-i', videoPath, '-q:a', '0', '-map', 'a', outputPathWithExtension]);
+
+//     ffmpeg.stderr.on('data', (data) => {
+//       console.error(`FFmpeg error output: ${data.toString()}`);
+//     });
+
+//     ffmpeg.on('close', (code) => {
+//       if (code === 0) {
+//         // console.log('Audio extraction successful:', outputPathWithExtension);
+//         resolve(outputPathWithExtension);
+//       } else {
+//         reject(new Error(`FFmpeg failed with exit code ${code}`));
+//       }
+//     });
+
+//     ffmpeg.on('error', (err) => {
+//       reject(new Error(`FFmpeg encountered an error: ${err.message}`));
+//     });
+//   });
+// }
 
 
 // Get duration of an audio file using ffmpeg
