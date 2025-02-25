@@ -88,7 +88,11 @@ const getLinkedInEmployees = require('./rapidAPI/linkedinEmployeesScraper.js');
 
 const fetchSalesNavURL = require('./rapidAPI/fetchSalesNavURL.js');
 
-const secScraper = require('./secFilings/secScraper.js');
+const secScraper10K = require('./secFilings/secScraper10K.js');
+
+const secScraper10Q = require('./secFilings/secScraper10Q.js');
+
+
 
 const { Http2ServerRequest } = require('http2');
 
@@ -163,7 +167,9 @@ app.use(fetchCompanyJobs.router)
 app.use(getPostDetails.router)
 app.use(getLinkedInEmployees.router)
 app.use(fetchSalesNavURL.router)
-app.use(secScraper.router);
+app.use(secScraper10K.router);
+app.use(secScraper10Q.router);
+
 
 const options = {
   key: fs.readFileSync('./onepgr.com.key', 'utf8'),

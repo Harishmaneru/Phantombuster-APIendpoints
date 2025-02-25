@@ -476,7 +476,8 @@ async function changeJobStatusToNotStarted(req, res) {
         const query = {
             user_id,
             request_id,
-            job_status: { $in: ['FAILED', 'IN_PROGRESS', 'SUCCESS', 'COMPLETED'] }
+            job_status: { $in: ['FAILED', 'SUCCESS'] }
+            // job_status: { $in: ['FAILED', 'IN_PROGRESS', 'SUCCESS', 'COMPLETED'] }
         };
 
         const updatedJobs = await SignalAutomationJob.updateMany(
