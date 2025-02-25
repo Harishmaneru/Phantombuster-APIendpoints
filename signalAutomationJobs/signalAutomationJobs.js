@@ -91,7 +91,7 @@ async function fetchJobsByStatus(req, res) {
                             response = { insightsResponse, newsResponse };
                             signalDataCount = (insightsResponse?.data?.length || 0) + (newsResponse?.data?.length || 0);
                             break;
-                          
+
                         case 'job_openings':
                         case 'job_changes':
                             response = await processJobSignals({
@@ -116,19 +116,48 @@ async function fetchJobsByStatus(req, res) {
                             response = await fetchProductLaunchSignals({ companyName: job.contact_company });
                             signalDataCount = response?.data?.length || 0;
                             break;
+                        // case 'linkedin_company_updates':
+                        // case 'activity_on_linkedin':
+                        //     const postsUrl = job.contact_details?.co_linkedin?.trim();
+                        //     if (!postsUrl) throw new Error('Invalid LinkedIn URL for company posts');
+                        //     response = await fetchCompanyPosts(postsUrl);
+                        //     signalDataCount = response?.data?.data?.length || 0;
+                        //     break;
+                        // case 'contact_profile_information':
+                        //     const companyUrl = job.contact_details?.co_linkedin?.trim();
+                        //     if (!companyUrl) throw new Error('Invalid LinkedIn URL for company details');
+                        //     response = await fetchCompanyDetailsByLinkedInURL(companyUrl);
+                        //     signalDataCount = response?.data?.data?.company_name ? 1 : 0;
+
                         case 'linkedin_company_updates':
-                        case 'activity_on_linkedin':
-                            const postsUrl = job.contact_details?.co_linkedin?.trim();
-                            if (!postsUrl) throw new Error('Invalid LinkedIn URL for company posts');
+                        case 'activity_on_linkedin': {
+                            let postsUrl = job.contact_details?.co_linkedin?.trim();
+                            if (!postsUrl || postsUrl === "N/A") {
+                                const companyName = job.contact_company?.trim();
+                                if (!companyName) {
+                                    throw new Error('Invalid LinkedIn URL for company posts: co_linkedin is N/A and contact_company is missing');
+                                }
+                                const slug = companyName.toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, '');
+                                postsUrl = `https://www.linkedin.com/company/${slug}`;
+                            }
                             response = await fetchCompanyPosts(postsUrl);
                             signalDataCount = response?.data?.data?.length || 0;
                             break;
-                        case 'contact_profile_information':
-                            const companyUrl = job.contact_details?.co_linkedin?.trim();
-                            if (!companyUrl) throw new Error('Invalid LinkedIn URL for company details');
+                        }
+                        case 'contact_profile_information': {
+                            let companyUrl = job.contact_details?.co_linkedin?.trim();
+                            if (!companyUrl || companyUrl === "N/A") {
+                                const companyName = job.contact_company?.trim();
+                                if (!companyName) {
+                                    throw new Error('Invalid LinkedIn URL for company details: co_linkedin is N/A and contact_company is missing');
+                                }
+                                const slug = companyName.toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, '');
+                                companyUrl = `https://www.linkedin.com/company/${slug}`;
+                            }
                             response = await fetchCompanyDetailsByLinkedInURL(companyUrl);
                             signalDataCount = response?.data?.data?.company_name ? 1 : 0;
                             break;
+                        }
                         default:
                             console.warn(`Unknown signal_flag for job ID: ${job.job_id}`);
                             continue;
@@ -263,15 +292,15 @@ async function summarizeSignalData(req, res) {
 
         console.log('Starting summarizeSignalData for user:', user_id, 'and request_id:', request_id);
         // const jobs = await SignalAutomationJob.find({ job_status: 'IN_PROGRESS', user_id, request_id });
-        const jobs = await SignalAutomationJob.find({ 
-            job_status: 'IN_PROGRESS', 
-            user_id, 
-            request_id 
+        const jobs = await SignalAutomationJob.find({
+            job_status: 'IN_PROGRESS',
+            user_id,
+            request_id
         }).toArray();
         if (!Array.isArray(jobs) || jobs.length === 0) {
             console.log(`No IN_PROGRESS jobs found for user ${user_id} with request_id ${request_id}`);
-            return res.json({ 
-                message: `No IN_PROGRESS jobs found for user ${user_id} with request_id ${request_id}.` 
+            return res.json({
+                message: `No IN_PROGRESS jobs found for user ${user_id} with request_id ${request_id}.`
             });
         }
 
@@ -382,16 +411,16 @@ async function summarizeSignalData(req, res) {
             }
         }
 
-        res.json({ 
-            message: `Signal data summarization completed successfully for user ${user_id}.`, 
-            processed: jobs.length 
+        res.json({
+            message: `Signal data summarization completed successfully for user ${user_id}.`,
+            processed: jobs.length
         });
 
-    } catch (error)  {
+    } catch (error) {
         console.error('Error in summarizeSignalData:', error.message);
-        res.status(500).json({ 
-            error: 'An error occurred while summarizing the signal data.', 
-            details: error.message 
+        res.status(500).json({
+            error: 'An error occurred while summarizing the signal data.',
+            details: error.message
         });
     }
 }
