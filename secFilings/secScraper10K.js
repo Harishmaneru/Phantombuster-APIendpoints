@@ -1,4 +1,3 @@
-
 const express = require('express');
 const router = express.Router();
 const fs = require('fs').promises;
@@ -6,7 +5,7 @@ const path = require('path');
 const axios = require('axios');
 
 const USER_AGENT = 'onepgr (harish@onepgr.us)';
-const RATE_LIMIT_DELAY = 3000; // milliseconds
+const RATE_LIMIT_DELAY = 3000;   
 
 // Setup basic logging utility
 const logger = {
@@ -22,11 +21,24 @@ const logger = {
   }
 };
 
+/**
+ * Returns a promise that resolves after a given number of milliseconds.
+ */
 function delay(ms) {
   logger.debug(`Delaying for ${ms}ms to respect rate limits`);
   return new Promise(resolve => setTimeout(resolve, ms));
 }
 
+/**
+ * Normalizes a string by converting to lowercase and removing spaces and punctuation.
+ */
+function normalizeName(name) {
+  return name.toLowerCase().replace(/[\s\.,-\/#!$%\^&\*;:{}=\-_`~()]/g, '');
+}
+
+/**
+ * Retrieves the CIK for a given ticker from the SEC company tickers JSON.
+ */
 async function getCIK(ticker) {
   logger.info(`Fetching CIK for ticker: ${ticker}`);
   const url = 'https://www.sec.gov/files/company_tickers.json';
@@ -42,7 +54,6 @@ async function getCIK(ticker) {
       throw new Error('Company not found');
     }
     
-    // Pad CIK to 10 digits
     const paddedCik = company.cik_str.toString().padStart(10, '0');
     logger.info(`Found CIK for ${ticker}: ${paddedCik}`);
     return paddedCik;
@@ -52,6 +63,48 @@ async function getCIK(ticker) {
   }
 }
 
+/**
+ * Retrieves the ticker symbol from the SEC company tickers JSON using a company name.
+ * The function normalizes both the input and each company's name for a forgiving match.
+ * @param {string} companyName - The company name to search for.
+ * @returns {string} The matching ticker symbol.
+ */
+async function getTickerFromCompanyName(companyName) {
+  logger.info(`Fetching ticker for company name: ${companyName}`);
+  const url = 'https://www.sec.gov/files/company_tickers.json';
+  try {
+    const response = await axios.get(url, { headers: { 'User-Agent': USER_AGENT } });
+    const companies = Object.values(response.data);
+    const normalizedInput = normalizeName(companyName);
+    
+    // Try an exact normalized match
+    let match = companies.find(c => normalizeName(c.title) === normalizedInput);
+    
+    // Fallback: check if normalized company name includes the input
+    if (!match) {
+      match = companies.find(c => normalizeName(c.title).includes(normalizedInput));
+    }
+    
+    if (!match) {
+      logger.error(`Company with name "${companyName}" not found in SEC database`);
+      throw new Error('Company not found by name');
+    }
+    logger.info(`Found ticker for "${companyName}": ${match.ticker}`);
+    return match.ticker;
+  } catch (error) {
+    logger.error(`Error fetching ticker for company name: ${companyName}`, error);
+    throw error;
+  }
+}
+
+/**
+ * Fetches recent filings from SEC submissions filtered by form types and filing date range.
+ * @param {string} cik - The padded CIK.
+ * @param {Array<string>} formTypes - Array of form types (e.g. ["10-K", "10-Q"]).
+ * @param {number} startYear - Minimum filing year (inclusive).
+ * @param {number} endYear - Maximum filing year (inclusive).
+ * @returns {Array<object>} Filtered filings.
+ */
 async function getFilings(cik, formTypes, startYear, endYear) {
   logger.info(`Fetching filings for CIK: ${cik}, forms: ${formTypes.join(', ')}, years: ${startYear}-${endYear}`);
   const url = `https://data.sec.gov/submissions/CIK${cik}.json`;
@@ -79,7 +132,7 @@ async function getFilings(cik, formTypes, startYear, endYear) {
     
     logger.debug(`Filtered to ${filtered.length} filings of requested types`);
     
-    // If date range filtering is provided, filter filings by the filing year.
+    // Filter by filing year if range provided.
     if (startYear && endYear) {
       filtered = filtered.filter(f => {
         const filingYear = parseInt(f.date.substring(0, 4));
@@ -95,6 +148,9 @@ async function getFilings(cik, formTypes, startYear, endYear) {
   }
 }
 
+/**
+ * Downloads a filing text given its CIK and filing metadata.
+ */
 async function downloadFiling(cik, filing) {
   logger.info(`Downloading filing: ${filing.form} from ${filing.date}, accession: ${filing.accession}`);
   const accessionNoDash = filing.accession.replace(/-/g, '');
@@ -111,6 +167,14 @@ async function downloadFiling(cik, filing) {
   }
 }
 
+/**
+ * Extracts the conformed period (YYYYMMDD) from a content snippet.
+ * Splits the snippet into lines and searches (case-insensitively) for a line containing
+ * "conformed period of report", then extracts the first 8-digit number.
+ *
+ * @param {string} contentSnippet - The snippet of filing text.
+ * @returns {string|null} The extracted conformed period or null if not found.
+ */
 function extractConformedPeriod(contentSnippet) {
   logger.debug('Extracting conformed period from content snippet');
   const lines = contentSnippet.split(/\r?\n/);
@@ -127,6 +191,15 @@ function extractConformedPeriod(contentSnippet) {
   return null;
 }
 
+/**
+ * Constructs the HTML filing URL.
+ *
+ * @param {string} cik - The company's CIK.
+ * @param {string} accession - The filing's accession number.
+ * @param {string} ticker - The company ticker.
+ * @param {string} contentSnippet - The filing content snippet containing the conformed period.
+ * @returns {string|null} The constructed filing URL or null if the conformed period isn’t found.
+ */
 function buildFilingUrl(cik, accession, ticker, contentSnippet) {
   logger.info(`Building HTML filing URL for ${ticker}, accession: ${accession}`);
   const conformedPeriod = extractConformedPeriod(contentSnippet);
@@ -141,6 +214,14 @@ function buildFilingUrl(cik, accession, ticker, contentSnippet) {
   return url;
 }
 
+/**
+ * Main function to fetch filings for a given ticker and form types within a date range.
+ * @param {string} ticker - The company ticker.
+ * @param {Array<string>} formTypes - Array of form types (e.g. ["10-K", "10-Q"]).
+ * @param {number} startYear - Minimum filing year.
+ * @param {number} endYear - Maximum filing year.
+ * @returns {object} An object containing the CIK and an array of filings.
+ */
 async function fetchFilings(ticker, formTypes, startYear, endYear) {
   logger.info(`Starting filing fetch process for ${ticker}, form types: ${formTypes.join(', ')}, years: ${startYear}-${endYear}`);
   
@@ -164,15 +245,13 @@ async function fetchFilings(ticker, formTypes, startYear, endYear) {
       try {
         const content = await downloadFiling(cik, filing);
         const htmlUrl = buildFilingUrl(cik, filing.accession, ticker, content);
-        
         results.push({
           form: filing.form,
           date: filing.date,
           accession: filing.accession,
           contentSnippet: content.substring(0, 500),
-          htmlUrl: htmlUrl
+          filingUrl: htmlUrl
         });
-        
         logger.debug(`Successfully processed filing ${filing.accession}`);
       } catch (err) {
         logger.error(`Error downloading filing ${filing.accession}`, err);
@@ -193,59 +272,129 @@ async function fetchFilings(ticker, formTypes, startYear, endYear) {
   }
 }
 
- 
-router.get('/10-Kfilings/:ticker', async (req, res) => {
+/**
+ * Fetch filings by company name.
+ * This function converts a company name to a ticker symbol and then calls fetchFilings.
+ * @param {string} identifier - The company name or ticker.
+ * @param {Array<string>} formTypes - Array of form types.
+ * @param {number} startYear - Minimum filing year.
+ * @param {number} endYear - Maximum filing year.
+ * @returns {object} An object containing the CIK and filings.
+ */
+async function fetchFilingsWithStatus(identifier, formTypes, startYear, endYear) {
+  try {
+    // Resolve identifier to ticker and CIK.
+    // First try as ticker; if that fails, try as company name.
+    let ticker, cik;
+    try {
+      ticker = identifier.toUpperCase();
+      cik = await getCIK(ticker);
+    } catch (e) {
+      // Fallback to resolving by company name.
+      ticker = await getTickerFromCompanyName(identifier);
+      cik = await getCIK(ticker);
+    }
+    
+    const filings = await getFilings(cik, formTypes, startYear, endYear);
+    const results = [];
+    for (let i = 0; i < filings.length; i++) {
+      const filing = filings[i];
+      if (i > 0) await delay(RATE_LIMIT_DELAY);
+      try {
+        const content = await downloadFiling(cik, filing);
+        const htmlUrl = buildFilingUrl(cik, filing.accession, ticker, content);
+        results.push({
+          form: filing.form,
+          date: filing.date,
+          accession: filing.accession,
+          contentSnippet: content.substring(0, 500),
+          filingUrl: htmlUrl
+        });
+      } catch (error) {
+        results.push({
+          form: filing.form,
+          date: filing.date,
+          accession: filing.accession,
+          error: error.message
+        });
+      }
+    }
+    if (results.length === 0) {
+      return {
+        status: 0,
+        message: 'No filings found',
+        ticker,
+        cik,
+        filings: []
+      };
+    }
+    return {
+      status: 1,
+      message: 'Success',
+      ticker,
+      cik,
+      filings: results
+    };
+  } catch (error) {
+    return {
+      status: -1,
+      message: error.message,
+      error: error.stack
+    };
+  }
+}
+
+// Express route endpoint for ticker/company name-based queries.
+// Endpoint: /10-Kfilings/:identifier
+// Accepts query parameters: formType (comma-separated, default: "10-K"),
+// startYear, and endYear.
+router.get('/10-Kfilings/:identifier', async (req, res) => {
   const startTime = Date.now();
-  const { ticker } = req.params;
+  const { identifier } = req.params;
   
-  logger.info(`Received request for ticker: ${ticker}`);
+  logger.info(`Received request for identifier: ${identifier}`);
   logger.debug('Request query parameters:', req.query);
   
   try {
-    
-    let formTypes = req.query.formType || '10-K';
-    if (formTypes.indexOf(',') !== -1) {
-      formTypes = formTypes.split(',').map(f => f.trim());
-    } else {
-      formTypes = [formTypes];
-    }
-    
+    let formTypes = req.query.formType 
+      ? req.query.formType.split(',').map(f => f.trim()) 
+      : ['10-K'];
     
     const currentYear = new Date().getFullYear();
     const startYear = req.query.startYear ? parseInt(req.query.startYear) : currentYear - 3;
     const endYear = req.query.endYear ? parseInt(req.query.endYear) : currentYear;
     
-    logger.info(`Processing request: ticker=${ticker}, formTypes=${formTypes.join(',')}, years=${startYear}-${endYear}`);
+    logger.info(`Processing request: identifier=${identifier}, formTypes=${formTypes.join(',')}, years=${startYear}-${endYear}`);
     
-    const result = await fetchFilings(ticker, formTypes, startYear, endYear);
-    
+    const result = await fetchFilingsWithStatus(identifier, formTypes, startYear, endYear);
     const responseTime = Date.now() - startTime;
-    logger.info(`Successfully completed request for ${ticker} in ${responseTime}ms, found ${result.filings.length} filings`);
+    logger.info(`Successfully completed request for ${identifier} in ${responseTime}ms, found ${result.filings.length} filings`);
     
     res.json({
-      success: true,
-      ticker: ticker.toUpperCase(),
-      cik: result.cik,
-      filings: result.filings
+      ...result,
+      executionTime: responseTime
     });
   } catch (error) {
     const responseTime = Date.now() - startTime;
-    logger.error(`Request failed for ${ticker} after ${responseTime}ms`, error);
-    
+    logger.error(`Request failed for ${identifier} after ${responseTime}ms`, error);
     res.status(500).json({
-      success: false,
+      status: -1,
+      message: 'Unexpected error occurred',
       error: error.message,
-      ticker: req.params.ticker.toUpperCase()
+      executionTime: responseTime
     });
   }
 });
 
 module.exports = {
   router,
+  fetchFilingsWithStatus,
+  getTickerFromCompanyName, 
   getCIK,
   getFilings,
   downloadFiling,
   fetchFilings,
   extractConformedPeriod,
-  buildFilingUrl
+  buildFilingUrl,
+  getTickerFromCompanyName
 };

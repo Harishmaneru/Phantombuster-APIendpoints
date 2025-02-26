@@ -72,6 +72,7 @@ const SubmissionSchema = new mongoose.Schema({
     fileName: { type: String },
     mimeType: { type: String }
   }],
+  score: { type: mongoose.Schema.Types.Mixed, default: null },
   submittedAt: { type: Date, default: Date.now }
 }, {
   writeConcern: { w: 1, j: false },
@@ -144,14 +145,14 @@ async function sendSubmissionEmails(submission, sendSummary) {
       <p><strong>Applicant Name:</strong> ${applicantName}</p>
       <p><strong>Applicant Email:</strong> ${email}</p>
       <p><strong>LinkedIn URL:</strong> ${linkedInUrl}</p>
-      <p><strong>Application Link:</strong> https://www.recordedinterview.com/InterviewPage${applicationLink}</p>
+      <p><strong>Application Link:</strong> https://www.recordedinterview.com/InterviewPage/${applicationLink}</p>
       <p><strong>Submitted At:</strong> ${submittedAt}</p>
     `;
 
   const hmMailOptions = {
     from: 'harish@onepgr.us',
     to: hiringManagerEmail,
-    bcc: 'rajiv@onepgr.com',
+    // bcc: 'rajiv@onepgr.com',
     subject: 'New Application Submission Received',
     html: hmEmailBody
   };
@@ -173,7 +174,7 @@ async function sendSubmissionEmails(submission, sendSummary) {
           <li><strong>Applicant Name:</strong> ${applicantName}</li>
           <li><strong>Email:</strong> ${email}</li>
           <li><strong>LinkedIn URL:</strong> ${linkedInUrl}</li>
-          <li><strong>Application Link:</strong> https://www.recordedinterview.com/InterviewPage${applicationLink}</li>
+          <li><strong>Application Link:</strong> https://www.recordedinterview.com/InterviewPage/${applicationLink}</li>
           <li><strong>Submitted At:</strong> ${submittedAt}</li>
         </ul>
         <p>We appreciate your interest and will get back to you soon.</p>
@@ -327,6 +328,21 @@ router.post('/submit', ensureDbConnection, handleUpload, async (req, res) => {
 
     // Send emails
     await sendSubmissionEmails(savedSubmission, sendSummary);
+
+    try {
+      if (savedSubmission.videoResponses && savedSubmission.videoResponses.length > 0) {
+        const evaluations = await evaluateSubmissionVideos(savedSubmission);
+        savedSubmission.score = evaluations;
+        await savedSubmission.save();
+        logSubmissionActivity('Evaluation Completed', { submissionId: savedId, score: evaluations });
+      }
+    } catch (evalError) {
+      logSubmissionActivity('Evaluation Error', { error: evalError.message });
+      // Optionally, update the submission score field with an error message
+      savedSubmission.score = { error: evalError.message };
+      await savedSubmission.save();
+    }
+
 
     res.status(201).json({
       success: true,
@@ -708,13 +724,10 @@ router.post('/evaluate-videos', ensureDbConnection, async (req, res) => {
     for (const videoResponse of videoResponses) {
       const videoUrl = videoResponse.videoUrl;
 
-      // Step 1: Download the video file from S3
       const videoPath = await downloadFileFromS3(videoUrl);
-
-      // Step 2: Transcribe the video using the new processAudioVideo function
+     
       const transcription = await processAudioVideo(videoPath, videoResponse.fileName);
 
-      // Step 3: Call the AI API to evaluate the transcription
       const evaluation = await evaluateTranscription(transcription, videoResponse.question);
 
       evaluations.push({
@@ -818,5 +831,30 @@ async function evaluateTranscription(transcription, question) {
   return response.data;
 
 }
+
+// New GET endpoint to fetch the evaluation/score for a submission
+router.get('/score/:submissionId', ensureDbConnection, async (req, res) => {
+  try {
+    const submissionId = req.params.submissionId;
+    const submission = await Submission.findById(submissionId, { score: 1 });
+    if (!submission) {
+      return res.status(404).json({ 
+        success: false, 
+        message: 'Submission not found' 
+      });
+    }
+    res.status(200).json({
+      success: true,
+      data: submission.score
+    });
+  } catch (error) {
+    console.error('Error fetching score:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to fetch score',
+      error: error.message
+    });
+  }
+});
 
 module.exports = router;
