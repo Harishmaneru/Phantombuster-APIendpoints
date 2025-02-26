@@ -213,6 +213,25 @@ const handleUpload = (req, res, next) => {
 // -------------------------
 // POST /submit route (modified for S3 integration)
 
+async function evaluateSubmissionVideos(submission) {
+  const videoResponses = submission.videoResponses;
+  const evaluations = [];
+
+  for (const videoResponse of videoResponses) {
+    const videoUrl = videoResponse.videoUrl;
+    const videoPath = await downloadFileFromS3(videoUrl);
+    const transcription = await processAudioVideo(videoPath, videoResponse.fileName);
+    const evaluation = await evaluateTranscription(transcription, videoResponse.question);
+    evaluations.push({
+      question: videoResponse.question,
+      transcription,
+      evaluation
+    });
+    fs.unlinkSync(videoPath);
+  }
+  return evaluations;
+}
+
 router.post('/submit', ensureDbConnection, handleUpload, async (req, res) => {
   const session = await mongoose.startSession();
   let savedId = null;
