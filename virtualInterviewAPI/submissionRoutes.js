@@ -900,8 +900,7 @@ const SharedLinkSchema = new mongoose.Schema({
   expiresAt: {
     type: Date,
     default: null
-  },
-  allowedEmail: { type: String, default: null },
+  }
 });
 
 const SharedLink = mongoose.model('SharedLink', SharedLinkSchema);
@@ -929,10 +928,8 @@ router.post('/share/generate', ensureDbConnection, async (req, res) => {
     // const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000); 
 
     await SharedLink.create({
-    submissionId,
-    token,
-    isPublic,
-    allowedEmail
+      submissionId,
+      token
       // expiresAt
     });
 
@@ -957,9 +954,8 @@ router.post('/share/generate', ensureDbConnection, async (req, res) => {
 router.get('/share/:token', ensureDbConnection, async (req, res) => {
   try {
     const { token } = req.params;
-    const { id, passcode } = req.query;  
+    const { id } = req.query;
 
-    // 1) Find the shared link
     const link = await SharedLink.findOne({ token, submissionId: id });
     if (!link) {
       return res.status(404).json({
@@ -968,26 +964,11 @@ router.get('/share/:token', ensureDbConnection, async (req, res) => {
       });
     }
 
-    
-    if (link.expiresAt && link.expiresAt < new Date()) {
-      return res.status(410).json({
-        success: false,
-        message: 'This link has expired'
-      });
-    }
 
-  
-    if (!link.isPublic) {
-      // For example, require a passcode
-      if (!passcode || passcode !== link.passcode) {
-        return res.status(403).json({
-          success: false,
-          message: 'Access denied - passcode required'
-        });
-      }
-    }
+    // if (link.expiresAt && link.expiresAt < new Date()) {
+    //   return res.status(410).json({ success: false, message: 'Link has expired' });
+    // }
 
- 
     const submission = await Submission.findById(id);
     if (!submission) {
       return res.status(404).json({
@@ -996,12 +977,10 @@ router.get('/share/:token', ensureDbConnection, async (req, res) => {
       });
     }
 
-   
     return res.status(200).json({
       success: true,
       data: submission
     });
-
   } catch (error) {
     console.error('Error validating share token:', error);
     return res.status(500).json({
@@ -1012,49 +991,7 @@ router.get('/share/:token', ensureDbConnection, async (req, res) => {
   }
 });
 
-
-// router.get('/share/:token', ensureDbConnection, async (req, res) => {
-//   try {
-//     const { token } = req.params;
-//     const { id } = req.query;
-
-//     const link = await SharedLink.findOne({ token, submissionId: id });
-//     if (!link) {
-//       return res.status(404).json({
-//         success: false,
-//         message: 'Invalid or expired share link'
-//       });
-//     }
-
-
-//     // if (link.expiresAt && link.expiresAt < new Date()) {
-//     //   return res.status(410).json({ success: false, message: 'Link has expired' });
-//     // }
-
-//     const submission = await Submission.findById(id);
-//     if (!submission) {
-//       return res.status(404).json({
-//         success: false,
-//         message: 'Submission not found'
-//       });
-//     }
-
-//     return res.status(200).json({
-//       success: true,
-//       data: submission
-//     });
-//   } catch (error) {
-//     console.error('Error validating share token:', error);
-//     return res.status(500).json({
-//       success: false,
-//       message: 'Server error validating share token',
-//       error: error.message
-//     });
-//   }
-// });
-
 /**
- * ===============================
  * POST /share/sendEmail
 ==================================
  */
