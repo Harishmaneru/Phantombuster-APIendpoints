@@ -925,7 +925,7 @@ router.post('/share/generate', ensureDbConnection, async (req, res) => {
     }
 
     const token = crypto.randomBytes(16).toString('hex');
-    // const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000); // optional
+    // const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000); 
 
     await SharedLink.create({
       submissionId,
@@ -964,7 +964,7 @@ router.get('/share/:token', ensureDbConnection, async (req, res) => {
       });
     }
 
-    // Optional: check expiration
+
     // if (link.expiresAt && link.expiresAt < new Date()) {
     //   return res.status(410).json({ success: false, message: 'Link has expired' });
     // }
@@ -990,6 +990,65 @@ router.get('/share/:token', ensureDbConnection, async (req, res) => {
     });
   }
 });
+
+/**
+ * ===============================
+ * POST /share/sendEmail
+==================================
+ */
+router.post('/share/sendEmail', ensureDbConnection, async (req, res) => {
+  try {
+    const { recipients, subject, message, isPublic } = req.body;
+
+ 
+    if (!recipients || !subject || !message) {
+      return res.status(400).json({
+        success: false,
+        message: 'Missing required fields (recipients, subject, message)'
+      });
+    }
+
+    
+    const emailList = recipients
+      .split(',')
+      .map((email) => email.trim())
+      .filter(Boolean);
+
+    if (emailList.length === 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'No valid email addresses provided'
+      });
+    }
+ 
+    console.log("Is public?", isPublic);
+
+    // Define mail options
+    const mailOptions = {
+      from: 'harish@onepgr.us',   
+      to: emailList,            
+      subject,
+      html: message
+    };
+
+ 
+    const info = await transporter.sendMail(mailOptions);
+    console.log("Email sent:", info.messageId);
+
+    return res.status(200).json({
+      success: true,
+      message: 'Emails sent successfully'
+    });
+  } catch (error) {
+    console.error('Error sending email:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Failed to send emails',
+      error: error.message
+    });
+  }
+});
+
 
 
 module.exports = router;
