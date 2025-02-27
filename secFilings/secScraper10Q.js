@@ -478,7 +478,7 @@ async function fetchFilings(ticker, formTypes, startYear, endYear) {
 }
 
 
-async function fetchFilingsWithStatus(identifier, formTypes, startYear, endYear) {
+async function fetchFilings10Q(identifier, formTypes, startYear, endYear) {
   try {
     // Resolve identifier to ticker and CIK.
     // First try as ticker; if that fails, try as company name.
@@ -559,7 +559,7 @@ router.get('/10-Qfilings/:identifier', async (req, res) => {
     
     logger.info(`Processing request: identifier=${identifier}, formTypes=${formTypes.join(',')}, years=${startYear}-${endYear}`);
     
-    const result = await fetchFilingsWithStatus(identifier, formTypes, startYear, endYear);
+    const result = await fetchFilings10Q(identifier, formTypes, startYear, endYear);
     const responseTime = Date.now() - startTime;
     logger.info(`Successfully completed request for ${identifier} in ${responseTime}ms, found ${result.filings.length} filings`);
     
@@ -581,7 +581,7 @@ router.get('/10-Qfilings/:identifier', async (req, res) => {
 
 module.exports = {
   router,
-  fetchFilingsWithStatus,
+  fetchFilings10Q,
   getTickerFromCompanyName, 
   getCIK,
   getFilings,

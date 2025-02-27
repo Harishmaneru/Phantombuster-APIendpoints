@@ -11,7 +11,7 @@ const path = require('path');
 const { spawn } = require('child_process');
 const axios = require('axios');
 const { OpenAI } = require('openai');
-
+const crypto = require('crypto');
 
 const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY,
@@ -875,5 +875,121 @@ router.get('/score/:submissionId', ensureDbConnection, async (req, res) => {
     });
   }
 });
+
+// ===================================================
+// SHARE LINK LOGIC 
+// ===================================================
+
+
+// 1) SharedLink schema
+const SharedLinkSchema = new mongoose.Schema({
+  submissionId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Submission',
+    required: true
+  },
+  token: {
+    type: String,
+    required: true,
+    unique: true
+  },
+  createdAt: {
+    type: Date,
+    default: Date.now
+  },
+  expiresAt: {
+    type: Date,
+    default: null
+  }
+});
+
+const SharedLink = mongoose.model('SharedLink', SharedLinkSchema);
+
+
+router.post('/share/generate', ensureDbConnection, async (req, res) => {
+  try {
+    const { submissionId } = req.body;
+    if (!submissionId) {
+      return res.status(400).json({
+        success: false,
+        message: 'submissionId is required'
+      });
+    }
+
+    const submission = await Submission.findById(submissionId);
+    if (!submission) {
+      return res.status(404).json({
+        success: false,
+        message: 'Submission not found'
+      });
+    }
+
+    const token = crypto.randomBytes(16).toString('hex');
+    // const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000); // optional
+
+    await SharedLink.create({
+      submissionId,
+      token
+      // expiresAt
+    });
+
+    // Construct share URL
+    const shareLink = `https://www.recordedinterview.com/candidate_response/${token}?id=${submissionId}`;
+
+    return res.status(200).json({
+      success: true,
+      shareLink
+    });
+  } catch (error) {
+    console.error('Error generating share link:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Error generating share link',
+      error: error.message
+    });
+  }
+});
+
+
+router.get('/share/:token', ensureDbConnection, async (req, res) => {
+  try {
+    const { token } = req.params;
+    const { id } = req.query;
+
+    const link = await SharedLink.findOne({ token, submissionId: id });
+    if (!link) {
+      return res.status(404).json({
+        success: false,
+        message: 'Invalid or expired share link'
+      });
+    }
+
+    // Optional: check expiration
+    // if (link.expiresAt && link.expiresAt < new Date()) {
+    //   return res.status(410).json({ success: false, message: 'Link has expired' });
+    // }
+
+    const submission = await Submission.findById(id);
+    if (!submission) {
+      return res.status(404).json({
+        success: false,
+        message: 'Submission not found'
+      });
+    }
+
+    return res.status(200).json({
+      success: true,
+      data: submission
+    });
+  } catch (error) {
+    console.error('Error validating share token:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Server error validating share token',
+      error: error.message
+    });
+  }
+});
+
 
 module.exports = router;

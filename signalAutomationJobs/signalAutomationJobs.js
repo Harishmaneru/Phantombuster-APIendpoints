@@ -13,6 +13,8 @@ const { fetchCompanyDetailsByLinkedInURL } = require('../pressFundingAnnounement
 const { fetchProductLaunchSignals } = require('../pressFundingAnnounements/productLunchs.js');
 const { fetchPublicMentions } = require('../pressFundingAnnounements/publicMentions.js');
 const { fetchCompanyPosts } = require('../rapidAPI/companyPosts.js');
+const { fetchFilings10K } = require('../secFilings/secScraper10K.js');
+const { fetchFilings10Q } = require('../secFilings/secScraper10Q.js');
 
 const { OpenAI } = require('openai');
 const url = "mongodb://onepgrdb:onepgrdb123@pages.onepgr.com:27017/?authSource=admin";
@@ -80,11 +82,39 @@ async function fetchJobsByStatus(req, res) {
 
                     switch (job.signal_flag) {
                         case 'financial_information':
-                            const response10K = await fetchLatestFiling({ companyName: job.contact_company, formType: '10-K' });
-                            const response10Q = await fetchLatestFiling({ companyName: job.contact_company, formType: '10-Q' });
-                            response = { form10K: response10K, form10Q: response10Q };
-                            signalDataCount = (response10K?.data ? 1 : 0) + (response10Q?.data ? 1 : 0);
+
+                            const filing10KResult = await fetchFilings10K({ companyName: job.contact_company });
+                            const filing10QResult = await fetchFilings10Q({ companyName: job.contact_company });
+
+
+                            const form10KData = filing10KResult?.data || filing10KResult?.filings || null;
+                            const form10QData = filing10QResult?.data || filing10QResult?.filings || null;
+
+                            const normalizeFilings = (filings) => {
+                                return filings.map(filing => {
+
+                                    if (!filing.filingUrl && filing.htmlUrl) {
+                                        filing.filingUrl = filing.htmlUrl;
+                                    }
+                                    return filing;
+                                });
+                            };
+
+                            const normalized10KData = form10KData ? normalizeFilings(form10KData) : null;
+                            const normalized10QData = form10QData ? normalizeFilings(form10QData) : null;
+
+                            response = {
+                                form10K: normalized10KData,
+                                form10Q: normalized10QData
+                            };
+
+
+                            signalDataCount =
+                                (normalized10KData ? normalized10KData.length : 0) +
+                                (normalized10QData ? normalized10QData.length : 0);
+
                             break;
+
                         case 'press_announcements':
                             const insightsResponse = await getCompanyInsights({ companyName: job.contact_company });
                             const newsResponse = await fetchCompanyNews({ companyName: job.contact_company });
