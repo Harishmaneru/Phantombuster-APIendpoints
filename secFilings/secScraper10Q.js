@@ -224,7 +224,10 @@ async function fetchFilings(ticker, formTypes, startYear, endYear) {
 }
 
 
-async function fetchFilings10Q(identifier, formTypes, startYear, endYear) {
+async function fetchFilings10Q(  identifier,
+  formTypes = ['10-Q'],
+  startYear = new Date().getFullYear() - 3,
+  endYear = new Date().getFullYear()) {
   try {
     // Resolve identifier to ticker and CIK.
     // First try as ticker; if that fails, try as company name.
