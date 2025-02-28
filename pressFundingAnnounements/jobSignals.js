@@ -27,7 +27,7 @@ const STATUS_CODES = {
     SERVER_ERROR: {
         httpStatus: 500,
         status: "-1",
-        message: "An error occurred while processing your request"
+        message: "Service Temporarily Unavailable"
     },
     RATE_LIMITED: {
         httpStatus: 429,
@@ -154,19 +154,47 @@ const extractCompanyNameFromLinkedInUrl = (linkedinUrl) => {
 const normalizeCompanyName = (name) => {
     return name
         .toLowerCase()
-        .replace(/[^a-z0-9]/g, '') // Remove special characters and spaces
+        .replace(/[^a-z0-9]/g, '')  
         .trim();
 };
 
-// Helper function to check if company names match
+// Updated helper function to check if company names match
 const isCompanyMatch = (jobCompany, searchCompany) => {
+    // If jobCompany is missing or explicitly set as "Company name not available", skip it
+    if (
+        !jobCompany || 
+        jobCompany.trim() === "" || 
+        jobCompany.toLowerCase() === "company name not available"
+    ) {
+        return false;
+    }
+
     const normalizedJobCompany = normalizeCompanyName(jobCompany);
     const normalizedSearchCompany = normalizeCompanyName(searchCompany);
 
     // Check if one contains the other or vice versa
     return normalizedJobCompany.includes(normalizedSearchCompany) ||
-        normalizedSearchCompany.includes(normalizedJobCompany);
+           normalizedSearchCompany.includes(normalizedJobCompany);
 };
+
+
+// // Helper function to normalize company names for comparison
+// const normalizeCompanyName = (name) => {
+//     return name
+//         .toLowerCase()
+//         .replace(/[^a-z0-9]/g, '') // Remove special characters and spaces
+//         .trim();
+// };
+
+// // Helper function to check if company names match
+// const isCompanyMatch = (jobCompany, searchCompany) => {
+//     const normalizedJobCompany = normalizeCompanyName(jobCompany);
+//     const normalizedSearchCompany = normalizeCompanyName(searchCompany);
+
+//     // Check if one contains the other or vice versa
+//     return normalizedJobCompany.includes(normalizedSearchCompany) ||
+//         normalizedSearchCompany.includes(normalizedJobCompany);
+// };
 
 // Reusable function to fetch job listings from Adzuna
 const fetchJobListings = async (companyName) => {
@@ -844,171 +872,3 @@ module.exports = {
     STATUS_CODES,
     cleanup  
 };
-
-//Scraping part removed from the code
-// require('dotenv').config();
-// const axios = require('axios');
-// const express = require('express');
-// const router = express.Router();
-// const { OpenAI } = require('openai');
-
-// // Initialize OpenAI client
-// const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
-
-// // Constants
-// const HTTP_STATUS = {
-//   BAD_REQUEST: 400,
-//   NOT_FOUND: 404,
-//   SERVER_ERROR: 500,
-//   SUCCESS: 200
-// };
-
-// const MESSAGES = {
-//   INVALID_INPUT: 'Either LinkedIn URL or Company Name is required',
-//   NO_JOBS_FOUND: 'No matching job listings found',
-//   JOB_FETCH_SUCCESS: 'Successfully retrieved job listings',
-//   LINKEDIN_URL_INVALID: 'Invalid LinkedIn URL format'
-// };
-
-// // Response formatter
-// const formatResponse = (status, data = null, message = '') => ({
-//   status,
-//   data,
-//   message: message || (status === HTTP_STATUS.SUCCESS ? MESSAGES.JOB_FETCH_SUCCESS : ''),
-//   timestamp: new Date().toISOString()
-// });
-
-// // LinkedIn URL validation and parsing
-// const parseLinkedInCompany = url => {
-//   try {
-//     const parsed = new URL(url);
-//     const validPaths = ['/company/', '/school/', '/organization/'];
-//     if (!validPaths.some(path => parsed.pathname.startsWith(path))) return null;
-    
-//     const [, , companySlug] = parsed.pathname.split('/');
-//     return companySlug?.replace(/-/g, ' ') || null;
-//   } catch (error) {
-//     return null;
-//   }
-// };
-
-// // AI-powered job description processing
-// const processJobDescription = async content => {
-//   try {
-//     const { choices } = await openai.chat.completions.create({
-//       model: 'gpt-3.5-turbo',
-//       messages: [{
-//         role: 'system',
-//         content: 'Extract and structure job details from the following content. Preserve all key information in logical sections.'
-//       }, {
-//         role: 'user',
-//         content: `Process this job description:\n\n${content.slice(0, 10000)}` // Prevent token overflow
-//       }],
-//       max_tokens: 2000,
-//       temperature: 0.3
-//     });
-
-//     return choices[0].message.content.trim();
-//   } catch (error) {
-//     console.error('AI Processing Error:', error);
-//     return 'Job description processing unavailable';
-//   }
-// };
-
-// // Adzuna API client
-// class JobAPI {
-//   static async fetchListings(companyName) {
-//     try {
-//       const { data } = await axios.get('https://api.adzuna.com/v1/api/jobs/us/search/1', {
-//         params: {
-//           app_id: process.env.ADZUNA_APP_ID,
-//           app_key: process.env.ADZUNA_APP_KEY,
-//           what: companyName,
-//           results_per_page: 10
-//         }
-//       });
-
-//       return data.results || [];
-//     } catch (error) {
-//       console.error('Adzuna API Error:', error.response?.data || error.message);
-//       return [];
-//     }
-//   }
-// }
-
-// // Core business logic
-// const jobSignalsService = {
-//   normalizeName: name => name.toLowerCase().replace(/[^a-z0-9]/g, ''),
-
-//   isCompanyMatch: (a, b) => {
-//     const normA = jobSignalsService.normalizeName(a);
-//     const normB = jobSignalsService.normalizeName(b);
-//     return normA.includes(normB) || normB.includes(normA);
-//   },
-
-//   processJobs: async (jobs, companyName) => {
-//     const filtered = jobs.filter(job => 
-//       jobSignalsService.isCompanyMatch(job.company?.display_name || '', companyName)
-//     );
-
-//     return Promise.all(filtered.map(async job => ({
-//       title: job.title || 'Untitled Position',
-//       company: job.company?.display_name || 'Unknown Company',
-//       location: job.location?.display_name || 'Location not specified',
-//       salary: job.salary_min && job.salary_max ? 
-//         `$${job.salary_min} - $${job.salary_max}` : 'Salary undisclosed',
-//       description: await processJobDescription(job.description || ''),
-//       url: job.redirect_url || '#',
-//       posted: job.created ? new Date(job.created) : 'Unknown date'
-//     })));
-//   }
-// };
-
-// // Main endpoint handler
-// router.post('/job-signals', async (req, res) => {
-//   try {
-//     const { linkedinUrl, companyName } = req.body;
-    
-//     // Input validation
-//     if (!linkedinUrl && !companyName) {
-//       return res.status(HTTP_STATUS.BAD_REQUEST).json(
-//         formatResponse(HTTP_STATUS.BAD_REQUEST, null, MESSAGES.INVALID_INPUT)
-//       );
-//     }
-
-//     // Company name resolution
-//     let targetCompany = companyName;
-//     if (linkedinUrl) {
-//       const parsedCompany = parseLinkedInCompany(linkedinUrl);
-//       if (parsedCompany) targetCompany = parsedCompany;
-//     }
-
-//     // Data fetching and processing
-//     const rawJobs = await JobAPI.fetchListings(targetCompany);
-//     if (!rawJobs.length) {
-//       return res.status(HTTP_STATUS.NOT_FOUND).json(
-//         formatResponse(HTTP_STATUS.NOT_FOUND, null, MESSAGES.NO_JOBS_FOUND)
-//       );
-//     }
-
-//     const processedJobs = await jobSignalsService.processJobs(rawJobs, targetCompany);
-    
-//     return res.status(HTTP_STATUS.SUCCESS).json(
-//       formatResponse(HTTP_STATUS.SUCCESS, processedJobs)
-//     );
-
-//   } catch (error) {
-//     console.error('Endpoint Error:', error);
-//     return res.status(HTTP_STATUS.SERVER_ERROR).json(
-//       formatResponse(HTTP_STATUS.SERVER_ERROR, null, error.message)
-//     );
-//   }
-// });
-
-// module.exports = {
-//   router,
-//   jobSignalsService,
-//   JobAPI,
-//   HTTP_STATUS,
-//   MESSAGES
-// };
