@@ -687,8 +687,27 @@ async function fetchJobsByStatus(req, res) {
                         // If no existing job data found, perform the API call based on the signal_flag
                         switch (job.signal_flag) {
                             case 'financial_information': {
-                                const filing10KResult = await fetchFilings10K({ companyName: job.contact_company });
-                                const filing10QResult = await fetchFilings10Q({ companyName: job.contact_company });
+                                function extractCompanyNameFromLinkedIn(linkedinUrl) {
+
+                                    const match = linkedinUrl.match(/linkedin\.com\/company\/([^\/]+)/i);
+                                    return match ? match[1] : null;
+                                }
+                                function isUnusualCompanyName(companyName) {
+
+                                    return /USA/i.test(companyName) || companyName.split(" ").length > 2;
+                                }
+                                let companyNameToUse = job.contact_company;
+                                if (isUnusualCompanyName(job.contact_company) && job.contact_details?.co_linkedin) {
+                                    const extractedName = extractCompanyNameFromLinkedIn(job.contact_details.co_linkedin);
+                                    if (extractedName) {
+                                        companyNameToUse = extractedName;
+                                    }
+                                }
+
+                                // Now use the decided companyNameToUse in your SEC filing fetch functions:
+                                const filing10KResult = await fetchFilings10K(companyNameToUse);
+                                const filing10QResult = await fetchFilings10Q(companyNameToUse);
+
 
                                 const form10KData = filing10KResult?.data || filing10KResult?.filings || null;
                                 const form10QData = filing10QResult?.data || filing10QResult?.filings || null;
@@ -704,11 +723,15 @@ async function fetchJobsByStatus(req, res) {
 
                                 const normalized10KData = form10KData ? normalizeFilings(form10KData) : null;
                                 const normalized10QData = form10QData ? normalizeFilings(form10QData) : null;
-
                                 response = {
+                                    status: filing10KResult.status,
+                                    message: filing10KResult.message,
+                                    ticker: filing10KResult.ticker,
+                                    cik: filing10KResult.cik,
                                     form10K: normalized10KData,
                                     form10Q: normalized10QData
                                 };
+
 
                                 signalDataCount =
                                     (normalized10KData ? normalized10KData.length : 0) +
@@ -873,6 +896,37 @@ async function fetchJobsByStatus(req, res) {
 }
 
 // Function to determine job status by checking all nested statuses
+// function determineJobStatus(response) {
+//     let hasError = false;
+//     let hasInProgress = false;
+//     let allSuccess = true;
+
+//     // Recursive function to check status within nested objects
+//     function checkStatus(obj) {
+//         if (typeof obj !== 'object' || obj === null) return;
+
+//         for (const key in obj) {
+//             if (typeof obj[key] === 'object') {
+//                 checkStatus(obj[key]);
+//             } else if (key === 'status') {
+//                 if (obj[key] !== -1 &&obj[key] === "-1") {
+//                     hasError = true;
+//                 } else if (obj[key] !== 1 &&obj[key] === "1") {
+//                     hasInProgress = true;
+//                     allSuccess = false;
+//                 } else if (obj[key] !== 0 && obj[key] !== "0") {
+//                     allSuccess = false;
+//                 }
+//             }
+//         }
+//     }
+
+//     checkStatus(response);
+
+//     if (hasError) return 'FAILED';
+//     if (hasInProgress) return 'IN_PROGRESS';
+//     return allSuccess ? 'SUCCESS' : 'IN_PROGRESS';
+// }
 function determineJobStatus(response) {
     let hasError = false;
     let hasInProgress = false;
@@ -886,12 +940,13 @@ function determineJobStatus(response) {
             if (typeof obj[key] === 'object') {
                 checkStatus(obj[key]);
             } else if (key === 'status') {
-                if (obj[key] === "-1") {
+                const statusStr = String(obj[key]); // Convert value to string
+                if (statusStr === "-1") {
                     hasError = true;
-                } else if (obj[key] === "1") {
+                } else if (statusStr === "1") {
                     hasInProgress = true;
                     allSuccess = false;
-                } else if (obj[key] !== "0") {
+                } else if (statusStr !== "0") {
                     allSuccess = false;
                 }
             }
