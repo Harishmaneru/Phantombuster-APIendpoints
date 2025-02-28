@@ -82,11 +82,10 @@ async function fetchJobsByStatus(req, res) {
 
                     switch (job.signal_flag) {
                         case 'financial_information':
-
-                            const filing10KResult = await fetchFilings10K( job.contact_company );
-                            const filing10QResult = await fetchFilings10Q(  job.contact_company  );
-
-
+                            
+                            const filing10KResult = await fetchFilings10K(job.contact_company, ['10-K'], startYear, endYear);
+                            const filing10QResult = await fetchFilings10Q(job.contact_company, ['10-Q'], startYear, endYear);
+                        
                             const form10KData = filing10KResult?.data || filing10KResult?.filings || null;
                             const form10QData = filing10QResult?.data || filing10QResult?.filings || null;
 
