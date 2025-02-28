@@ -21,24 +21,15 @@ const logger = {
   }
 };
 
-/**
- * Returns a promise that resolves after a given number of milliseconds.
- */
 function delay(ms) {
   logger.debug(`Delaying for ${ms}ms to respect rate limits`);
   return new Promise(resolve => setTimeout(resolve, ms));
 }
 
-/**
- * Normalizes a string by converting to lowercase and removing spaces and punctuation.
- */
 function normalizeName(name) {
   return name.toLowerCase().replace(/[\s\.,-\/#!$%\^&\*;:{}=\-_`~()]/g, '');
 }
 
-/**
- * Retrieves the CIK for a given ticker from the SEC company tickers JSON.
- */
 async function getCIK(ticker) {
   logger.info(`Fetching CIK for ticker: ${ticker}`);
   const url = 'https://www.sec.gov/files/company_tickers.json';
@@ -63,12 +54,6 @@ async function getCIK(ticker) {
   }
 }
 
-/**
- * Retrieves the ticker symbol from the SEC company tickers JSON using a company name.
- * The function normalizes both the input and each company's name for a forgiving match.
- * @param {string} companyName - The company name to search for.
- * @returns {string} The matching ticker symbol.
- */
 async function getTickerFromCompanyName(companyName) {
   logger.info(`Fetching ticker for company name: ${companyName}`);
   const url = 'https://www.sec.gov/files/company_tickers.json';
@@ -97,14 +82,7 @@ async function getTickerFromCompanyName(companyName) {
   }
 }
 
-/**
- * Fetches recent filings from SEC submissions filtered by form types and filing date range.
- * @param {string} cik - The padded CIK.
- * @param {Array<string>} formTypes - Array of form types (e.g. ["10-K", "10-Q"]).
- * @param {number} startYear - Minimum filing year (inclusive).
- * @param {number} endYear - Maximum filing year (inclusive).
- * @returns {Array<object>} Filtered filings.
- */
+
 async function getFilings(cik, formTypes, startYear, endYear) {
   logger.info(`Fetching filings for CIK: ${cik}, forms: ${formTypes.join(', ')}, years: ${startYear}-${endYear}`);
   const url = `https://data.sec.gov/submissions/CIK${cik}.json`;
@@ -148,9 +126,6 @@ async function getFilings(cik, formTypes, startYear, endYear) {
   }
 }
 
-/**
- * Downloads a filing text given its CIK and filing metadata.
- */
 async function downloadFiling(cik, filing) {
   logger.info(`Downloading filing: ${filing.form} from ${filing.date}, accession: ${filing.accession}`);
   const accessionNoDash = filing.accession.replace(/-/g, '');
@@ -167,14 +142,6 @@ async function downloadFiling(cik, filing) {
   }
 }
 
-/**
- * Extracts the conformed period (YYYYMMDD) from a content snippet.
- * Splits the snippet into lines and searches (case-insensitively) for a line containing
- * "conformed period of report", then extracts the first 8-digit number.
- *
- * @param {string} contentSnippet - The snippet of filing text.
- * @returns {string|null} The extracted conformed period or null if not found.
- */
 function extractConformedPeriod(contentSnippet) {
   logger.debug('Extracting conformed period from content snippet');
   const lines = contentSnippet.split(/\r?\n/);
@@ -191,15 +158,7 @@ function extractConformedPeriod(contentSnippet) {
   return null;
 }
 
-/**
- * Constructs the HTML filing URL.
- *
- * @param {string} cik - The company's CIK.
- * @param {string} accession - The filing's accession number.
- * @param {string} ticker - The company ticker.
- * @param {string} contentSnippet - The filing content snippet containing the conformed period.
- * @returns {string|null} The constructed filing URL or null if the conformed period isn’t found.
- */
+
 function buildFilingUrl(cik, accession, ticker, contentSnippet) {
   logger.info(`Building HTML filing URL for ${ticker}, accession: ${accession}`);
   const conformedPeriod = extractConformedPeriod(contentSnippet);
@@ -214,14 +173,6 @@ function buildFilingUrl(cik, accession, ticker, contentSnippet) {
   return url;
 }
 
-/**
- * Main function to fetch filings for a given ticker and form types within a date range.
- * @param {string} ticker - The company ticker.
- * @param {Array<string>} formTypes - Array of form types (e.g. ["10-K", "10-Q"]).
- * @param {number} startYear - Minimum filing year.
- * @param {number} endYear - Maximum filing year.
- * @returns {object} An object containing the CIK and an array of filings.
- */
 async function fetchFilings(ticker, formTypes, startYear, endYear) {
   logger.info(`Starting filing fetch process for ${ticker}, form types: ${formTypes.join(', ')}, years: ${startYear}-${endYear}`);
   
@@ -272,15 +223,7 @@ async function fetchFilings(ticker, formTypes, startYear, endYear) {
   }
 }
 
-/**
- * Fetch filings by company name.
- * This function converts a company name to a ticker symbol and then calls fetchFilings.
- * @param {string} identifier - The company name or ticker.
- * @param {Array<string>} formTypes - Array of form types.
- * @param {number} startYear - Minimum filing year.
- * @param {number} endYear - Maximum filing year.
- * @returns {object} An object containing the CIK and filings.
- */
+
 async function fetchFilings10K(identifier, formTypes, startYear, endYear) {
   try {
     // Resolve identifier to ticker and CIK.
@@ -344,10 +287,6 @@ async function fetchFilings10K(identifier, formTypes, startYear, endYear) {
   }
 }
 
-// Express route endpoint for ticker/company name-based queries.
-// Endpoint: /10-Kfilings/:identifier
-// Accepts query parameters: formType (comma-separated, default: "10-K"),
-// startYear, and endYear.
 router.get('/10-Kfilings/:identifier', async (req, res) => {
   const startTime = Date.now();
   const { identifier } = req.params;
