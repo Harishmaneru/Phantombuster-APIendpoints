@@ -206,7 +206,7 @@ async function fetchJobsByStatus(req, res) {
                             $set: {
                                 job_status: jobStatus,
                                 signal_data: response,
-                                signal_data_count: signalDataCount
+                                signal_data_count: signalDataCountSignalAutomationJob.updateOne
                             }
                         }
                     );
@@ -222,11 +222,14 @@ async function fetchJobsByStatus(req, res) {
                     await SignalAutomationJob.updateOne(
                         { _id: job._id },
                         {
-                            job_status: 'FAILED',
-                            job_error: {
-                                message: jobError.message,
-                                timestamp: new Date()
+                            $set: {
+                                job_status: 'FAILED',
+                                job_error: {
+                                    message: jobError.message,
+                                    timestamp: new Date()
+                                }
                             }
+                    
                         }
                     );
                 }
@@ -511,7 +514,7 @@ async function changeJobStatusToNotStarted(req, res) {
         const query = {
             user_id,
             request_id,
-            job_status: { $in: ['FAILED', 'SUCCESS'] }
+            job_status: { $in: ['FAILED', 'SUCCESS', 'NOT_STARTED'] }
             // job_status: { $in: ['FAILED', 'IN_PROGRESS', 'SUCCESS', 'COMPLETED'] }
         };
 
