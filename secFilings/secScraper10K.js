@@ -72,7 +72,7 @@ async function getTickerFromCompanyName(companyName) {
     
     if (!match) {
       logger.error(`Company with name "${companyName}" not found in SEC database`);
-      throw new Error('Company not found by name');
+      throw new Error('Company not found');
     }
     logger.info(`Found ticker for "${companyName}": ${match.ticker}`);
     return match.ticker;
@@ -284,12 +284,50 @@ async function fetchFilings10K(  identifier,
     };
   } catch (error) {
     return {
-      status: -1,
+      status: 0,
       message: error.message,
-      error: error.stack
+      // error: error.message
     };
   }
 }
+
+// router.get('/10-Kfilings/:identifier', async (req, res) => {
+//   const startTime = Date.now();
+//   const { identifier } = req.params;
+  
+//   logger.info(`Received request for identifier: ${identifier}`);
+//   logger.debug('Request query parameters:', req.query);
+  
+//   try {
+//     let formTypes = req.query.formType 
+//       ? req.query.formType.split(',').map(f => f.trim()) 
+//       : ['10-K'];
+    
+//     const currentYear = new Date().getFullYear();
+//     const startYear = req.query.startYear ? parseInt(req.query.startYear) : currentYear - 3;
+//     const endYear = req.query.endYear ? parseInt(req.query.endYear) : currentYear;
+    
+//     logger.info(`Processing request: identifier=${identifier}, formTypes=${formTypes.join(',')}, years=${startYear}-${endYear}`);
+    
+//     const result = await fetchFilings10K(identifier, formTypes, startYear, endYear);
+//     const responseTime = Date.now() - startTime;
+//     logger.info(`Successfully completed request for ${identifier} in ${responseTime}ms, found ${result.filings.length} filings`);
+    
+//     res.json({
+//       ...result,
+//       executionTime: responseTime
+//     });
+//   } catch (error) {
+//     const responseTime = Date.now() - startTime;
+//     logger.error(`Request failed for ${identifier} after ${responseTime}ms`, error);
+//     res.status(500).json({
+//       status: -1,
+//       message: 'Unexpected error occurred',
+//       error: error.message,
+//       executionTime: responseTime
+//     });
+//   }
+// });
 
 router.get('/10-Kfilings/:identifier', async (req, res) => {
   const startTime = Date.now();
@@ -311,7 +349,10 @@ router.get('/10-Kfilings/:identifier', async (req, res) => {
     
     const result = await fetchFilings10K(identifier, formTypes, startYear, endYear);
     const responseTime = Date.now() - startTime;
-    logger.info(`Successfully completed request for ${identifier} in ${responseTime}ms, found ${result.filings.length} filings`);
+    
+    // Check if result.filings exists before accessing its length
+    const filingsCount = result.filings ? result.filings.length : 0;
+    logger.info(`Successfully completed request for ${identifier} in ${responseTime}ms, found ${filingsCount} filings`);
     
     res.json({
       ...result,
@@ -321,9 +362,9 @@ router.get('/10-Kfilings/:identifier', async (req, res) => {
     const responseTime = Date.now() - startTime;
     logger.error(`Request failed for ${identifier} after ${responseTime}ms`, error);
     res.status(500).json({
-      status: -1,
-      message: 'Unexpected error occurred',
-      error: error.message,
+      status: 0,
+      message: error.message || `${identifier} not found in SEC database`,
+      // error: error.message,
       executionTime: responseTime
     });
   }

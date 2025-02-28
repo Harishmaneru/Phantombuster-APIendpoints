@@ -82,9 +82,27 @@ async function fetchJobsByStatus(req, res) {
 
                     switch (job.signal_flag) {
                         case 'financial_information':
-                            const filing10KResult = await fetchFilings10K(job.contact_company);
-                            const filing10QResult = await fetchFilings10Q(job.contact_company);
 
+                            function extractCompanyNameFromLinkedIn(linkedinUrl) {
+                                // This regex assumes the URL is in the form: "http://www.linkedin.com/company/<company-name>"
+                                const match = linkedinUrl.match(/linkedin\.com\/company\/([^\/]+)/i);
+                                return match ? match[1] : null;
+                            }
+                            function isUnusualCompanyName(companyName) {
+                                return /USA/i.test(companyName) || companyName.split(" ").length > 2;
+                            }
+                            let companyNameToUse = job.contact_company;
+                            // If the contact_company appears unusual and there's a LinkedIn URL, extract the name from LinkedIn.
+                            if (isUnusualCompanyName(job.contact_company) && job.contact_details?.co_linkedin) {
+                                const extractedName = extractCompanyNameFromLinkedIn(job.contact_details.co_linkedin);
+                                if (extractedName) {
+                                    companyNameToUse = extractedName;
+                                }
+                            }
+
+                            // Now use the decided companyNameToUse in your SEC filing fetch functions:
+                            const filing10KResult = await fetchFilings10K(companyNameToUse);
+                            const filing10QResult = await fetchFilings10Q(companyNameToUse);
                             const form10KData = filing10KResult?.data || filing10KResult?.filings || null;
                             const form10QData = filing10QResult?.data || filing10QResult?.filings || null;
 
@@ -102,10 +120,12 @@ async function fetchJobsByStatus(req, res) {
                             const normalized10QData = form10QData ? normalizeFilings(form10QData) : null;
 
                             response = {
-                                form10K: normalized10KData,
-                                form10Q: normalized10QData
+                                status: filing10KResult.status,
+                                message: filing10KResult.message,
+                                ticker: filing10KResult.ticker,
+                                cik: filing10KResult.cik,
+                                filings: [...normalized10KData, ...normalized10QData]
                             };
-
 
                             signalDataCount =
                                 (normalized10KData ? normalized10KData.length : 0) +
@@ -144,19 +164,6 @@ async function fetchJobsByStatus(req, res) {
                             response = await fetchProductLaunchSignals({ companyName: job.contact_company });
                             signalDataCount = response?.data?.length || 0;
                             break;
-                        // case 'linkedin_company_updates':
-                        // case 'activity_on_linkedin':
-                        //     const postsUrl = job.contact_details?.co_linkedin?.trim();
-                        //     if (!postsUrl) throw new Error('Invalid LinkedIn URL for company posts');
-                        //     response = await fetchCompanyPosts(postsUrl);
-                        //     signalDataCount = response?.data?.data?.length || 0;
-                        //     break;
-                        // case 'contact_profile_information':
-                        //     const companyUrl = job.contact_details?.co_linkedin?.trim();
-                        //     if (!companyUrl) throw new Error('Invalid LinkedIn URL for company details');
-                        //     response = await fetchCompanyDetailsByLinkedInURL(companyUrl);
-                        //     signalDataCount = response?.data?.data?.company_name ? 1 : 0;
-
                         case 'linkedin_company_updates':
                         case 'activity_on_linkedin': {
                             let postsUrl = job.contact_details?.co_linkedin?.trim();
