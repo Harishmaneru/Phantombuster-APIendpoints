@@ -92,7 +92,11 @@ const secScraper10K = require('./secFilings/secScraper10K.js');
 
 const secScraper10Q = require('./secFilings/secScraper10Q.js');
 
+const warmupInbox = require('./warmupInboxAPI/warmupInbox.js');
 
+const prospectsAPI = require('./exploriumAPI/prospectsAPI.js');
+
+const businessesAPI = require('./exploriumAPI/businessesAPI.js');
 
 const { Http2ServerRequest } = require('http2');
 
@@ -169,7 +173,9 @@ app.use(getLinkedInEmployees.router)
 app.use(fetchSalesNavURL.router)
 app.use(secScraper10K.router);
 app.use(secScraper10Q.router);
-
+app.use(warmupInbox);
+app.use(prospectsAPI);
+app.use(businessesAPI);
 
 const options = {
   key: fs.readFileSync('./onepgr.com.key', 'utf8'),

@@ -1283,17 +1283,17 @@ const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 // Mapping for credit details based on signal_flag.
 // Signals that do not incur a cost have creditsPerCall set to 0.
 const creditMapping = {
-  financial_information: { creditsPerCall: 0, costPerCredit: 0 },
-  press_announcements: { creditsPerCall: 0, costPerCredit: 0 },
-  job_openings: { creditsPerCall: 0, costPerCredit: 0 },
-  job_changes: { creditsPerCall: 0, costPerCredit: 0 },
-  youtube_marketing_videos: { creditsPerCall: 0, costPerCredit: 0 },
-  twitter_brand_mentions: { creditsPerCall: 1, costPerCredit: 0.2 },
-  public_mentions: { creditsPerCall: 0, costPerCredit: 0 },
-  product_launches: { creditsPerCall: 0, costPerCredit: 0 },
-  linkedin_company_updates: { creditsPerCall: 2, costPerCredit: 0.2 },
-  activity_on_linkedin: { creditsPerCall: 2, costPerCredit: 0.2 },
-  contact_profile_information: { creditsPerCall: 1, costPerCredit: 0.2 }
+    financial_information: { creditsPerCall: 0, costPerCredit: 0 },
+    press_announcements: { creditsPerCall: 0, costPerCredit: 0 },
+    job_openings: { creditsPerCall: 0, costPerCredit: 0 },
+    job_changes: { creditsPerCall: 0, costPerCredit: 0 },
+    youtube_marketing_videos: { creditsPerCall: 0, costPerCredit: 0 },
+    twitter_brand_mentions: { creditsPerCall: 1, costPerCredit: 0.2 },
+    public_mentions: { creditsPerCall: 0, costPerCredit: 0 },
+    product_launches: { creditsPerCall: 0, costPerCredit: 0 },
+    linkedin_company_updates: { creditsPerCall: 2, costPerCredit: 0.2 },
+    activity_on_linkedin: { creditsPerCall: 2, costPerCredit: 0.2 },
+    contact_profile_information: { creditsPerCall: 1, costPerCredit: 0.2 }
 };
 
 // Helper function to determine job status based on nested response statuses.
@@ -1329,179 +1329,178 @@ function determineJobStatus(response) {
 // Process a single job by executing the appropriate API call based on signal_flag
 // and update the job with the response, status, and cost details.
 async function processJob(job) {
-  let response, signalDataCount = 0, costDetails = null;
+    let response, signalDataCount = 0, costDetails = null;
 
-  // Reuse signal data if a similar job exists.
-  const existingJob = await SignalAutomationJob.findOne({
-      user_id: job.user_id,
-      request_id: job.request_id,
-      contact_company: job.contact_company,
-      signal_flag: job.signal_flag,
-      signal_data: { $exists: true, $ne: null },
-      _id: { $ne: job._id }
-  });
-  
-  if (existingJob) {
-    console.log(`Reusing signal data from job ${existingJob.job_id} for company ${job.contact_company}`);
-    response = existingJob.signal_data;
-    signalDataCount = existingJob.signal_data_count || 0;
-  } else {
-    // Process the API call based on the signal_flag.
-    switch (job.signal_flag) {
-      case 'financial_information': {
-        // Fetch 10-K and 10-Q filings.
-        const filing10KResult = await fetchFilings10K(job.contact_company);
-        const filing10QResult = await fetchFilings10Q(job.contact_company);
-        const form10KData = filing10KResult?.data || filing10KResult?.filings || null;
-        const form10QData = filing10QResult?.data || filing10QResult?.filings || null;
-        const normalizeFilings = (filings) => {
-          return filings.map(filing => {
-            if (!filing.filingUrl && filing.htmlUrl) {
-              filing.filingUrl = filing.htmlUrl;
+    // Reuse signal data if a similar job exists.
+    const existingJob = await SignalAutomationJob.findOne({
+        user_id: job.user_id,
+        request_id: job.request_id,
+        contact_company: job.contact_company,
+        signal_flag: job.signal_flag,
+        signal_data: { $exists: true, $ne: null },
+        _id: { $ne: job._id }
+    });
+
+    if (existingJob) {
+        console.log(`Reusing signal data from job ${existingJob.job_id} for company ${job.contact_company}`);
+        response = existingJob.signal_data;
+        signalDataCount = existingJob.signal_data_count || 0;
+    } else {
+        // Process the API call based on the signal_flag.
+        switch (job.signal_flag) {
+            case 'financial_information': {
+                // Fetch 10-K and 10-Q filings.
+                const filing10KResult = await fetchFilings10K(job.contact_company);
+                const filing10QResult = await fetchFilings10Q(job.contact_company);
+                const form10KData = filing10KResult?.data || filing10KResult?.filings || null;
+                const form10QData = filing10QResult?.data || filing10QResult?.filings || null;
+                const normalizeFilings = (filings) => {
+                    return filings.map(filing => {
+                        if (!filing.filingUrl && filing.htmlUrl) {
+                            filing.filingUrl = filing.htmlUrl;
+                        }
+                        return filing;
+                    });
+                };
+                const normalized10KData = form10KData ? normalizeFilings(form10KData) : null;
+                const normalized10QData = form10QData ? normalizeFilings(form10QData) : null;
+                response = {
+                    status: filing10KResult.status,
+                    message: filing10KResult.message,
+                    ticker: filing10KResult.ticker,
+                    cik: filing10KResult.cik,
+                    form10K: normalized10KData,
+                    form10Q: normalized10QData
+                };
+                signalDataCount =
+                    (normalized10KData ? normalized10KData.length : 0) +
+                    (normalized10QData ? normalized10QData.length : 0);
+                break;
             }
-            return filing;
-          });
-        };
-        const normalized10KData = form10KData ? normalizeFilings(form10KData) : null;
-        const normalized10QData = form10QData ? normalizeFilings(form10QData) : null;
-        response = {
-          status: filing10KResult.status,
-          message: filing10KResult.message,
-          ticker: filing10KResult.ticker,
-          cik: filing10KResult.cik,
-          form10K: normalized10KData,
-          form10Q: normalized10QData
-        };
-        signalDataCount = 
-          (normalized10KData ? normalized10KData.length : 0) +
-          (normalized10QData ? normalized10QData.length : 0);
-        break;
-      }
-      case 'press_announcements': {
-        const insightsResponse = await getCompanyInsights({ companyName: job.contact_company });
-        const newsResponse = await fetchCompanyNews({ companyName: job.contact_company });
-        response = { insightsResponse, newsResponse };
-        signalDataCount = (insightsResponse?.data?.length || 0) + (newsResponse?.data?.length || 0);
-        break;
-      }
-      case 'job_openings':
-      case 'job_changes': {
-        response = await processJobSignals({
-          linkedinUrl: job.contact_details?.co_linkedin,
-          companyName: job.contact_company
-        });
-        signalDataCount = response?.data?.length || 0;
-        break;
-      }
-      case 'youtube_marketing_videos': {
-        response = await fetchYouTubeVideos({ companyName: job.contact_company });
-        signalDataCount = response?.data?.length || 0;
-        break;
-      }
-      case 'twitter_brand_mentions': {
-        response = await fetchTwitterMentions({ companyName: job.contact_company });
-        signalDataCount = response?.data?.length || 0;
-        break;
-      }
-      case 'public_mentions': {
-        response = await fetchPublicMentions({ companyName: job.contact_company });
-        signalDataCount = response?.data?.length || 0;
-        break;
-      }
-      case 'product_launches': {
-        response = await fetchProductLaunchSignals({ companyName: job.contact_company });
-        signalDataCount = response?.data?.length || 0;
-        break;
-      }
-      case 'linkedin_company_updates':
-      case 'activity_on_linkedin': {
-        let postsUrl = job.contact_details?.co_linkedin?.trim();
-        if (!postsUrl || postsUrl === "N/A") {
-          const slug = job.contact_company.toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, '');
-          postsUrl = `https://www.linkedin.com/company/${slug}`;
+            case 'press_announcements': {
+                const insightsResponse = await getCompanyInsights({ companyName: job.contact_company });
+                const newsResponse = await fetchCompanyNews({ companyName: job.contact_company });
+                response = { insightsResponse, newsResponse };
+                signalDataCount = (insightsResponse?.data?.length || 0) + (newsResponse?.data?.length || 0);
+                break;
+            }
+            case 'job_openings':
+            case 'job_changes': {
+                response = await processJobSignals({
+                    linkedinUrl: job.contact_details?.co_linkedin,
+                    companyName: job.contact_company
+                });
+                signalDataCount = response?.data?.length || 0;
+                break;
+            }
+            case 'youtube_marketing_videos': {
+                response = await fetchYouTubeVideos({ companyName: job.contact_company });
+                signalDataCount = response?.data?.length || 0;
+                break;
+            }
+            case 'twitter_replies_or_engagements':
+            case 'twitter_brand_mentions': {
+                response = await fetchTwitterMentions({ companyName: job.contact_company });
+                signalDataCount = response?.data?.length || 0;
+                break;
+            }
+            case 'public_mentions': {
+                response = await fetchPublicMentions({ companyName: job.contact_company });
+                signalDataCount = response?.data?.length || 0;
+                break;
+            }
+            case 'product_launches': {
+                response = await fetchProductLaunchSignals({ companyName: job.contact_company });
+                signalDataCount = response?.data?.length || 0;
+                break;
+            }
+            case 'linkedin_company_updates':
+            case 'activity_on_linkedin': {
+                let postsUrl = job.contact_details?.co_linkedin?.trim();
+                if (!postsUrl || postsUrl === "N/A") {
+                    const slug = job.contact_company.toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, '');
+                    postsUrl = `https://www.linkedin.com/company/${slug}`;
+                }
+                response = await fetchCompanyPosts(postsUrl);
+                signalDataCount = response?.data?.data?.length || 0;
+                break;
+            }
+            case 'contact_profile_information': {
+                let companyUrl = job.contact_details?.co_linkedin?.trim();
+                if (!companyUrl || companyUrl === "N/A") {
+                    const slug = job.contact_company.toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, '');
+                    companyUrl = `https://www.linkedin.com/company/${slug}`;
+                }
+                response = await fetchCompanyDetailsByLinkedInURL(companyUrl);
+                signalDataCount = response?.data?.data?.company_name ? 1 : 0;
+                break;
+            }
+            default:
+                console.warn(`Unknown signal_flag for job ID: ${job.job_id}`);
+                return;
         }
-        response = await fetchCompanyPosts(postsUrl);
-        signalDataCount = response?.data?.data?.length || 0;
-        break;
-      }
-      case 'contact_profile_information': {
-        let companyUrl = job.contact_details?.co_linkedin?.trim();
-        if (!companyUrl || companyUrl === "N/A") {
-          const slug = job.contact_company.toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, '');
-          companyUrl = `https://www.linkedin.com/company/${slug}`;
+    }
+
+    // Determine the job status based on the response.
+    const jobStatus = determineJobStatus(response);
+    // Retrieve credit mapping based on the signal_flag.
+    const mapping = creditMapping[job.signal_flag] || { creditsPerCall: 0, costPerCredit: 0 };
+    costDetails = {
+        signal_name: job.signal_name,
+        signal_flag: job.signal_flag,
+        total_signal_usage: 1, // each API call is counted as one usage
+        total_credits_used: mapping.creditsPerCall,
+        credits_per_signal: mapping.creditsPerCall,
+        cost_per_credit: mapping.costPerCredit
+    };
+
+    // Update the job document with response, signal data count, job status, and cost details.
+    const updateResult = await SignalAutomationJob.updateOne(
+        { _id: job._id },
+        {
+            $set: {
+                job_status: jobStatus,
+                signal_data: response,
+                signal_data_count: signalDataCount,
+                job_signal_cost_details: costDetails
+            }
         }
-        response = await fetchCompanyDetailsByLinkedInURL(companyUrl);
-        signalDataCount = response?.data?.data?.company_name ? 1 : 0;
-        break;
-      }
-      default:
-        console.warn(`Unknown signal_flag for job ID: ${job.job_id}`);
-        return;
+    );
+
+    if (updateResult.modifiedCount === 0) {
+        console.warn(`Job ID: ${job.job_id} update did not modify any documents`);
+    } else {
+        console.log(`Job ID: ${job.job_id} updated with status: ${jobStatus}, signal_data_count: ${signalDataCount}, and cost details:`, costDetails);
     }
-  }
-  
-  // Determine the job status based on the response.
-  const jobStatus = determineJobStatus(response);
-  // Retrieve credit mapping based on the signal_flag.
-  const mapping = creditMapping[job.signal_flag] || { creditsPerCall: 0, costPerCredit: 0 };
-  costDetails = {
-    signal_name: job.signal_name,
-    signal_flag: job.signal_flag,
-    total_signal_usage: 1, // each API call is counted as one usage
-    total_credits_used: mapping.creditsPerCall,
-    credits_per_signal: mapping.creditsPerCall,
-    cost_per_credit: mapping.costPerCredit
-  };
-  
-  // Update the job document with response, signal data count, job status, and cost details.
-  const updateResult = await SignalAutomationJob.updateOne(
-    { _id: job._id },
-    {
-      $set: {
-        job_status: jobStatus,
-        signal_data: response,
-        signal_data_count: signalDataCount,
-        job_signal_cost_details: costDetails
-      }
-    }
-  );
-  
-  if (updateResult.modifiedCount === 0) {
-    console.warn(`Job ID: ${job.job_id} update did not modify any documents`);
-  } else {
-    console.log(`Job ID: ${job.job_id} updated with status: ${jobStatus}, signal_data_count: ${signalDataCount}, and cost details:`, costDetails);
-  }
 }
 
 // Aggregate cost details from all jobs for a given user and request,
 // then update the signalautomationrequests document with the field job_signal_cost_details.
 async function aggregateAndUpdateRequestCostDetails(user_id, request_id) {
-  const jobs = await SignalAutomationJob.find({ user_id, request_id }).toArray();
-  const aggregatedCostDetails = {};
-  
-  jobs.forEach(job => {
-    const cost = job.job_signal_cost_details;
-    if (cost) {
-      const key = cost.signal_flag;
-      if (!aggregatedCostDetails[key]) {
-        aggregatedCostDetails[key] = { ...cost };
-      } else {
-        aggregatedCostDetails[key].total_signal_usage += cost.total_signal_usage;
-        aggregatedCostDetails[key].total_credits_used += cost.total_credits_used;
-      }
-    }
-  });
-  
-  const aggregatedCostArray = Object.values(aggregatedCostDetails);
-  
-  // Update the request document in the signalautomationrequests collection.
-  // Note: The field name here is job_signal_cost_details as per your schema.
-  const requestCollection = client.db("onepgr").collection("signalautomationrequests");
-  await requestCollection.updateOne(
-    { request_id },
-    { $set: { job_signal_cost_details: aggregatedCostArray } }
-  );
-  console.log(`Updated request ${request_id} with aggregated cost details:`, aggregatedCostArray);
+    const jobs = await SignalAutomationJob.find({ user_id, request_id }).toArray();
+    const aggregatedCostDetails = {};
+
+    jobs.forEach(job => {
+        const cost = job.job_signal_cost_details;
+        if (cost) {
+            const key = cost.signal_flag;
+            if (!aggregatedCostDetails[key]) {
+                aggregatedCostDetails[key] = { ...cost };
+            } else {
+                aggregatedCostDetails[key].total_signal_usage += cost.total_signal_usage;
+                aggregatedCostDetails[key].total_credits_used += cost.total_credits_used;
+            }
+        }
+    });
+
+    const aggregatedCostArray = Object.values(aggregatedCostDetails);
+
+    const requestCollection = client.db("onepgr").collection("signalautomationrequests");
+    await requestCollection.updateOne(
+        { request_id },
+        { $set: { job_signal_cost_details: aggregatedCostArray } }
+    );
+    console.log(`Updated request ${request_id} with aggregated cost details:`, aggregatedCostArray);
 }
 
 // Updated fetchJobsByStatus endpoint which processes jobs, updates their cost details,
@@ -1563,8 +1562,8 @@ async function fetchJobsByStatus(req, res) {
             // Optionally, run summarization after processing.
             try {
                 await summarizeSignalData({ query: { user_id, request_id } }, {
-                    json: () => {},
-                    status: () => ({ json: () => {} })
+                    json: () => { },
+                    status: () => ({ json: () => { } })
                 });
                 console.log('Summarization completed for user:', { user_id, request_id });
             } catch (summaryError) {
@@ -1574,7 +1573,7 @@ async function fetchJobsByStatus(req, res) {
 
         // Aggregate cost details and update the request document.
         if (request_id) {
-          await aggregateAndUpdateRequestCostDetails(user_id, request_id);
+            await aggregateAndUpdateRequestCostDetails(user_id, request_id);
         }
 
         const statusCounts = await SignalAutomationJob.aggregate([
@@ -1673,6 +1672,7 @@ async function summarizeSignalData(req, res) {
                         case 'youtube_marketing_videos':
                             promptTemplate = `Summarize the recent YouTube content from ${job.contact_company}. Focus on video engagement, key themes, and notable metrics: `;
                             break;
+                        case 'twitter_replies_or_engagements':
                         case 'twitter_brand_mentions':
                             promptTemplate = `Analyze Twitter engagement for ${job.contact_company}. Include mention volume, sentiment trends, and notable interactions: `;
                             break;

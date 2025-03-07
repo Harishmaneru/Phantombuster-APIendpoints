@@ -49,7 +49,7 @@ router.post('/interviewlink', upload.single('companyLogo'), async (req, res) => 
 
         const applicationLink = generateUniqueLink();
         const expiresAt = new Date();
-        expiresAt.setDate(expiresAt.getDate() + 15);
+        expiresAt.setDate(expiresAt.getDate() + 60);
 
         const companyLogoUrl = req.file ? `data:${req.file.mimetype};base64,${req.file.buffer.toString('base64')}` : null;
 
@@ -154,9 +154,9 @@ router.get('/allinterviews', async (req, res) => {
         if (userId) {
             filter.userId = userId;
         }
-        if (status === 'active') {
-            filter.expiresAt = { $gt: new Date() };
-        }
+        // if (status === 'active') {
+        //     filter.expiresAt = { $gt: new Date() };
+        // }
 
         // Calculate skip value for pagination
         const skip = (page - 1) * limit;
