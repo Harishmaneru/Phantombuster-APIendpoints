@@ -34,27 +34,37 @@ const validateAndConvertYear = (yearInput) => {
     if (year > currentYear) {
         throw new Error('Year cannot be in the future');
     }
- 
+
     return new Date(`${year}-01-01`).toISOString();
 };
 
-// Reusable method for matching businesses using only the URL
-const matchBusinesses = async (domain) => {
+// Reusable method for matching businesses using name, domain, and URL
+const matchBusinesses = async (businessData) => {
     try {
-        let formattedUrl = domain;
-        // Prepend "https://" if no protocol is present
-        if (!domain.startsWith('http://') && !domain.startsWith('https://')) {
-            formattedUrl = `https://${domain}`;
-        }
-        console.log('Matching business with URL:', formattedUrl);
+        let matchData = {
+            name: businessData.name || '',
+            domain: businessData.domain || '',
+            url: businessData.url || ''
+        };
 
-        // Call the API with only the "url" field as in the example
+        // If URL is provided but no protocol, prepend https://
+        if (matchData.url && !matchData.url.startsWith('http://') && !matchData.url.startsWith('https://')) {
+            matchData.url = `https://${matchData.url}`;
+        }
+
+        // If domain is provided but no URL, create URL from domain
+        if (!matchData.url && matchData.domain) {
+            matchData.url = `https://${matchData.domain}`;
+        }
+
+        console.log('Matching business with data:', matchData);
+
         const response = await exploriumAxios.post('/businesses/match', {
-            businesses_to_match: [{ url: formattedUrl }]
+            businesses_to_match: [matchData]
         });
+
         console.log('Matched businesses:', response.data.matched_businesses);
         const businesses = response.data.matched_businesses;
-        // Return an array of business IDs
         return businesses.map(b => b.business_id);
     } catch (error) {
         console.error('Error matching businesses:', error.response?.data || error.message);
@@ -67,7 +77,7 @@ const fetchBusinessEvents = async (businessIds, timestampFrom) => {
     try {
         console.log('Fetching business events for IDs:', businessIds, 'from:', timestampFrom);
         const response = await exploriumAxios.post('/businesses/events', {
-            event_types: ["ipo_announcement"],
+            event_types: ["ipo_announcement", "new_investment", "new_product", "new_funding_round",],
             business_ids: businessIds,
             timestamp_from: timestampFrom
         });
@@ -78,16 +88,29 @@ const fetchBusinessEvents = async (businessIds, timestampFrom) => {
         throw new Error('Failed to fetch business events');
     }
 };
-
+// Reusable method for fetching funding and acquisition data
+const fetchFundingAndAcquisition = async (businessId) => {
+    try {
+        console.log('Fetching funding and acquisition data for business ID:', businessId);
+        const response = await exploriumAxios.post('businesses/company_ratings_by_employees/enrich', {
+            business_id: businessId
+        });
+        console.log('Fetched funding and acquisition data:', response.data);
+        return response.data || {};
+    } catch (error) {
+        console.error('Error fetching funding and acquisition data:', error.response?.data || error.message);
+        throw new Error('Failed to fetch funding and acquisition data');
+    }
+};
 router.post('/fetchFundingannounmenet', async (req, res) => {
     try {
-        const { domain, year } = req.body;
+        const { name, domain, url, year } = req.body;
 
-        // Validate required parameter
-        if (!domain) {
+        // Validate required parameters
+        if (!name && !domain && !url) {
             return res.status(400).json({
                 status: '-1',
-                message: 'Domain is required'
+                message: 'At least one of: name, domain, or url is required'
             });
         }
 
@@ -102,12 +125,12 @@ router.post('/fetchFundingannounmenet', async (req, res) => {
             });
         }
 
-        // Match businesses using the provided domain (via URL)
-        const businessIds = await matchBusinesses(domain);
+        // Match businesses using the provided data
+        const businessIds = await matchBusinesses({ name, domain, url });
         if (!businessIds.length) {
             return res.status(404).json({
                 status: '-1',
-                message: 'No businesses found for the given domain'
+                message: 'No businesses found for the given criteria'
             });
         }
 
@@ -115,9 +138,48 @@ router.post('/fetchFundingannounmenet', async (req, res) => {
 
         res.json({
             status: '1',
-            events: events,
+            FundingannounmenetData: events,
             count: events.length,
-            timestamp_from: timestampFrom
+            timestamp_from: timestampFrom,
+            matched_business_ids: businessIds
+        });
+    } catch (error) {
+        const statusCode = error.response?.status || 500;
+        res.status(statusCode).json({
+            status: '-1',
+            message: error.message || 'An error occurred during processing'
+        });
+    }
+});
+
+router.post('/fetchFundingAndAcquisition', async (req, res) => {
+    try {
+        const { name, domain, url } = req.body;
+
+        // Validate required parameters
+        if (!name && !domain && !url) {
+            return res.status(400).json({
+                status: '-1',
+                message: 'At least one of: name, domain, or url is required'
+            });
+        }
+
+        // Match businesses using the provided data
+        const businessIds = await matchBusinesses({ name, domain, url });
+        if (!businessIds.length) {
+            return res.status(404).json({
+                status: '-1',
+                message: 'No businesses found for the given criteria'
+            });
+        }
+
+        // Get funding and acquisition data for the first matched business
+        const fundingData = await fetchFundingAndAcquisition(businessIds[0]);
+
+        res.json({
+            status: '1',
+            FundingAndAcquisitionData: fundingData,
+            business_id: businessIds[0]
         });
     } catch (error) {
         const statusCode = error.response?.status || 500;
