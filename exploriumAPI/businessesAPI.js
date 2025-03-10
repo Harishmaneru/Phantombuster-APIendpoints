@@ -189,5 +189,4 @@ router.post('/fetchFundingAndAcquisition', async (req, res) => {
         });
     }
 });
-
 module.exports = router;

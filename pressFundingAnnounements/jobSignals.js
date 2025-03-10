@@ -176,26 +176,6 @@ const isCompanyMatch = (jobCompany, searchCompany) => {
     return normalizedJobCompany.includes(normalizedSearchCompany) ||
            normalizedSearchCompany.includes(normalizedJobCompany);
 };
-
-
-// // Helper function to normalize company names for comparison
-// const normalizeCompanyName = (name) => {
-//     return name
-//         .toLowerCase()
-//         .replace(/[^a-z0-9]/g, '') // Remove special characters and spaces
-//         .trim();
-// };
-
-// // Helper function to check if company names match
-// const isCompanyMatch = (jobCompany, searchCompany) => {
-//     const normalizedJobCompany = normalizeCompanyName(jobCompany);
-//     const normalizedSearchCompany = normalizeCompanyName(searchCompany);
-
-//     // Check if one contains the other or vice versa
-//     return normalizedJobCompany.includes(normalizedSearchCompany) ||
-//         normalizedSearchCompany.includes(normalizedJobCompany);
-// };
-
 // Reusable function to fetch job listings from Adzuna
 const fetchJobListings = async (companyName) => {
     console.log(`Initiating job listings fetch for company: ${companyName}`);

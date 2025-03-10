@@ -8,14 +8,13 @@ const RAPIDAPI_KEY = '9844a765dbmsh2921a4931f5e3acp19930bjsneb132c95f806' //Raji
 const RAPIDAPI_URL = 'https://fresh-linkedin-profile-data.p.rapidapi.com/get-company-posts';
 
 const fetchCompanyPosts = async (companyUrl) => {
-
     console.log('Input LinkedIn URL:', companyUrl);
 
     if (!companyUrl) {
         console.log('Error: Missing LinkedIn URL');
         return {
             status: "-1",
-            message: "LinkedIn URL is required.",
+            message: "Please provide a valid LinkedIn company URL to fetch posts.",
             data: {}
         };
     }
@@ -36,7 +35,7 @@ const fetchCompanyPosts = async (companyUrl) => {
         console.log('API Response Status:', response.status);
 
         if (response.data.data && response.data.data.length > 0) {
-            console.log(`Found ${response.data.data.length} posts,`);
+            console.log(`Found ${response.data.data.length} posts`);
             
             const limitedPosts = {
                 ...response.data,
@@ -52,7 +51,7 @@ const fetchCompanyPosts = async (companyUrl) => {
             console.log('No posts found in API response');
             return {
                 status: "0",
-                message: "No posts found for the provided company.",
+                message: "No recent posts found. The company profile might be private or inactive.",
                 data: {}
             };
         }
@@ -70,19 +69,29 @@ const fetchCompanyPosts = async (companyUrl) => {
                 data: error.response.data
             });
 
-            // Return the actual API error message to client
+            // Handle specific error cases with professional messages
+            let errorMessage = "Unable to fetch company's LinkedIn posts. Please try again later.";
+            
+            if (error.response.data?.message?.toLowerCase().includes('not found on linkedin')) {
+                errorMessage = "Unable to find company's LinkedIn profile. Please verify the company URL or name.";
+            } else if (error.response.status === 404) {
+                errorMessage = "LinkedIn profile not found. Please verify the company URL.";
+            } else if (error.response.status === 429) {
+                errorMessage = "Request limit reached. Please try again in a few minutes.";
+            }
+
             return {
                 status: "-1",
-                message: error.response.data.message || error.response.statusText,
+                message: errorMessage,
                 error: error.response.data,
                 data: {}
             };
         }
 
-        // Generic error handling if no response object
+        // Generic error handling with professional message
         return {
             status: "-1",
-            message: error.message || "Failed to fetch company posts.",
+            message: "Technical error while fetching posts. Please try again later.",
             error: error.message,
             data: {}
         };
@@ -107,23 +116,22 @@ router.post('/getCompanyPosts', async (req, res) => {
     try {
         console.log('Processing request for URL:', companyUrl);
         const response = await fetchCompanyPosts(companyUrl);
-        
-        // Set appropriate HTTP status code
-        // const httpStatus = response.status === "-1" ? 500 : 200;
-        
+
+
+
         console.log('Sending response:', {
             status: response.status,
             message: response.message,
             dataPresent: !!response.data
         });
-        
+
         res.send(response);
     } catch (error) {
         console.error('Route Handler Error:', {
             message: error.message,
             stack: error.stack
         });
-        
+
         res.status(500).json({
             status: "-1",
             message: error.message || "An error occurred while fetching company posts.",

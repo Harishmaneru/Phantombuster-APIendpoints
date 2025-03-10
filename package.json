@@ -1,4 +1,13 @@
 {
+  "name": "phantom-api-endpoints",
+  "version": "1.0.0",
+  "description": "API endpoints for phantom application",
+  "main": "server.js",
+  "scripts": {
+    "start": "node app.js",
+    "dev": "nodemon app.js",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
   "dependencies": {
     "aws-sdk": "^2.1692.0",
     "axios": "^1.7.9",
@@ -24,5 +33,8 @@
     "puppeteer-extra-plugin-stealth": "^2.11.2",
     "whisper-node": "^1.1.1",
     "yahoo-finance2": "^2.13.3"
+  },
+  "devDependencies": {
+    "nodemon": "^3.1.9"
   }
 }

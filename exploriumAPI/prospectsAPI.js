@@ -11,13 +11,24 @@ const exploriumAxios = axios.create({
     }
 });
 
-const matchProspects = async (linkedinUrl) => {
+const matchProspects = async (prospectData) => {
     try {
+        // Build the prospect matching data with only provided values
+        const matchData = {};
+
+        if (prospectData.linkedin) matchData.linkedin = prospectData.linkedin;
+        if (prospectData.name) matchData.name = prospectData.name;
+        if (prospectData.email) matchData.email = prospectData.email;
+        if (prospectData.company_name) matchData.company_name = prospectData.company_name;
+        if (prospectData.job_title) matchData.job_title = prospectData.job_title;
+
+        console.log('Matching prospect with data:', matchData);
+
         const response = await exploriumAxios.post('/prospects/match', {
-            prospects_to_match: [{ linkedin: linkedinUrl }]
+            prospects_to_match: [matchData]
         });
+
         console.log('Matched prospects:', response.data.matched_prospects);
-        // Extract prospect IDs from response
         const prospects = response.data.matched_prospects;
         return prospects.map(p => p.prospect_id);
     } catch (error) {
@@ -54,25 +65,83 @@ const validateAndConvertYear = (yearInput) => {
     return new Date(`${year}-01-01`).toISOString();
 };
 
-
 const fetchPersonChanges = async (prospectIds, timestampFrom) => {
     try {
-        const response = await exploriumAxios.post('/prospects/events', {
-            event_types: ['prospect_changed_company', 'prospect_changed_role', 'prospect_job_start_anniversary'],
+        // Separate API calls for different event types to ensure we get all data
+        const roleChanges = await exploriumAxios.post('/prospects/events', {
+            event_types: ['prospect_changed_role'],
             prospect_ids: prospectIds,
             timestamp_from: timestampFrom
         });
-        console.log('fetchPersonChanges:', response.data);
-        return response.data || [];
+
+        const companyChanges = await exploriumAxios.post('/prospects/events', {
+            event_types: ['prospect_changed_company'],
+            prospect_ids: prospectIds,
+            timestamp_from: timestampFrom
+        });
+
+        const anniversaries = await exploriumAxios.post('/prospects/events', {
+            event_types: ['prospect_job_start_anniversary'],
+            prospect_ids: prospectIds,
+            timestamp_from: timestampFrom
+        });
+
+        console.log('Role Changes Response:', roleChanges.data);
+        console.log('Company Changes Response:', companyChanges.data);
+        console.log('Anniversaries Response:', anniversaries.data);
+
+        // Safely extract events from each response using output_events
+        const roleEvents = Array.isArray(roleChanges.data?.output_events) ? roleChanges.data.output_events : [];
+        const companyEvents = Array.isArray(companyChanges.data?.output_events) ? companyChanges.data.output_events : [];
+        const anniversaryEvents = Array.isArray(anniversaries.data?.output_events) ? anniversaries.data.output_events : [];
+
+        // Combine all events and process them
+        const allEvents = [
+            ...roleEvents.map(event => ({
+                event_type: event.event_name,
+                event_time: event.event_time,
+                event_id: event.event_id,
+                prospect_id: event.prospect_id,
+                ...event.data // Spread the data object which contains the specific event details
+            })),
+            ...companyEvents.map(event => ({
+                event_type: event.event_name,
+                event_time: event.event_time,
+                event_id: event.event_id,
+                prospect_id: event.prospect_id,
+                ...event.data
+            })),
+            ...anniversaryEvents.map(event => ({
+                event_type: event.event_name,
+                event_time: event.event_time,
+                event_id: event.event_id,
+                prospect_id: event.prospect_id,
+                ...event.data
+            }))
+        ];
+
+        // Sort events by date if they have event_time
+        allEvents.sort((a, b) => {
+            if (a.event_time && b.event_time) {
+                return new Date(b.event_time) - new Date(a.event_time);
+            }
+            return 0;
+        });
+
+        console.log('Combined person changes:', allEvents);
+        return allEvents;
     } catch (error) {
-        console.error('Error fetching person changes:', error.response?.data || error.message);
-        throw new Error('Failed to fetch person changes');
+        console.error('Error fetching person changes:', error);
+        if (error.response) {
+            console.error('API Response Error:', error.response.data);
+        }
+        throw new Error('Failed to fetch person changes: ' + (error.response?.data?.message || error.message));
     }
 };
 
 const fetchPersonContactsInformation = async (prospectId) => {
     try {
-        const response = await exploriumAxios.post('/prospects/enrich', {
+        const response = await exploriumAxios.post('prospects/contacts_information/enrich', {
             prospect_id: prospectId,
         });
 
@@ -101,13 +170,20 @@ const fetchPersonProfessionalProfile = async (prospectId) => {
 //API's for fetching person changes, person contacts information, person professional profile
 router.post('/fetch-person-changes', async (req, res) => {
     try {
-        const { linkedinUrl, year } = req.body;
+        const {
+            linkedinUrl,
+            name,
+            email,
+            company_name,
+            job_title,
+            year
+        } = req.body;
 
-        // Validate required parameters
-        if (!linkedinUrl) {
+        // Validate required parameters - at least one identifier is needed
+        if (!linkedinUrl && !name && !email) {
             return res.status(400).json({
                 status: '-1',
-                message: 'LinkedIn URL is required'
+                message: 'At least one of: LinkedIn URL, name, or email is required'
             });
         }
 
@@ -122,23 +198,39 @@ router.post('/fetch-person-changes', async (req, res) => {
             });
         }
 
-        // Get prospect IDs
-        const prospectIds = await matchProspects(linkedinUrl);
+        // Get prospect IDs with enhanced matching
+        const prospectIds = await matchProspects({
+            linkedin: linkedinUrl,
+            name,
+            email,
+            company_name,
+            job_title
+        });
+
         if (!prospectIds.length) {
             return res.status(404).json({
                 status: '-1',
-                message: 'No prospects found for the given LinkedIn URL'
+                message: 'No prospects found for the given criteria'
             });
         }
 
-        // Get combined changes
+        // Get changes with enhanced event fetching
         const changes = await fetchPersonChanges(prospectIds, timestampFrom);
 
+        // Enhanced response with more details
         res.json({
             status: '1',
-            personchanges: changes,
-            count: changes.length,
-            timestamp_from: timestampFrom
+            PersonChangesData: {
+                changes: changes,
+                summary: {
+                    total_changes: changes.length,
+                    role_changes: changes.filter(c => c.event_type === 'prospect_changed_role').length,
+                    company_changes: changes.filter(c => c.event_type === 'prospect_changed_company').length,
+                    anniversaries: changes.filter(c => c.event_type === 'prospect_job_start_anniversary').length
+                },
+                prospect_ids: prospectIds,
+                timestamp_from: timestampFrom
+            }
         });
 
     } catch (error) {
@@ -149,6 +241,9 @@ router.post('/fetch-person-changes', async (req, res) => {
         });
     }
 });
+
+
+
 
 router.post('/fetch-person-info', async (req, res) => {
     try {

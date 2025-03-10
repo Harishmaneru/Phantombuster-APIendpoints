@@ -1,4 +1,3 @@
-
 require('dotenv').config();
 const express = require('express');
 const axios = require('axios');
@@ -12,14 +11,14 @@ const fetchCompanyDetailsByLinkedInURL = async (linkedinUrl) => {
     if (!linkedinUrl) {
         return {
             status: "-1",
-            message: "LinkedIn URL is required. Please provide a valid LinkedIn company profile URL.",
+            message: "Please provide a valid LinkedIn company URL to fetch details.",
             data: {}
         };
     }
 
     try {
         console.log(`Fetching company details for LinkedIn URL: ${linkedinUrl}`);
-        
+
         const response = await axios.get(RAPIDAPI_URL, {
             headers: {
                 'x-rapidapi-host': RAPIDAPI_HOST,
@@ -40,23 +39,30 @@ const fetchCompanyDetailsByLinkedInURL = async (linkedinUrl) => {
     } catch (error) {
         console.error('Error fetching company details:', error.message);
 
-        let apiMessage = "An unexpected error occurred.";
-        let apiStatus = "-1";
+        let errorMessage = "Unable to fetch company details. Please try again later.";
 
-        // Extract message and status from RapidAPI response, if available
-        if (error.response && error.response.data) {
-            apiMessage = error.response.data.message || apiMessage;
-            apiStatus = error.response.data.status || apiStatus;
+        if (error.response) {
+            // Handle specific error cases
+            if (error.response.status === 404 || error.response.data?.message?.toLowerCase().includes('not found')) {
+                errorMessage = "Unable to find company profile. Please verify the LinkedIn URL.";
+            } else if (error.response.status === 429) {
+                errorMessage = "Request limit reached. Please try again in a few minutes.";
+            } else if (error.response.status === 400) {
+                errorMessage = "Invalid LinkedIn URL format. Please provide a valid company profile URL.";
+            }
+
+            return {
+                status: "-1",
+                message: errorMessage,
+                error: error.response.data?.message || error.message,
+                data: {}
+            };
         }
 
-        // Handle specific known cases like 429 rate limit
-        if (error.response && error.response.status === 429) {
-            apiMessage = error.response.data.message || "Too many requests. Please wait or upgrade your plan.";
-        }
-
+        // Generic error handling
         return {
-            status: apiStatus,
-            message: apiMessage,
+            status: "-1",
+            message: "Technical error while fetching company details. Please try again later.",
             error: error.message,
             data: {}
         };
