@@ -81,8 +81,7 @@ function determineJobStatus(response) {
     return allSuccess ? 'SUCCESS' : 'IN_PROGRESS';
 }
 
-// Process a single job by executing the appropriate API call based on signal_flag
-// and update the job with the response, status, and cost details.
+
 async function processJob(job) {
     let response, signalDataCount = 0, costDetails = null;
 
@@ -190,9 +189,9 @@ async function processJob(job) {
                     // Fallback to using company name if no valid LinkedIn profile
                     console.log('No LinkedIn profile found, using company name:', job.contact_company);
                     const slug = job.contact_company.toLowerCase()
-                        .replace(/\s+/g, '-')     // Replace spaces with hyphens
-                        .replace(/[^a-z0-9-]/g, '') // Remove special characters
-                        .replace(/-+/g, '-');     // Replace multiple hyphens with single hyphen
+                        .replace(/\s+/g, '-')      
+                        .replace(/[^a-z0-9-]/g, '')  
+                        .replace(/-+/g, '-');     
                     companyUrl = `https://www.linkedin.com/company/${slug}`;
                 }
 
