@@ -242,19 +242,19 @@ const extractCloudflareRayId = (html) => {
 // Enhanced scrapeJobDescription function for EC2 and cloud environments
 const scrapeJobDescription = async (jobPostingUrl, rayId = null) => {
     console.log('Starting job description scraping for URL:', jobPostingUrl);
-    
+
     // Special case for Indeed - try direct fetch first
     if (jobPostingUrl.includes('indeed.com')) {
         const jobKey = extractIndeedJobKey(jobPostingUrl);
         if (jobKey) {
             console.log('Detected Indeed job with key:', jobKey);
-            
+
             // If we have a Ray ID for this job key, use it
             const storedRayId = rayId || cloudflareStore.rayIds[jobKey];
             if (storedRayId) {
                 console.log('Using stored Ray ID:', storedRayId);
             }
-            
+
             const directResult = await fetchIndeedJobDirectly(jobKey, storedRayId);
             if (directResult) {
                 console.log('Successfully fetched Indeed job directly');
@@ -263,12 +263,12 @@ const scrapeJobDescription = async (jobPostingUrl, rayId = null) => {
             console.log('Direct fetch failed, trying enhanced browser scraping');
         }
     }
-    
+
     // Try direct fetch for Adzuna
     if (jobPostingUrl.includes('adzuna.com')) {
         try {
             console.log('Attempting direct API fetch for Adzuna job');
-            
+
             // Use a more realistic user agent
             const headers = {
                 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/96.0.4664.110 Safari/537.36',
@@ -278,64 +278,106 @@ const scrapeJobDescription = async (jobPostingUrl, rayId = null) => {
                 'Cache-Control': 'no-cache',
                 'Pragma': 'no-cache'
             };
-            
-            const response = await axios.get(jobPostingUrl, { 
+
+            const response = await axios.get(jobPostingUrl, {
                 headers,
                 timeout: 30000,
                 maxRedirects: 5
             });
-            
+
             if (response.status === 200) {
                 console.log('Successfully fetched Adzuna job page');
                 const $ = cheerio.load(response.data);
-                
-                // Get job title
-                const jobTitle = $('h1').first().text().trim() || 
-                                $('.job-title').text().trim() ||
-                                $('title').text().trim();
-                                
+
+                // Get job title - more specific selectors for Adzuna
+                const jobTitle = $('h1.job-title').text().trim() ||
+                    $('h1').first().text().trim() ||
+                    $('.job-title').text().trim() ||
+                    $('title').text().replace(' | Adzuna', '').trim();
+
                 console.log('Found job title:', jobTitle);
-                
-                // Get job description
-                const jobDescription = $('.job-description').text().trim() || 
-                                    $('#job-description').text().trim() ||
-                                    $('.description').text().trim();
-                                    
+
+                // Get job description - more specific selectors for Adzuna
+                // First try the main job description container
+                let jobDescription = '';
+
+                // Try the specific job description container first
+                const descriptionElement = $('.job-description');
+                if (descriptionElement.length > 0) {
+                    jobDescription = descriptionElement.text().trim();
+                    console.log('Found job description in .job-description');
+                }
+
+                // If that fails, try the details section
+                if (!jobDescription || jobDescription.length < 100) {
+                    const detailsElement = $('#details');
+                    if (detailsElement.length > 0) {
+                        jobDescription = detailsElement.text().trim();
+                        console.log('Found job description in #details');
+                    }
+                }
+
+                // If that fails, try the app-description section
+                if (!jobDescription || jobDescription.length < 100) {
+                    const appDescriptionElement = $('.app-description');
+                    if (appDescriptionElement.length > 0) {
+                        jobDescription = appDescriptionElement.text().trim();
+                        console.log('Found job description in .app-description');
+                    }
+                }
+
+                // If that fails, try to find the main content area and exclude navigation/footer
+                if (!jobDescription || jobDescription.length < 100) {
+                    // Remove navigation, footer, and other non-content elements
+                    $('nav, header, footer, .navigation, .footer, .menu, .popular-jobs, .top-jobs, .top-locations').remove();
+                    $('script, style, link, meta').remove();
+
+                    // Get the main content
+                    const mainContent = $('.job-details, .job-content, main, #main, .main-content, .content');
+                    if (mainContent.length > 0) {
+                        jobDescription = mainContent.text().trim();
+                        console.log('Found job description in main content area');
+                    }
+                }
+
+                // If we still don't have a good description, try a more aggressive approach
+                if (!jobDescription || jobDescription.length < 100) {
+                    // Get all text from the body, excluding common navigation elements
+                    const bodyText = $('body').text();
+
+                    // Remove common header/footer/navigation text
+                    const cleanedText = bodyText
+                        .replace(/Popular Jobs|Top job titles|Top job types|Top companies|Top locations/gi, '')
+                        .replace(/Jobseekers|Recruiters|Adzuna|Browse jobs|Post a job|About|Careers|Contact|Privacy|Terms/gi, '')
+                        .replace(/Work From Home|Remote|Online|Part Time|Entry Level|Freelance|Weekend|Summer|Full Time|Seasonal/gi, '')
+                        .replace(/Amazon jobs|UPS jobs|Walmart jobs|Starbucks jobs|Target jobs|Costco jobs|FedEx jobs|Apple jobs/gi, '')
+                        .replace(/New York City|Atlanta|Denver|Dallas|Orlando|Chicago|Nashville|San Antonio|Tucson|Las Vegas/gi, '')
+                        .replace(/© \d+ ADZUNA LTD/gi, '')
+                        .replace(/Country selection/gi, '')
+                        .trim();
+
+                    // Split into paragraphs and find meaningful chunks
+                    const paragraphs = cleanedText.split('\n')
+                        .map(p => p.trim())
+                        .filter(p => p.length > 50);
+
+                    if (paragraphs.length > 0) {
+                        // Join the paragraphs that are likely part of the job description
+                        jobDescription = paragraphs.join('\n\n');
+                        console.log('Found job description using text extraction');
+                    }
+                }
+
+                // If we have a job description, return it
                 if (jobDescription && jobDescription.length > 100) {
-                    console.log(`Found job description: ${jobDescription.substring(0, 100)}...`);
-                    
+                    console.log(`Found Adzuna job description: ${jobDescription.substring(0, 100)}...`);
+
                     return {
                         Job_Title: jobTitle || 'Unknown Position',
                         Job_Description: jobDescription,
                         Platform: 'adzuna',
                         URL: jobPostingUrl
                     };
-                } else {
-                    // Try a more aggressive approach to find the description
-                    const bodyText = $('body').text();
-                    // Remove common header/footer text
-                    const cleanedText = bodyText
-                        .replace(/Cookie Policy|Privacy Policy|Terms of Use|Copyright/gi, '')
-                        .replace(/Sign In|Sign Up|Register|Login/gi, '')
-                        .trim();
-                    
-                    // Split into paragraphs and find the longest one (likely the job description)
-                    const paragraphs = cleanedText.split('\n\n')
-                        .map(p => p.trim())
-                        .filter(p => p.length > 200);
-                    
-                    if (paragraphs.length > 0) {
-                        // Sort by length and take the longest paragraph
-                        const longestParagraph = paragraphs.sort((a, b) => b.length - a.length)[0];
-                        console.log('Found description using text extraction');
-                        
-                        return {
-                            Job_Title: jobTitle || 'Unknown Position',
-                            Job_Description: longestParagraph,
-                            Platform: 'adzuna',
-                            URL: jobPostingUrl
-                        };
-                    }
                 }
             }
         } catch (error) {
@@ -343,7 +385,7 @@ const scrapeJobDescription = async (jobPostingUrl, rayId = null) => {
             // Continue to browser-based scraping
         }
     }
-    
+
     // Configure browser for EC2 environment
     const launchOptions = {
         headless: true,
@@ -374,7 +416,7 @@ const scrapeJobDescription = async (jobPostingUrl, rayId = null) => {
         ignoreHTTPSErrors: true,
         timeout: 60000
     };
-    
+
     // Check if we're running in EC2 (you can add more specific detection if needed)
     const isEC2 = process.env.AWS_EXECUTION_ENV || process.env.EC2_INSTANCE_ID;
     if (isEC2) {
@@ -382,12 +424,12 @@ const scrapeJobDescription = async (jobPostingUrl, rayId = null) => {
         // Add EC2-specific settings
         launchOptions.args.push('--single-process'); // Helps with memory issues
     }
-    
+
     const browser = await puppeteer.launch(launchOptions);
     console.log('Browser launched with optimized settings for cloud environment');
-    
+
     const page = await browser.newPage();
-    
+
     // Add page console logs for debugging
     page.on('console', msg => console.log('PAGE CONSOLE:', msg.text()));
 
@@ -415,7 +457,7 @@ const scrapeJobDescription = async (jobPostingUrl, rayId = null) => {
         page.on('request', (req) => {
             const resourceType = req.resourceType();
             const url = req.url();
-            
+
             // Block analytics, ads, and unnecessary resources
             if (
                 ['image', 'stylesheet', 'font', 'media'].includes(resourceType) ||
@@ -451,39 +493,39 @@ const scrapeJobDescription = async (jobPostingUrl, rayId = null) => {
         // Take a screenshot for debugging
         await page.screenshot({ path: 'debug-screenshot.png' });
         console.log('Took debug screenshot');
-        
+
         // Check for Cloudflare challenge
         const isCloudflare = await page.evaluate(() => {
-            return document.body.textContent.includes('Cloudflare') || 
-                   document.body.textContent.includes('Verifying') ||
-                   document.body.textContent.includes('security challenge');
+            return document.body.textContent.includes('Cloudflare') ||
+                document.body.textContent.includes('Verifying') ||
+                document.body.textContent.includes('security challenge');
         });
-        
+
         if (isCloudflare) {
             console.log('Cloudflare detected, checking for Ray ID...');
-            
+
             // Extract Ray ID from the page
             const extractedRayId = await page.evaluate(() => {
                 const rayIdMatch = document.body.textContent.match(/Your Ray ID for this request is ([a-zA-Z0-9]+)/);
                 return rayIdMatch ? rayIdMatch[1] : null;
             });
-            
+
             if (extractedRayId) {
                 console.log('Found Ray ID in Cloudflare challenge:', extractedRayId);
-                
+
                 // Store the Ray ID for this job URL
                 cloudflareStore.rayIds[jobPostingUrl] = extractedRayId;
-                
+
                 // Try to extract any cookies that might help bypass Cloudflare
                 const cookies = await page.cookies();
-                const cfCookies = cookies.filter(cookie => 
-                    cookie.name.includes('cf_') || 
+                const cfCookies = cookies.filter(cookie =>
+                    cookie.name.includes('cf_') ||
                     cookie.name.includes('__cf')
                 );
-                
+
                 if (cfCookies.length > 0) {
                     console.log('Found Cloudflare cookies:', cfCookies.map(c => c.name).join(', '));
-                    
+
                     // Store the cookies for this Ray ID
                     const cookieString = cfCookies.map(c => `${c.name}=${c.value}`).join('; ');
                     cloudflareStore.clearanceCookies[extractedRayId] = cookieString;
@@ -514,50 +556,89 @@ const scrapeJobDescription = async (jobPostingUrl, rayId = null) => {
         // Special handling for Adzuna
         if (jobPostingUrl.includes('adzuna.com')) {
             console.log('Applying Adzuna-specific scraping logic');
-            
+
             // Try to get job title
             const jobTitle = await page.evaluate(() => {
-                const titleElement = document.querySelector('h1') || 
-                                    document.querySelector('.job-title') ||
-                                    document.querySelector('title');
-                return titleElement ? titleElement.innerText.trim() : 'Unknown Position';
+                const titleElement = document.querySelector('h1.job-title') ||
+                    document.querySelector('h1') ||
+                    document.querySelector('.job-title');
+                return titleElement ? titleElement.innerText.trim() :
+                    document.title.replace(' | Adzuna', '').trim();
             });
-            
+
             console.log('Found job title:', jobTitle);
-            
-            // Try to get job description
+
+            // Try to get job description with more specific targeting
             const jobDescription = await page.evaluate(() => {
-                // Try various selectors
-                const descElement = document.querySelector('.job-description') || 
-                                   document.querySelector('#job-description') ||
-                                   document.querySelector('.description');
-                
-                if (descElement && descElement.innerText.trim().length > 100) {
-                    return descElement.innerText.trim();
+                // First try specific job description containers
+                const descriptionSelectors = [
+                    '.job-description',
+                    '#details',
+                    '.app-description',
+                    '.description-container',
+                    '.job-details',
+                    '.job-content'
+                ];
+
+                for (const selector of descriptionSelectors) {
+                    const element = document.querySelector(selector);
+                    if (element && element.innerText.trim().length > 100) {
+                        return element.innerText.trim();
+                    }
                 }
-                
-                // If no specific element found, extract the main content
-                // Remove headers, footers, navigation
+
+                // If specific selectors fail, try to clean the page and extract content
+                // Remove navigation, header, footer elements
+                const elementsToRemove = document.querySelectorAll(
+                    'nav, header, footer, .navigation, .footer, .menu, ' +
+                    '.popular-jobs, .top-jobs, .top-locations, ' +
+                    'script, style, link, meta'
+                );
+
+                elementsToRemove.forEach(el => {
+                    if (el && el.parentNode) {
+                        el.parentNode.removeChild(el);
+                    }
+                });
+
+                // Get the main content
+                const mainContent = document.querySelector('.job-details, .job-content, main, #main, .main-content, .content');
+                if (mainContent && mainContent.innerText.trim().length > 100) {
+                    return mainContent.innerText.trim();
+                }
+
+                // If all else fails, get the body text and clean it
                 const bodyText = document.body.innerText;
-                
-                // Split into paragraphs and find the longest one (likely the job description)
-                const paragraphs = bodyText.split('\n\n')
+
+                // Remove common navigation text patterns
+                const cleanedText = bodyText
+                    .replace(/Popular Jobs|Top job titles|Top job types|Top companies|Top locations/gi, '')
+                    .replace(/Jobseekers|Recruiters|Adzuna|Browse jobs|Post a job|About|Careers|Contact|Privacy|Terms/gi, '')
+                    .replace(/Work From Home|Remote|Online|Part Time|Entry Level|Freelance|Weekend|Summer|Full Time|Seasonal/gi, '')
+                    .replace(/Amazon jobs|UPS jobs|Walmart jobs|Starbucks jobs|Target jobs|Costco jobs|FedEx jobs|Apple jobs/gi, '')
+                    .replace(/New York City|Atlanta|Denver|Dallas|Orlando|Chicago|Nashville|San Antonio|Tucson|Las Vegas/gi, '')
+                    .replace(/© \d+ ADZUNA LTD/gi, '')
+                    .replace(/Country selection/gi, '')
+                    .trim();
+
+                // Split into paragraphs and find meaningful chunks
+                const paragraphs = cleanedText.split('\n')
                     .map(p => p.trim())
-                    .filter(p => p.length > 200);
-                
+                    .filter(p => p.length > 50);
+
                 if (paragraphs.length > 0) {
-                    // Sort by length and take the longest paragraph
-                    return paragraphs.sort((a, b) => b.length - a.length)[0];
+                    // Join the paragraphs that are likely part of the job description
+                    return paragraphs.join('\n\n');
                 }
-                
+
                 return null;
             });
-            
+
             if (jobDescription && jobDescription.length > 100) {
                 console.log(`Found Adzuna job description: ${jobDescription.substring(0, 100)}...`);
-                
+
                 return {
-                    Job_Title: jobTitle,
+                    Job_Title: jobTitle || 'Unknown Position',
                     Job_Description: jobDescription,
                     Platform: 'adzuna',
                     URL: jobPostingUrl
@@ -573,7 +654,7 @@ const scrapeJobDescription = async (jobPostingUrl, rayId = null) => {
         // Standard approach for other platforms or as fallback
         console.log('Using standard scraping approach with selectors');
         const selectors = platformConfig.selectors || ['body'];
-        
+
         // Try each selector
         for (const selector of selectors) {
             try {
@@ -585,7 +666,7 @@ const scrapeJobDescription = async (jobPostingUrl, rayId = null) => {
                         el.querySelectorAll('script, style').forEach(node => node.remove());
                         return el.innerText.trim();
                     }, element);
-                    
+
                     if (text && text.length > 100) {
                         console.log(`Successfully extracted text (${text.length} chars) with selector: ${selector}`);
                         return text;
@@ -599,13 +680,13 @@ const scrapeJobDescription = async (jobPostingUrl, rayId = null) => {
                 console.log(`Error with selector ${selector}:`, e.message);
             }
         }
-        
+
         // Last resort: try to extract any meaningful text from the page
         console.log('Trying last resort extraction from entire page');
         const bodyText = await page.evaluate(() => {
             // Remove script, style and hidden elements
             document.querySelectorAll('script, style, [style*="display:none"], [style*="display: none"]').forEach(el => el.remove());
-            
+
             // Get all text chunks
             const textNodes = [];
             const walk = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT, null, false);
@@ -615,11 +696,11 @@ const scrapeJobDescription = async (jobPostingUrl, rayId = null) => {
                     textNodes.push(node.textContent.trim());
                 }
             }
-            
+
             // Find the longest chunk
             return textNodes.sort((a, b) => b.length - a.length)[0] || document.body.innerText;
         });
-        
+
         if (bodyText && bodyText.length > 200) {
             console.log(`Last resort found text (${bodyText.length} chars)`);
             return bodyText;
@@ -639,11 +720,21 @@ const scrapeJobDescription = async (jobPostingUrl, rayId = null) => {
 
 
 
-const generateQuestions = async (JobDescription) => {
-    
+const generateQuestions = async (JobDescription, JobTitle = null) => {
+    // Check if the job description is meaningful or just navigation/menu text
+    const isMenuText = JobDescription.includes('Popular Jobs') &&
+        JobDescription.includes('Top job titles') &&
+        JobDescription.includes('Top job types') &&
+        JobDescription.includes('Top companies');
 
-   const prompt = `Generate exactly 3 relevant and challenging technical interview questions based on the following job description. The questions should focus on conceptual understanding and require detailed verbal explanations, not code-writing tasks. Avoid asking questions that involve solving problems by writing code. Provide only the questions, without any introductory text, explanations, or formatting:\n\n${JobDescription}`;
+    let prompt;
 
+    if (isMenuText && JobTitle) {
+        console.log('Job description appears to be menu text, using job title instead:', JobTitle);
+        prompt = `Generate exactly 3 relevant and challenging interview questions for a "${JobTitle}" position. The questions should focus on skills and knowledge relevant to this role. Provide only the questions, without any introductory text, explanations, or formatting.`;
+    } else {
+        prompt = `Generate exactly 3 relevant and challenging technical interview questions based on the following job description. The questions should focus on conceptual understanding and require detailed verbal explanations, not code-writing tasks. Avoid asking questions that involve solving problems by writing code. Provide only the questions, without any introductory text, explanations, or formatting:\n\n${JobDescription}`;
+    }
 
     const response = await openai.chat.completions.create({
         model: 'gpt-3.5-turbo',
@@ -689,7 +780,7 @@ router.post('/generate-questions', async (req, res) => {
     const { jobPostingUrl, jobTitle, manualJobDescription, rayId } = req.body;
 
     if (!jobPostingUrl && !jobTitle && !manualJobDescription) {
-        return res.status(400).json({ 
+        return res.status(400).json({
             status: "-1",
             message: "Either job posting URL, job title, or manual job description is required",
             data: {}
@@ -698,11 +789,12 @@ router.post('/generate-questions', async (req, res) => {
 
     try {
         console.log(`Generating questions using provided data`);
-        
+
         // Initialize variables
         let jobData;
         let jobDescription;
-        
+        let extractedJobTitle = jobTitle;
+
         // If manual job description is provided, use it directly
         if (manualJobDescription) {
             console.log('Using manually provided job description');
@@ -713,11 +805,11 @@ router.post('/generate-questions', async (req, res) => {
                 URL: jobPostingUrl || 'Manual Entry'
             };
             jobDescription = manualJobDescription;
-        } 
+        }
         // Otherwise try to scrape
         else if (jobPostingUrl) {
             console.log(`Attempting to scrape job posting URL: ${jobPostingUrl}`);
-            
+
             // If it's Indeed and we have a Ray ID, store it
             if (jobPostingUrl.includes('indeed.com') && rayId) {
                 const jobKey = extractIndeedJobKey(jobPostingUrl);
@@ -726,31 +818,41 @@ router.post('/generate-questions', async (req, res) => {
                     cloudflareStore.rayIds[jobKey] = rayId;
                 }
             }
-            
+
             try {
                 jobData = await scrapeJobDescription(jobPostingUrl, rayId);
                 console.log('Raw job data:', typeof jobData === 'object' ? 'Object with properties' : 'Text string');
-                
+
                 // Handle both structured and unstructured job data
                 if (typeof jobData === 'object') {
                     jobDescription = jobData.Job_Description;
+                    extractedJobTitle = jobData.Job_Title || extractedJobTitle;
                     console.log('Using structured job data with title:', jobData.Job_Title);
                 } else {
                     jobDescription = jobData;
                     console.log('Using unstructured job data');
                 }
+
+                // Check if the job description is just navigation/menu text
+                const isMenuText = jobDescription.includes('Popular Jobs') &&
+                    jobDescription.includes('Top job titles') &&
+                    jobDescription.includes('Top job types');
+
+                if (isMenuText && extractedJobTitle) {
+                    console.log('Detected menu text in job description, will rely on job title for questions');
+                }
             } catch (error) {
                 console.error('Error scraping job description:', error.message);
-                
+
                 // If scraping fails but jobTitle is provided, use that as fallback
                 if (jobTitle) {
                     console.log('Using provided job title as fallback:', jobTitle);
                     jobData = {
                         Job_Title: jobTitle,
                         Job_Description: `Position for ${jobTitle}`,
-                        Platform: jobPostingUrl.includes('indeed.com') ? 'indeed' : 
-                                 jobPostingUrl.includes('adzuna.com') ? 'adzuna' : 
-                                 identifyPlatform(jobPostingUrl),
+                        Platform: jobPostingUrl.includes('indeed.com') ? 'indeed' :
+                            jobPostingUrl.includes('adzuna.com') ? 'adzuna' :
+                                identifyPlatform(jobPostingUrl),
                         URL: jobPostingUrl
                     };
                     jobDescription = jobData.Job_Description;
@@ -767,12 +869,13 @@ router.post('/generate-questions', async (req, res) => {
                 Job_Description: `Position for ${jobTitle}`,
             };
             jobDescription = jobData.Job_Description;
+            extractedJobTitle = jobTitle;
         }
 
         console.log('Final job description length:', jobDescription.length);
-        
-        // Generate raw questions based on the description
-        const rawQuestions = await generateQuestions(jobDescription);
+
+        // Generate raw questions based on the description and title
+        const rawQuestions = await generateQuestions(jobDescription, extractedJobTitle);
 
         // Clean the questions for UI display
         const questions = cleanQuestions(rawQuestions);
@@ -794,18 +897,21 @@ router.post('/generate-questions', async (req, res) => {
             message: "Successfully generated interview questions",
             data: {
                 questions,
-                jobDetails: typeof jobData === 'object' ? jobData : { Job_Description: jobDescription },
+                jobDetails: typeof jobData === 'object' ? jobData : {
+                    Job_Title: extractedJobTitle || 'Unknown Position',
+                    Job_Description: jobDescription
+                },
                 questionCount: questions.length,
                 rayId: responseRayId || rayId
             }
         });
     } catch (error) {
         console.error('Error in /generate-questions:', error.message);
-        res.status(500).json({ 
+        res.status(500).json({
             status: "-1",
             message: error.message,
             error: error.message,
-            data: {} 
+            data: {}
         });
     }
 });
