@@ -893,18 +893,9 @@ router.post('/generate-questions', async (req, res) => {
 
         // Respond with questions and the job description
         res.json({
-            status: "1",
-            message: "Successfully generated interview questions",
-            data: {
-                questions,
-                jobDetails: typeof jobData === 'object' ? jobData : {
-                    Job_Title: extractedJobTitle || 'Unknown Position',
-                    Job_Description: jobDescription
-                },
-                questionCount: questions.length,
-                rayId: responseRayId || rayId
-            }
-        });
+            questions,
+            JobDescription: jobDescription 
+        })
     } catch (error) {
         console.error('Error in /generate-questions:', error.message);
         res.status(500).json({
