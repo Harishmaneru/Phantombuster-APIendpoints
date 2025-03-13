@@ -27,39 +27,6 @@ const transporter = nodemailer.createTransport({
     }
 });
 
-// Platform-specific selectors
-// const PLATFORM_SELECTORS = {
-//     linkedin: {
-//         selectors: ['.description__text', '.show-more-less-html__markup', '[data-job-description]'],
-//         waitForSelector: '.description__text'
-//     },
-//     indeed: {
-//         selectors: [
-//             '#jobDescriptionText',
-//             '.jobsearch-JobComponent-description',
-//             '[data-testid="jobDescriptionTitleHeading"]',
-//             '.jobDescriptionText',
-//             '.Full job description',
-//             '[id*="jobDescriptionTitleHeading"]'
-//         ],
-//         waitForSelector: '#jobDescriptionTitleHeading',
-//         consentSelector: '[id^="onetrust-accept-btn-handler"]',
-//         scrollIntoView: true
-//     },
-//     glassdoor: {
-//         selectors: ['.jobDescriptionContent', '.desc', '[data-test="description"]'],
-//         waitForSelector: '.jobDescriptionContent'
-//     },
-//     greenhouse: {
-//         selectors: ['#content', '#gh-job-content', '.content-block'],
-//         waitForSelector: '#content'
-//     },
-//     lever: {
-//         selectors: ['.posting-description', '.content'],
-//         waitForSelector: '.posting-description'
-//     }
-// };
-
 const PLATFORM_SELECTORS = {
     linkedin: {
         selectors: ['.description__text', '.show-more-less-html__markup', '[data-job-description]'],
@@ -894,7 +861,7 @@ router.post('/generate-questions', async (req, res) => {
         // Respond with questions and the job description
         res.json({
             questions,
-            JobDescription: jobDescription 
+            JobDescription: jobDescription
         })
     } catch (error) {
         console.error('Error in /generate-questions:', error.message);

@@ -63,9 +63,11 @@ async function fetchSalesNavURL(salesNavUrl) {
 
         if (retries === maxRetries && status === 'pending') {
             return {
-                request_id: requestId,
-                status: 'pending',
-                message: 'Your search was added to queue. Please wait and try again later!'
+                status: 1,
+                salesNavigatorQueueMessage: {
+                    request_id: requestId,
+                    message: 'Your search was added to queue. Please wait and try again later!'
+                }
             };
         }
 
@@ -139,18 +141,17 @@ router.post('/find-employees', async (req, res) => {
         if (!salesNavUrl) {
             return res.status(400).json({
                 status: -1,
-                message: 'Sales Navigator URL is required'
+                salesNavigatorDataError: {
+                    message: 'Sales Navigator URL is required'
+                }
             });
         }
 
         const result = await fetchSalesNavURL(salesNavUrl);
 
-        if (result.status === 'pending') {
-            return res.status(202).json({
-                status: 1,
-                request_id: result.request_id,
-                message: result.message
-            });
+        // If the result already contains a salesNavigatorQueueMessage, return it directly
+        if (result.salesNavigatorQueueMessage) {
+            return res.status(202).json(result);
         }
 
         res.status(200).json({
@@ -166,9 +167,11 @@ router.post('/find-employees', async (req, res) => {
 
         res.status(503).json({
             status: -1,
-            message: 'Error processing request',
-            error: error.message,
-            apiResponse: error.response?.data || null
+            salesNavigatorDataError: {
+                message: 'Error processing request',
+                error: error.message,
+                apiResponse: error.response?.data || null
+            }
         });
     }
 });
@@ -181,7 +184,9 @@ router.get('/search-results/:requestId', async (req, res) => {
         if (!requestId) {
             return res.status(400).json({
                 status: -1,
-                message: 'Request ID is required'
+                salesNavigatorDataError: {
+                    message: 'Request ID is required'
+                }
             });
         }
 
@@ -190,8 +195,10 @@ router.get('/search-results/:requestId', async (req, res) => {
         if (result.status !== 'completed') {
             return res.status(202).json({
                 status: 1,
-                message: result.message,
-                search_status: result.status
+                salesNavigatorQueueMessage: {
+                    message: result.message,
+                    search_status: result.status
+                }
             });
         }
 
@@ -208,9 +215,11 @@ router.get('/search-results/:requestId', async (req, res) => {
 
         res.status(503).json({
             status: -1,
-            message: 'Error retrieving search results',
-            error: error.message,
-            apiResponse: error.response?.data || null
+            salesNavigatorDataError: {
+                message: 'Error retrieving search results',
+                error: error.message,
+                apiResponse: error.response?.data || null
+            }
         });
     }
 });
