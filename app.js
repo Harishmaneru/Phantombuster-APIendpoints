@@ -164,7 +164,7 @@ app.use(personProfile.router);
 app.use(getCompanyInfo.router);
 app.use(virtualInterview);
 app.use(videoTotext.router);
-app.use(interviewLink);
+app.use(interviewLink.router);
 app.use(submissionRoutes)
 app.use(fetchPersonPosts.router)
 app.use(fetchCompanyJobs.router)

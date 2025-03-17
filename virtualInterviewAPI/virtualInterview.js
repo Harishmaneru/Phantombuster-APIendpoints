@@ -1013,6 +1013,7 @@ router.post('/create-interview-page/:category/:subcategory/:applicationLink', as
         }
 
         // Create interview link using /interviewlink endpoint logic
+        const applicationLink = generateUniqueId();
         const interviewData = {
             userId: 'system',  
             email: 'system@recordedinterview.com',  
@@ -1020,6 +1021,7 @@ router.post('/create-interview-page/:category/:subcategory/:applicationLink', as
             jobPostingUrl: job.Job_URL,
             companyUrl: job.Company_URL,
             questions: questions,
+            applicationLink: applicationLink,
             expiresAt: new Date(Date.now() + 60 * 24 * 60 * 60 * 1000) // 60 days from now
         };
 
@@ -1027,7 +1029,7 @@ router.post('/create-interview-page/:category/:subcategory/:applicationLink', as
         const interview = new Interview(interviewData);
         await interview.save();
 
-        const interviewPageLink = `https://www.recordedinterview.com/InterviewPage/${interviewData.applicationLink}`;
+        const interviewPageLink = `https://www.recordedinterview.com/InterviewPage/${applicationLink}`;
 
         // Update the job with interview page link - modified query
         await collection.updateOne(

@@ -285,4 +285,4 @@ router.get('/health', (req, res) => {
     res.json({ success: true, dbStatus: mongoose.connection.readyState === 1 ? 'connected' : 'disconnected' });
 });
 
-module.exports = router;
+module.exports = { router, Interview };
