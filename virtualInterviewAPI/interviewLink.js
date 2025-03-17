@@ -184,8 +184,8 @@ router.get('/allinterviews', async (req, res) => {
 
         // Fetch paginated interviews
         const interviews = await Interview.find(filter)
-            .select('-companyLogoUrl') // Exclude large binary data
-            .sort({ createdAt: -1 }) // Sort by newest first
+            .select('-companyLogoUrl')  
+            .sort({ createdAt: -1 })  
             .skip(skip)
             .limit(limit);
 

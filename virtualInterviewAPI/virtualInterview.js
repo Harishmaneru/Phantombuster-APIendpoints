@@ -1012,17 +1012,21 @@ router.post('/create-interview-page/:category/:subcategory/:applicationLink', as
             throw new Error('Failed to generate questions');
         }
 
+        // Add custom question to the questions array
+        const customQuestion = `Tell us about your relevant experience and past work that aligns with this job posting.`;
+        const allQuestions = [customQuestion, ...questions];
+
         // Create interview link using /interviewlink endpoint logic
         const applicationLink = generateUniqueId();
         const interviewData = {
-            userId: 'system',  
-            email: 'system@recordedinterview.com',  
+            userId: 'system',
+            email: 'system@recordedinterview.com',
             interviewTitle: job.Job_Title,
             jobPostingUrl: job.Job_URL,
             companyUrl: job.Company_URL,
-            questions: questions,
+            questions: allQuestions,
             applicationLink: applicationLink,
-            expiresAt: new Date(Date.now() + 60 * 24 * 60 * 60 * 1000) // 60 days from now
+            expiresAt: new Date(Date.now() + 60 * 24 * 60 * 60 * 1000) 
         };
 
         // Create new interview document using Interview model
