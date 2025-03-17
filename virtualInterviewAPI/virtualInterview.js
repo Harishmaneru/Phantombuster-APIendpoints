@@ -453,7 +453,7 @@ const scrapeJobDescription = async (jobPostingUrl, rayId = null) => {
         // Navigate with networkidle2 wait and longer timeout for EC2
         await page.goto(jobPostingUrl, {
             waitUntil: 'networkidle2',
-            timeout: 120000  
+            timeout: 120000
         });
         console.log('Successfully loaded the page');
 
@@ -937,6 +937,7 @@ router.post('/submit-responses', upload.fields([
 
 // Add these MongoDB schema definitions at the top of the file
 const jobSchema = {
+    applicationLink: String,
     Job_Title: String,
     Company: String,
     Company_URL: String,
@@ -947,7 +948,8 @@ const jobSchema = {
     Portal: String,
     Job_URL: String,
     Posted_At: String,
-    Job_Description: String
+    Job_Description: String,
+    interviewPageLink: String
 };
 
 const subcategorySchema = {
@@ -960,20 +962,136 @@ const categorySchema = {
     subcategories: [subcategorySchema]
 };
 
-// Add these new endpoints after existing routes
 
-// Endpoint to store job data
+router.post('/create-interview-page/:category/:subcategory/:applicationLink', async (req, res) => {
+    console.log('=== Starting create interview page endpoint ===');
+    let client;
+
+    try {
+        client = new MongoClient(mongoUri, { useUnifiedTopology: true });
+        await client.connect();
+        const db = client.db(dbName);
+        const collection = db.collection('jobCategories');
+
+        // Find the specific job using applicationLink
+        const category = await collection.findOne({
+            name: req.params.category,
+            'subcategories.name': req.params.subcategory,
+            'subcategories.jobs.applicationLink': req.params.applicationLink
+        });
+
+        if (!category) {
+            throw new Error('Category or subcategory not found');
+        }
+
+        const subcategory = category.subcategories.find(sub => sub.name === req.params.subcategory);
+        const job = subcategory.jobs.find(job => job.applicationLink === req.params.applicationLink);
+
+        if (!job) {
+            throw new Error('Job not found');
+        }
+
+        // Check if interview page already exists
+        if (job.interviewPageLink) {
+            return res.json({
+                status: "1",
+                message: "Interview page already exists",
+                data: {
+                    interviewPageLink: job.interviewPageLink,
+                    isExisting: true
+                }
+            });
+        }
+
+        // Generate questions using job description
+        console.log('Generating questions for job:', job.Job_Title);
+        const questions = await generateQuestions(job.Job_Description, job.Job_Title);
+
+        if (!questions || questions.length === 0) {
+            throw new Error('Failed to generate questions');
+        }
+
+        // Create interview link using /interviewlink endpoint logic
+        const interviewData = {
+            interviewTitle: job.Job_Title,
+            jobPostingUrl: job.Job_URL,
+            companyUrl: job.Company_URL,
+            questions: questions
+        };
+        function generateUniqueLink() {
+            const timestamp = Date.now().toString(36);
+            const randomString = Math.random().toString(36).substr(2, 6);
+            return `${timestamp}-${randomString}`;
+        }
+        // Create new interview document using Interview model
+        const applicationLink = generateUniqueLink();
+        const expiresAt = new Date();
+        expiresAt.setDate(expiresAt.getDate() + 60); // 60 days expiry
+
+        const interview = new Interview({
+            ...interviewData,
+            applicationLink,
+            expiresAt
+        });
+
+        await interview.save();
+
+        const interviewPageLink = `https://www.recordedinterview.com/InterviewPage/${applicationLink}`;
+
+        // Update the job with interview page link - modified query
+        await collection.updateOne(
+            {
+                name: req.params.category,
+                'subcategories.name': req.params.subcategory,
+                'subcategories.jobs.applicationLink': req.params.applicationLink
+            },
+            {
+                $set: {
+                    'subcategories.$[sub].jobs.$[job].interviewPageLink': interviewPageLink
+                }
+            },
+            {
+                arrayFilters: [
+                    { 'sub.name': req.params.subcategory },
+                    { 'job.applicationLink': req.params.applicationLink }
+                ]
+            }
+        );
+
+        console.log('Interview page created successfully for:', job.Job_Title);
+
+        res.json({
+            status: "1",
+            message: "Interview page created successfully",
+            data: {
+                interviewPageLink,
+                isExisting: false,
+                questions
+            }
+        });
+
+    } catch (error) {
+        console.error('Error creating interview page:', error);
+        res.status(500).json({
+            status: "-1",
+            message: error.message,
+            data: {}
+        });
+    } finally {
+        if (client) {
+            await client.close();
+            console.log('MongoDB connection closed');
+        }
+    }
+});
+
+// Modify the store-jobs endpoint to include interview page creation
 router.post('/store-jobs', async (req, res) => {
     console.log('=== Starting /store-jobs endpoint ===');
     console.log('Request received at:', new Date().toISOString());
-    
-    try {
-        // Log the request body structure
-        console.log('Request body structure:', {
-            hasCategories: !!req.body.categories,
-            categoriesCount: req.body.categories?.length || 0
-        });
+    let client;
 
+    try {
         // Validate input
         if (!req.body.categories || !Array.isArray(req.body.categories)) {
             console.error('Invalid input: categories array is missing or not an array');
@@ -985,39 +1103,46 @@ router.post('/store-jobs', async (req, res) => {
         }
 
         console.log('Attempting to connect to MongoDB...');
-        const client = new MongoClient(mongoUri, { useUnifiedTopology: true });
+        client = new MongoClient(mongoUri, { useUnifiedTopology: true });
         await client.connect();
         console.log('Successfully connected to MongoDB');
 
         const db = client.db(dbName);
         const collection = db.collection('jobCategories');
 
-        // Log existing data count
-        const existingCount = await collection.countDocuments();
-        console.log('Existing documents in collection:', existingCount);
-
         // Clear existing data
         console.log('Clearing existing data...');
         await collection.deleteMany({});
         console.log('Successfully cleared existing data');
 
-        // Log categories structure before insertion
-        console.log('Categories summary before insertion:', req.body.categories.map(cat => ({
-            name: cat.name,
-            subcategoriesCount: cat.subcategories?.length || 0,
-            totalJobs: cat.subcategories?.reduce((acc, sub) => acc + (sub.jobs?.length || 0), 0) || 0
-        })));
+        // Process categories and create interview pages
+        console.log('Processing categories and creating interview pages...');
+        const processedCategories = await Promise.all(req.body.categories.map(async (category) => {
+            const processedSubcategories = await Promise.all(category.subcategories.map(async (subcategory) => {
+                const processedJobs = await Promise.all(subcategory.jobs.map(async (job) => {
+                    // Generate a unique applicationLink
+                    const applicationLink = generateUniqueId();
+                    return {
+                        ...job,
+                        applicationLink
+                    };
+                }));
+                return {
+                    ...subcategory,
+                    jobs: processedJobs
+                };
+            }));
+            return {
+                ...category,
+                subcategories: processedSubcategories
+            };
+        }));
 
-        // Store new categories
-        console.log('Inserting new categories...');
-        const { categories } = req.body;
-        const result = await collection.insertMany(categories);
+        // Store processed categories
+        console.log('Storing processed categories...');
+        const result = await collection.insertMany(processedCategories);
         console.log('Insert operation completed');
         console.log('Inserted documents:', result.insertedCount);
-
-        // Verify insertion
-        const newCount = await collection.countDocuments();
-        console.log('Total documents after insertion:', newCount);
 
         await client.close();
         console.log('MongoDB connection closed');
@@ -1025,10 +1150,10 @@ router.post('/store-jobs', async (req, res) => {
         console.log('=== Endpoint completed successfully ===');
         res.json({
             status: "1",
-            message: "Jobs data stored successfully",
+            message: "Jobs data stored successfully with interview pages",
             data: {
                 insertedCount: result.insertedCount,
-                categoriesCount: newCount
+                categoriesCount: processedCategories.length
             }
         });
     } catch (error) {
@@ -1039,8 +1164,10 @@ router.post('/store-jobs', async (req, res) => {
             timestamp: new Date().toISOString()
         });
 
-        await client?.close();
-        console.log('MongoDB connection closed after error');
+        if (client) {
+            await client.close();
+            console.log('MongoDB connection closed after error');
+        }
 
         res.status(500).json({
             status: "-1",
@@ -1152,6 +1279,100 @@ router.get('/fetch-jobs/:category/:subcategory', async (req, res) => {
         });
     }
 });
+
+// Add this new endpoint
+router.post('/refresh-interview-page/:category/:subcategory/:applicationLink', async (req, res) => {
+    console.log('=== Starting refresh/create interview page endpoint ===');
+    let client;
+
+    try {
+        client = new MongoClient(mongoUri, { useUnifiedTopology: true });
+        await client.connect();
+        const db = client.db(dbName);
+        const collection = db.collection('jobCategories');
+
+        // Find the specific job
+        const category = await collection.findOne({
+            name: req.params.category,
+            'subcategories.name': req.params.subcategory
+        });
+
+        if (!category) {
+            throw new Error('Category or subcategory not found');
+        }
+
+        const subcategory = category.subcategories.find(sub => sub.name === req.params.subcategory);
+        const job = subcategory.jobs.find(job => job._id.toString() === req.params.applicationLink);
+
+        if (!job) {
+            throw new Error('Job not found');
+        }
+
+        // Check if job already has an interview page
+        const isCreating = !job.interviewPageLink;
+        console.log(isCreating ?
+            'Creating new interview page...' :
+            'Refreshing existing interview page...'
+        );
+
+        // Create new interview page
+        const newInterviewPageLink = await createInterviewPage(job);
+
+        if (!newInterviewPageLink) {
+            throw new Error('Failed to create interview page');
+        }
+
+        // Update the job with new interview page link
+        await collection.updateOne(
+            {
+                name: req.params.category,
+                'subcategories.name': req.params.subcategory,
+                'subcategories.jobs._id': job._id
+            },
+            {
+                $set: {
+                    'subcategories.$[sub].jobs.$[job].interviewPageLink': newInterviewPageLink
+                }
+            },
+            {
+                arrayFilters: [
+                    { 'sub.name': req.params.subcategory },
+                    { 'job._id': job._id }
+                ]
+            }
+        );
+
+        res.json({
+            status: "1",
+            message: isCreating ?
+                "Interview page created successfully" :
+                "Interview page refreshed successfully",
+            data: {
+                interviewPageLink: newInterviewPageLink,
+                action: isCreating ? 'created' : 'refreshed'
+            }
+        });
+    } catch (error) {
+        console.error('Error in interview page operation:', error);
+        res.status(500).json({
+            status: "-1",
+            message: error.message,
+            data: {}
+        });
+    } finally {
+        if (client) {
+            await client.close();
+            console.log('MongoDB connection closed');
+        }
+    }
+});
+
+// Add this helper function
+function generateUniqueId() {
+    const timestamp = Date.now().toString(36);
+    const randomString = Math.random().toString(36).substr(2, 6);
+    return `${timestamp}-${randomString}`;
+}
 
 module.exports = router;
 
