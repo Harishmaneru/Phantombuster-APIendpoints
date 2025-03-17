@@ -6,6 +6,7 @@ const puppeteer = require('puppeteer');
 const { MongoClient } = require('mongodb');
 const { convertVideoToAudio, transcribeAudio } = require('../virtualInterviewAPI/videoTotext');
 const { OpenAI } = require('openai');
+const { Interview } = require('./interviewLink');
 
 const axios = require('axios');
 const cheerio = require('cheerio');
@@ -1013,30 +1014,21 @@ router.post('/create-interview-page/:category/:subcategory/:applicationLink', as
 
         // Create interview link using /interviewlink endpoint logic
         const interviewData = {
+            userId: 'system',  
+            email: 'system@recordedinterview.com',  
             interviewTitle: job.Job_Title,
             jobPostingUrl: job.Job_URL,
             companyUrl: job.Company_URL,
-            questions: questions
+            questions: questions,
+            applicationLink: generateUniqueLink(),
+            expiresAt: new Date(Date.now() + 60 * 24 * 60 * 60 * 1000) // 60 days from now
         };
-        function generateUniqueLink() {
-            const timestamp = Date.now().toString(36);
-            const randomString = Math.random().toString(36).substr(2, 6);
-            return `${timestamp}-${randomString}`;
-        }
+
         // Create new interview document using Interview model
-        const applicationLink = generateUniqueLink();
-        const expiresAt = new Date();
-        expiresAt.setDate(expiresAt.getDate() + 60); // 60 days expiry
-
-        const interview = new Interview({
-            ...interviewData,
-            applicationLink,
-            expiresAt
-        });
-
+        const interview = new Interview(interviewData);
         await interview.save();
 
-        const interviewPageLink = `https://www.recordedinterview.com/InterviewPage/${applicationLink}`;
+        const interviewPageLink = `https://www.recordedinterview.com/InterviewPage/${interviewData.applicationLink}`;
 
         // Update the job with interview page link - modified query
         await collection.updateOne(
@@ -1302,7 +1294,7 @@ router.post('/refresh-interview-page/:category/:subcategory/:applicationLink', a
         }
 
         const subcategory = category.subcategories.find(sub => sub.name === req.params.subcategory);
-        const job = subcategory.jobs.find(job => job._id.toString() === req.params.applicationLink);
+        const job = subcategory.jobs.find(job => job.applicationLink === req.params.applicationLink);
 
         if (!job) {
             throw new Error('Job not found');
@@ -1327,7 +1319,7 @@ router.post('/refresh-interview-page/:category/:subcategory/:applicationLink', a
             {
                 name: req.params.category,
                 'subcategories.name': req.params.subcategory,
-                'subcategories.jobs._id': job._id
+                'subcategories.jobs.applicationLink': req.params.applicationLink
             },
             {
                 $set: {
@@ -1337,7 +1329,7 @@ router.post('/refresh-interview-page/:category/:subcategory/:applicationLink', a
             {
                 arrayFilters: [
                     { 'sub.name': req.params.subcategory },
-                    { 'job._id': job._id }
+                    { 'job.applicationLink': req.params.applicationLink }
                 ]
             }
         );
