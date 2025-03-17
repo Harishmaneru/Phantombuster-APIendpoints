@@ -1024,6 +1024,7 @@ router.post('/create-interview-page/:category/:subcategory/:applicationLink', as
             interviewTitle: job.Job_Title,
             jobPostingUrl: job.Job_URL,
             companyUrl: job.Company_URL,
+            companyLogoUrl: job.Company_Logo,
             questions: allQuestions,
             applicationLink: applicationLink,
             expiresAt: new Date(Date.now() + 60 * 24 * 60 * 60 * 1000) 
@@ -1107,39 +1108,104 @@ router.post('/store-jobs', async (req, res) => {
         const db = client.db(dbName);
         const collection = db.collection('jobCategories');
 
-        // Clear existing data
-        console.log('Clearing existing data...');
-        await collection.deleteMany({});
-        console.log('Successfully cleared existing data');
+        // Fetch existing categories
+        console.log('Fetching existing categories...');
+        const existingCategories = await collection.find({}).toArray();
+        console.log('Found existing categories:', existingCategories.length);
 
-        // Process categories and create interview pages
-        console.log('Processing categories and creating interview pages...');
-        const processedCategories = await Promise.all(req.body.categories.map(async (category) => {
-            const processedSubcategories = await Promise.all(category.subcategories.map(async (subcategory) => {
-                const processedJobs = await Promise.all(subcategory.jobs.map(async (job) => {
-                    // Generate a unique applicationLink
-                    const applicationLink = generateUniqueId();
+        // Process new categories and merge with existing ones
+        console.log('Processing new categories and merging with existing ones...');
+        const processedCategories = await Promise.all(req.body.categories.map(async (newCategory) => {
+            // Find existing category
+            const existingCategory = existingCategories.find(ec => ec.name === newCategory.name);
+            
+            if (existingCategory) {
+                // Merge subcategories
+                const mergedSubcategories = await Promise.all(newCategory.subcategories.map(async (newSubcategory) => {
+                    const existingSubcategory = existingCategory.subcategories.find(es => es.name === newSubcategory.name);
+                    
+                    if (existingSubcategory) {
+                        // Merge jobs, avoiding duplicates based on applicationLink
+                        const existingJobLinks = new Set(existingSubcategory.jobs.map(j => j.applicationLink));
+                        const newJobs = newSubcategory.jobs.filter(job => !existingJobLinks.has(job.applicationLink));
+                        
+                        // Generate applicationLinks for new jobs that don't have one
+                        const processedNewJobs = await Promise.all(newJobs.map(async (job) => {
+                            if (!job.applicationLink) {
+                                return {
+                                    ...job,
+                                    applicationLink: generateUniqueId()
+                                };
+                            }
+                            return job;
+                        }));
+
+                        return {
+                            ...existingSubcategory,
+                            jobs: [...existingSubcategory.jobs, ...processedNewJobs]
+                        };
+                    } else {
+                        // New subcategory, process its jobs
+                        const processedJobs = await Promise.all(newSubcategory.jobs.map(async (job) => {
+                            if (!job.applicationLink) {
+                                return {
+                                    ...job,
+                                    applicationLink: generateUniqueId()
+                                };
+                            }
+                            return job;
+                        }));
+
+                        return {
+                            ...newSubcategory,
+                            jobs: processedJobs
+                        };
+                    }
+                }));
+
+                return {
+                    ...existingCategory,
+                    subcategories: mergedSubcategories
+                };
+            } else {
+                // New category, process all its jobs
+                const processedSubcategories = await Promise.all(newCategory.subcategories.map(async (subcategory) => {
+                    const processedJobs = await Promise.all(subcategory.jobs.map(async (job) => {
+                        if (!job.applicationLink) {
+                            return {
+                                ...job,
+                                applicationLink: generateUniqueId()
+                            };
+                        }
+                        return job;
+                    }));
                     return {
-                        ...job,
-                        applicationLink
+                        ...subcategory,
+                        jobs: processedJobs
                     };
                 }));
+
                 return {
-                    ...subcategory,
-                    jobs: processedJobs
+                    ...newCategory,
+                    subcategories: processedSubcategories
                 };
-            }));
-            return {
-                ...category,
-                subcategories: processedSubcategories
-            };
+            }
         }));
 
-        // Store processed categories
-        console.log('Storing processed categories...');
-        const result = await collection.insertMany(processedCategories);
-        console.log('Insert operation completed');
-        console.log('Inserted documents:', result.insertedCount);
+        // Update or insert categories
+        console.log('Updating/inserting categories...');
+        const updatePromises = processedCategories.map(async (category) => {
+            const result = await collection.updateOne(
+                { name: category.name },
+                { $set: category },
+                { upsert: true }
+            );
+            return result;
+        });
+
+        const results = await Promise.all(updatePromises);
+        const modifiedCount = results.reduce((acc, result) => acc + (result.modifiedCount || 0), 0);
+        const upsertedCount = results.reduce((acc, result) => acc + (result.upsertedCount || 0), 0);
 
         await client.close();
         console.log('MongoDB connection closed');
@@ -1147,9 +1213,10 @@ router.post('/store-jobs', async (req, res) => {
         console.log('=== Endpoint completed successfully ===');
         res.json({
             status: "1",
-            message: "Jobs data stored successfully with interview pages",
+            message: "Jobs data merged successfully",
             data: {
-                insertedCount: result.insertedCount,
+                modifiedCount,
+                upsertedCount,
                 categoriesCount: processedCategories.length
             }
         });
