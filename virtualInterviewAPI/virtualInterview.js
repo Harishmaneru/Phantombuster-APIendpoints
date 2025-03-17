@@ -1020,7 +1020,6 @@ router.post('/create-interview-page/:category/:subcategory/:applicationLink', as
             jobPostingUrl: job.Job_URL,
             companyUrl: job.Company_URL,
             questions: questions,
-            applicationLink: generateUniqueLink(),
             expiresAt: new Date(Date.now() + 60 * 24 * 60 * 60 * 1000) // 60 days from now
         };
 
