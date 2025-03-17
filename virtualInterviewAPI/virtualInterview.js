@@ -906,7 +906,7 @@ router.post('/submit-responses', upload.fields([
 
         const rating = await generateRating(jobDescription, [textAnswer, ...videoResponses]);
 
-        const client = new MongoClient(mongoUri, { useUnifiedTopology: true });
+        const client = new MongoClient(mongoUri);
         await client.connect();
         const db = client.db(dbName);
         const collection = db.collection(collectionName);
@@ -969,7 +969,7 @@ router.post('/create-interview-page/:category/:subcategory/:applicationLink', as
     let client;
 
     try {
-        client = new MongoClient(mongoUri, { useUnifiedTopology: true });
+        client = new MongoClient(mongoUri);
         await client.connect();
         const db = client.db(dbName);
         const collection = db.collection('jobCategories');
@@ -1100,7 +1100,7 @@ router.post('/store-jobs', async (req, res) => {
         }
 
         console.log('Attempting to connect to MongoDB...');
-        client = new MongoClient(mongoUri, { useUnifiedTopology: true });
+        client = new MongoClient(mongoUri);
         await client.connect();
         console.log('Successfully connected to MongoDB');
 
@@ -1177,7 +1177,7 @@ router.post('/store-jobs', async (req, res) => {
 // Endpoint to fetch all job data
 router.get('/fetch-jobs', async (req, res) => {
     try {
-        const client = new MongoClient(mongoUri, { useUnifiedTopology: true });
+        const client = new MongoClient(mongoUri);
         await client.connect();
         const db = client.db(dbName);
         const collection = db.collection('jobCategories');
@@ -1205,7 +1205,7 @@ router.get('/fetch-jobs', async (req, res) => {
 // Endpoint to fetch jobs by category
 router.get('/fetch-jobs/:category', async (req, res) => {
     try {
-        const client = new MongoClient(mongoUri, { useUnifiedTopology: true });
+        const client = new MongoClient(mongoUri);
         await client.connect();
         const db = client.db(dbName);
         const collection = db.collection('jobCategories');
@@ -1240,7 +1240,7 @@ router.get('/fetch-jobs/:category', async (req, res) => {
 // Endpoint to fetch jobs by category and subcategory
 router.get('/fetch-jobs/:category/:subcategory', async (req, res) => {
     try {
-        const client = new MongoClient(mongoUri, { useUnifiedTopology: true });
+        const client = new MongoClient(mongoUri);
         await client.connect();
         const db = client.db(dbName);
         const collection = db.collection('jobCategories');
@@ -1283,7 +1283,7 @@ router.post('/refresh-interview-page/:category/:subcategory/:applicationLink', a
     let client;
 
     try {
-        client = new MongoClient(mongoUri, { useUnifiedTopology: true });
+        client = new MongoClient(mongoUri);
         await client.connect();
         const db = client.db(dbName);
         const collection = db.collection('jobCategories');
