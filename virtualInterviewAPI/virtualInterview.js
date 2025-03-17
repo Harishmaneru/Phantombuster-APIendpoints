@@ -453,7 +453,7 @@ const scrapeJobDescription = async (jobPostingUrl, rayId = null) => {
         // Navigate with networkidle2 wait and longer timeout for EC2
         await page.goto(jobPostingUrl, {
             waitUntil: 'networkidle2',
-            timeout: 120000 // Longer timeout for EC2
+            timeout: 120000  
         });
         console.log('Successfully loaded the page');
 
@@ -932,6 +932,224 @@ router.post('/submit-responses', upload.fields([
         res.json({ message: 'Responses submitted and evaluated successfully.' });
     } catch (error) {
         res.status(500).json({ error: error.message });
+    }
+});
+
+// Add these MongoDB schema definitions at the top of the file
+const jobSchema = {
+    Job_Title: String,
+    Company: String,
+    Company_URL: String,
+    Company_Logo: String,
+    Location: String,
+    Compensation: String,
+    Employment_Type: String,
+    Portal: String,
+    Job_URL: String,
+    Posted_At: String,
+    Job_Description: String
+};
+
+const subcategorySchema = {
+    name: String,
+    jobs: [jobSchema]
+};
+
+const categorySchema = {
+    name: String,
+    subcategories: [subcategorySchema]
+};
+
+// Add these new endpoints after existing routes
+
+// Endpoint to store job data
+router.post('/store-jobs', async (req, res) => {
+    console.log('=== Starting /store-jobs endpoint ===');
+    console.log('Request received at:', new Date().toISOString());
+    
+    try {
+        // Log the request body structure
+        console.log('Request body structure:', {
+            hasCategories: !!req.body.categories,
+            categoriesCount: req.body.categories?.length || 0
+        });
+
+        // Validate input
+        if (!req.body.categories || !Array.isArray(req.body.categories)) {
+            console.error('Invalid input: categories array is missing or not an array');
+            return res.status(400).json({
+                status: "-1",
+                message: "Invalid input: categories array is required",
+                data: {}
+            });
+        }
+
+        console.log('Attempting to connect to MongoDB...');
+        const client = new MongoClient(mongoUri, { useUnifiedTopology: true });
+        await client.connect();
+        console.log('Successfully connected to MongoDB');
+
+        const db = client.db(dbName);
+        const collection = db.collection('jobCategories');
+
+        // Log existing data count
+        const existingCount = await collection.countDocuments();
+        console.log('Existing documents in collection:', existingCount);
+
+        // Clear existing data
+        console.log('Clearing existing data...');
+        await collection.deleteMany({});
+        console.log('Successfully cleared existing data');
+
+        // Log categories structure before insertion
+        console.log('Categories summary before insertion:', req.body.categories.map(cat => ({
+            name: cat.name,
+            subcategoriesCount: cat.subcategories?.length || 0,
+            totalJobs: cat.subcategories?.reduce((acc, sub) => acc + (sub.jobs?.length || 0), 0) || 0
+        })));
+
+        // Store new categories
+        console.log('Inserting new categories...');
+        const { categories } = req.body;
+        const result = await collection.insertMany(categories);
+        console.log('Insert operation completed');
+        console.log('Inserted documents:', result.insertedCount);
+
+        // Verify insertion
+        const newCount = await collection.countDocuments();
+        console.log('Total documents after insertion:', newCount);
+
+        await client.close();
+        console.log('MongoDB connection closed');
+
+        console.log('=== Endpoint completed successfully ===');
+        res.json({
+            status: "1",
+            message: "Jobs data stored successfully",
+            data: {
+                insertedCount: result.insertedCount,
+                categoriesCount: newCount
+            }
+        });
+    } catch (error) {
+        console.error('=== Error in /store-jobs endpoint ===');
+        console.error('Error details:', {
+            message: error.message,
+            stack: error.stack,
+            timestamp: new Date().toISOString()
+        });
+
+        await client?.close();
+        console.log('MongoDB connection closed after error');
+
+        res.status(500).json({
+            status: "-1",
+            message: error.message,
+            data: {}
+        });
+    }
+});
+
+// Endpoint to fetch all job data
+router.get('/fetch-jobs', async (req, res) => {
+    try {
+        const client = new MongoClient(mongoUri, { useUnifiedTopology: true });
+        await client.connect();
+        const db = client.db(dbName);
+        const collection = db.collection('jobCategories');
+
+        // Fetch all categories
+        const categories = await collection.find({}).toArray();
+
+        await client.close();
+
+        res.json({
+            status: "1",
+            message: "Jobs data fetched successfully",
+            data: { categories }
+        });
+    } catch (error) {
+        console.error('Error fetching jobs:', error);
+        res.status(500).json({
+            status: "-1",
+            message: error.message,
+            data: {}
+        });
+    }
+});
+
+// Endpoint to fetch jobs by category
+router.get('/fetch-jobs/:category', async (req, res) => {
+    try {
+        const client = new MongoClient(mongoUri, { useUnifiedTopology: true });
+        await client.connect();
+        const db = client.db(dbName);
+        const collection = db.collection('jobCategories');
+
+        const category = await collection.findOne({ name: req.params.category });
+
+        await client.close();
+
+        if (!category) {
+            return res.status(404).json({
+                status: "-1",
+                message: "Category not found",
+                data: {}
+            });
+        }
+
+        res.json({
+            status: "1",
+            message: "Category jobs fetched successfully",
+            data: { category }
+        });
+    } catch (error) {
+        console.error('Error fetching category jobs:', error);
+        res.status(500).json({
+            status: "-1",
+            message: error.message,
+            data: {}
+        });
+    }
+});
+
+// Endpoint to fetch jobs by category and subcategory
+router.get('/fetch-jobs/:category/:subcategory', async (req, res) => {
+    try {
+        const client = new MongoClient(mongoUri, { useUnifiedTopology: true });
+        await client.connect();
+        const db = client.db(dbName);
+        const collection = db.collection('jobCategories');
+
+        const category = await collection.findOne({
+            name: req.params.category,
+            'subcategories.name': req.params.subcategory
+        });
+
+        await client.close();
+
+        if (!category) {
+            return res.status(404).json({
+                status: "-1",
+                message: "Category or subcategory not found",
+                data: {}
+            });
+        }
+
+        const subcategory = category.subcategories.find(sub => sub.name === req.params.subcategory);
+
+        res.json({
+            status: "1",
+            message: "Subcategory jobs fetched successfully",
+            data: { subcategory }
+        });
+    } catch (error) {
+        console.error('Error fetching subcategory jobs:', error);
+        res.status(500).json({
+            status: "-1",
+            message: error.message,
+            data: {}
+        });
     }
 });
 
