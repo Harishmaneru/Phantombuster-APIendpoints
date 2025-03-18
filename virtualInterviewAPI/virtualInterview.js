@@ -1017,7 +1017,7 @@ router.post('/create-interview-page/:category/:subcategory/:applicationLink', as
         const allQuestions = [customQuestion, ...questions];
 
         // Create interview link using /interviewlink endpoint logic
-        const applicationLink = generateUniqueId();
+        // const applicationLink = generateUniqueId();
         const interviewData = {
             userId: 'system',
             email: 'system@recordedinterview.com',
@@ -1026,7 +1026,7 @@ router.post('/create-interview-page/:category/:subcategory/:applicationLink', as
             companyUrl: job.Company_URL,
             companyLogoUrl: job.Company_Logo,
             questions: allQuestions,
-            applicationLink: applicationLink,
+            applicationLink: job.applicationLink,
             expiresAt: new Date(Date.now() + 60 * 24 * 60 * 60 * 1000) 
         };
 
@@ -1343,95 +1343,96 @@ router.get('/fetch-jobs/:category/:subcategory', async (req, res) => {
         });
     }
 });
+ // Add this new endpoint
+// router.post('/refresh-interview-page/:category/:subcategory/:applicationLink', async (req, res) => {
+//     console.log('=== Starting refresh/create interview page endpoint ===');
+//     let client;
 
-// Add this new endpoint
-router.post('/refresh-interview-page/:category/:subcategory/:applicationLink', async (req, res) => {
-    console.log('=== Starting refresh/create interview page endpoint ===');
-    let client;
+//     try {
+//         client = new MongoClient(mongoUri);
+//         await client.connect();
+//         const db = client.db(dbName);
+//         const collection = db.collection('jobCategories');
 
-    try {
-        client = new MongoClient(mongoUri);
-        await client.connect();
-        const db = client.db(dbName);
-        const collection = db.collection('jobCategories');
+//         // Find the specific job
+//         const category = await collection.findOne({
+//             name: req.params.category,
+//             'subcategories.name': req.params.subcategory
+//         });
 
-        // Find the specific job
-        const category = await collection.findOne({
-            name: req.params.category,
-            'subcategories.name': req.params.subcategory
-        });
+//         if (!category) {
+//             throw new Error('Category or subcategory not found');
+//         }
 
-        if (!category) {
-            throw new Error('Category or subcategory not found');
-        }
+//         const subcategory = category.subcategories.find(sub => sub.name === req.params.subcategory);
+//         const job = subcategory.jobs.find(job => job.applicationLink === req.params.applicationLink);
 
-        const subcategory = category.subcategories.find(sub => sub.name === req.params.subcategory);
-        const job = subcategory.jobs.find(job => job.applicationLink === req.params.applicationLink);
+//         if (!job) {
+//             throw new Error('Job not found');
+//         }
 
-        if (!job) {
-            throw new Error('Job not found');
-        }
+//         // Check if job already has an interview page
+//         const isCreating = !job.interviewPageLink;
+//         console.log(isCreating ?
+//             'Creating new interview page...' :
+//             'Refreshing existing interview page...'
+//         );
 
-        // Check if job already has an interview page
-        const isCreating = !job.interviewPageLink;
-        console.log(isCreating ?
-            'Creating new interview page...' :
-            'Refreshing existing interview page...'
-        );
+//         // Create new interview page
+//         const newInterviewPageLink = await createInterviewPage(job);
 
-        // Create new interview page
-        const newInterviewPageLink = await createInterviewPage(job);
+//         if (!newInterviewPageLink) {
+//             throw new Error('Failed to create interview page');
+//         }
 
-        if (!newInterviewPageLink) {
-            throw new Error('Failed to create interview page');
-        }
+//         // Update the job with new interview page link
+//         await collection.updateOne(
+//             {
+//                 name: req.params.category,
+//                 'subcategories.name': req.params.subcategory,
+//                 'subcategories.jobs.applicationLink': req.params.applicationLink
+//             },
+//             {
+//                 $set: {
+//                     'subcategories.$[sub].jobs.$[job].interviewPageLink': newInterviewPageLink
+//                 }
+//             },
+//             {
+//                 arrayFilters: [
+//                     { 'sub.name': req.params.subcategory },
+//                     { 'job.applicationLink': req.params.applicationLink }
+//                 ]
+//             }
+//         );
 
-        // Update the job with new interview page link
-        await collection.updateOne(
-            {
-                name: req.params.category,
-                'subcategories.name': req.params.subcategory,
-                'subcategories.jobs.applicationLink': req.params.applicationLink
-            },
-            {
-                $set: {
-                    'subcategories.$[sub].jobs.$[job].interviewPageLink': newInterviewPageLink
-                }
-            },
-            {
-                arrayFilters: [
-                    { 'sub.name': req.params.subcategory },
-                    { 'job.applicationLink': req.params.applicationLink }
-                ]
-            }
-        );
-
-        res.json({
-            status: "1",
-            message: isCreating ?
-                "Interview page created successfully" :
-                "Interview page refreshed successfully",
-            data: {
-                interviewPageLink: newInterviewPageLink,
-                action: isCreating ? 'created' : 'refreshed'
-            }
-        });
-    } catch (error) {
-        console.error('Error in interview page operation:', error);
-        res.status(500).json({
-            status: "-1",
-            message: error.message,
-            data: {}
-        });
-    } finally {
-        if (client) {
-            await client.close();
-            console.log('MongoDB connection closed');
-        }
-    }
-});
+//         res.json({
+//             status: "1",
+//             message: isCreating ?
+//                 "Interview page created successfully" :
+//                 "Interview page refreshed successfully",
+//             data: {
+//                 interviewPageLink: newInterviewPageLink,
+//                 action: isCreating ? 'created' : 'refreshed'
+//             }
+//         });
+//     } catch (error) {
+//         console.error('Error in interview page operation:', error);
+//         res.status(500).json({
+//             status: "-1",
+//             message: error.message,
+//             data: {}
+//         });
+//     } finally {
+//         if (client) {
+//             await client.close();
+//             console.log('MongoDB connection closed');
+//         }
+//     }
+// });
 
 // Add this helper function
+
+
 function generateUniqueId() {
     const timestamp = Date.now().toString(36);
     const randomString = Math.random().toString(36).substr(2, 6);
