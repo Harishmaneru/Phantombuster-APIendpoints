@@ -1017,7 +1017,7 @@ router.post('/create-interview-page/:category/:subcategory/:applicationLink', as
         const allQuestions = [customQuestion, ...questions];
 
         // Create interview link using /interviewlink endpoint logic
-        // const applicationLink = generateUniqueId();
+        const applicationLink = req.params.applicationLink;  
         const interviewData = {
             userId: 'system',
             email: 'system@recordedinterview.com',
@@ -1026,7 +1026,7 @@ router.post('/create-interview-page/:category/:subcategory/:applicationLink', as
             companyUrl: job.Company_URL,
             companyLogoUrl: job.Company_Logo,
             questions: allQuestions,
-            applicationLink: job.applicationLink || generateUniqueId(),
+            applicationLink: applicationLink,
             expiresAt: new Date(Date.now() + 60 * 24 * 60 * 60 * 1000) 
         };
 
