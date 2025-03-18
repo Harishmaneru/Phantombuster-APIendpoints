@@ -59,13 +59,13 @@ async function updateExpiredInterviews() {
 
 router.post('/interviewlink', upload.single('companyLogo'), async (req, res) => {
     try {
-        const { userId, interviewTitle, email, jobPostingUrl, companyUrl, questions } = req.body;
+        const { userId, interviewTitle, email, jobPostingUrl, companyUrl, questions, applicationLink: providedApplicationLink } = req.body;
 
         if (!userId || !interviewTitle || !email || !jobPostingUrl || !questions) {
             return res.status(400).json({ success: false, message: 'Missing required fields' });
         }
 
-        const applicationLink = generateUniqueLink();
+        const applicationLink = providedApplicationLink || generateUniqueLink();
         const expiresAt = new Date();
         expiresAt.setDate(expiresAt.getDate() + 60);
 

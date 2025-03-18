@@ -1026,7 +1026,7 @@ router.post('/create-interview-page/:category/:subcategory/:applicationLink', as
             companyUrl: job.Company_URL,
             companyLogoUrl: job.Company_Logo,
             questions: allQuestions,
-            applicationLink: job.applicationLink,
+            applicationLink: job.applicationLink || generateUniqueId(),
             expiresAt: new Date(Date.now() + 60 * 24 * 60 * 60 * 1000) 
         };
 
