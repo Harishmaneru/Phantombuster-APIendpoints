@@ -20,12 +20,14 @@ const InterviewSchema = new mongoose.Schema({
     interviewTitle: { type: String, required: true },
     jobPostingUrl: { type: String, required: true },
     companyUrl: String,
-    companyLogoUrl: String, // Store logo as a URL or base64 string
+    companyLogoUrl: String,
     questions: { type: [String], required: true },
     applicationLink: { type: String, unique: true, required: true },
     createdAt: { type: Date, default: Date.now },
     expiresAt: { type: Date, required: true },
-    status: { type: String, enum: ['active', 'expired', 'deleted'], default: 'active' }
+    status: { type: String, enum: ['active', 'expired', 'deleted'], default: 'active' },
+    viewCount: { type: Number, default: 0 },
+    lastViewed: { type: Date }
 });
 
 const Interview = mongoose.model('Interview', InterviewSchema);
@@ -166,8 +168,8 @@ router.get('/allinterviews', async (req, res) => {
 
         // Extract query parameters
         const userId = req.query.userId;
-        const page = Math.max(parseInt(req.query.page) || 1, 1); // Ensure page is at least 1
-        const limit = Math.min(Math.max(parseInt(req.query.limit) || 10, 1), 100); // Limit between 1 and 100
+        const page = Math.max(parseInt(req.query.page) || 1, 1); 
+        const limit = Math.min(Math.max(parseInt(req.query.limit) || 10, 1), 100);  
 
         // Build the filter object
         const filter = {};
@@ -184,8 +186,8 @@ router.get('/allinterviews', async (req, res) => {
 
         // Fetch paginated interviews
         const interviews = await Interview.find(filter)
-            .select('-companyLogoUrl')  
-            .sort({ createdAt: -1 })  
+            .select('-companyLogoUrl')
+            .sort({ createdAt: -1 })
             .skip(skip)
             .limit(limit);
 
@@ -277,6 +279,65 @@ router.get('/interview/:linkId', async (req, res) => {
     } catch (err) {
         console.error('Error fetching interview:', err);
         res.status(500).json({ success: false, message: 'Failed to fetch interview details' });
+    }
+});
+
+// Get view count for an interview
+router.get('/interview/:interviewCode/views', async (req, res) => {
+    try {
+        const { interviewCode } = req.params;
+        const interview = await Interview.findOne({ applicationLink: interviewCode });
+
+        if (!interview) {
+            return res.status(404).json({
+                success: false,
+                message: 'Interview not found'
+            });
+        }
+
+        res.json({
+            success: true,
+            viewCount: interview.viewCount || 0
+        });
+    } catch (error) {
+        console.error('Error fetching view count:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Failed to fetch view count'
+        });
+    }
+});
+
+// Increment view count
+router.post('/interview/:interviewCode/views', async (req, res) => {
+    try {
+        const { interviewCode } = req.params;
+        const interview = await Interview.findOneAndUpdate(
+            { applicationLink: interviewCode },
+            {
+                $inc: { viewCount: 1 },
+                lastViewed: new Date()
+            },
+            { new: true }
+        );
+
+        if (!interview) {
+            return res.status(404).json({
+                success: false,
+                message: 'Interview not found'
+            });
+        }
+
+        res.json({
+            success: true,
+            viewCount: interview.viewCount
+        });
+    } catch (error) {
+        console.error('Error updating view count:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Failed to update view count'
+        });
     }
 });
 

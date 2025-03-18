@@ -22,13 +22,13 @@ const matchProspects = async (prospectData) => {
         if (prospectData.company_name) matchData.company_name = prospectData.company_name;
         if (prospectData.job_title) matchData.job_title = prospectData.job_title;
 
-        console.log('Matching prospect with data:', matchData);
+        console.log('exploriumAPI:Matching prospect with data:', matchData);
 
         const response = await exploriumAxios.post('/prospects/match', {
             prospects_to_match: [matchData]
         });
 
-        console.log('Matched prospects:', response.data.matched_prospects);
+        console.log('exploriumAPI:Matched prospects:', response.data.matched_prospects);
         const prospects = response.data.matched_prospects;
         return prospects.map(p => p.prospect_id);
     } catch (error) {
@@ -86,9 +86,9 @@ const fetchPersonChanges = async (prospectIds, timestampFrom) => {
             timestamp_from: timestampFrom
         });
 
-        console.log('Role Changes Response:', roleChanges.data);
-        console.log('Company Changes Response:', companyChanges.data);
-        console.log('Anniversaries Response:', anniversaries.data);
+        console.log('exploriumAPI:Role Changes Response:', roleChanges.data);
+        console.log('exploriumAPI:Company Changes Response:', companyChanges.data);
+        console.log('exploriumAPI:Anniversaries Response:', anniversaries.data);
 
         // Safely extract events from each response using output_events
         const roleEvents = Array.isArray(roleChanges.data?.output_events) ? roleChanges.data.output_events : [];
@@ -128,12 +128,12 @@ const fetchPersonChanges = async (prospectIds, timestampFrom) => {
             return 0;
         });
 
-        console.log('Combined person changes:', allEvents);
+        console.log('exploriumAPI:Combined person changes:', allEvents);
         return allEvents;
     } catch (error) {
-        console.error('Error fetching person changes:', error);
+        console.error('exploriumAPI:Error fetching person changes:', error);
         if (error.response) {
-            console.error('API Response Error:', error.response.data);
+            console.error('exploriumAPI:API Response Error:', error.response.data);
         }
         throw new Error('Failed to fetch person changes: ' + (error.response?.data?.message || error.message));
     }
@@ -145,10 +145,10 @@ const fetchPersonContactsInformation = async (prospectId) => {
             prospect_id: prospectId,
         });
 
-        console.log('fetchPersonContactsInformation:', response.data);
+        console.log('exploriumAPI:fetchPersonContactsInformation:', response.data);
         return response.data || [];
     } catch (error) {
-        console.error('Error fetchPersonContactsInformation:', error.response?.data || error.message);
+        console.error('exploriumAPI:Error fetchPersonContactsInformation:', error.response?.data || error.message);
         throw error;
     }
 };
@@ -159,7 +159,7 @@ const fetchPersonProfessionalProfile = async (prospectId) => {
             prospect_id: prospectId,
         });
 
-        console.log('fetchPersonProfessionalProfile:', response.data);
+        console.log('exploriumAPI:fetchPersonProfessionalProfile:', response.data);
         return response.data || [];
     } catch (error) {
         console.error('Error fetchPersonProfessionalProfile:', error.response?.data || error.message);
