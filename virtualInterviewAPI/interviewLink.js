@@ -93,7 +93,7 @@ router.post('/interviewlink', upload.single('companyLogo'), async (req, res) => 
             success: true,
             message: 'Interview created successfully',
             data: {
-                applicationLink: `https://www.recordedinterview.com/InterviewPage/${applicationLink}`,
+                applicationLink: `https://app.recordedinterview.com/InterviewPage/${applicationLink}`,
                 expiresAt,
                 interviewTitle,
                 email,
@@ -168,8 +168,8 @@ router.get('/allinterviews', async (req, res) => {
 
         // Extract query parameters
         const userId = req.query.userId;
-        const page = Math.max(parseInt(req.query.page) || 1, 1); 
-        const limit = Math.min(Math.max(parseInt(req.query.limit) || 10, 1), 100);  
+        const page = Math.max(parseInt(req.query.page) || 1, 1);
+        const limit = Math.min(Math.max(parseInt(req.query.limit) || 10, 1), 100);
 
         // Build the filter object
         const filter = {};
@@ -205,7 +205,7 @@ router.get('/allinterviews', async (req, res) => {
             email: interview.email,
             jobPostingUrl: interview.jobPostingUrl,
             questions: interview.questions,
-            applicationLink: `https://www.recordedinterview.com/InterviewPage/${interview.applicationLink}`,
+            applicationLink: `https://app.recordedinterview.com/InterviewPage/${interview.applicationLink}`,
             createdAt: interview.createdAt,
             expiresAt: interview.expiresAt,
             status: interview.status,

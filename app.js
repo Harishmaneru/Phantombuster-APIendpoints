@@ -35,13 +35,13 @@ const phoneValidationApi = require('./TrestleAPI/phoneValidationApi.js');
 
 const findPerson = require('./TrestleAPI/findPerson.js')
 
-const realContact =require('./TrestleAPI/realContact.js');
+const realContact = require('./TrestleAPI/realContact.js');
 
 const phoneFeedback = require('./TrestleAPI/phoneFeedback.js');
 
-const filingController =require('./secFilings/filingController.js');
+const filingController = require('./secFilings/filingController.js');
 
-const downloadFillings =require('./secFilings/downloadFillings.js');
+const downloadFillings = require('./secFilings/downloadFillings.js');
 
 const pressFundingAnnounements = require('./pressFundingAnnounements/newsAnnouncements.js');
 
@@ -55,7 +55,7 @@ const jobSignals = require('./pressFundingAnnounements/jobSignals.js');
 
 const companyPosts = require('./rapidAPI/companyPosts.js');
 
-const getCompanyArticles  = require('./pressFundingAnnounements/getCompanyArticles.js');
+const getCompanyArticles = require('./pressFundingAnnounements/getCompanyArticles.js');
 
 const fetchCompanyByDomain = require('./pressFundingAnnounements/fetchCompanyByDomain.js');
 
@@ -112,10 +112,11 @@ app.use(
       "http://localhost:4200",
       "http://localhost:4201",
       /\.onepgr\.com$/,
-      "https://videoresponse.onepgr.com", 
-      "https://virtual-interviewer-taupe.vercel.app",  
-      "https://virtual-interviewer-igmc.vercel.app",
-      "https://www.recordedinterview.com"
+      "https://videoresponse.onepgr.com",
+      "https://www.recordedinterview.com",
+      "https://www.app.recordedinterview.com",
+      "https://www.app.recordedinterview.com",
+      "https://app.recordedinterview.com"
 
     ],
     methods: ["GET", "PUT", "POST", "DELETE", "OPTIONS"],

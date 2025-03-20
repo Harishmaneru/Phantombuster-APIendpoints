@@ -102,7 +102,7 @@ const fetchPersonChanges = async (prospectIds, timestampFrom) => {
                 event_time: event.event_time,
                 event_id: event.event_id,
                 prospect_id: event.prospect_id,
-                ...event.data // Spread the data object which contains the specific event details
+                ...event.data  
             })),
             ...companyEvents.map(event => ({
                 event_type: event.event_name,
@@ -244,7 +244,7 @@ router.post('/fetch-person-changes', async (req, res) => {
 
 
 
-
+//fetchPersonContactsInformation API
 router.post('/fetch-person-info', async (req, res) => {
     try {
         const { linkedinUrl } = req.body;
@@ -304,7 +304,7 @@ router.post('/fetch-person-info', async (req, res) => {
     }
 });
 
-
+//ProfessionalProfile API
 router.post('/fetchProfessionalinfo', async (req, res) => {
     try {
         const { linkedinUrl } = req.body;

@@ -1017,7 +1017,7 @@ router.post('/create-interview-page/:category/:subcategory/:applicationLink', as
         const allQuestions = [customQuestion, ...questions];
 
         // Create interview link using /interviewlink endpoint logic
-        const applicationLink = req.params.applicationLink;  
+        const applicationLink = req.params.applicationLink;
         const interviewData = {
             userId: 'system',
             email: 'system@recordedinterview.com',
@@ -1027,14 +1027,14 @@ router.post('/create-interview-page/:category/:subcategory/:applicationLink', as
             companyLogoUrl: job.Company_Logo,
             questions: allQuestions,
             applicationLink: applicationLink,
-            expiresAt: new Date(Date.now() + 60 * 24 * 60 * 60 * 1000) 
+            expiresAt: new Date(Date.now() + 60 * 24 * 60 * 60 * 1000)
         };
 
         // Create new interview document using Interview model
         const interview = new Interview(interviewData);
         await interview.save();
 
-        const interviewPageLink = `https://www.recordedinterview.com/InterviewPage/${applicationLink}`;
+        const interviewPageLink = `https://app.recordedinterview.com/InterviewPage/${applicationLink}`;
 
         // Update the job with interview page link - modified query
         await collection.updateOne(
@@ -1118,17 +1118,17 @@ router.post('/store-jobs', async (req, res) => {
         const processedCategories = await Promise.all(req.body.categories.map(async (newCategory) => {
             // Find existing category
             const existingCategory = existingCategories.find(ec => ec.name === newCategory.name);
-            
+
             if (existingCategory) {
                 // Merge subcategories
                 const mergedSubcategories = await Promise.all(newCategory.subcategories.map(async (newSubcategory) => {
                     const existingSubcategory = existingCategory.subcategories.find(es => es.name === newSubcategory.name);
-                    
+
                     if (existingSubcategory) {
                         // Merge jobs, avoiding duplicates based on applicationLink
                         const existingJobLinks = new Set(existingSubcategory.jobs.map(j => j.applicationLink));
                         const newJobs = newSubcategory.jobs.filter(job => !existingJobLinks.has(job.applicationLink));
-                        
+
                         // Generate applicationLinks for new jobs that don't have one
                         const processedNewJobs = await Promise.all(newJobs.map(async (job) => {
                             if (!job.applicationLink) {
@@ -1343,7 +1343,7 @@ router.get('/fetch-jobs/:category/:subcategory', async (req, res) => {
         });
     }
 });
- // Add this new endpoint
+// Add this new endpoint
 // router.post('/refresh-interview-page/:category/:subcategory/:applicationLink', async (req, res) => {
 //     console.log('=== Starting refresh/create interview page endpoint ===');
 //     let client;

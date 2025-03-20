@@ -145,7 +145,7 @@ async function sendSubmissionEmails(submission, sendSummary) {
       <p><strong>Applicant Name:</strong> ${applicantName}</p>
       <p><strong>Applicant Email:</strong> ${email}</p>
       <p><strong>LinkedIn URL:</strong> ${linkedInUrl}</p>
-      <p><strong>Application Link:</strong> https://www.recordedinterview.com/InterviewPage/${applicationLink}</p>
+      <p><strong>Application Link:</strong> https://app.recordedinterview.com/InterviewPage/${applicationLink}</p>
       <p><strong>Submitted At:</strong> ${submittedAt}</p>
     `;
 
@@ -174,7 +174,7 @@ async function sendSubmissionEmails(submission, sendSummary) {
           <li><strong>Applicant Name:</strong> ${applicantName}</li>
           <li><strong>Email:</strong> ${email}</li>
           <li><strong>LinkedIn URL:</strong> ${linkedInUrl}</li>
-          <li><strong>Application Link:</strong> https://www.recordedinterview.com/InterviewPage/${applicationLink}</li>
+          <li><strong>Application Link:</strong> https://app.recordedinterview.com/InterviewPage/${applicationLink}</li>
           <li><strong>Submitted At:</strong> ${submittedAt}</li>
         </ul>
         <p>We appreciate your interest and will get back to you soon.</p>
@@ -408,9 +408,9 @@ router.delete('/submissions/:submissionId', ensureDbConnection, async (req, res)
     // Fetch the submission
     const submission = await Submission.findById(submissionId);
     if (!submission) {
-      return res.status(404).json({ 
-        success: false, 
-        message: 'Submission not found' 
+      return res.status(404).json({
+        success: false,
+        message: 'Submission not found'
       });
     }
 
@@ -744,7 +744,7 @@ router.post('/evaluate-videos', ensureDbConnection, async (req, res) => {
       const videoUrl = videoResponse.videoUrl;
 
       const videoPath = await downloadFileFromS3(videoUrl);
-     
+
       const transcription = await processAudioVideo(videoPath, videoResponse.fileName);
 
       const evaluation = await evaluateTranscription(transcription, videoResponse.question);
@@ -857,9 +857,9 @@ router.get('/score/:submissionId', ensureDbConnection, async (req, res) => {
     const submissionId = req.params.submissionId;
     const submission = await Submission.findById(submissionId, { score: 1 });
     if (!submission) {
-      return res.status(404).json({ 
-        success: false, 
-        message: 'Submission not found' 
+      return res.status(404).json({
+        success: false,
+        message: 'Submission not found'
       });
     }
     res.status(200).json({
@@ -934,7 +934,7 @@ router.post('/share/generate', ensureDbConnection, async (req, res) => {
     });
 
     // Construct share URL
-    const shareLink = `https://www.recordedinterview.com/candidate_response/${token}?id=${submissionId}`;
+    const shareLink = `https://app.recordedinterview.com/candidate_response/${token}?id=${submissionId}`;
 
     return res.status(200).json({
       success: true,
@@ -999,7 +999,7 @@ router.post('/share/sendEmail', ensureDbConnection, async (req, res) => {
   try {
     const { recipients, subject, message, isPublic } = req.body;
 
- 
+
     if (!recipients || !subject || !message) {
       return res.status(400).json({
         success: false,
@@ -1007,7 +1007,7 @@ router.post('/share/sendEmail', ensureDbConnection, async (req, res) => {
       });
     }
 
-    
+
     const emailList = recipients
       .split(',')
       .map((email) => email.trim())
@@ -1019,18 +1019,18 @@ router.post('/share/sendEmail', ensureDbConnection, async (req, res) => {
         message: 'No valid email addresses provided'
       });
     }
- 
+
     console.log("Is public?", isPublic);
 
     // Define mail options
     const mailOptions = {
-      from: 'harish@onepgr.us',   
-      to: emailList,            
+      from: 'harish@onepgr.us',
+      to: emailList,
       subject,
       html: message
     };
 
- 
+
     const info = await transporter.sendMail(mailOptions);
     console.log("Email sent:", info.messageId);
 
