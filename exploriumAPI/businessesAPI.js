@@ -95,8 +95,11 @@ const fetchFundingAndAcquisition = async (businessId) => {
         const response = await exploriumAxios.post('businesses/company_ratings_by_employees/enrich', {
             business_id: businessId
         });
-        console.log('Fetched funding and acquisition data:', response.data);
-        return response.data || {};
+
+        // Extract just the data object from the response
+        const fundingData = response.data?.data || {};
+        console.log('Fetched funding and acquisition data:', fundingData);
+        return fundingData;
     } catch (error) {
         console.error('Error fetching funding and acquisition data:', error.response?.data || error.message);
         throw new Error('Failed to fetch funding and acquisition data');
