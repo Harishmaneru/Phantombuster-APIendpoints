@@ -144,7 +144,7 @@ console.log('Email transporter configuration:', {
 });
 
 // Immediately verify transporter on module load
-(async function() {
+(async function () {
   try {
     const verification = await transporter.verify();
     console.log('Initial email transporter verification:', verification);
@@ -184,26 +184,48 @@ async function sendSubmissionEmails(submission, sendSummary) {
     });
 
     const companyName = (() => {
-
       if (interview?.companyUrl) {
         const url = interview.companyUrl;
-    
+
         if (url.startsWith('@https://')) {
           // Extract domain name without TLD
           const domain = new URL(url.substring(1)).hostname;
           // Remove .com, .org, etc. and return company name
           return domain.split('.')[0];
         }
-        return url; 
+
+        // Handle regular URLs (without @ prefix)
+        try {
+          // Try to create a URL object
+          const urlObj = new URL(url);
+          // Extract the hostname without www. if present
+          const hostname = urlObj.hostname.replace(/^www\./, '');
+          // Extract the domain name without TLD (.com, .org, etc.)
+          const domainParts = hostname.split('.');
+          if (domainParts.length >= 1) {
+            // Format the company name nicely - TalentBoxLabsInc -> TalentBoxLabs, Inc
+            let name = domainParts[0];
+            // Check if domain contains "Inc" at the end
+            if (/Inc$/i.test(name)) {
+              name = name.replace(/Inc$/i, ', Inc');
+            }
+            return name;
+          }
+        } catch (e) {
+          // If URL parsing fails, just return the URL as is
+          console.error('Failed to parse company URL:', e);
+        }
+
+        return url;
       }
       return "Our Team";
     })();
-    
+
     console.log(`Sending emails for submission from ${applicantName} to ${hiringManagerEmail}`);
 
     // Email to Hiring Manager
     const hmEmailBody = `
-      <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; text-align: start;">
+      <div style="font-family: Arial, sans-serif; max-width: 600px; text-align: left;">
         <h4 style="color: #2d3748;">New Application Submission Received</h4>
         <p style="color: #4a5568;"><strong>Applicant Name:</strong> ${applicantName}</p>
         <p style="color: #4a5568;"><strong>Applicant Email:</strong> ${email}</p>
@@ -234,7 +256,7 @@ async function sendSubmissionEmails(submission, sendSummary) {
     // Email to Applicant (if they opted in)
     if (sendSummary) {
       const applicantEmailBody = `
-        <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; text-align: start;">
+        <div style="font-family: Arial, sans-serif; max-width: 600px; text-align: left;">
           <h3 style="color: #2d3748;">Thank You for Your Application!</h3>
           <p style="color: #4a5568;">Dear ${applicantName},</p>
           <p style="color: #4a5568;">Thank you for submitting your application to ${companyName}. Here's a summary of your submission:</p>
@@ -426,7 +448,7 @@ router.post('/submit', ensureDbConnection, handleUpload, async (req, res) => {
 
     // Send emails
     const emailResult = await sendSubmissionEmails(savedSubmission, sendSummary);
-    
+
     // Log email status
     if (!emailResult.success) {
       logSubmissionActivity('Email Sending Error', { error: emailResult.error });
@@ -1131,7 +1153,7 @@ router.post('/share/sendEmail', ensureDbConnection, async (req, res) => {
       const info = await transporter.sendMail(mailOptions);
       console.log("Email sent:", info.messageId);
       console.log("Email recipients:", info.accepted.join(', '));
-      
+
       if (info.rejected && info.rejected.length > 0) {
         console.error("Some recipients were rejected:", info.rejected.join(', '));
       }
