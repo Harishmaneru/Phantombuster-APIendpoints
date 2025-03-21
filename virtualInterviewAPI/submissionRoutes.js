@@ -126,11 +126,12 @@ const ensureDbConnection = async (req, res, next) => {
 };
 
 const transporter = nodemailer.createTransport({
-  host: 'smtp.gmail.com',
-  port: 465,
-  secure: true,
+  // host: 'smtp.gmail.com',
+  // port: 465,
+  service: 'gmail',
+  // secure: true,
   auth: {
-    user: 'harish@onepgr.us',
+    user: 'admin@recordedinterview.com',
     pass: process.env.EMAIL_PASSWORD,
   },
 });
@@ -150,7 +151,7 @@ async function sendSubmissionEmails(submission, sendSummary) {
     `;
 
   const hmMailOptions = {
-    from: 'harish@onepgr.us',
+    from: 'admin@recordedinterview.com',
     to: hiringManagerEmail,
     // bcc: 'rajiv@onepgr.com',
     subject: 'New Application Submission Received',
@@ -181,7 +182,7 @@ async function sendSubmissionEmails(submission, sendSummary) {
       `;
 
     const applicantMailOptions = {
-      from: 'harish@onepgr.us',
+      from: 'admin@recordedinterview.com',
       to: email,
       subject: 'Thank You for Your Application',
       html: applicantEmailBody
@@ -1024,7 +1025,7 @@ router.post('/share/sendEmail', ensureDbConnection, async (req, res) => {
 
     // Define mail options
     const mailOptions = {
-      from: 'harish@onepgr.us',
+      from: 'admin@recordedinterview.com',
       to: emailList,
       subject,
       html: message
