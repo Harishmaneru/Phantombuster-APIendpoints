@@ -102,7 +102,7 @@ const fetchPersonChanges = async (prospectIds, timestampFrom) => {
                 event_time: event.event_time,
                 event_id: event.event_id,
                 prospect_id: event.prospect_id,
-                ...event.data  
+                ...event.data
             })),
             ...companyEvents.map(event => ({
                 event_type: event.event_name,
@@ -155,7 +155,7 @@ const fetchPersonContactsInformation = async (prospectId) => {
 
 const fetchPersonProfessionalProfile = async (prospectId) => {
     try {
-        const response = await exploriumAxios.post('/prospects/professional-profile/enrich', {
+        const response = await exploriumAxios.post('prospects/profiles/enrich', {
             prospect_id: prospectId,
         });
 
@@ -244,8 +244,7 @@ router.post('/fetch-person-changes', async (req, res) => {
 
 
 
-//fetchPersonContactsInformation API
-router.post('/fetch-person-info', async (req, res) => {
+router.post('/fetchpersonProfessionalinfo', async (req, res) => {
     try {
         const { linkedinUrl } = req.body;
 
@@ -257,8 +256,10 @@ router.post('/fetch-person-info', async (req, res) => {
             });
         }
 
-        // Get prospect IDs
-        const prospectIds = await matchProspects(linkedinUrl);
+        const prospectIds = await matchProspects({
+            linkedin: linkedinUrl
+        });
+
         if (!prospectIds.length) {
             return res.status(404).json({
                 status: '-1',
@@ -266,101 +267,30 @@ router.post('/fetch-person-info', async (req, res) => {
             });
         }
 
-        // Get combined changes
-        const PersonContactsInformation = await fetchPersonContactsInformation(prospectIds);
+        // Get both professional profile and contacts information concurrently
+        const [professionalProfile, contactsInfo] = await Promise.all([
+            fetchPersonProfessionalProfile(prospectIds[0]),
+            fetchPersonContactsInformation(prospectIds[0])
+        ]);
 
-        res.json({
+        // Combine both responses
+        const response = {
             status: '1',
-            PersonContactsInformation: PersonContactsInformation,
-            PersonContactsInformation: PersonContactsInformation.length,
-        });
+            PersonProfessionalProfileResponse: professionalProfile.response_context,
+            PersonProfessionalProfil: professionalProfile.data,
+            PersonContactsInformationResponse: contactsInfo.response_context,
+            PersonContactsInformation: contactsInfo.data
+        };
+
+        res.json(response);
 
     } catch (error) {
         const statusCode = error.response?.status || 500;
-
-        // Send the actual error message from the API
-        const errorMessage = (() => {
-            try {
-                if (error.response?.data) {
-                    // Handle Explorium-style errors
-                    if (typeof error.response.data === 'object') {
-                        return error.response.data.detail ||
-                            error.response.data.message ||
-                            JSON.stringify(error.response.data);
-                    }
-                    return error.response.data;
-                }
-                return error.message || 'An error occurred during processing';
-            } catch (parseError) {
-                return 'Contacts Information Not Found';
-            }
-        })();
-
         res.status(statusCode).json({
             status: '-1',
-            message: errorMessage
-
+            message: error.message || 'An error occurred during processing'
         });
     }
 });
 
-//ProfessionalProfile API
-router.post('/fetchProfessionalinfo', async (req, res) => {
-    try {
-        const { linkedinUrl } = req.body;
-
-        // Validate required parameters
-        if (!linkedinUrl) {
-            return res.status(400).json({
-                status: '-1',
-                message: 'LinkedIn URL is required'
-            });
-        }
-
-        // Get prospect IDs
-        const prospectIds = await matchProspects(linkedinUrl);
-        if (!prospectIds.length) {
-            return res.status(404).json({
-                status: '-1',
-                message: 'No prospects found for the given LinkedIn URL'
-            });
-        }
-
-        // Get combined changes
-        const PersonContactsInformation = await fetchPersonProfessionalProfile(prospectIds);
-
-        res.json({
-            status: '1',
-            PersonContactsInformation: PersonContactsInformation,
-            PersonContactsInformation: PersonContactsInformation.length,
-        });
-
-    } catch (error) {
-        const statusCode = error.response?.status || 500;
-
-        // Send the actual error message from the API
-        const errorMessage = (() => {
-            try {
-                if (error.response?.data) {
-                    // Handle Explorium-style errors
-                    if (typeof error.response.data === 'object') {
-                        return error.response.data.detail ||
-                            error.response.data.message ||
-                            JSON.stringify(error.response.data);
-                    }
-                    return error.response.data;
-                }
-                return error.message || 'An error occurred during processing';
-            } catch (parseError) {
-                return 'Contacts Information Not Found';
-            }
-        })();
-
-        res.status(statusCode).json({
-            status: '-1',
-            message: errorMessage
-
-        });
-    }
-});
 module.exports = router;
