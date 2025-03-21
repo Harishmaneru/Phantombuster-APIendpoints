@@ -140,21 +140,30 @@ const transporter = nodemailer.createTransport({
 async function sendSubmissionEmails(submission, sendSummary) {
   const { applicantName, email, applicationLink, hiringManagerEmail, linkedInUrl, submittedAt } = submission;
 
+  // Get interview details to get company name
+  const interview = await mongoose.model('Interview').findOne({
+    applicationLink: submission.applicationLink
+  });
+
+  const companyName = interview?.interviewTitle || "Our Team"; // Default if not found
+
   // Email to Hiring Manager
   const hmEmailBody = `
-      <h4>New Application Submission Received</h4>
-      <p><strong>Applicant Name:</strong> ${applicantName}</p>
-      <p><strong>Applicant Email:</strong> ${email}</p>
-      <p><strong>LinkedIn URL:</strong> ${linkedInUrl}</p>
-      <p><strong>Application Link:</strong> https://app.recordedinterview.com/InterviewPage/${applicationLink}</p>
-      <p><strong>Submitted At:</strong> ${submittedAt}</p>
-    `;
+    <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+      <h4 style="color: #2d3748;">New Application Submission Received</h4>
+      <p style="color: #4a5568;"><strong>Applicant Name:</strong> ${applicantName}</p>
+      <p style="color: #4a5568;"><strong>Applicant Email:</strong> ${email}</p>
+      <p style="color: #4a5568;"><strong>LinkedIn URL:</strong> <a href="${linkedInUrl}">${linkedInUrl}</a></p>
+      <p style="color: #4a5568;"><strong>Application Link:</strong> <a href="https://app.recordedinterview.com/InterviewPage/${applicationLink}">View Application</a></p>
+      <p style="color: #4a5568;"><strong>Submitted At:</strong> ${submittedAt.toLocaleString()}</p>
+      <p style="margin-top: 20px; color: #718096;">Best regards,<br/>${companyName} Hiring Team</p>
+    </div>
+  `;
 
   const hmMailOptions = {
-    from: 'admin@recordedinterview.com',
+    from: 'RecordedInterview <admin@recordedinterview.com>',
     to: hiringManagerEmail,
-    // bcc: 'rajiv@onepgr.com',
-    subject: 'New Application Submission Received',
+    subject: `[${companyName}] New Application Received - ${applicantName}`,
     html: hmEmailBody
   };
 
@@ -168,23 +177,26 @@ async function sendSubmissionEmails(submission, sendSummary) {
   // Email to Applicant (if they opted in)
   if (sendSummary) {
     const applicantEmailBody = `
-        <h3>Thank You for Your Application!</h3>
-        <p>Dear ${applicantName},</p>
-        <p>Thank you for submitting your application. Here’s a summary of your submission:</p>
-        <ul>
+      <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+        <h3 style="color: #2d3748;">Thank You for Your Application!</h3>
+        <p style="color: #4a5568;">Dear ${applicantName},</p>
+        <p style="color: #4a5568;">Thank you for submitting your application to ${companyName}. Here's a summary of your submission:</p>
+        <ul style="color: #4a5568; list-style: none; padding-left: 0;">
           <li><strong>Applicant Name:</strong> ${applicantName}</li>
           <li><strong>Email:</strong> ${email}</li>
-          <li><strong>LinkedIn URL:</strong> ${linkedInUrl}</li>
-          <li><strong>Application Link:</strong> https://app.recordedinterview.com/InterviewPage/${applicationLink}</li>
-          <li><strong>Submitted At:</strong> ${submittedAt}</li>
+          <li><strong>LinkedIn URL:</strong> <a href="${linkedInUrl}">${linkedInUrl}</a></li>
+          <li><strong>Application Link:</strong> <a href="https://app.recordedinterview.com/InterviewPage/${applicationLink}">View Application</a></li>
+          <li><strong>Submitted At:</strong> ${submittedAt.toLocaleString()}</li>
         </ul>
-        <p>We appreciate your interest and will get back to you soon.</p>
-      `;
+        <p style="color: #4a5568;">We appreciate your interest in ${companyName} and will review your application carefully.</p>
+        <p style="margin-top: 20px; color: #718096;">Best regards,<br/>${companyName} Hiring Team</p>
+      </div>
+    `;
 
     const applicantMailOptions = {
-      from: 'admin@recordedinterview.com',
+      from: 'RecordedInterview <admin@recordedinterview.com>',
       to: email,
-      subject: 'Thank You for Your Application',
+      subject: `Application Confirmation - ${companyName}`,
       html: applicantEmailBody
     };
 
