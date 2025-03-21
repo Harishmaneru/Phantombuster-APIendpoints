@@ -136,76 +136,127 @@ const transporter = nodemailer.createTransport({
   },
 });
 
+// Log transporter config on startup (without exposing the password)
+console.log('Email transporter configuration:', {
+  service: 'gmail',
+  user: 'admin@recordedinterview.com',
+  passProvided: !!process.env.EMAIL_PASSWORD
+});
+
+// Immediately verify transporter on module load
+(async function() {
+  try {
+    const verification = await transporter.verify();
+    console.log('Initial email transporter verification:', verification);
+  } catch (error) {
+    console.error('Initial email transporter verification failed:', error.message);
+    console.error('This will likely cause email sending to fail');
+  }
+})();
+
+// Verify transporter connection
+async function verifyEmailTransporter() {
+  try {
+    const verification = await transporter.verify();
+    console.log('Email transporter verified successfully:', verification);
+    return true;
+  } catch (error) {
+    console.error('Email transporter verification failed:', error);
+    return false;
+  }
+}
+
 // Helper function to send emails (unchanged)
 async function sendSubmissionEmails(submission, sendSummary) {
-  const { applicantName, email, applicationLink, hiringManagerEmail, linkedInUrl, submittedAt } = submission;
-
-  // Get interview details to get company name
-  const interview = await mongoose.model('Interview').findOne({
-    applicationLink: submission.applicationLink
-  });
-
-  const companyName = interview?.interviewTitle || "Our Team"; // Default if not found
-
-  // Email to Hiring Manager
-  const hmEmailBody = `
-    <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
-      <h4 style="color: #2d3748;">New Application Submission Received</h4>
-      <p style="color: #4a5568;"><strong>Applicant Name:</strong> ${applicantName}</p>
-      <p style="color: #4a5568;"><strong>Applicant Email:</strong> ${email}</p>
-      <p style="color: #4a5568;"><strong>LinkedIn URL:</strong> <a href="${linkedInUrl}">${linkedInUrl}</a></p>
-      <p style="color: #4a5568;"><strong>Application Link:</strong> <a href="https://app.recordedinterview.com/InterviewPage/${applicationLink}">View Application</a></p>
-      <p style="color: #4a5568;"><strong>Submitted At:</strong> ${submittedAt.toLocaleString()}</p>
-      <p style="margin-top: 20px; color: #718096;">Best regards,<br/>${companyName} Hiring Team</p>
-    </div>
-  `;
-
-  const hmMailOptions = {
-    from: 'RecordedInterview <admin@recordedinterview.com>',
-    to: hiringManagerEmail,
-    subject: `[${companyName}] New Application Received - ${applicantName}`,
-    html: hmEmailBody
-  };
-
   try {
-    let infoHM = await transporter.sendMail(hmMailOptions);
-    console.log(`Hiring Manager Email sent: ${infoHM.messageId}`);
-  } catch (error) {
-    console.error(`Error sending Hiring Manager Email: ${error}`);
-  }
+    // Verify email transporter first
+    const isTransporterValid = await verifyEmailTransporter();
+    if (!isTransporterValid) {
+      console.error('Email transporter is not valid, skipping email sending');
+      return { success: false, error: 'Email transporter is not valid' };
+    }
 
-  // Email to Applicant (if they opted in)
-  if (sendSummary) {
-    const applicantEmailBody = `
+    const { applicantName, email, applicationLink, hiringManagerEmail, linkedInUrl, submittedAt } = submission;
+
+    // Get interview details to get company name
+    const interview = await mongoose.model('Interview').findOne({
+      applicationLink: submission.applicationLink
+    });
+
+    const companyName = interview?.interviewTitle || "Our Team"; // Default if not found
+    console.log(`Sending emails for submission from ${applicantName} to ${hiringManagerEmail}`);
+
+    // Email to Hiring Manager
+    const hmEmailBody = `
       <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
-        <h3 style="color: #2d3748;">Thank You for Your Application!</h3>
-        <p style="color: #4a5568;">Dear ${applicantName},</p>
-        <p style="color: #4a5568;">Thank you for submitting your application to ${companyName}. Here's a summary of your submission:</p>
-        <ul style="color: #4a5568; list-style: none; padding-left: 0;">
-          <li><strong>Applicant Name:</strong> ${applicantName}</li>
-          <li><strong>Email:</strong> ${email}</li>
-          <li><strong>LinkedIn URL:</strong> <a href="${linkedInUrl}">${linkedInUrl}</a></li>
-          <li><strong>Application Link:</strong> <a href="https://app.recordedinterview.com/InterviewPage/${applicationLink}">View Application</a></li>
-          <li><strong>Submitted At:</strong> ${submittedAt.toLocaleString()}</li>
-        </ul>
-        <p style="color: #4a5568;">We appreciate your interest in ${companyName} and will review your application carefully.</p>
+        <h4 style="color: #2d3748;">New Application Submission Received</h4>
+        <p style="color: #4a5568;"><strong>Applicant Name:</strong> ${applicantName}</p>
+        <p style="color: #4a5568;"><strong>Applicant Email:</strong> ${email}</p>
+        <p style="color: #4a5568;"><strong>LinkedIn URL:</strong> <a href="${linkedInUrl}">${linkedInUrl}</a></p>
+        <p style="color: #4a5568;"><strong>Application Link:</strong> <a href="https://app.recordedinterview.com/InterviewPage/${applicationLink}">View Application</a></p>
+        <p style="color: #4a5568;"><strong>Submitted At:</strong> ${submittedAt.toLocaleString()}</p>
         <p style="margin-top: 20px; color: #718096;">Best regards,<br/>${companyName} Hiring Team</p>
       </div>
     `;
 
-    const applicantMailOptions = {
+    const hmMailOptions = {
       from: 'RecordedInterview <admin@recordedinterview.com>',
-      to: email,
-      subject: `Application Confirmation - ${companyName}`,
-      html: applicantEmailBody
+      to: hiringManagerEmail,
+      subject: `[${companyName}] New Application Received - ${applicantName}`,
+      html: hmEmailBody
     };
 
     try {
-      let infoApp = await transporter.sendMail(applicantMailOptions);
-      console.log(`Applicant Email sent: ${infoApp.messageId}`);
+      console.log(`Attempting to send hiring manager email to: ${hiringManagerEmail}`);
+      let infoHM = await transporter.sendMail(hmMailOptions);
+      console.log(`Hiring Manager Email sent: ${infoHM.messageId}`);
     } catch (error) {
-      console.error(`Error sending Applicant Email: ${error}`);
+      console.error(`Error sending Hiring Manager Email: ${error.message}`);
+      console.error('Error details:', error);
+      return { success: false, error: `Failed to send hiring manager email: ${error.message}` };
     }
+
+    // Email to Applicant (if they opted in)
+    if (sendSummary) {
+      const applicantEmailBody = `
+        <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+          <h3 style="color: #2d3748;">Thank You for Your Application!</h3>
+          <p style="color: #4a5568;">Dear ${applicantName},</p>
+          <p style="color: #4a5568;">Thank you for submitting your application to ${companyName}. Here's a summary of your submission:</p>
+          <ul style="color: #4a5568; list-style: none; padding-left: 0;">
+            <li><strong>Applicant Name:</strong> ${applicantName}</li>
+            <li><strong>Email:</strong> ${email}</li>
+            <li><strong>LinkedIn URL:</strong> <a href="${linkedInUrl}">${linkedInUrl}</a></li>
+            <li><strong>Application Link:</strong> <a href="https://app.recordedinterview.com/InterviewPage/${applicationLink}">View Application</a></li>
+            <li><strong>Submitted At:</strong> ${submittedAt.toLocaleString()}</li>
+          </ul>
+          <p style="color: #4a5568;">We appreciate your interest in ${companyName} and will review your application carefully.</p>
+          <p style="margin-top: 20px; color: #718096;">Best regards,<br/>${companyName} Hiring Team</p>
+        </div>
+      `;
+
+      const applicantMailOptions = {
+        from: 'RecordedInterview <admin@recordedinterview.com>',
+        to: email,
+        subject: `Application Confirmation - ${companyName}`,
+        html: applicantEmailBody
+      };
+
+      try {
+        console.log(`Attempting to send applicant email to: ${email}`);
+        let infoApp = await transporter.sendMail(applicantMailOptions);
+        console.log(`Applicant Email sent: ${infoApp.messageId}`);
+      } catch (error) {
+        console.error(`Error sending Applicant Email: ${error.message}`);
+        console.error('Error details:', error);
+        return { success: false, error: `Failed to send applicant email: ${error.message}` };
+      }
+    }
+
+    return { success: true };
+  } catch (error) {
+    console.error('Unexpected error in sendSubmissionEmails:', error);
+    return { success: false, error: `Unexpected error: ${error.message}` };
   }
 }
 
@@ -359,7 +410,15 @@ router.post('/submit', ensureDbConnection, handleUpload, async (req, res) => {
     const sendSummary = req.body.receiveEmailSummary === 'true';
 
     // Send emails
-    await sendSubmissionEmails(savedSubmission, sendSummary);
+    const emailResult = await sendSubmissionEmails(savedSubmission, sendSummary);
+    
+    // Log email status
+    if (!emailResult.success) {
+      logSubmissionActivity('Email Sending Error', { error: emailResult.error });
+      console.error('Failed to send notification emails:', emailResult.error);
+    } else {
+      logSubmissionActivity('Email Sending Success', { success: true });
+    }
 
     try {
       if (savedSubmission.videoResponses && savedSubmission.videoResponses.length > 0) {
@@ -375,13 +434,14 @@ router.post('/submit', ensureDbConnection, handleUpload, async (req, res) => {
       await savedSubmission.save();
     }
 
-
     res.status(201).json({
       success: true,
       message: 'Submission saved successfully',
       data: {
         submissionId: savedId,
-        submittedAt: new Date()
+        submittedAt: new Date(),
+        emailStatus: emailResult.success ? 'sent' : 'failed',
+        emailError: emailResult.success ? null : emailResult.error
       }
     });
 
@@ -1012,6 +1072,15 @@ router.post('/share/sendEmail', ensureDbConnection, async (req, res) => {
   try {
     const { recipients, subject, message, isPublic } = req.body;
 
+    // Verify email transporter first
+    const isTransporterValid = await verifyEmailTransporter();
+    if (!isTransporterValid) {
+      console.error('Email transporter is not valid, skipping email sending');
+      return res.status(500).json({
+        success: false,
+        message: 'Email service is not available at the moment'
+      });
+    }
 
     if (!recipients || !subject || !message) {
       return res.status(400).json({
@@ -1019,7 +1088,6 @@ router.post('/share/sendEmail', ensureDbConnection, async (req, res) => {
         message: 'Missing required fields (recipients, subject, message)'
       });
     }
-
 
     const emailList = recipients
       .split(',')
@@ -1034,6 +1102,7 @@ router.post('/share/sendEmail', ensureDbConnection, async (req, res) => {
     }
 
     console.log("Is public?", isPublic);
+    console.log(`Attempting to send shared link emails to ${emailList.length} recipients: ${emailList.join(', ')}`);
 
     // Define mail options
     const mailOptions = {
@@ -1043,16 +1112,36 @@ router.post('/share/sendEmail', ensureDbConnection, async (req, res) => {
       html: message
     };
 
+    try {
+      const info = await transporter.sendMail(mailOptions);
+      console.log("Email sent:", info.messageId);
+      console.log("Email recipients:", info.accepted.join(', '));
+      
+      if (info.rejected && info.rejected.length > 0) {
+        console.error("Some recipients were rejected:", info.rejected.join(', '));
+      }
 
-    const info = await transporter.sendMail(mailOptions);
-    console.log("Email sent:", info.messageId);
-
-    return res.status(200).json({
-      success: true,
-      message: 'Emails sent successfully'
-    });
+      return res.status(200).json({
+        success: true,
+        message: 'Emails sent successfully',
+        details: {
+          messageId: info.messageId,
+          accepted: info.accepted,
+          rejected: info.rejected || []
+        }
+      });
+    } catch (error) {
+      console.error('Error in transporter.sendMail:', error.message);
+      console.error('Error details:', error);
+      return res.status(500).json({
+        success: false,
+        message: 'Failed to send emails',
+        error: error.message
+      });
+    }
   } catch (error) {
-    console.error('Error sending email:', error);
+    console.error('Error sending email:', error.message);
+    console.error('Error stack:', error.stack);
     return res.status(500).json({
       success: false,
       message: 'Failed to send emails',
@@ -1061,6 +1150,26 @@ router.post('/share/sendEmail', ensureDbConnection, async (req, res) => {
   }
 });
 
-
+// Add route to check email service status
+router.get('/email-status', async (req, res) => {
+  try {
+    const isValid = await verifyEmailTransporter();
+    res.status(200).json({
+      success: true,
+      emailServiceActive: isValid,
+      smtpConfig: {
+        service: 'gmail',
+        user: 'admin@recordedinterview.com',
+        authProvided: !!process.env.EMAIL_PASSWORD
+      }
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      emailServiceActive: false,
+      error: error.message
+    });
+  }
+});
 
 module.exports = router;
