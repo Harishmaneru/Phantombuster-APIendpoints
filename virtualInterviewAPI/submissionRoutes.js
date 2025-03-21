@@ -183,12 +183,27 @@ async function sendSubmissionEmails(submission, sendSummary) {
       applicationLink: submission.applicationLink
     });
 
-    const companyName = interview?.interviewTitle || "Our Team"; // Default if not found
+    const companyName = (() => {
+
+      if (interview?.companyUrl) {
+        const url = interview.companyUrl;
+    
+        if (url.startsWith('@https://')) {
+          // Extract domain name without TLD
+          const domain = new URL(url.substring(1)).hostname;
+          // Remove .com, .org, etc. and return company name
+          return domain.split('.')[0];
+        }
+        return url; 
+      }
+      return "Our Team";
+    })();
+    
     console.log(`Sending emails for submission from ${applicantName} to ${hiringManagerEmail}`);
 
     // Email to Hiring Manager
     const hmEmailBody = `
-      <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+      <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; text-align: start;">
         <h4 style="color: #2d3748;">New Application Submission Received</h4>
         <p style="color: #4a5568;"><strong>Applicant Name:</strong> ${applicantName}</p>
         <p style="color: #4a5568;"><strong>Applicant Email:</strong> ${email}</p>
@@ -219,7 +234,7 @@ async function sendSubmissionEmails(submission, sendSummary) {
     // Email to Applicant (if they opted in)
     if (sendSummary) {
       const applicantEmailBody = `
-        <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+        <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; text-align: start;">
           <h3 style="color: #2d3748;">Thank You for Your Application!</h3>
           <p style="color: #4a5568;">Dear ${applicantName},</p>
           <p style="color: #4a5568;">Thank you for submitting your application to ${companyName}. Here's a summary of your submission:</p>
@@ -616,7 +631,7 @@ function convertVideoToAudio(videoPath, outputAudioPath) {
       : `${outputAudioPath}.mp3`;
 
     const ffmpegArgs = ['-y', '-i', videoPath, '-vn', '-q:a', '0', '-map', 'a', outputPathWithExtension];
-    console.log('Running FFmpeg command:', `ffmpeg ${ffmpegArgs.join(' ')}`);
+    // console.log('Running FFmpeg command:', `ffmpeg ${ffmpegArgs.join(' ')}`);
 
     const ffmpeg = spawn('ffmpeg', ffmpegArgs);
 
@@ -727,7 +742,7 @@ function getFileStream(filePath) {
 // Transcribe an audio chunk using OpenAI's Whisper API
 async function transcribeAudioToText(audioPath) {
   try {
-    console.log("Sending file to OpenAI Whisper for transcription:", audioPath);
+    // console.log("Sending file to OpenAI Whisper for transcription:", audioPath);
     const fileStream = await getFileStream(audioPath);
     const response = await openai.audio.transcriptions.create({
       file: fileStream,
