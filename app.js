@@ -116,7 +116,11 @@ app.use(
       "https://www.recordedinterview.com",
       "https://www.app.recordedinterview.com",
       "https://www.app.recordedinterview.com",
-      "https://app.recordedinterview.com"
+      "https://app.recordedinterview.com",
+      "https://www.getprospectsignals.com/",
+      "https://app.getprospectsignals.com/",
+      "https://www.app.getprospectsignals.com/",
+
 
     ],
     methods: ["GET", "PUT", "POST", "DELETE", "OPTIONS"],
