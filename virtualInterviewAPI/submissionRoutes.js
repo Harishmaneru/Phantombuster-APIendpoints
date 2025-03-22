@@ -230,7 +230,7 @@ async function sendSubmissionEmails(submission, sendSummary) {
         <p style="color: #4a5568;"><strong>Applicant Name:</strong> ${applicantName}</p>
         <p style="color: #4a5568;"><strong>Applicant Email:</strong> ${email}</p>
         <p style="color: #4a5568;"><strong>LinkedIn URL:</strong> <a href="${linkedInUrl}">${linkedInUrl}</a></p>
-        <p style="color: #4a5568;"><strong>Application Link:</strong> <a href="https://app.recordedinterview.com/InterviewPage/${applicationLink}">View Application</a></p>
+        <p style="color: #4a5568;"><strong>Application Link:</strong> <a href="https://record.onepgr.com/InterviewPage/${applicationLink}">View Application</a></p>
         <p style="color: #4a5568;"><strong>Submitted At:</strong> ${submittedAt.toLocaleString()}</p>
         <p style="margin-top: 20px; color: #718096;">Best regards,<br/>${companyName} Hiring Team</p>
       </div>
@@ -264,7 +264,7 @@ async function sendSubmissionEmails(submission, sendSummary) {
             <li><strong>Applicant Name:</strong> ${applicantName}</li>
             <li><strong>Email:</strong> ${email}</li>
             <li><strong>LinkedIn URL:</strong> <a href="${linkedInUrl}">${linkedInUrl}</a></li>
-            <li><strong>Application Link:</strong> <a href="https://app.recordedinterview.com/InterviewPage/${applicationLink}">View Application</a></li>
+            <li><strong>Application Link:</strong> <a href="https://record.onepgr.com/InterviewPage/${applicationLink}">View Application</a></li>
             <li><strong>Submitted At:</strong> ${submittedAt.toLocaleString()}</li>
           </ul>
           <p style="color: #4a5568;">We appreciate your interest in ${companyName} and will review your application carefully.</p>
@@ -1044,7 +1044,7 @@ router.post('/share/generate', ensureDbConnection, async (req, res) => {
     });
 
     // Construct share URL
-    const shareLink = `https://app.recordedinterview.com/candidate_response/${token}?id=${submissionId}`;
+    const shareLink = `https://record.onepgr.com/candidate_response/${token}?id=${submissionId}`;
 
     return res.status(200).json({
       success: true,

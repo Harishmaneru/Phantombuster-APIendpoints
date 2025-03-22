@@ -1003,7 +1003,7 @@ router.post('/create-interview-page/:category/:subcategory/:applicationLink', as
         const interview = new Interview(interviewData);
         await interview.save();
 
-        const interviewPageLink = `https://app.recordedinterview.com/InterviewPage/${applicationLink}`;
+        const interviewPageLink = `https://record.onepgr.com/InterviewPage/${applicationLink}`;
 
         // Update the job with interview page link - modified query
         await collection.updateOne(

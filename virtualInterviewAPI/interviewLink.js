@@ -93,7 +93,7 @@ router.post('/interviewlink', upload.single('companyLogo'), async (req, res) => 
             success: true,
             message: 'Interview created successfully',
             data: {
-                applicationLink: `https://app.recordedinterview.com/InterviewPage/${applicationLink}`,
+                applicationLink: `https://record.onepgr.com/InterviewPage/${applicationLink}`,
                 expiresAt,
                 interviewTitle,
                 email,
@@ -205,7 +205,7 @@ router.get('/allinterviews', async (req, res) => {
             email: interview.email,
             jobPostingUrl: interview.jobPostingUrl,
             questions: interview.questions,
-            applicationLink: `https://app.recordedinterview.com/InterviewPage/${interview.applicationLink}`,
+            applicationLink: `https://record.onepgr.com/InterviewPage/${interview.applicationLink}`,
             createdAt: interview.createdAt,
             expiresAt: interview.expiresAt,
             status: interview.status,
