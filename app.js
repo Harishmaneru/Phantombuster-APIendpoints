@@ -118,7 +118,9 @@ app.use(
       "https://www.app.recordedinterview.com",
       "https://app.recordedinterview.com",
       "https://www.getprospectsignals.com",
-      "https://getprospectsignals.com"
+      "https://getprospectsignals.com",
+      "https://record.onepgr.com/"
+
 
 
     ],
