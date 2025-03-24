@@ -156,6 +156,7 @@ async function processJob(job) {
 
                 try {
                     response = await fetchFundingAnnouncements({ domain });
+                    signalDataCount = response?.data?.length || 0;
                     console.log('[SIGNAL_AUTOMATION_JOBS] Funding announcement API response status:', response.status);
                     console.log('[SIGNAL_AUTOMATION_JOBS] Found funding announcements count:', response?.data?.length || 0);
                 } catch (error) {
@@ -163,7 +164,7 @@ async function processJob(job) {
                     throw error;
                 }
 
-                signalDataCount = response?.data?.length || 0;
+                
                 break;
             }
             case 'new_product_launch': {
@@ -173,6 +174,7 @@ async function processJob(job) {
 
                 try {
                     response = await fetchFundingAcquisitionInfo({ domain });
+                    signalDataCount = response?.data?.length || 0;
                     console.log('[SIGNAL_AUTOMATION_JOBS] Product launch API response status:', response.status);
                     console.log('[SIGNAL_AUTOMATION_JOBS] Product launch data retrieved:', !!response?.data);
                 } catch (error) {
@@ -180,7 +182,7 @@ async function processJob(job) {
                     throw error;
                 }
 
-                signalDataCount = response?.data?.length || 0;
+                
                 break;
             }
             case 'youtube_marketing_videos': {
