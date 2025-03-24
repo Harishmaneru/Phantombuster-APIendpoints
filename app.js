@@ -181,7 +181,7 @@ app.use(secScraper10K.router);
 app.use(secScraper10Q.router);
 app.use(warmupInbox);
 app.use(prospectsAPI);
-app.use(businessesAPI);
+app.use(businessesAPI.router);
 
 const options = {
   key: fs.readFileSync('./onepgr.com.key', 'utf8'),

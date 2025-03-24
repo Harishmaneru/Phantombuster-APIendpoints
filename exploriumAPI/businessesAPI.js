@@ -139,10 +139,20 @@ router.post('/fetchFundingannounmenet', async (req, res) => {
 
         const events = await fetchBusinessEvents(businessIds, timestampFrom);
 
+        // Check if events are empty
+        if (!events.output_events || events.output_events.length === 0) {
+            return res.json({
+                status: '-1',
+                message: 'No funding announcements found for the provided company',
+                timestamp_from: timestampFrom,
+                matched_business_ids: businessIds
+            });
+        }
+
         res.json({
             status: '1',
             FundingannounmenetData: events,
-            count: events.length,
+            count: events.output_events.length,
             timestamp_from: timestampFrom,
             matched_business_ids: businessIds
         });
@@ -179,6 +189,15 @@ router.post('/fetchFundingAndAcquisition', async (req, res) => {
         // Get funding and acquisition data for the first matched business
         const fundingData = await fetchFundingAndAcquisition(businessIds[0]);
 
+        // Check if the response data is empty
+        if (!fundingData || Object.keys(fundingData).length === 0) {
+            return res.json({
+                status: '-1',
+                message: 'No funding and acquisition, product launch or new investment data found for the provided company',
+                business_id: businessIds[0]
+            });
+        }
+
         res.json({
             status: '1',
             FundingAndAcquisitionData: fundingData,
@@ -192,4 +211,94 @@ router.post('/fetchFundingAndAcquisition', async (req, res) => {
         });
     }
 });
-module.exports = router;
+
+// Reusable method for fetching funding announcements
+const fetchFundingAnnouncements = async ({ name, domain, url, year }) => {
+    console.log('[EXPLORIUM_BUSINESSES_API] Starting fetchFundingAnnouncements with params:', { name, domain, url, year });
+
+    // Validate required parameters
+    if (!name && !domain && !url) {
+        console.error('[EXPLORIUM_BUSINESSES_API] Validation Error: No identifier provided');
+        throw new Error('At least one of: name, domain, or url is required');
+    }
+
+    try {
+        // Convert the provided year to an ISO timestamp
+        const timestampFrom = validateAndConvertYear(year);
+        console.log('[EXPLORIUM_BUSINESSES_API] Converted timestamp:', timestampFrom);
+
+        // Match businesses using the provided data
+        console.log('[EXPLORIUM_BUSINESSES_API] Attempting to match businesses with:', { name, domain, url });
+        const businessIds = await matchBusinesses({ name, domain, url });
+        if (!businessIds.length) {
+            console.error('[EXPLORIUM_BUSINESSES_API] No businesses found for criteria:', { name, domain, url });
+            throw new Error('No businesses found for the given criteria');
+        }
+        console.log('[EXPLORIUM_BUSINESSES_API] Found business IDs:', businessIds);
+
+        console.log('[EXPLORIUM_BUSINESSES_API] Fetching business events for IDs:', businessIds);
+        const events = await fetchBusinessEvents(businessIds, timestampFrom);
+        console.log('[EXPLORIUM_BUSINESSES_API] Retrieved events count:', events.length);
+
+        const response = {
+            status: '1',
+            FundingannounmenetData: events,
+            count: events.length,
+            timestamp_from: timestampFrom,
+            matched_business_ids: businessIds
+        };
+        console.log('[EXPLORIUM_BUSINESSES_API] Successfully completed fetchFundingAnnouncements');
+        return response;
+    } catch (error) {
+        console.error('[EXPLORIUM_BUSINESSES_API] Error in fetchFundingAnnouncements:', error.message);
+        throw error;
+    }
+};
+
+// Reusable method for fetching funding and acquisition information
+const fetchFundingAcquisitionInfo = async ({ name, domain, url }) => {
+    console.log('[EXPLORIUM_BUSINESSES_API] Starting fetchFundingAcquisitionInfo with params:', { name, domain, url });
+
+    // Validate required parameters
+    if (!name && !domain && !url) {
+        console.error('[EXPLORIUM_BUSINESSES_API] Validation Error: No identifier provided');
+        throw new Error('At least one of: name, domain, or url is required');
+    }
+
+    try {
+        // Match businesses using the provided data
+        console.log('[EXPLORIUM_BUSINESSES_API] Attempting to match businesses with:', { name, domain, url });
+        const businessIds = await matchBusinesses({ name, domain, url });
+        if (!businessIds.length) {
+            console.error('[EXPLORIUM_BUSINESSES_API] No businesses found for criteria:', { name, domain, url });
+            throw new Error('No businesses found for the given criteria');
+        }
+        console.log('[EXPLORIUM_BUSINESSES_API] Found business IDs:', businessIds);
+
+        // Get funding and acquisition data for the first matched business
+        console.log('[EXPLORIUM_BUSINESSES_API] Fetching funding data for business ID:', businessIds[0]);
+        const fundingData = await fetchFundingAndAcquisition(businessIds[0]);
+        console.log('[EXPLORIUM_BUSINESSES_API] Retrieved funding data:', !!fundingData);
+
+        const response = {
+            status: '1',
+            FundingAndAcquisitionData: fundingData,
+            business_id: businessIds[0]
+        };
+        console.log('[EXPLORIUM_BUSINESSES_API] Successfully completed fetchFundingAcquisitionInfo');
+        return response;
+    } catch (error) {
+        console.error('[EXPLORIUM_BUSINESSES_API] Error in fetchFundingAcquisitionInfo:', error.message);
+        throw error;
+    }
+};
+
+module.exports = {
+    router,
+    matchBusinesses,
+    fetchBusinessEvents,
+    fetchFundingAndAcquisition,
+    validateAndConvertYear,
+    fetchFundingAnnouncements,
+    fetchFundingAcquisitionInfo
+};

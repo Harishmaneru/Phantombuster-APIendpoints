@@ -15,6 +15,8 @@ const { fetchPublicMentions } = require('../pressFundingAnnounements/publicMenti
 const { fetchCompanyPosts } = require('../rapidAPI/companyPosts.js');
 const { fetchFilings10K } = require('../secFilings/secScraper10K.js');
 const { fetchFilings10Q } = require('../secFilings/secScraper10Q.js');
+const { fetchFundingAnnouncements } = require('../exploriumAPI/businessesAPI.js');
+const { fetchFundingAcquisitionInfo } = require('../exploriumAPI/businessesAPI.js');
 
 const { OpenAI } = require('openai');
 const url = "mongodb://onepgrdb:onepgrdb123@pages.onepgr.com:27017/?authSource=admin";
@@ -147,6 +149,40 @@ async function processJob(job) {
                 signalDataCount = response?.data?.length || 0;
                 break;
             }
+            case 'funding_announcement': {
+                console.log('[SIGNAL_AUTOMATION_JOBS] Processing funding announcement for company:', job.contact_company);
+                const domain = job.contact_details?.domain || `${job.contact_company}.com`;
+                console.log('[SIGNAL_AUTOMATION_JOBS] Using domain for funding announcement:', domain);
+
+                try {
+                    response = await fetchFundingAnnouncements({ domain });
+                    console.log('[SIGNAL_AUTOMATION_JOBS] Funding announcement API response status:', response.status);
+                    console.log('[SIGNAL_AUTOMATION_JOBS] Found funding announcements count:', response?.data?.length || 0);
+                } catch (error) {
+                    console.error('[SIGNAL_AUTOMATION_JOBS] Error fetching funding announcements:', error.message);
+                    throw error;
+                }
+
+                signalDataCount = response?.data?.length || 0;
+                break;
+            }
+            case 'new_product_launch': {
+                console.log('[SIGNAL_AUTOMATION_JOBS] Processing new product launch for company:', job.contact_company);
+                const domain = job.contact_details?.domain || `${job.contact_company}.com`;
+                console.log('[SIGNAL_AUTOMATION_JOBS] Using domain for product launch:', domain);
+
+                try {
+                    response = await fetchFundingAcquisitionInfo({ domain });
+                    console.log('[SIGNAL_AUTOMATION_JOBS] Product launch API response status:', response.status);
+                    console.log('[SIGNAL_AUTOMATION_JOBS] Product launch data retrieved:', !!response?.data);
+                } catch (error) {
+                    console.error('[SIGNAL_AUTOMATION_JOBS] Error fetching product launch info:', error.message);
+                    throw error;
+                }
+
+                signalDataCount = response?.data?.length || 0;
+                break;
+            }
             case 'youtube_marketing_videos': {
                 response = await fetchYouTubeVideos({ companyName: job.contact_company });
                 signalDataCount = response?.data?.length || 0;
@@ -172,7 +208,7 @@ async function processJob(job) {
             case 'activity_on_linkedin': {
                 let companyUrl = '';
                 const linkedinProfile = job.contact_details?.co_linkedin?.trim();
-                
+
                 // First check if we have a valid LinkedIn profile URL
                 if (linkedinProfile && linkedinProfile !== "N/A") {
                     // Check if it's a valid LinkedIn URL
@@ -189,9 +225,9 @@ async function processJob(job) {
                     // Fallback to using company name if no valid LinkedIn profile
                     console.log('No LinkedIn profile found, using company name:', job.contact_company);
                     const slug = job.contact_company.toLowerCase()
-                        .replace(/\s+/g, '-')      
-                        .replace(/[^a-z0-9-]/g, '')  
-                        .replace(/-+/g, '-');     
+                        .replace(/\s+/g, '-')
+                        .replace(/[^a-z0-9-]/g, '')
+                        .replace(/-+/g, '-');
                     companyUrl = `https://www.linkedin.com/company/${slug}`;
                 }
 
@@ -443,6 +479,12 @@ async function summarizeSignalData(req, res) {
                         case 'job_openings':
                         case 'job_changes':
                             promptTemplate = `Analyze the job market activity for ${job.contact_company}. Include total openings, key departments hiring, and notable positions: `;
+                            break;
+                        case 'funding_announcement':
+                            promptTemplate = `Summarize the latest funding announcements for ${job.contact_company}. Include funding amounts, investors, and key developments: `;
+                            break;
+                        case 'new_product_launch':
+                            promptTemplate = `Summarize the latest product launches for ${job.contact_company}. Include product details, launch dates, key features, and market impact: `;
                             break;
                         case 'youtube_marketing_videos':
                             promptTemplate = `Summarize the recent YouTube content from ${job.contact_company}. Focus on video engagement, key themes, and notable metrics: `;
