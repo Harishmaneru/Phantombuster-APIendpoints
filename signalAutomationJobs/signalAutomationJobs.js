@@ -156,9 +156,10 @@ async function processJob(job) {
 
                 try {
                     response = await fetchFundingAnnouncements({ domain });
-                    signalDataCount = response?.data?.length || 0;
+                    // Handle the FundingannounmenetData structure
+                    signalDataCount = response?.FundingannounmenetData?.output_events?.length || 0;
                     console.log('[SIGNAL_AUTOMATION_JOBS] Funding announcement API response status:', response.status);
-                    console.log('[SIGNAL_AUTOMATION_JOBS] Found funding announcements count:', response?.data?.length || 0);
+                    console.log('[SIGNAL_AUTOMATION_JOBS] Found funding announcements count:', signalDataCount);
                 } catch (error) {
                     console.error('[SIGNAL_AUTOMATION_JOBS] Error fetching funding announcements:', error.message);
                     throw error;
@@ -174,9 +175,11 @@ async function processJob(job) {
 
                 try {
                     response = await fetchFundingAcquisitionInfo({ domain });
-                    signalDataCount = response?.data?.length || 0;
+                    // Handle both array and single object responses
+                    signalDataCount = Array.isArray(response?.data) ? response.data.length : 
+                                    (response?.FundingAndAcquisitionData ? 1 : 0);
                     console.log('[SIGNAL_AUTOMATION_JOBS] Product launch API response status:', response.status);
-                    console.log('[SIGNAL_AUTOMATION_JOBS] Product launch data retrieved:', !!response?.data);
+                    console.log('[SIGNAL_AUTOMATION_JOBS] Product launch data retrieved:', !!response?.FundingAndAcquisitionData);
                 } catch (error) {
                     console.error('[SIGNAL_AUTOMATION_JOBS] Error fetching product launch info:', error.message);
                     throw error;
@@ -626,7 +629,7 @@ async function changeJobStatusToNotStarted(req, res) {
         const query = {
             user_id,
             request_id,
-            job_status: { $in: ['FAILED'] }
+            job_status: { $in: ['IN_PROGRESS'] }
             // job_status: { $in: ['FAILED', 'IN_PROGRESS', 'SUCCESS', 'COMPLETED'] }
         };
 
