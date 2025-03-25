@@ -15,7 +15,7 @@ const { fetchPublicMentions } = require('../pressFundingAnnounements/publicMenti
 const { fetchCompanyPosts } = require('../rapidAPI/companyPosts.js');
 const { fetchFilings10K } = require('../secFilings/secScraper10K.js');
 const { fetchFilings10Q } = require('../secFilings/secScraper10Q.js');
-const { fetchFundingAnnouncements } = require('../exploriumAPI/businessesAPI.js');
+const { fetchFundingAndProductLaunchSignals } = require('../exploriumAPI/businessesAPI.js');
 const { fetchFundingAcquisitionInfo } = require('../exploriumAPI/businessesAPI.js');
 
 const { OpenAI } = require('openai');
@@ -156,16 +156,15 @@ async function processJob(job) {
 
                 try {
                     response = await fetchFundingAcquisitionInfo({ domain });
-                    // Handle the FundingannounmenetData structure
-                    signalDataCount = response?.FundingannounmenetData?.output_events?.length || 0;
+                    // Count the number of funding rounds from the FundingAndAcquisitionData
+                    signalDataCount = response?.FundingAndAcquisitionData?.number_of_funding_rounds ||
+                        response?.FundingAndAcquisitionData?.funding_rounds_info?.length || 0;
                     console.log('[SIGNAL_AUTOMATION_JOBS] Funding announcement API response status:', response.status);
-                    console.log('[SIGNAL_AUTOMATION_JOBS] Found funding announcements count:', signalDataCount);
+                    console.log('[SIGNAL_AUTOMATION_JOBS] Found funding rounds count:', signalDataCount);
                 } catch (error) {
                     console.error('[SIGNAL_AUTOMATION_JOBS] Error fetching funding announcements:', error.message);
                     throw error;
                 }
-
-                
                 break;
             }
             case 'new_product_launch': {
@@ -174,18 +173,17 @@ async function processJob(job) {
                 console.log('[SIGNAL_AUTOMATION_JOBS] Using domain for product launch:', domain);
 
                 try {
-                    response = await fetchFundingAnnouncements({ domain });
-                    // Handle both array and single object responses
-                    signalDataCount = Array.isArray(response?.data) ? response.data.length : 
-                                    (response?.FundingAndAcquisitionData ? 1 : 0);
+                    response = await fetchFundingAndProductLaunchSignals({ domain });
+                    // Count the number of output events from the FundingannounmenetData
+                    signalDataCount = response?.fundingInvestmentAndProductLaunchData?.output_events?.length || 0;
                     console.log('[SIGNAL_AUTOMATION_JOBS] Product launch API response status:', response.status);
-                    console.log('[SIGNAL_AUTOMATION_JOBS] Product launch data retrieved:', !!response?.FundingAndAcquisitionData);
+                    console.log('[SIGNAL_AUTOMATION_JOBS] Found product launches count:', signalDataCount);
                 } catch (error) {
                     console.error('[SIGNAL_AUTOMATION_JOBS] Error fetching product launch info:', error.message);
                     throw error;
                 }
 
-                
+
                 break;
             }
             case 'youtube_marketing_videos': {
@@ -629,8 +627,8 @@ async function changeJobStatusToNotStarted(req, res) {
         const query = {
             user_id,
             request_id,
-            job_status: { $in: ['IN_PROGRESS'] }
-            // job_status: { $in: ['FAILED', 'IN_PROGRESS', 'SUCCESS', 'COMPLETED'] }
+            // job_status: { $in: ['COMPLETED'] }
+            job_status: { $in: ['FAILED', 'IN_PROGRESS', 'SUCCESS', 'COMPLETED'] }
         };
 
         const updatedJobs = await SignalAutomationJob.updateMany(

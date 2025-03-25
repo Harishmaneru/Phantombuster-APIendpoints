@@ -105,7 +105,7 @@ const fetchFundingAndAcquisition = async (businessId) => {
         throw new Error('Failed to fetch funding and acquisition data');
     }
 };
-router.post('/fetchFundingannounmenet', async (req, res) => {
+router.post('/fetchFundingAndProductLaunchSignals', async (req, res) => {
     try {
         const { name, domain, url, year } = req.body;
 
@@ -151,7 +151,7 @@ router.post('/fetchFundingannounmenet', async (req, res) => {
 
         res.json({
             status: '1',
-            FundingannounmenetData: events,
+            fundingInvestmentAndProductLaunchData: events,
             count: events.output_events.length,
             timestamp_from: timestampFrom,
             matched_business_ids: businessIds
@@ -193,7 +193,7 @@ router.post('/fetchFundingAndAcquisition', async (req, res) => {
         if (!fundingData || Object.keys(fundingData).length === 0) {
             return res.json({
                 status: '-1',
-                message: 'No funding and acquisition, product launch or new investment data found for the provided company',
+                message: 'No funding and or new investment data found for the provided company',
                 business_id: businessIds[0]
             });
         }
@@ -213,8 +213,8 @@ router.post('/fetchFundingAndAcquisition', async (req, res) => {
 });
 
 // Reusable method for fetching funding announcements
-const fetchFundingAnnouncements = async ({ name, domain, url, year }) => {
-    console.log('[EXPLORIUM_BUSINESSES_API] Starting fetchFundingAnnouncements with params:', { name, domain, url, year });
+const fetchFundingAndProductLaunchSignals = async ({ name, domain, url, year }) => {
+    console.log('[EXPLORIUM_BUSINESSES_API] Starting fetchFundingAndProductLaunchSignals with params:', { name, domain, url, year });
 
     // Validate required parameters
     if (!name && !domain && !url) {
@@ -242,15 +242,15 @@ const fetchFundingAnnouncements = async ({ name, domain, url, year }) => {
 
         const response = {
             status: '1',
-            FundingannounmenetData: events,
+            fundingInvestmentAndProductLaunchData: events,
             count: events.length,
             timestamp_from: timestampFrom,
             matched_business_ids: businessIds
         };
-        console.log('[EXPLORIUM_BUSINESSES_API] Successfully completed fetchFundingAnnouncements');
+        console.log('[EXPLORIUM_BUSINESSES_API] Successfully completed fetchFundingAndProductLaunchSignals');
         return response;
     } catch (error) {
-        console.error('[EXPLORIUM_BUSINESSES_API] Error in fetchFundingAnnouncements:', error.message);
+        console.error('[EXPLORIUM_BUSINESSES_API] Error in fetchFundingAndProductLaunchSignals:', error.message);
         throw error;
     }
 };
@@ -299,6 +299,6 @@ module.exports = {
     fetchBusinessEvents,
     fetchFundingAndAcquisition,
     validateAndConvertYear,
-    fetchFundingAnnouncements,
+    fetchFundingAndProductLaunchSignals,
     fetchFundingAcquisitionInfo
 };
