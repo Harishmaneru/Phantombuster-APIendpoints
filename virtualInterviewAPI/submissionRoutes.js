@@ -349,7 +349,6 @@ router.post('/submit', ensureDbConnection, handleUpload, async (req, res) => {
       filesCount: req?.files?.length || 0
     });
 
-
     const dbState = verifyDbConnection();
     logSubmissionActivity('DB State Check', { state: dbState });
 
@@ -367,7 +366,6 @@ router.post('/submit', ensureDbConnection, handleUpload, async (req, res) => {
       textResponse,
       textQuestion
     } = req.body;
-
 
     if (!userId || !applicationLink || !hiringManagerEmail || !applicantName || !email || !linkedInUrl || !textResponse || !textQuestion || !req.files || req.files.length === 0) {
       logSubmissionActivity('Validation Error', {
@@ -387,6 +385,20 @@ router.post('/submit', ensureDbConnection, handleUpload, async (req, res) => {
         success: false,
         message: 'Missing required fields'
       });
+    }
+
+    // Start transaction
+    session.startTransaction();
+
+    // Increment application count in Interview model
+    const interview = await mongoose.model('Interview').findOneAndUpdate(
+      { applicationLink },
+      { $inc: { applicationCount: 1 } },
+      { new: true, session }
+    );
+
+    if (!interview) {
+      throw new Error('Interview not found');
     }
 
     // Process video files: use the S3 URL returned by multer-s3
@@ -410,9 +422,6 @@ router.post('/submit', ensureDbConnection, handleUpload, async (req, res) => {
         mimeType: file.mimetype
       };
     });
-
-    logSubmissionActivity('Transaction Start', { sessionId: session.id });
-    session.startTransaction();
 
     const submission = new Submission({
       userId,
@@ -478,7 +487,8 @@ router.post('/submit', ensureDbConnection, handleUpload, async (req, res) => {
         submissionId: savedId,
         submittedAt: new Date(),
         emailStatus: emailResult.success ? 'sent' : 'failed',
-        emailError: emailResult.success ? null : emailResult.error
+        emailError: emailResult.success ? null : emailResult.error,
+        applicationCount: interview.applicationCount
       }
     });
 

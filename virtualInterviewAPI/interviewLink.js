@@ -27,7 +27,8 @@ const InterviewSchema = new mongoose.Schema({
     expiresAt: { type: Date, required: true },
     status: { type: String, enum: ['active', 'expired', 'deleted'], default: 'active' },
     viewCount: { type: Number, default: 0 },
-    lastViewed: { type: Date }
+    lastViewed: { type: Date },
+    applicationCount: { type: Number, default: 0 }
 });
 
 const Interview = mongoose.model('Interview', InterviewSchema);
@@ -273,7 +274,9 @@ router.get('/interview/:linkId', async (req, res) => {
                 questions: interview.questions || [],
                 applicationLink: interview.applicationLink,
                 companyLogoUrl: interview.companyLogoUrl,
-                expiresAt: interview.expiresAt
+                expiresAt: interview.expiresAt,
+                viewCount: interview.viewCount,
+                applicationCount: interview.applicationCount
             }
         });
     } catch (err) {
@@ -297,13 +300,14 @@ router.get('/interview/:interviewCode/views', async (req, res) => {
 
         res.json({
             success: true,
-            viewCount: interview.viewCount || 0
+            viewCount: interview.viewCount || 0,
+            applicationCount: interview.applicationCount || 0
         });
     } catch (error) {
-        console.error('Error fetching view count:', error);
+        console.error('Error fetching counts:', error);
         res.status(500).json({
             success: false,
-            message: 'Failed to fetch view count'
+            message: 'Failed to fetch counts'
         });
     }
 });
