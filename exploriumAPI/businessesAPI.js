@@ -105,7 +105,7 @@ const fetchFundingAndAcquisition = async (businessId) => {
         throw new Error('Failed to fetch funding and acquisition data');
     }
 };
-router.post('/fetchFundingAndProductLaunchSignals', async (req, res) => {
+router.post('/fetchFundingAndProductLaunchdata', async (req, res) => {
     try {
         const { name, domain, url, year } = req.body;
 
