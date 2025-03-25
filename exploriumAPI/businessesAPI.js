@@ -92,12 +92,12 @@ const fetchBusinessEvents = async (businessIds, timestampFrom) => {
 const fetchFundingAndAcquisition = async (businessId) => {
     try {
         console.log('Fetching funding and acquisition data for business ID:', businessId);
-        const response = await exploriumAxios.post('businesses/company_ratings_by_employees/enrich', {
-            business_id: businessId
+        const response = await exploriumAxios.post('/businesses/funding_and_acquisition/bulk_enrich', {
+            business_ids: [businessId]
         });
 
-        // Extract just the data object from the response
-        const fundingData = response.data?.data || {};
+        // Extract and restructure the data to remove the nested data object
+        const fundingData = response.data?.data?.[0]?.data || {};
         console.log('Fetched funding and acquisition data:', fundingData);
         return fundingData;
     } catch (error) {

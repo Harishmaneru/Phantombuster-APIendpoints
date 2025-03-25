@@ -230,7 +230,7 @@ async function sendSubmissionEmails(submission, sendSummary) {
         <p style="color: #4a5568;"><strong>Applicant Name:</strong> ${applicantName}</p>
         <p style="color: #4a5568;"><strong>Applicant Email:</strong> ${email}</p>
         <p style="color: #4a5568;"><strong>LinkedIn URL:</strong> <a href="${linkedInUrl}">${linkedInUrl}</a></p>
-        <p style="color: #4a5568;"><strong>Application Link:</strong> <a href="https://record.onepgr.com/InterviewPage/${applicationLink}">View Application</a></p>
+        <p style="color: #4a5568;"><strong>Application Link:</strong> <a href="https://record.onepgr.com/InterviewPage/${applicationLink}"></a></p>
         <p style="color: #4a5568;"><strong>Submitted At:</strong> ${submittedAt.toLocaleString()}</p>
         <p style="margin-top: 20px; color: #718096;">Best regards,<br/>${companyName} Hiring Team</p>
       </div>

@@ -155,7 +155,7 @@ async function processJob(job) {
                 console.log('[SIGNAL_AUTOMATION_JOBS] Using domain for funding announcement:', domain);
 
                 try {
-                    response = await fetchFundingAnnouncements({ domain });
+                    response = await fetchFundingAcquisitionInfo({ domain });
                     // Handle the FundingannounmenetData structure
                     signalDataCount = response?.FundingannounmenetData?.output_events?.length || 0;
                     console.log('[SIGNAL_AUTOMATION_JOBS] Funding announcement API response status:', response.status);
@@ -174,7 +174,7 @@ async function processJob(job) {
                 console.log('[SIGNAL_AUTOMATION_JOBS] Using domain for product launch:', domain);
 
                 try {
-                    response = await fetchFundingAcquisitionInfo({ domain });
+                    response = await fetchFundingAnnouncements({ domain });
                     // Handle both array and single object responses
                     signalDataCount = Array.isArray(response?.data) ? response.data.length : 
                                     (response?.FundingAndAcquisitionData ? 1 : 0);
