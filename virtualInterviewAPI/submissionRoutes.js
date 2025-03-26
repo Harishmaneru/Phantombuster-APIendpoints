@@ -31,11 +31,44 @@ const upload = multer({
     bucket: process.env.AWS_BUCKET_NAME,
     acl: 'public-read',
     key: function (req, file, cb) {
-      cb(null, `videos/${Date.now()}-${file.originalname}`);
+      // Determine the folder based on file type
+      const folder = file.mimetype.startsWith('video/') ? 'videos' : 'resumes';
+      cb(null, `${folder}/${Date.now()}-${file.originalname}`);
     }
   }),
   limits: {
-    fileSize: 500 * 1024 * 1024
+    fileSize: 500 * 1024 * 1024 // 500MB limit for videos
+  },
+  fileFilter: function (req, file, cb) {
+    // Accept video files and document files
+    const allowedMimeTypes = [
+      'video/mp4',
+      'video/webm',
+      'video/quicktime',
+      'application/pdf',
+      'application/msword',
+      'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+    ];
+    
+    if (allowedMimeTypes.includes(file.mimetype)) {
+      // Apply different size limits based on file type
+      if (file.mimetype.startsWith('video/')) {
+        // 500MB limit for videos
+        if (file.size > 500 * 1024 * 1024) {
+          cb(new Error('Video file size exceeds 500MB limit'));
+          return;
+        }
+      } else {
+        // 5MB limit for resumes
+        if (file.size > 5 * 1024 * 1024) {
+          cb(new Error('Resume file size exceeds 5MB limit'));
+          return;
+        }
+      }
+      cb(null, true);
+    } else {
+      cb(new Error('Invalid file type. Only video and document files are allowed.'));
+    }
   }
 }).any();
 
@@ -65,6 +98,11 @@ const SubmissionSchema = new mongoose.Schema({
   linkedInUrl: { type: String, required: true },
   textQuestion: { type: String, required: true },
   textResponse: { type: String, required: true },
+  resume: {
+    url: { type: String },
+    fileName: { type: String },
+    mimeType: { type: String }
+  },
   videoResponses: [{
     questionIndex: { type: Number, required: true },
     question: { type: String, required: true },
@@ -264,7 +302,7 @@ async function sendSubmissionEmails(submission, sendSummary) {
             <li><strong>Applicant Name:</strong> ${applicantName}</li>
             <li><strong>Email:</strong> ${email}</li>
             <li><strong>LinkedIn URL:</strong> <a href="${linkedInUrl}">${linkedInUrl}</a></li>
-            <li><strong>Application Link:</strong> <a href="https://record.onepgr.com/InterviewPage/${applicationLink}">View Application</a></li>
+            <li><strong>Application Link:</strong> <a href="https://record.onepgr.com/InterviewPage/${applicationLink}"></a></li>
             <li><strong>Submitted At:</strong> ${submittedAt.toLocaleString()}</li>
           </ul>
           <p style="color: #4a5568;">We appreciate your interest in ${companyName} and will review your application carefully.</p>
@@ -401,27 +439,46 @@ router.post('/submit', ensureDbConnection, handleUpload, async (req, res) => {
       throw new Error('Interview not found');
     }
 
-    // Process video files: use the S3 URL returned by multer-s3
-    const videoResponses = req.files.map((file, index) => {
-      const questionNumber = index + 1;
-      const question = req.body[`videoQuestion${questionNumber}`];
+    // Process files: separate videos and resume
+    const videoResponses = [];
+    let resume = null;
 
-      logSubmissionActivity('Processing File', {
-        index,
-        fileName: file.originalname,
-        mimeType: file.mimetype,
-        size: file.size,
-        question
-      });
+    for (const file of req.files) {
+      if (file.mimetype.startsWith('video/')) {
+        const questionNumber = videoResponses.length + 1;
+        const question = req.body[`videoQuestion${questionNumber}`];
 
-      return {
-        questionIndex: questionNumber,
-        question: question,
-        videoUrl: file.location,
-        fileName: file.originalname,
-        mimeType: file.mimetype
-      };
-    });
+        logSubmissionActivity('Processing Video File', {
+          index: questionNumber,
+          fileName: file.originalname,
+          mimeType: file.mimetype,
+          size: file.size,
+          question
+        });
+
+        videoResponses.push({
+          questionIndex: questionNumber,
+          question: question,
+          videoUrl: file.location,
+          fileName: file.originalname,
+          mimeType: file.mimetype
+        });
+      } else if (file.mimetype === 'application/pdf' || 
+                 file.mimetype === 'application/msword' || 
+                 file.mimetype === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document') {
+        logSubmissionActivity('Processing Resume File', {
+          fileName: file.originalname,
+          mimeType: file.mimetype,
+          size: file.size
+        });
+
+        resume = {
+          url: file.location,
+          fileName: file.originalname,
+          mimeType: file.mimetype
+        };
+      }
+    }
 
     const submission = new Submission({
       userId,
@@ -432,7 +489,8 @@ router.post('/submit', ensureDbConnection, handleUpload, async (req, res) => {
       linkedInUrl,
       textQuestion,
       textResponse,
-      videoResponses
+      videoResponses,
+      resume
     });
 
     savedSubmission = await submission.save({ session });
@@ -446,7 +504,9 @@ router.post('/submit', ensureDbConnection, handleUpload, async (req, res) => {
 
     logSubmissionActivity('Submission Saved', {
       submissionId: savedId,
-      verified: !!verifySubmission
+      verified: !!verifySubmission,
+      hasResume: !!resume,
+      videoCount: videoResponses.length
     });
 
     await session.commitTransaction();
@@ -488,7 +548,9 @@ router.post('/submit', ensureDbConnection, handleUpload, async (req, res) => {
         submittedAt: new Date(),
         emailStatus: emailResult.success ? 'sent' : 'failed',
         emailError: emailResult.success ? null : emailResult.error,
-        applicationCount: interview.applicationCount
+        applicationCount: interview.applicationCount,
+        hasResume: !!resume,
+        videoCount: videoResponses.length
       }
     });
 
