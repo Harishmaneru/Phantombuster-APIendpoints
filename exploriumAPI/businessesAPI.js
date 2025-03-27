@@ -293,6 +293,71 @@ const fetchFundingAcquisitionInfo = async ({ name, domain, url }) => {
     }
 };
 
+// Reusable method for fetching technographics data
+const fetchTechnographicsData = async (businessId) => {
+    try {
+        console.log('[EXPLORIUM_BUSINESSES_API] Fetching technographics data for business ID:', businessId);
+        const response = await exploriumAxios.post('/businesses/technographics/bulk_enrich', {
+            business_ids: [businessId]
+        });
+
+        // Extract and restructure the data to remove the nested data object
+        const technographicsData = response.data?.data?.[0]?.data || {};
+        console.log('[EXPLORIUM_BUSINESSES_API] Retrieved technographics data:', !!technographicsData);
+        return technographicsData;
+    } catch (error) {
+        console.error('[EXPLORIUM_BUSINESSES_API] Error fetching technographics data:', error.response?.data || error.message);
+        throw new Error('Failed to fetch technographics data');
+    }
+};
+
+router.post('/fetchtechnographicsdata', async (req, res) => {
+    try {
+        const { name, domain, url } = req.body;
+
+        // Validate required parameters
+        if (!name && !domain && !url) {
+            return res.status(400).json({
+                status: '-1',
+                message: 'At least one of: name, domain, or url is required'
+            });
+        }
+
+        // Match businesses using the provided data
+        const businessIds = await matchBusinesses({ name, domain, url });
+        if (!businessIds.length) {
+            return res.status(404).json({
+                status: '-1',
+                message: 'No businesses found for the given criteria'
+            });
+        }
+
+        // Get technographics data for the first matched business
+        const technographicsData = await fetchTechnographicsData(businessIds[0]);
+
+        // Check if the response data is empty
+        if (!technographicsData || Object.keys(technographicsData).length === 0) {
+            return res.json({
+                status: '-1',
+                message: 'No technographics data found for the provided company',
+                business_id: businessIds[0]
+            });
+        }
+
+        res.json({
+            status: '1',
+            technographicsData: technographicsData,
+            business_id: businessIds[0]
+        });
+    } catch (error) {
+        const statusCode = error.response?.status || 500;
+        res.status(statusCode).json({
+            status: '-1',
+            message: error.message || 'An error occurred during processing'
+        });
+    }
+});
+
 module.exports = {
     router,
     matchBusinesses,
@@ -300,5 +365,6 @@ module.exports = {
     fetchFundingAndAcquisition,
     validateAndConvertYear,
     fetchFundingAndProductLaunchSignals,
-    fetchFundingAcquisitionInfo
+    fetchFundingAcquisitionInfo,
+    fetchTechnographicsData
 };
