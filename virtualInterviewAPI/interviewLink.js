@@ -114,15 +114,29 @@ router.post('/interviewlink', upload.single('companyLogo'), async (req, res) => 
 router.post('/editinterview/:id', async (req, res) => {
     try {
         const { id } = req.params;
-        const { questions } = req.body;
+        const { questions, email, interviewTitle } = req.body;
 
-        if (!questions || !Array.isArray(questions)) {
+        // Create update object
+        const updateObject = {};
+        
+        // Add fields to update object if they exist
+        if (questions && Array.isArray(questions)) {
+            updateObject.questions = questions;
+        } else if (questions) {
             return res.status(400).json({ success: false, message: "Invalid questions data" });
+        }
+        
+        if (email) updateObject.email = email;
+        if (interviewTitle) updateObject.interviewTitle = interviewTitle;
+        
+        // Check if there's anything to update
+        if (Object.keys(updateObject).length === 0) {
+            return res.status(400).json({ success: false, message: "No valid fields to update" });
         }
 
         const updatedInterview = await Interview.findByIdAndUpdate(
             id,
-            { questions },
+            updateObject,
             { new: true }
         );
 
