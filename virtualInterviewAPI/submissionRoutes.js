@@ -49,7 +49,7 @@ const upload = multer({
       'application/msword',
       'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
     ];
-    
+
     if (allowedMimeTypes.includes(file.mimetype)) {
       // Apply different size limits based on file type
       if (file.mimetype.startsWith('video/')) {
@@ -268,7 +268,13 @@ async function sendSubmissionEmails(submission, sendSummary) {
         <p style="color: #4a5568;"><strong>Applicant Name:</strong> ${applicantName}</p>
         <p style="color: #4a5568;"><strong>Applicant Email:</strong> ${email}</p>
         <p style="color: #4a5568;"><strong>LinkedIn URL:</strong> <a href="${linkedInUrl}">${linkedInUrl}</a></p>
-        <p style="color: #4a5568;"><strong>Application Link:</strong> <a href="https://record.onepgr.com/InterviewPage/${applicationLink}"></a></p>
+        <p style="color: #4a5568;">
+        <strong>Application Link:</strong> 
+        <a href="https://record.onepgr.com/InterviewPage/${applicationLink}" 
+        style="word-break: break-all; color: #3182ce; text-decoration: underline;">
+        https://record.onepgr.com/InterviewPage/${applicationLink}
+        </a>
+        </p> 
         <p style="color: #4a5568;"><strong>Submitted At:</strong> ${submittedAt.toLocaleString()}</p>
         <p style="margin-top: 20px; color: #718096;">Best regards,<br/>${companyName} Hiring Team</p>
       </div>
@@ -302,7 +308,12 @@ async function sendSubmissionEmails(submission, sendSummary) {
             <li><strong>Applicant Name:</strong> ${applicantName}</li>
             <li><strong>Email:</strong> ${email}</li>
             <li><strong>LinkedIn URL:</strong> <a href="${linkedInUrl}">${linkedInUrl}</a></li>
-            <li><strong>Application Link:</strong> <a href="https://record.onepgr.com/InterviewPage/${applicationLink}"></a></li>
+            <li>
+            <strong>Application Link:</strong> 
+            <a href="https://record.onepgr.com/InterviewPage/${applicationLink}">
+            https://record.onepgr.com/InterviewPage/${applicationLink}
+            </a>
+            </li>
             <li><strong>Submitted At:</strong> ${submittedAt.toLocaleString()}</li>
           </ul>
           <p style="color: #4a5568;">We appreciate your interest in ${companyName} and will review your application carefully.</p>
@@ -463,9 +474,9 @@ router.post('/submit', ensureDbConnection, handleUpload, async (req, res) => {
           fileName: file.originalname,
           mimeType: file.mimetype
         });
-      } else if (file.mimetype === 'application/pdf' || 
-                 file.mimetype === 'application/msword' || 
-                 file.mimetype === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document') {
+      } else if (file.mimetype === 'application/pdf' ||
+        file.mimetype === 'application/msword' ||
+        file.mimetype === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document') {
         logSubmissionActivity('Processing Resume File', {
           fileName: file.originalname,
           mimeType: file.mimetype,
@@ -681,6 +692,7 @@ router.get('/submissions', ensureDbConnection, async (req, res) => {
 
     logSubmissionActivity('Fetching Submissions', { userId, applicationLink, includeVideos, page, limit });
 
+    // Only exclude videoResponses if includeVideos is false, always include resume
     const projection = includeVideos === 'true' ? {} : { videoResponses: 0 };
 
     const submissions = await Submission.find(
