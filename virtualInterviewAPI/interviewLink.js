@@ -24,8 +24,7 @@ const InterviewSchema = new mongoose.Schema({
     questions: { type: [String], required: true },
     applicationLink: { type: String, unique: true, required: true },
     createdAt: { type: Date, default: Date.now },
-    expiresAt: { type: Date, required: true },
-    status: { type: String, enum: ['active', 'expired', 'deleted'], default: 'active' },
+    status: { type: String, enum: ['active', 'deleted'], default: 'active' },
     viewCount: { type: Number, default: 0 },
     lastViewed: { type: Date },
     applicationCount: { type: Number, default: 0 }
@@ -40,26 +39,7 @@ function generateUniqueLink() {
     return `${timestamp}-${randomString}`;
 }
 
-// Add this helper function after the generateUniqueLink function
-async function updateExpiredInterviews() {
-    try {
-        const result = await Interview.updateMany(
-            {
-                status: 'active',
-                expiresAt: { $lt: new Date() }
-            },
-            {
-                $set: { status: 'expired' }
-            }
-        );
-        console.log(`Updated ${result.modifiedCount} expired interviews`);
-    } catch (err) {
-        console.error('Error updating expired interviews:', err);
-    }
-}
-
 // Create interview link route
-
 router.post('/interviewlink', upload.single('companyLogo'), async (req, res) => {
     try {
         const { userId, interviewTitle, email, jobPostingUrl, companyUrl, questions, applicationLink: providedApplicationLink } = req.body;
@@ -69,9 +49,6 @@ router.post('/interviewlink', upload.single('companyLogo'), async (req, res) => 
         }
 
         const applicationLink = providedApplicationLink || generateUniqueLink();
-        const expiresAt = new Date();
-        expiresAt.setDate(expiresAt.getDate() + 60);
-
         const companyLogoUrl = req.file ? `data:${req.file.mimetype};base64,${req.file.buffer.toString('base64')}` : null;
 
         const parsedQuestions = Array.isArray(questions) ? questions : JSON.parse(questions);
@@ -84,8 +61,7 @@ router.post('/interviewlink', upload.single('companyLogo'), async (req, res) => 
             companyUrl,
             companyLogoUrl,
             questions: parsedQuestions,
-            applicationLink,
-            expiresAt
+            applicationLink
         });
 
         await interview.save();
@@ -95,7 +71,6 @@ router.post('/interviewlink', upload.single('companyLogo'), async (req, res) => 
             message: 'Interview created successfully',
             data: {
                 applicationLink: `https://record.onepgr.com/InterviewPage/${applicationLink}`,
-                expiresAt,
                 interviewTitle,
                 email,
                 jobPostingUrl,
@@ -178,9 +153,6 @@ router.delete('/deleteinterview/:id', async (req, res) => {
 
 router.get('/allinterviews', async (req, res) => {
     try {
-        // First, update any expired interviews
-        await updateExpiredInterviews();
-
         // Extract query parameters
         const userId = req.query.userId;
         const page = Math.max(parseInt(req.query.page) || 1, 1);
@@ -222,7 +194,6 @@ router.get('/allinterviews', async (req, res) => {
             questions: interview.questions,
             applicationLink: `https://record.onepgr.com/InterviewPage/${interview.applicationLink}`,
             createdAt: interview.createdAt,
-            expiresAt: interview.expiresAt,
             status: interview.status,
             numberOfQuestions: interview.questions.length
         }));
@@ -256,9 +227,6 @@ router.get('/allinterviews', async (req, res) => {
 // Fetch interview details route
 router.get('/interview/:linkId', async (req, res) => {
     try {
-        // First, update any expired interviews
-        await updateExpiredInterviews();
-
         const { linkId } = req.params;
 
         const interview = await Interview.findOne({
@@ -267,14 +235,7 @@ router.get('/interview/:linkId', async (req, res) => {
         });
 
         if (!interview) {
-            return res.status(404).json({ success: false, message: 'Interview not found or expired' });
-        }
-
-        // Check if interview has expired
-        if (interview.expiresAt < new Date()) {
-            interview.status = 'expired';
-            await interview.save();
-            return res.status(404).json({ success: false, message: 'Interview has expired' });
+            return res.status(404).json({ success: false, message: 'Interview not found' });
         }
 
         res.status(200).json({
@@ -288,7 +249,6 @@ router.get('/interview/:linkId', async (req, res) => {
                 questions: interview.questions || [],
                 applicationLink: interview.applicationLink,
                 companyLogoUrl: interview.companyLogoUrl,
-                expiresAt: interview.expiresAt,
                 viewCount: interview.viewCount,
                 applicationCount: interview.applicationCount
             }
