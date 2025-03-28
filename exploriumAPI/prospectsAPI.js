@@ -217,6 +217,15 @@ router.post('/fetch-person-changes', async (req, res) => {
         // Get changes with enhanced event fetching
         const changes = await fetchPersonChanges(prospectIds, timestampFrom);
 
+        // Check if there are no changes
+        if (!changes || changes.length === 0) {
+            return res.status(404).json({
+                status: '-1',
+                message: 'No changes or events found for the given prospect(s) since ' + 
+                         new Date(timestampFrom).getFullYear()
+            });
+        }
+
         // Enhanced response with more details
         res.json({
             status: '1',
