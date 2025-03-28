@@ -17,6 +17,7 @@ const { fetchFilings10K } = require('../secFilings/secScraper10K.js');
 const { fetchFilings10Q } = require('../secFilings/secScraper10Q.js');
 const { fetchFundingAndProductLaunchSignals } = require('../exploriumAPI/businessesAPI.js');
 const { fetchFundingAcquisitionInfo } = require('../exploriumAPI/businessesAPI.js');
+const { fetchTechnographicsData } = require('../exploriumAPI/businessesAPI.js');
 
 const { OpenAI } = require('openai');
 const url = "mongodb://onepgrdb:onepgrdb123@pages.onepgr.com:27017/?authSource=admin";
@@ -163,6 +164,25 @@ async function processJob(job) {
                     console.log('[SIGNAL_AUTOMATION_JOBS] Found funding rounds count:', signalDataCount);
                 } catch (error) {
                     console.error('[SIGNAL_AUTOMATION_JOBS] Error fetching funding announcements:', error.message);
+                    throw error;
+                }
+                break;
+            }
+            case 'technographics_data': {
+                console.log('[SIGNAL_AUTOMATION_JOBS] Processing technographics data for company:', job.contact_company);
+                const domain = job.contact_details?.domain || `${job.contact_company}.com`;
+                console.log('[SIGNAL_AUTOMATION_JOBS] Using domain for technographics data:', domain);
+
+                try {
+                    response = await fetchTechnographicsData({ domain });
+                    // Count the number of technographics data points
+                    // signalDataCount = response?.technographicsData?.length || 0;
+                    signalDataCount = Object.keys(response.technographicsData).length;
+
+                    console.log('[SIGNAL_AUTOMATION_JOBS] Technographics data API response status:', response.status);
+                    console.log('[SIGNAL_AUTOMATION_JOBS] Found technographics data count:', signalDataCount);
+                } catch (error) {
+                    console.error('[SIGNAL_AUTOMATION_JOBS] Error fetching technographics data:', error.message);
                     throw error;
                 }
                 break;
@@ -488,6 +508,9 @@ async function summarizeSignalData(req, res) {
                             break;
                         case 'new_product_launch':
                             promptTemplate = `Summarize the latest product launches for ${job.contact_company}. Include product details, launch dates, key features, and market impact: `;
+                            break;
+                        case 'technographics_data':
+                            promptTemplate = `Analyze the comprehensive technographic data for ${job.contact_company}. Summarize the complete technology stack and its categorization into functional areas (e.g., Operations Management, Programming, Marketing, IT Security, Product and Design, etc.). Identify key trends, standout technologies, and any competitive advantages. Provide insights on how these tools support business operations, drive innovation, and impact market positioning.`;
                             break;
                         case 'youtube_marketing_videos':
                             promptTemplate = `Summarize the recent YouTube content from ${job.contact_company}. Focus on video engagement, key themes, and notable metrics: `;
