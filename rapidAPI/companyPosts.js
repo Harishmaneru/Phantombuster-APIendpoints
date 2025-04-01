@@ -5,7 +5,7 @@ const router = express.Router();
 
 const RAPIDAPI_HOST = 'fresh-linkedin-profile-data.p.rapidapi.com';
 // const RAPIDAPI_KEY = '9844a765dbmsh2921a4931f5e3acp19930bjsneb132c95f806' //Rajiv Account (pro plan)
-const RAPIDAPI_KEY = '7b5216ff04mshcb5e0e42435bc24p19037djsn131b9d42a1ee'  //temparary  key
+const RAPIDAPI_KEY = '555f39d567mshd3b5b5ed67da326p10603djsnc5e2e27c7423'  //temparary  key
 const RAPIDAPI_URL = 'https://fresh-linkedin-profile-data.p.rapidapi.com/get-company-posts';
 
 const fetchCompanyPosts = async (companyUrl) => {
