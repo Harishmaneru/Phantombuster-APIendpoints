@@ -191,6 +191,8 @@ router.get('/allinterviews', async (req, res) => {
             interviewTitle: interview.interviewTitle,
             email: interview.email,
             jobPostingUrl: interview.jobPostingUrl,
+            companyUrl: interview.companyUrl,
+            companyLogoUrl: interview.companyLogoUrl,
             questions: interview.questions,
             applicationLink: `https://record.onepgr.com/InterviewPage/${interview.applicationLink}`,
             createdAt: interview.createdAt,
