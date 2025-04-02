@@ -222,6 +222,26 @@ async function processJob(job) {
                 signalDataCount = response?.data?.length || 0;
                 break;
             }
+            // case 'email_activity': {
+            //     response = {
+            //         status: "0",
+            //         message: "Email activity signal is currently not supported.",
+            //         data: []
+            //     };
+            //     signalDataCount = 0;
+            //     // Update job status to SUCCESS since we're handling it gracefully
+            //     await SignalAutomationJob.updateOne(
+            //         { _id: job._id },
+            //         {
+            //             $set: {
+            //                 job_status: 'SUCCESS',
+            //                 signal_data: response,
+            //                 signal_data_count: signalDataCount
+            //             }
+            //         }
+            //     );
+            //     break;
+            // }
             case 'product_launches': {
                 response = await fetchProductLaunchSignals({ companyName: job.contact_company });
                 signalDataCount = response?.data?.length || 0;
@@ -269,9 +289,27 @@ async function processJob(job) {
                 signalDataCount = response?.data?.data?.company_name ? 1 : 0;
                 break;
             }
-            default:
+            default: {
                 console.warn(`Unknown signal_flag for job ID: ${job.job_id}`);
-                return;
+                response = {
+                    status: "0",
+                    message: `${job.signal_flag} signal is currently not supported`,
+                    data: []
+                };
+                signalDataCount = 0;
+                // Update job status to SUCCESS since we're handling it gracefully
+                await SignalAutomationJob.updateOne(
+                    { _id: job._id },
+                    {
+                        $set: {
+                            job_status: 'SUCCESS',
+                            signal_data: response,
+                            signal_data_count: signalDataCount
+                        }
+                    }
+                );
+                break;
+            }
         }
     }
 
