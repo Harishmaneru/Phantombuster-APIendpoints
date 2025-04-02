@@ -358,6 +358,44 @@ router.post('/fetchtechnographicsdata', async (req, res) => {
     }
 });
 
+// Reusable method for fetching technographics information
+const fetchTechnographicsInfo = async ({ domain }) => {
+    console.log('[EXPLORIUM_BUSINESSES_API] Starting fetchTechnographicsInfo with domain:', domain);
+
+    // Validate required parameters
+    if (!domain) {
+        console.error('[EXPLORIUM_BUSINESSES_API] Validation Error: Domain is required');
+        throw new Error('Domain is required');
+    }
+
+    try {
+        // Match businesses using the provided domain
+        console.log('[EXPLORIUM_BUSINESSES_API] Attempting to match businesses with domain:', domain);
+        const businessIds = await matchBusinesses({ domain });
+        if (!businessIds.length) {
+            console.error('[EXPLORIUM_BUSINESSES_API] No businesses found for domain:', domain);
+            throw new Error('No businesses found for the given domain');
+        }
+        console.log('[EXPLORIUM_BUSINESSES_API] Found business IDs:', businessIds);
+
+        // Get technographics data for the first matched business
+        console.log('[EXPLORIUM_BUSINESSES_API] Fetching technographics data for business ID:', businessIds[0]);
+        const technographicsData = await fetchTechnographicsData(businessIds[0]);
+        console.log('[EXPLORIUM_BUSINESSES_API] Retrieved technographics data:', !!technographicsData);
+
+        const response = {
+            status: '1',
+            technographicsData: technographicsData,
+            business_id: businessIds[0]
+        };
+        console.log('[EXPLORIUM_BUSINESSES_API] Successfully completed fetchTechnographicsInfo');
+        return response;
+    } catch (error) {
+        console.error('[EXPLORIUM_BUSINESSES_API] Error in fetchTechnographicsInfo:', error.message);
+        throw error;
+    }
+};
+
 module.exports = {
     router,
     matchBusinesses,
@@ -366,5 +404,6 @@ module.exports = {
     validateAndConvertYear,
     fetchFundingAndProductLaunchSignals,
     fetchFundingAcquisitionInfo,
-    fetchTechnographicsData
+    fetchTechnographicsData,
+    fetchTechnographicsInfo
 };

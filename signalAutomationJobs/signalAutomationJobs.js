@@ -17,7 +17,7 @@ const { fetchFilings10K } = require('../secFilings/secScraper10K.js');
 const { fetchFilings10Q } = require('../secFilings/secScraper10Q.js');
 const { fetchFundingAndProductLaunchSignals } = require('../exploriumAPI/businessesAPI.js');
 const { fetchFundingAcquisitionInfo } = require('../exploriumAPI/businessesAPI.js');
-const { fetchTechnographicsData } = require('../exploriumAPI/businessesAPI.js');
+const { fetchTechnographicsInfo } = require('../exploriumAPI/businessesAPI.js');
 
 const { OpenAI } = require('openai');
 const url = "mongodb://onepgrdb:onepgrdb123@pages.onepgr.com:27017/?authSource=admin";
@@ -174,7 +174,7 @@ async function processJob(job) {
                 console.log('[SIGNAL_AUTOMATION_JOBS] Using domain for technographics data:', domain);
 
                 try {
-                    response = await fetchTechnographicsData({ domain });
+                    response = await fetchTechnographicsInfo({ domain });
                     // Count the number of technographics data points
                     // signalDataCount = response?.technographicsData?.length || 0;
                     signalDataCount = Object.keys(response.technographicsData).length;
