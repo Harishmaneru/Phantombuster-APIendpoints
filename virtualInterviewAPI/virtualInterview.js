@@ -657,20 +657,19 @@ const scrapeJobDescription = async (jobPostingUrl, rayId = null) => {
 
 
 
-const generateQuestions = async (JobDescription, JobTitle = null) => {
+const generateQuestions = async (JobDescription, JobTitle = null, numQuestions = 3) => {
     // Check if the job description is meaningful or just navigation/menu text
     const isMenuText = JobDescription.includes('Popular Jobs') &&
         JobDescription.includes('Top job titles') &&
-        JobDescription.includes('Top job types') &&
-        JobDescription.includes('Top companies');
+        JobDescription.includes('Top job types');
 
     let prompt;
 
     if (isMenuText && JobTitle) {
         console.log('Job description appears to be menu text, using job title instead:', JobTitle);
-        prompt = `Generate exactly 3 relevant and challenging interview questions for a "${JobTitle}" position. The questions should focus on skills and knowledge relevant to this role. Provide only the questions, without any introductory text, explanations, or formatting.`;
+        prompt = `Generate exactly ${numQuestions} relevant and challenging interview questions for a "${JobTitle}" position. The questions should focus on skills and knowledge relevant to this role. Provide only the questions, without any introductory text, explanations, or formatting.`;
     } else {
-        prompt = `Generate exactly 3 relevant and challenging technical interview questions based on the following job description. The questions should focus on conceptual understanding and require detailed verbal explanations, not code-writing tasks. Avoid asking questions that involve solving problems by writing code. Provide only the questions, without any introductory text, explanations, or formatting:\n\n${JobDescription}`;
+        prompt = `Generate exactly ${numQuestions} relevant and challenging technical interview questions based on the following job description. The questions should focus on conceptual understanding and require detailed verbal explanations, not code-writing tasks. Avoid asking questions that involve solving problems by writing code. Provide only the questions, without any introductory text, explanations, or formatting:\n\n${JobDescription}`;
     }
 
     const response = await openai.chat.completions.create({
@@ -711,113 +710,156 @@ const cleanQuestions = (questions) => {
     return cleanedQuestions;
 };
 
-// Main route handler
+// Add a cache to store job data
+const jobDataCache = new Map();
+
+// Add a temporary storage for job data with user isolation
+const tempJobDataStore = new Map();
+
+// Helper function to generate a unique key for the user's job data
+const generateUserJobKey = (userId, jobPostingUrl) => {
+    return `${userId}_${jobPostingUrl || 'manual'}`;
+};
+
+// Helper function to get all keys for a specific user
+const getUserJobKeys = (userId) => {
+    return Array.from(tempJobDataStore.keys()).filter(key => key.startsWith(`${userId}_`));
+};
 
 router.post('/generate-questions', async (req, res) => {
-    const { jobPostingUrl, jobTitle, manualJobDescription, rayId } = req.body;
+    const { jobPostingUrl, jobTitle, manualJobDescription, rayId, numQuestions = 3, isAdditionalRequest = false, userId } = req.body;
 
     if (!jobPostingUrl && !jobTitle && !manualJobDescription) {
         return res.status(400).json({
             status: "-1",
-            message: "Either job posting URL, job title, or manual job description is required",
+            message: "Either job posting URL, job title, or job description is required",
+            data: {}
+        });
+    }
+
+    if (!userId) {
+        return res.status(400).json({
+            status: "-1",
+            message: "User ID is required",
             data: {}
         });
     }
 
     try {
-        console.log(`Generating questions using provided data`);
+        console.log(`Generating questions for user ${userId}`);
 
         // Initialize variables
         let jobData;
         let jobDescription;
         let extractedJobTitle = jobTitle;
 
-        // If manual job description is provided, use it directly
-        if (manualJobDescription) {
-            console.log('Using manually provided job description');
-            jobData = {
-                Job_Title: jobTitle || 'Unknown Position',
-                Job_Description: manualJobDescription,
-                Platform: jobPostingUrl ? identifyPlatform(jobPostingUrl) : 'manual',
-                URL: jobPostingUrl || 'Manual Entry'
-            };
-            jobDescription = manualJobDescription;
-        }
-        // Otherwise try to scrape
-        else if (jobPostingUrl) {
-            console.log(`Attempting to scrape job posting URL: ${jobPostingUrl}`);
+        // Generate a unique key for this user's job data
+        const userJobKey = generateUserJobKey(userId, jobPostingUrl);
 
-            // If it's Indeed and we have a Ray ID, store it
-            if (jobPostingUrl.includes('indeed.com') && rayId) {
-                const jobKey = extractIndeedJobKey(jobPostingUrl);
-                if (jobKey) {
-                    console.log('Storing Ray ID for Indeed job:', rayId);
-                    cloudflareStore.rayIds[jobKey] = rayId;
+        // If this is an additional request, use the stored data
+        if (isAdditionalRequest && tempJobDataStore.has(userJobKey)) {
+            console.log(`Using stored job data for additional questions for user ${userId}`);
+            const storedData = tempJobDataStore.get(userJobKey);
+            jobData = storedData.jobData;
+            jobDescription = storedData.jobDescription;
+            extractedJobTitle = storedData.extractedJobTitle;
+        } else {
+            // If manual job description is provided, use it directly
+            if (manualJobDescription) {
+                console.log(`Using manually provided job description for user ${userId}`);
+                jobData = {
+                    Job_Title: jobTitle || 'Unknown Position',
+                    Job_Description: manualJobDescription,
+                    Platform: jobPostingUrl ? identifyPlatform(jobPostingUrl) : 'manual',
+                    URL: jobPostingUrl || 'Manual Entry'
+                };
+                jobDescription = manualJobDescription;
+            }
+            // Otherwise try to scrape
+            else if (jobPostingUrl) {
+                console.log(`Attempting to scrape job posting URL for user ${userId}: ${jobPostingUrl}`);
+
+                // If it's Indeed and we have a Ray ID, store it
+                if (jobPostingUrl.includes('indeed.com') && rayId) {
+                    const jobKey = extractIndeedJobKey(jobPostingUrl);
+                    if (jobKey) {
+                        console.log(`Storing Ray ID for Indeed job for user ${userId}:`, rayId);
+                        cloudflareStore.rayIds[jobKey] = rayId;
+                    }
+                }
+
+                try {
+                    jobData = await scrapeJobDescription(jobPostingUrl, rayId);
+                    console.log(`Raw job data for user ${userId}:`, typeof jobData === 'object' ? 'Object with properties' : 'Text string');
+
+                    // Handle both structured and unstructured job data
+                    if (typeof jobData === 'object') {
+                        jobDescription = jobData.Job_Description;
+                        extractedJobTitle = jobData.Job_Title || extractedJobTitle;
+                        console.log(`Using structured job data with title for user ${userId}:`, jobData.Job_Title);
+                    } else {
+                        jobDescription = jobData;
+                        console.log(`Using unstructured job data for user ${userId}`);
+                    }
+
+                    // Check if the job description is just navigation/menu text
+                    const isMenuText = jobDescription.includes('Popular Jobs') &&
+                        jobDescription.includes('Top job titles') &&
+                        jobDescription.includes('Top job types');
+
+                    if (isMenuText && extractedJobTitle) {
+                        console.log(`Detected menu text in job description for user ${userId}, will rely on job title for questions`);
+                    }
+                } catch (error) {
+                    console.error(`Error scraping job description for user ${userId}:`, error.message);
+
+                    // If scraping fails but jobTitle is provided, use that as fallback
+                    if (jobTitle) {
+                        console.log(`Using provided job title as fallback for user ${userId}:`, jobTitle);
+                        jobData = {
+                            Job_Title: jobTitle,
+                            Job_Description: `Position for ${jobTitle}`,
+                            Platform: jobPostingUrl.includes('indeed.com') ? 'indeed' :
+                                jobPostingUrl.includes('adzuna.com') ? 'adzuna' :
+                                    identifyPlatform(jobPostingUrl),
+                            URL: jobPostingUrl
+                        };
+                        jobDescription = jobData.Job_Description;
+                    } else {
+                        throw new Error('Failed to get job description and no job title provided. Please provide a job description.');
+                    }
                 }
             }
-
-            try {
-                jobData = await scrapeJobDescription(jobPostingUrl, rayId);
-                console.log('Raw job data:', typeof jobData === 'object' ? 'Object with properties' : 'Text string');
-
-                // Handle both structured and unstructured job data
-                if (typeof jobData === 'object') {
-                    jobDescription = jobData.Job_Description;
-                    extractedJobTitle = jobData.Job_Title || extractedJobTitle;
-                    console.log('Using structured job data with title:', jobData.Job_Title);
-                } else {
-                    jobDescription = jobData;
-                    console.log('Using unstructured job data');
-                }
-
-                // Check if the job description is just navigation/menu text
-                const isMenuText = jobDescription.includes('Popular Jobs') &&
-                    jobDescription.includes('Top job titles') &&
-                    jobDescription.includes('Top job types');
-
-                if (isMenuText && extractedJobTitle) {
-                    console.log('Detected menu text in job description, will rely on job title for questions');
-                }
-            } catch (error) {
-                console.error('Error scraping job description:', error.message);
-
-                // If scraping fails but jobTitle is provided, use that as fallback
-                if (jobTitle) {
-                    console.log('Using provided job title as fallback:', jobTitle);
-                    jobData = {
-                        Job_Title: jobTitle,
-                        Job_Description: `Position for ${jobTitle}`,
-                        Platform: jobPostingUrl.includes('indeed.com') ? 'indeed' :
-                            jobPostingUrl.includes('adzuna.com') ? 'adzuna' :
-                                identifyPlatform(jobPostingUrl),
-                        URL: jobPostingUrl
-                    };
-                    jobDescription = jobData.Job_Description;
-                } else {
-                    throw new Error('Failed to get job description and no job title provided. Please provide a job description.');
-                }
+            // Use just the job title if that's all we have
+            else if (jobTitle) {
+                console.log(`Using only job title for user ${userId}:`, jobTitle);
+                jobData = {
+                    Job_Title: jobTitle,
+                    Job_Description: `Position for ${jobTitle}`,
+                };
+                jobDescription = jobData.Job_Description;
+                extractedJobTitle = jobTitle;
             }
-        }
-        // Use just the job title if that's all we have
-        else if (jobTitle) {
-            console.log('Using only job title:', jobTitle);
-            jobData = {
-                Job_Title: jobTitle,
-                Job_Description: `Position for ${jobTitle}`,
-            };
-            jobDescription = jobData.Job_Description;
-            extractedJobTitle = jobTitle;
+
+            // Store the data for potential additional requests
+            tempJobDataStore.set(userJobKey, {
+                jobData,
+                jobDescription,
+                extractedJobTitle,
+                userId, // Store userId with the data for additional validation
+                timestamp: Date.now() // Store timestamp for potential cleanup
+            });
         }
 
-        console.log('Final job description length:', jobDescription.length);
+        console.log(`Final job description length for user ${userId}:`, jobDescription.length);
 
         // Generate raw questions based on the description and title
-        const rawQuestions = await generateQuestions(jobDescription, extractedJobTitle);
+        const rawQuestions = await generateQuestions(jobDescription, extractedJobTitle, numQuestions);
 
         // Clean the questions for UI display
         const questions = cleanQuestions(rawQuestions);
 
-        console.log(`Generated ${questions.length} questions`);
+        console.log(`Generated ${questions.length} questions for user ${userId}`);
 
         // Get the Ray ID if available
         let responseRayId = null;
@@ -834,7 +876,7 @@ router.post('/generate-questions', async (req, res) => {
             JobDescription: jobDescription
         })
     } catch (error) {
-        console.error('Error in /generate-questions:', error.message);
+        console.error(`Error in /generate-questions for user ${userId}:`, error.message);
         res.status(500).json({
             status: "-1",
             message: error.message,
@@ -844,32 +886,79 @@ router.post('/generate-questions', async (req, res) => {
     }
 });
 
+// Add a cleanup function to be called from the /interviewlink endpoint
+const cleanupJobData = (userId, jobPostingUrl) => {
+    if (!userId) {
+        console.error('Cannot cleanup job data: userId is required');
+        return;
+    }
+
+    const userJobKey = generateUserJobKey(userId, jobPostingUrl);
+    
+    // Verify the data belongs to the correct user before deleting
+    if (tempJobDataStore.has(userJobKey)) {
+        const storedData = tempJobDataStore.get(userJobKey);
+        if (storedData.userId === userId) {
+            tempJobDataStore.delete(userJobKey);
+            console.log(`Cleaned up job data for user ${userId} and job ${jobPostingUrl}`);
+        } else {
+            console.error(`Attempted to cleanup data for wrong user. Expected ${userId}, found ${storedData.userId}`);
+        }
+    }
+};
+
+// Add a function to cleanup all data for a specific user
+const cleanupAllUserData = (userId) => {
+    if (!userId) {
+        console.error('Cannot cleanup user data: userId is required');
+        return;
+    }
+
+    const userKeys = getUserJobKeys(userId);
+    userKeys.forEach(key => {
+        const storedData = tempJobDataStore.get(key);
+        if (storedData.userId === userId) {
+            tempJobDataStore.delete(key);
+            console.log(`Cleaned up job data for user ${userId} with key ${key}`);
+        }
+    });
+};
+
+// Export the cleanup functions
+module.exports.cleanupJobData = cleanupJobData;
+module.exports.cleanupAllUserData = cleanupAllUserData;
+
 // Process applicant responses
-router.post('/submit-responses', upload.fields([
-    { name: 'videoResponse1', maxCount: 1 },
-    { name: 'videoResponse2', maxCount: 1 },
-    { name: 'videoResponse3', maxCount: 1 }
-]), async (req, res) => {
+router.post('/submit-responses', upload.any(), async (req, res) => {
     const { textAnswer, jobPostingUrl, emails } = req.body;
-    console.log(req.body)
-    const videos = req.files;
-    console.log(videos)
-    if (!textAnswer || !jobPostingUrl || !emails || !videos) {
-        return res.status(400).json({ error: 'Required fields are missing.' });
+    console.log('Request body:', req.body);
+    console.log('Files:', req.files);
+
+    if (!textAnswer || !jobPostingUrl || !emails) {
+        return res.status(400).json({ 
+            status: "-1",
+            message: "Required fields are missing.",
+            data: {}
+        });
     }
 
     try {
         const jobDescription = await scrapeJobDescription(jobPostingUrl);
 
         const videoResponses = [];
-        for (const key of ['videoResponse1', 'videoResponse2', 'videoResponse3']) {
-            if (videos[key]) {
-                const videoPath = videos[key][0].path;
-                const audioPath = await convertVideoToAudio(videoPath);
-                const transcription = await transcribeAudio(audioPath);
-                videoResponses.push(transcription);
-                fs.unlinkSync(audioPath);
-                fs.unlinkSync(videoPath);
+        // Process all video files
+        if (req.files && req.files.length > 0) {
+            for (const file of req.files) {
+                if (file.mimetype.startsWith('video/')) {
+                    const videoPath = file.path;
+                    const audioPath = await convertVideoToAudio(videoPath);
+                    const transcription = await transcribeAudio(audioPath);
+                    videoResponses.push(transcription);
+                    
+                    // Clean up temporary files
+                    fs.unlinkSync(audioPath);
+                    fs.unlinkSync(videoPath);
+                }
             }
         }
 
@@ -899,9 +988,23 @@ router.post('/submit-responses', upload.fields([
             text: emailContent
         });
 
-        res.json({ message: 'Responses submitted and evaluated successfully.' });
+        res.json({ 
+            status: "1",
+            message: "Responses submitted and evaluated successfully.",
+            data: {
+                textAnswer,
+                videoResponsesCount: videoResponses.length,
+                rating
+            }
+        });
     } catch (error) {
-        res.status(500).json({ error: error.message });
+        console.error('Error in /submit-responses:', error);
+        res.status(500).json({ 
+            status: "-1",
+            message: error.message,
+            error: error.message,
+            data: {}
+        });
     }
 });
 
@@ -1320,4 +1423,3 @@ function generateUniqueId() {
 }
 
 module.exports = router;
-
