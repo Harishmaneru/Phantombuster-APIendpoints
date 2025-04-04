@@ -4,8 +4,8 @@ const axios = require('axios');
 const router = express.Router();
 
 const RAPIDAPI_HOST = 'fresh-linkedin-profile-data.p.rapidapi.com';
-// const RAPIDAPI_KEY = '9844a765dbmsh2921a4931f5e3acp19930bjsneb132c95f806'; //Rajiv Pro plan key
-const RAPIDAPI_KEY = '555f39d567mshd3b5b5ed67da326p10603djsnc5e2e27c7423'  //temparary  key
+const RAPIDAPI_KEY = '9844a765dbmsh2921a4931f5e3acp19930bjsneb132c95f806'; //Rajiv Pro plan key
+// const RAPIDAPI_KEY = '555f39d567mshd3b5b5ed67da326p10603djsnc5e2e27c7423'   
 const RAPIDAPI_URL = 'https://fresh-linkedin-profile-data.p.rapidapi.com/get-company-by-linkedinurl';
 
 const fetchCompanyInfo = async (linkedinUrl) => {

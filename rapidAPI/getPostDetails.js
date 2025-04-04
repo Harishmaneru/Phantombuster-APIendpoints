@@ -66,16 +66,16 @@ const getLinkedInPostData = async (urn) => {
                 params: { urn: urn, type: 'LIKE', page: 1 },
                 headers: {
                     'x-rapidapi-host': 'fresh-linkedin-profile-data.p.rapidapi.com',
-                    // 'x-rapidapi-key': '9844a765dbmsh2921a4931f5e3acp19930bjsneb132c95f806' //Rajiv Account pro plan
-                    'x-rapidapi-key': '555f39d567mshd3b5b5ed67da326p10603djsnc5e2e27c7423'  //temparary  key
+                    'x-rapidapi-key': '9844a765dbmsh2921a4931f5e3acp19930bjsneb132c95f806' //Rajiv Account pro plan
+                    // 'x-rapidapi-key': '555f39d567mshd3b5b5ed67da326p10603djsnc5e2e27c7423'  //temparary  key
                 }
             }),
             axios.get(`https://fresh-linkedin-profile-data.p.rapidapi.com/get-post-comments`, {
                 params: { urn: urn, sort_by: 'Most relevant', page: 1 },
                 headers: {
                     'x-rapidapi-host': 'fresh-linkedin-profile-data.p.rapidapi.com',
-                    // 'x-rapidapi-key': '9844a765dbmsh2921a4931f5e3acp19930bjsneb132c95f806' //Rajiv Account pro plan
-                    'x-rapidapi-key': '555f39d567mshd3b5b5ed67da326p10603djsnc5e2e27c7423'  //temparary  key
+                    'x-rapidapi-key': '9844a765dbmsh2921a4931f5e3acp19930bjsneb132c95f806' //Rajiv Account pro plan
+                    // 'x-rapidapi-key': '555f39d567mshd3b5b5ed67da326p10603djsnc5e2e27c7423'  //temparary  key
                 }
             })
         ]);
