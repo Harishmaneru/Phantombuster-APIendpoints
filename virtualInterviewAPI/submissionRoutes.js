@@ -126,7 +126,8 @@ async function connectDB() {
     return;
   }
 
-  const mongoURI = process.env.MONGODB_URI;
+  // const mongoURI = process.env.MONGODB_URI;
+  const mongoURI = 'mongodb+srv://harishmaneru:Xe2Mz13z83IDhbPW@cluster0.bu3exkw.mongodb.net/?retryWrites=true&w=majority&tls=true';
   const options = {
     serverSelectionTimeoutMS: 60000,
     socketTimeoutMS: 120000,

@@ -4,7 +4,8 @@ const multer = require('multer');
 const mongoose = require('mongoose');
 
 // Database connection
-const mongoURI = process.env.MONGODB_URI;
+// const mongoURI = process.env.MONGODB_URI;
+const mongoURI = 'mongodb+srv://harishmaneru:Xe2Mz13z83IDhbPW@cluster0.bu3exkw.mongodb.net/?retryWrites=true&w=majority&tls=true';
 mongoose.connect(mongoURI, { serverSelectionTimeoutMS: 15000, socketTimeoutMS: 45000 })
     .then(() => console.log('createVI: MongoDB connected'))
     .catch(err => console.error('MongoDB connection error:', err));
