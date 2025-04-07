@@ -98,7 +98,7 @@ const prospectsAPI = require('./exploriumAPI/prospectsAPI.js');
 
 const businessesAPI = require('./exploriumAPI/businessesAPI.js');
 
-const signupApi = require('./virtualInterviewAPI/signuApi.js');
+const signupApi = require('./virtualInterviewAPI/signupApi.js');
 
 const { Http2ServerRequest } = require('http2');
 
