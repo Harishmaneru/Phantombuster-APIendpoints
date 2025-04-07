@@ -102,7 +102,6 @@ const signupApi = require('./virtualInterviewAPI/signupApi.js');
 
 const { Http2ServerRequest } = require('http2');
 
-
 const app = express();
 const port = 3001;
 
@@ -122,8 +121,6 @@ app.use(
       "https://www.getprospectsignals.com",
       "https://getprospectsignals.com",
       "https://record.onepgr.com/"
-
-
 
     ],
     methods: ["GET", "PUT", "POST", "DELETE", "OPTIONS"],
