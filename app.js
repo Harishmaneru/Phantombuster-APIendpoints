@@ -98,6 +98,8 @@ const prospectsAPI = require('./exploriumAPI/prospectsAPI.js');
 
 const businessesAPI = require('./exploriumAPI/businessesAPI.js');
 
+const signupApi = require('./virtualInterviewAPI/signuApi.js');
+
 const { Http2ServerRequest } = require('http2');
 
 
@@ -182,6 +184,7 @@ app.use(secScraper10Q.router);
 app.use(warmupInbox);
 app.use(prospectsAPI);
 app.use(businessesAPI.router);
+app.use(signupApi);
 
 const options = {
   key: fs.readFileSync('./onepgr.com.key', 'utf8'),
