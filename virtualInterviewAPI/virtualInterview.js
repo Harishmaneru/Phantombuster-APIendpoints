@@ -16,8 +16,9 @@ const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 const router = express.Router();
 const upload = multer({ dest: 'uploads/' });
 
-const mongoUri = 'mongodb+srv://harishmaneru:Xe2Mz13z83IDhbPW@cluster0.bu3exkw.mongodb.net/?retryWrites=true&w=majority&tls=true';
-const dbName = 'interviewApp';
+
+const mongoUri = process.env.ONEPGR_MONGO_URI
+const dbName = 'onepgr_apps';
 const collectionName = 'applicantResponses';
 
 const transporter = nodemailer.createTransport({
@@ -894,7 +895,7 @@ const cleanupJobData = (userId, jobPostingUrl) => {
     }
 
     const userJobKey = generateUserJobKey(userId, jobPostingUrl);
-    
+
     // Verify the data belongs to the correct user before deleting
     if (tempJobDataStore.has(userJobKey)) {
         const storedData = tempJobDataStore.get(userJobKey);
@@ -935,7 +936,7 @@ router.post('/submit-responses', upload.any(), async (req, res) => {
     console.log('Files:', req.files);
 
     if (!textAnswer || !jobPostingUrl || !emails) {
-        return res.status(400).json({ 
+        return res.status(400).json({
             status: "-1",
             message: "Required fields are missing.",
             data: {}
@@ -954,7 +955,7 @@ router.post('/submit-responses', upload.any(), async (req, res) => {
                     const audioPath = await convertVideoToAudio(videoPath);
                     const transcription = await transcribeAudio(audioPath);
                     videoResponses.push(transcription);
-                    
+
                     // Clean up temporary files
                     fs.unlinkSync(audioPath);
                     fs.unlinkSync(videoPath);
@@ -988,7 +989,7 @@ router.post('/submit-responses', upload.any(), async (req, res) => {
             text: emailContent
         });
 
-        res.json({ 
+        res.json({
             status: "1",
             message: "Responses submitted and evaluated successfully.",
             data: {
@@ -999,7 +1000,7 @@ router.post('/submit-responses', upload.any(), async (req, res) => {
         });
     } catch (error) {
         console.error('Error in /submit-responses:', error);
-        res.status(500).json({ 
+        res.status(500).json({
             status: "-1",
             message: error.message,
             error: error.message,

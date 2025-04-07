@@ -15,9 +15,10 @@ const connectToMongoDB = async () => {
 
         await mongoose.connect(process.env.ONEPGR_MONGO_URI, {
             useNewUrlParser: true,
-            useUnifiedTopology: true
+            useUnifiedTopology: true,
+            dbName: 'onepgr_apps'  // Explicitly specify database name
         });
-        console.log('Connected to MongoDB');
+        console.log('Connected to MongoDB onepgr_apps database');
     } catch (error) {
         console.error('MongoDB connection error:', error);
         throw error;
@@ -63,12 +64,12 @@ const ensureDbConnection = async (req, res, next) => {
 // Signup API endpoint
 router.post('/api/signup', ensureDbConnection, async (req, res) => {
     try {
-        console.log('[signupApi] Signup request received:', { 
-            email: req.body.email, 
-            name: req.body.name, 
-            appType: req.body.appType 
+        console.log('[signupApi] Signup request received:', {
+            email: req.body.email,
+            name: req.body.name,
+            appType: req.body.appType
         });
-        
+
         const { name, email, phone, password, appType } = req.body;
 
         // Validate required fields
@@ -105,8 +106,8 @@ router.post('/api/signup', ensureDbConnection, async (req, res) => {
 
         // Save user to database
         await newUser.save();
-        console.log('[signupApi] User registered successfully', { 
-            userId: newUser.userId, 
+        console.log('[signupApi] User registered successfully', {
+            userId: newUser.userId,
             email: newUser.email,
             subscriptionType: newUser.subscriptionType
         });
@@ -137,7 +138,7 @@ router.post('/api/signup', ensureDbConnection, async (req, res) => {
 router.post('/api/login', ensureDbConnection, async (req, res) => {
     try {
         console.log('[signupApi] Login request received:', { email: req.body.email });
-        
+
         const { email, password } = req.body;
 
         // Validate required fields
@@ -172,8 +173,8 @@ router.post('/api/login', ensureDbConnection, async (req, res) => {
         // Check if trial has expired
         const currentDate = new Date();
         const trialStatus = currentDate <= user.trialEndDate ? 'active' : 'expired';
-        console.log('[signupApi] Login successful', { 
-            userId: user.userId, 
+        console.log('[signupApi] Login successful', {
+            userId: user.userId,
             email: user.email,
             trialStatus: trialStatus
         });

@@ -126,8 +126,8 @@ async function connectDB() {
     return;
   }
 
-  // const mongoURI = process.env.MONGODB_URI;
-  const mongoURI = 'mongodb+srv://harishmaneru:Xe2Mz13z83IDhbPW@cluster0.bu3exkw.mongodb.net/?retryWrites=true&w=majority&tls=true';
+  const mongoURI = process.env.ONEPGR_MONGO_URI
+
   const options = {
     serverSelectionTimeoutMS: 60000,
     socketTimeoutMS: 120000,
@@ -135,13 +135,14 @@ async function connectDB() {
     maxPoolSize: 10,
     wtimeoutMS: 30000,
     keepAlive: true,
-    keepAliveInitialDelay: 300000
+    keepAliveInitialDelay: 300000,
+    dbName: 'onepgr_apps'  // Explicitly specify database name
   };
 
   try {
     logSubmissionActivity('DB Connection Attempt', { uri: mongoURI.replace(/\/\/.*@/, '//****@') });
     await mongoose.connect(mongoURI, options);
-    logSubmissionActivity('DB Connection', { status: 'success' });
+    logSubmissionActivity('DB Connection', { status: 'success', database: 'onepgr_apps' });
   } catch (err) {
     logSubmissionActivity('DB Connection Error', {
       error: err.message,
