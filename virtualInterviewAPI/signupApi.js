@@ -27,7 +27,14 @@ const connectToMongoDB = async () => {
 
 // Define user schema
 const userSchema = new mongoose.Schema({
-    userId: { type: String, default: () => new mongoose.Types.ObjectId().toString(), unique: true },
+    userId: {
+        type: String,
+        default: () => {
+            // Generate a random 4-digit ID
+            return Math.floor(1000 + Math.random() * 9000).toString();
+        },
+        unique: true
+    },
     name: { type: String, required: true },
     email: { type: String, required: true, unique: true },
     phone: { type: String, required: true },
