@@ -80,46 +80,102 @@ router.post('/webhook', express.raw({ type: 'application/json' }), async (req, r
                 const product = await stripe.products.retrieve(price.product);
 
                 const planName = product.name || price.nickname || 'Unknown Plan';
-                const currentPeriodStart = new Date(stripeSubscription.current_period_start * 1000);
-                const currentPeriodEnd = new Date(stripeSubscription.current_period_end * 1000);
+                
+                // Improved date handling with fallbacks
+                const currentPeriodStart = stripeSubscription.current_period_start 
+                    ? new Date(stripeSubscription.current_period_start * 1000)
+                    : new Date();
+                
+                const currentPeriodEnd = stripeSubscription.current_period_end 
+                    ? new Date(stripeSubscription.current_period_end * 1000)
+                    : new Date(Date.now() + 30 * 24 * 60 * 60 * 1000); // 30 days from now
 
-                if (isNaN(currentPeriodStart.getTime()) || isNaN(currentPeriodEnd.getTime())) {
-                    throw new Error('Invalid Stripe subscription date values');
-                }
-
-                await Subscription.create({
-                    userId,
-                    customerId: customer,
+                // Log raw subscription data for debugging
+                console.log('Raw Stripe subscription:', {
+                    current_period_start: stripeSubscription.current_period_start,
+                    current_period_end: stripeSubscription.current_period_end,
                     subscriptionId,
-                    status: subscriptionStatus,
-                    sessionId,
-                    amount: amount_total / 100,
-                    currency,
-                    paymentStatus: payment_status,
-                    planName,
-                    currentPeriodStart,
-                    currentPeriodEnd
+                    customerId: customer
                 });
 
-                console.log(`[stripeRoutes.js] Subscription stored for user ${userId}`);
+                try {
+                    await Subscription.create({
+                        userId,
+                        customerId: customer,
+                        subscriptionId,
+                        status: subscriptionStatus,
+                        sessionId,
+                        amount: amount_total / 100,
+                        currency,
+                        paymentStatus: payment_status,
+                        planName,
+                        currentPeriodStart,
+                        currentPeriodEnd
+                    });
+
+                    console.log(`[stripeRoutes.js] Subscription stored for user ${userId}`);
+                } catch (dbError) {
+                    console.error('[stripeRoutes.js] Database save error:', dbError);
+                    // Continue processing - don't return here
+                }
                 break;
             }
 
-            case 'invoice.paid': {
-                console.log('[stripeRoutes.js] Invoice paid event received');
-                // Add invoice paid handling logic here if needed
+            case 'invoice.payment_succeeded': {
+                const invoice = event.data.object;
+                const subscriptionId = invoice.subscription;
+                
+                if (subscriptionId) {
+                    await connectToMongoDB();
+                    
+                    try {
+                        await Subscription.updateOne(
+                            { subscriptionId },
+                            { 
+                                paymentStatus: 'paid',
+                                currentPeriodStart: new Date(invoice.period_start * 1000),
+                                currentPeriodEnd: new Date(invoice.period_end * 1000)
+                            }
+                        );
+                        console.log(`[stripeRoutes.js] Updated subscription ${subscriptionId} for paid invoice`);
+                    } catch (dbError) {
+                        console.error('[stripeRoutes.js] Database update error:', dbError);
+                    }
+                }
                 break;
             }
 
             case 'customer.subscription.deleted': {
-                console.log('[stripeRoutes.js] Subscription deleted event received');
-                // Add subscription cancellation handling logic here if needed
+                const subscription = event.data.object;
+                try {
+                    await connectToMongoDB();
+                    await Subscription.updateOne(
+                        { subscriptionId: subscription.id },
+                        { status: 'canceled' }
+                    );
+                    console.log(`[stripeRoutes.js] Marked subscription ${subscription.id} as canceled`);
+                } catch (dbError) {
+                    console.error('[stripeRoutes.js] Database update error:', dbError);
+                }
                 break;
             }
 
             case 'customer.subscription.updated': {
-                console.log('[stripeRoutes.js] Subscription updated event received');
-                // Add subscription update handling logic here if needed
+                const subscription = event.data.object;
+                try {
+                    await connectToMongoDB();
+                    await Subscription.updateOne(
+                        { subscriptionId: subscription.id },
+                        { 
+                            status: subscription.status,
+                            currentPeriodStart: new Date(subscription.current_period_start * 1000),
+                            currentPeriodEnd: new Date(subscription.current_period_end * 1000)
+                        }
+                    );
+                    console.log(`[stripeRoutes.js] Updated subscription ${subscription.id}`);
+                } catch (dbError) {
+                    console.error('[stripeRoutes.js] Database update error:', dbError);
+                }
                 break;
             }
 
@@ -128,10 +184,11 @@ router.post('/webhook', express.raw({ type: 'application/json' }), async (req, r
             }
         }
 
-        return res.json({ received: true });
+        // Single response at the end
+        res.json({ received: true, message: 'Webhook processed successfully' });
     } catch (error) {
         console.error('[stripeRoutes.js] Webhook Error:', error.message);
-        return res.status(500).json({ error: error.message });
+        res.status(500).json({ error: error.message });
     }
 });
 
