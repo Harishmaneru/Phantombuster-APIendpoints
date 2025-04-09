@@ -37,6 +37,13 @@ const subscriptionSchema = new mongoose.Schema({
     customerId: { type: String, required: true },
     subscriptionId: { type: String, required: true },
     status: { type: String, default: 'active' },
+    sessionId: { type: String },
+    amount: { type: Number },
+    currency: { type: String },
+    paymentStatus: { type: String },
+    planName: { type: String },
+    currentPeriodStart: { type: Date },
+    currentPeriodEnd: { type: Date },
     createdAt: { type: Date, default: Date.now }
 }, { collection: 'user_subscriptions' });
 
@@ -79,12 +86,6 @@ router.post('/webhook', express.raw({ type: 'application/json' }), async (req, r
         console.log(`[stripeRoutes.js] Payment Status: ${session.payment_status}`);
         console.log(`[stripeRoutes.js] Amount Total: ${session.amount_total / 100} ${session.currency}`);
 
-        // Log metadata if present
-        if (session.metadata) {
-            console.log('[stripeRoutes.js] Session Metadata:');
-            console.log(`[stripeRoutes.js] ${JSON.stringify(session.metadata, null, 2)}`);
-        }
-
         // Get user ID from metadata
         const userId = session.metadata.userId;
         const subscriptionStatus = session.status || 'active';
@@ -93,12 +94,23 @@ router.post('/webhook', express.raw({ type: 'application/json' }), async (req, r
             // Connect to MongoDB
             await connectToMongoDB();
 
+            // Get subscription details from Stripe
+            const stripeSubscription = await stripe.subscriptions.retrieve(subscriptionId);
+            const planName = stripeSubscription.items.data[0]?.price?.nickname || 'Unknown Plan';
+
             // Store subscription details in the database
             const subscription = new Subscription({
                 userId,
                 customerId,
                 subscriptionId,
-                status: subscriptionStatus
+                status: subscriptionStatus,
+                sessionId: session.id,
+                amount: session.amount_total / 100,
+                currency: session.currency,
+                paymentStatus: session.payment_status,
+                planName,
+                currentPeriodStart: new Date(stripeSubscription.current_period_start * 1000),
+                currentPeriodEnd: new Date(stripeSubscription.current_period_end * 1000)
             });
 
             await subscription.save();
