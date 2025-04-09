@@ -42,8 +42,8 @@ const subscriptionSchema = new mongoose.Schema({
     currency: { type: String },
     paymentStatus: { type: String },
     planName: { type: String },
-    currentPeriodStart: { type: Date },
-    currentPeriodEnd: { type: Date },
+    currentPeriodStart: { type: Date, required: true },
+    currentPeriodEnd: { type: Date, required: true },
     createdAt: { type: Date, default: Date.now }
 }, { collection: 'user_subscriptions' });
 
@@ -103,6 +103,15 @@ router.post('/webhook', express.raw({ type: 'application/json' }), async (req, r
             const product = await stripe.products.retrieve(price.product);
             const productName = product.name || 'Unknown Product';
 
+            // Convert Stripe timestamps to proper Date objects
+            const periodStart = new Date(stripeSubscription.current_period_start * 1000);
+            const periodEnd = new Date(stripeSubscription.current_period_end * 1000);
+
+            // Validate dates
+            if (isNaN(periodStart.getTime()) || isNaN(periodEnd.getTime())) {
+                throw new Error('Invalid date values from Stripe subscription');
+            }
+
             // Store subscription details in the database
             const subscription = new Subscription({
                 userId,
@@ -114,8 +123,8 @@ router.post('/webhook', express.raw({ type: 'application/json' }), async (req, r
                 currency: session.currency,
                 paymentStatus: session.payment_status,
                 planName: productName,
-                currentPeriodStart: new Date(stripeSubscription.current_period_start * 1000),
-                currentPeriodEnd: new Date(stripeSubscription.current_period_end * 1000)
+                currentPeriodStart: periodStart,
+                currentPeriodEnd: periodEnd
             });
 
             await subscription.save();
@@ -123,6 +132,7 @@ router.post('/webhook', express.raw({ type: 'application/json' }), async (req, r
             console.log(`[stripeRoutes.js] Status: ${subscriptionStatus}`);
         } catch (error) {
             console.error('[stripeRoutes.js] Error storing subscription data:', error);
+            res.status(500).json({ error: error.message });
         }
     }
     res.json({ received: true });
