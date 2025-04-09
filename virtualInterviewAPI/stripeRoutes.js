@@ -207,9 +207,124 @@ router.post('/create-checkout-session', async (req, res) => {
     res.json({ url: session.url });
 });
 
+// Get Subscription Details from Checkout Session ID
+router.post('/get-subscription-from-session', async (req, res) => {
+    const { sessionId } = req.body;
+
+    if (!sessionId) {
+        return res.status(400).json({ error: 'sessionId is required' });
+    }
+
+    try {
+        // Retrieve the session with expanded subscription data
+        const session = await stripe.checkout.sessions.retrieve(sessionId, {
+            expand: ['subscription', 'customer']
+        });
+        // console.log('session', session);
+        if (!session || !session.subscription) {
+            return res.status(404).json({ error: 'No subscription found in this session' });
+        }
+
+        // Retrieve the subscription with expanded price and product data
+        const subscription = await stripe.subscriptions.retrieve(session.subscription.id, {
+            expand: ['items.data.price.product', 'customer']
+        });
+
+        // Helper function to safely format dates
+        const safeFormatDate = (timestamp) => {
+            if (!timestamp) return null;
+            try {
+                const date = new Date(timestamp * 1000);
+                return {
+                    iso: date.toISOString(),
+                    formatted: date.toDateString()
+                };
+            } catch (e) {
+                console.warn(`Invalid date conversion for timestamp: ${timestamp}`);
+                return null;
+            }
+        };
+
+        // Get price and product details
+        const priceData = subscription.items.data[0]?.price;
+        if (!priceData) {
+            return res.status(404).json({ error: 'No price data found in subscription' });
+        }
+
+        const productData = priceData.product; // This is the expanded product object
+
+        // Get interval information - with safety checks
+        let interval = 'one-time';
+        if (priceData.recurring &&
+            priceData.recurring.interval_count &&
+            priceData.recurring.interval) {
+            interval = `${priceData.recurring.interval_count} ${priceData.recurring.interval}`;
+        }
+
+        // Include payment information from the session
+        const paymentInfo = {
+            paymentStatus: session.payment_status || 'unknown',
+            paymentMethod: session.payment_method_types?.[0] || null,
+            amountTotal: session.amount_total ? session.amount_total / 100 : null
+        };
+
+        // Safe date formatting
+        const nextBillingDate = safeFormatDate(subscription.current_period_end);
+        const currentPeriodStart = safeFormatDate(subscription.current_period_start);
+        const currentPeriodEnd = safeFormatDate(subscription.current_period_end);
+        const trialEnd = safeFormatDate(subscription.trial_end);
+        const createdAt = safeFormatDate(subscription.created);
+
+        // Build comprehensive response with safe null checks
+        res.json({
+            checkout: {
+                id: session.id,
+                status: session.status || 'unknown',
+                paymentStatus: session.payment_status || 'unknown'
+            },
+            subscription: {
+                id: subscription.id,
+                status: subscription.status || 'unknown',
+                plan: {
+                    id: priceData.id,
+                    name: productData?.name || priceData.nickname || 'Standard Plan',
+                    description: productData?.description || '',
+                    amount: priceData.unit_amount ? priceData.unit_amount / 100 : 0,
+                    currency: priceData.currency || 'usd',
+                    interval: interval
+                },
+                billing: {
+                    nextBillingDate: nextBillingDate?.iso || null,
+                    nextBillingDateFormatted: nextBillingDate?.formatted || 'N/A',
+                    currentPeriodStart: currentPeriodStart?.iso || null,
+                    currentPeriodEnd: currentPeriodEnd?.iso || null,
+                    cancelAtPeriodEnd: subscription.cancel_at_period_end || false,
+                    trialEnd: trialEnd?.iso || null
+                },
+                customer: subscription.customer ? {
+                    id: typeof subscription.customer === 'object' ?
+                        subscription.customer.id : subscription.customer,
+                    email: typeof subscription.customer === 'object' ?
+                        subscription.customer.email : null,
+                    name: typeof subscription.customer === 'object' ?
+                        subscription.customer.name : null
+                } : null,
+                payment: paymentInfo,
+                createdAt: createdAt?.iso || null
+            }
+        });
+    } catch (error) {
+        console.error("Error in get-subscription-from-session:", error);
+        if (error.type === 'StripeInvalidRequestError') {
+            return res.status(404).json({ error: 'Session or subscription not found' });
+        }
+        res.status(500).json({ error: error.message || "Failed to fetch subscription" });
+    }
+});
+
+
 
 // Get Subscription Details
-
 router.post('/get-subscription', async (req, res) => {
     const { subscriptionId } = req.body;
 
@@ -460,6 +575,130 @@ router.post('/update-subscription', async (req, res) => {
         res.status(500).json({ error: error.message });
     }
 });
+
+// Get Invoice Details
+router.post('/get-invoice', async (req, res) => {
+    // Fetch invoice details by invoice ID or customer ID
+    const { invoiceId, customerId, subscriptionId, limit = 10 } = req.body;
+
+    try {
+        // Connect to MongoDB
+        await connectToMongoDB();
+
+        // Different retrieval strategies based on what's provided
+        let invoiceData;
+
+        // Case 1: Get a specific invoice by ID
+        if (invoiceId) {
+            invoiceData = await stripe.invoices.retrieve(invoiceId, {
+                expand: ['customer', 'subscription', 'charge', 'payment_intent']
+            });
+
+            return res.json({
+                invoice: formatInvoiceResponse(invoiceData)
+            });
+        }
+
+        // Case 2: Get all invoices for a subscription
+        else if (subscriptionId) {
+            const invoices = await stripe.invoices.list({
+                subscription: subscriptionId,
+                limit: limit,
+                expand: ['data.customer', 'data.subscription', 'data.charge', 'data.payment_intent']
+            });
+
+            return res.json({
+                invoices: invoices.data.map(invoice => formatInvoiceResponse(invoice)),
+                hasMore: invoices.has_more,
+                totalCount: invoices.data.length
+            });
+        }
+
+        // Case 3: Get all invoices for a customer
+        else if (customerId) {
+            const invoices = await stripe.invoices.list({
+                customer: customerId,
+                limit: limit,
+                expand: ['data.customer', 'data.subscription', 'data.charge', 'data.payment_intent']
+            });
+
+            return res.json({
+                invoices: invoices.data.map(invoice => formatInvoiceResponse(invoice)),
+                hasMore: invoices.has_more,
+                totalCount: invoices.data.length
+            });
+        }
+
+        // No valid parameters provided
+        else {
+            return res.status(400).json({
+                error: 'Please provide either invoiceId, customerId, or subscriptionId'
+            });
+        }
+    } catch (error) {
+        console.error('Error in get-invoice:', error);
+        if (error.type === 'StripeInvalidRequestError') {
+            return res.status(404).json({ error: 'Invoice not found in Stripe' });
+        }
+        res.status(500).json({ error: error.message });
+    }
+});
+function formatInvoiceResponse(invoice) {
+    return {
+        id: invoice.id,
+        number: invoice.number,
+        status: invoice.status,
+        amount: {
+            total: invoice.total / 100,
+            subtotal: invoice.subtotal / 100,
+            tax: invoice.tax ? invoice.tax / 100 : 0,
+            amountPaid: invoice.amount_paid / 100,
+            amountDue: invoice.amount_due / 100,
+            amountRemaining: invoice.amount_remaining / 100,
+            currency: invoice.currency
+        },
+        billing: {
+            invoiceDate: new Date(invoice.created * 1000).toISOString(),
+            dueDate: invoice.due_date ? new Date(invoice.due_date * 1000).toISOString() : null,
+            periodStart: invoice.period_start ? new Date(invoice.period_start * 1000).toISOString() : null,
+            periodEnd: invoice.period_end ? new Date(invoice.period_end * 1000).toISOString() : null
+        },
+        payment: {
+            paid: invoice.paid,
+            attemptCount: invoice.attempt_count,
+            nextPaymentAttempt: invoice.next_payment_attempt ?
+                new Date(invoice.next_payment_attempt * 1000).toISOString() : null,
+            receiptNumber: invoice.receipt_number,
+            receiptUrl: invoice.hosted_invoice_url || null,
+            pdfUrl: invoice.invoice_pdf || null,
+            chargeId: invoice.charge || null,
+            paymentIntentId: invoice.payment_intent || null
+        },
+        customer: invoice.customer ? {
+            id: typeof invoice.customer === 'object' ? invoice.customer.id : invoice.customer,
+            name: typeof invoice.customer === 'object' ? invoice.customer.name : null,
+            email: typeof invoice.customer === 'object' ? invoice.customer.email : null
+        } : null,
+        subscription: invoice.subscription ? {
+            id: typeof invoice.subscription === 'object' ?
+                invoice.subscription.id : invoice.subscription
+        } : null,
+        items: invoice.lines.data.map(item => ({
+            id: item.id,
+            description: item.description,
+            amount: item.amount / 100,
+            currency: invoice.currency,
+            period: {
+                start: item.period.start ? new Date(item.period.start * 1000).toISOString() : null,
+                end: item.period.end ? new Date(item.period.end * 1000).toISOString() : null
+            },
+            priceId: item.price ? item.price.id : null,
+            productId: item.price && item.price.product ? item.price.product : null,
+            quantity: item.quantity || 1
+        })),
+        metadata: invoice.metadata || {}
+    };
+}
 
 
 
