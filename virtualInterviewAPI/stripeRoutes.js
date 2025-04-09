@@ -52,90 +52,87 @@ const Subscription = mongoose.model('Subscription', subscriptionSchema);
 
 // Webhook to capture customerId and subscriptionId
 router.post('/webhook', express.raw({ type: 'application/json' }), async (req, res) => {
-    // Verify and parse the webhook event
     const sig = req.headers['stripe-signature'];
     const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET;
 
     let event;
     try {
         event = stripe.webhooks.constructEvent(req.body, sig, webhookSecret);
-        console.log('[stripeRoutes.js] Webhook signature verified successfully');
+        console.log('[stripeRoutes.js] Webhook verified:', event.id, event.type);
     } catch (err) {
         console.error('[stripeRoutes.js] Webhook signature verification failed:', err.message);
         return res.status(400).send(`Webhook Error: ${err.message}`);
     }
 
-    // Log the event type and basic info
-    console.log('[stripeRoutes.js] Webhook Event Details:');
-    console.log(`[stripeRoutes.js] Event ID: ${event.id}`);
-    console.log(`[stripeRoutes.js] Event Type: ${event.type}`);
-    console.log(`[stripeRoutes.js] API Version: ${event.api_version}`);
-    console.log(`[stripeRoutes.js] Created: ${new Date(event.created * 1000).toISOString()}`);
-    console.log(`[stripeRoutes.js] Livemode: ${event.livemode}`);
+    try {
+        // Handle different event types
+        switch (event.type) {
+            case 'checkout.session.completed': {
+                const session = event.data.object;
+                const { customer, subscription: subscriptionId, metadata, id: sessionId, payment_status, amount_total, currency } = session;
+                const userId = metadata?.userId || 'unknown';
+                const subscriptionStatus = session.status || 'active';
 
-    // Handle the checkout.session.completed event
-    if (event.type === 'checkout.session.completed') {
-        const session = event.data.object;
-        const customerId = session.customer;
-        const subscriptionId = session.subscription;
+                await connectToMongoDB();
 
-        console.log('[stripeRoutes.js] Checkout Session Details:');
-        console.log(`[stripeRoutes.js] Customer ID: ${customerId}`);
-        console.log(`[stripeRoutes.js] Subscription ID: ${subscriptionId}`);
-        console.log(`[stripeRoutes.js] Session ID: ${session.id}`);
-        console.log(`[stripeRoutes.js] Payment Status: ${session.payment_status}`);
-        console.log(`[stripeRoutes.js] Amount Total: ${session.amount_total / 100} ${session.currency}`);
+                const stripeSubscription = await stripe.subscriptions.retrieve(subscriptionId);
+                const price = stripeSubscription.items.data[0]?.price;
+                const product = await stripe.products.retrieve(price.product);
 
-        // Get user ID from metadata
-        const userId = session.metadata.userId;
-        const subscriptionStatus = session.status || 'active';
+                const planName = product.name || price.nickname || 'Unknown Plan';
+                const currentPeriodStart = new Date(stripeSubscription.current_period_start * 1000);
+                const currentPeriodEnd = new Date(stripeSubscription.current_period_end * 1000);
 
-        try {
-            // Connect to MongoDB
-            await connectToMongoDB();
+                if (isNaN(currentPeriodStart.getTime()) || isNaN(currentPeriodEnd.getTime())) {
+                    throw new Error('Invalid Stripe subscription date values');
+                }
 
-            // Get subscription details from Stripe
-            const stripeSubscription = await stripe.subscriptions.retrieve(subscriptionId);
-            const priceId = stripeSubscription.items.data[0]?.price?.id;
-            
-            // Get product details
-            const price = await stripe.prices.retrieve(priceId);
-            const product = await stripe.products.retrieve(price.product);
-            const productName = product.name || 'Unknown Product';
+                await Subscription.create({
+                    userId,
+                    customerId: customer,
+                    subscriptionId,
+                    status: subscriptionStatus,
+                    sessionId,
+                    amount: amount_total / 100,
+                    currency,
+                    paymentStatus: payment_status,
+                    planName,
+                    currentPeriodStart,
+                    currentPeriodEnd
+                });
 
-            // Convert Stripe timestamps to proper Date objects
-            const periodStart = new Date(stripeSubscription.current_period_start * 1000);
-            const periodEnd = new Date(stripeSubscription.current_period_end * 1000);
-
-            // Validate dates
-            if (isNaN(periodStart.getTime()) || isNaN(periodEnd.getTime())) {
-                throw new Error('Invalid date values from Stripe subscription');
+                console.log(`[stripeRoutes.js] Subscription stored for user ${userId}`);
+                break;
             }
 
-            // Store subscription details in the database
-            const subscription = new Subscription({
-                userId,
-                customerId,
-                subscriptionId,
-                status: subscriptionStatus,
-                sessionId: session.id,
-                amount: session.amount_total / 100,
-                currency: session.currency,
-                paymentStatus: session.payment_status,
-                planName: productName,
-                currentPeriodStart: periodStart,
-                currentPeriodEnd: periodEnd
-            });
+            case 'invoice.paid': {
+                console.log('[stripeRoutes.js] Invoice paid event received');
+                // Add invoice paid handling logic here if needed
+                break;
+            }
 
-            await subscription.save();
-            console.log(`[stripeRoutes.js] Subscription stored in MongoDB for user ${userId}`);
-            console.log(`[stripeRoutes.js] Status: ${subscriptionStatus}`);
-        } catch (error) {
-            console.error('[stripeRoutes.js] Error storing subscription data:', error);
-            res.status(500).json({ error: error.message });
+            case 'customer.subscription.deleted': {
+                console.log('[stripeRoutes.js] Subscription deleted event received');
+                // Add subscription cancellation handling logic here if needed
+                break;
+            }
+
+            case 'customer.subscription.updated': {
+                console.log('[stripeRoutes.js] Subscription updated event received');
+                // Add subscription update handling logic here if needed
+                break;
+            }
+
+            default: {
+                console.log(`[stripeRoutes.js] Unhandled event type: ${event.type}`);
+            }
         }
+
+        return res.json({ received: true });
+    } catch (error) {
+        console.error('[stripeRoutes.js] Webhook Error:', error.message);
+        return res.status(500).json({ error: error.message });
     }
-    res.json({ received: true });
 });
 
 router.post('/create-checkout-session', async (req, res) => {
@@ -159,31 +156,82 @@ router.post('/get-subscription', async (req, res) => {
     // Fetch subscription details for the profile section
     const { subscriptionId, userId } = req.body;
 
+    if (!subscriptionId) {
+        return res.status(400).json({ error: 'subscriptionId is required' });
+    }
+
     try {
         // Connect to MongoDB
         await connectToMongoDB();
 
-        // First check if we have this subscription in our database
-        const subscriptionRecord = await Subscription.findOne({ subscriptionId });
-
-        if (!subscriptionRecord) {
-            return res.status(404).json({ error: 'Subscription not found' });
+        // First try to get subscription from Stripe
+        const subscription = await stripe.subscriptions.retrieve(subscriptionId);
+        
+        if (!subscription) {
+            return res.status(404).json({ error: 'Subscription not found in Stripe' });
         }
 
-        // Then get detailed information from Stripe
-        const subscription = await stripe.subscriptions.retrieve(subscriptionId);
+        // Then check if we have this subscription in our database
+        const subscriptionRecord = await Subscription.findOne({ subscriptionId });
+
+        // If we have a Stripe subscription but no database record, create one
+        if (subscription && !subscriptionRecord) {
+            try {
+                // Get the price details
+                const price = subscription.items.data[0]?.price;
+                if (!price) {
+                    throw new Error('No price information found in subscription');
+                }
+
+                // Get the product details
+                const product = await stripe.products.retrieve(price.product);
+                
+                // Validate and convert dates
+                const currentPeriodStart = new Date(subscription.current_period_start * 1000);
+                const currentPeriodEnd = new Date(subscription.current_period_end * 1000);
+
+                if (isNaN(currentPeriodStart.getTime()) || isNaN(currentPeriodEnd.getTime())) {
+                    throw new Error('Invalid date values from Stripe subscription');
+                }
+
+                const newSubscription = new Subscription({
+                    userId: userId,
+                    customerId: subscription.customer,
+                    subscriptionId: subscription.id,
+                    status: subscription.status,
+                    amount: price.unit_amount / 100,
+                    currency: price.currency,
+                    planName: product.name || 'Unknown Plan',
+                    currentPeriodStart: currentPeriodStart,
+                    currentPeriodEnd: currentPeriodEnd
+                });
+
+                await newSubscription.save();
+                console.log('Created new subscription record in database');
+            } catch (saveError) {
+                console.error('Error saving subscription to database:', saveError);
+                // Continue with the response even if saving to database fails
+            }
+        }
+
+        // Get the latest subscription record after potential creation
+        const latestSubscriptionRecord = await Subscription.findOne({ subscriptionId });
 
         res.json({
             plan: subscription.items.data[0].price.nickname || 'Unknown Plan',
             status: subscription.status,
             amount: subscription.items.data[0].price.unit_amount / 100,
             nextBillingDate: new Date(subscription.current_period_end * 1000).toDateString(),
-            // Include database record data
-            userId: subscriptionRecord.userId,
-            customerId: subscriptionRecord.customerId,
-            createdAt: subscriptionRecord.createdAt
+            // Include database record data if it exists
+            userId: latestSubscriptionRecord?.userId || userId,
+            customerId: latestSubscriptionRecord?.customerId || subscription.customer,
+            createdAt: latestSubscriptionRecord?.createdAt || new Date()
         });
     } catch (error) {
+        console.error('Error in get-subscription:', error);
+        if (error.type === 'StripeInvalidRequestError') {
+            return res.status(404).json({ error: 'Subscription not found in Stripe' });
+        }
         res.status(500).json({ error: error.message });
     }
 });
@@ -248,9 +296,18 @@ router.post('/get-user-subscription', async (req, res) => {
 
 
 router.post('/update-subscription', async (req, res) => {
-    const { subscriptionId, subscriptionItemId, newPriceId } = req.body;
+    const { subscriptionId, newPriceId } = req.body;
 
     try {
+        // 1. Fetch current subscription from Stripe
+        const subscription = await stripe.subscriptions.retrieve(subscriptionId);
+
+        const subscriptionItemId = subscription.items.data[0]?.id;
+        if (!subscriptionItemId) {
+            return res.status(400).json({ error: 'Subscription item ID not found' });
+        }
+
+        // 3. Update the subscription with new price
         const updatedSubscription = await stripe.subscriptions.update(subscriptionId, {
             items: [
                 {
@@ -258,7 +315,7 @@ router.post('/update-subscription', async (req, res) => {
                     price: newPriceId
                 }
             ],
-            proration_behavior: 'create_prorations' // or 'always_invoice' to charge immediately
+            proration_behavior: 'create_prorations'
         });
 
         res.json({
@@ -270,6 +327,7 @@ router.post('/update-subscription', async (req, res) => {
         res.status(500).json({ error: error.message });
     }
 });
+
 
 
 module.exports = router;

@@ -177,11 +177,11 @@ const transporter = nodemailer.createTransport({
 });
 
 // Log transporter config on startup (without exposing the password)
-console.log('Email transporter configuration:', {
-  service: 'gmail',
-  user: 'admin@recordedinterview.com',
-  passProvided: !!process.env.EMAIL_PASSWORD
-});
+// console.log('Email transporter configuration:', {
+//   service: 'gmail',
+//   user: 'admin@recordedinterview.com',
+//   passProvided: !!process.env.EMAIL_PASSWORD
+// });
 
 // Immediately verify transporter on module load
 (async function () {
