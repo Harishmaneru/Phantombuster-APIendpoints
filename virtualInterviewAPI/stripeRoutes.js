@@ -96,7 +96,12 @@ router.post('/webhook', express.raw({ type: 'application/json' }), async (req, r
 
             // Get subscription details from Stripe
             const stripeSubscription = await stripe.subscriptions.retrieve(subscriptionId);
-            const planName = stripeSubscription.items.data[0]?.price?.nickname || 'Unknown Plan';
+            const priceId = stripeSubscription.items.data[0]?.price?.id;
+            
+            // Get product details
+            const price = await stripe.prices.retrieve(priceId);
+            const product = await stripe.products.retrieve(price.product);
+            const productName = product.name || 'Unknown Product';
 
             // Store subscription details in the database
             const subscription = new Subscription({
@@ -108,7 +113,7 @@ router.post('/webhook', express.raw({ type: 'application/json' }), async (req, r
                 amount: session.amount_total / 100,
                 currency: session.currency,
                 paymentStatus: session.payment_status,
-                planName,
+                planName: productName,
                 currentPeriodStart: new Date(stripeSubscription.current_period_start * 1000),
                 currentPeriodEnd: new Date(stripeSubscription.current_period_end * 1000)
             });
