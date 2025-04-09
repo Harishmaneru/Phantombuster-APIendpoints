@@ -100,6 +100,8 @@ const businessesAPI = require('./exploriumAPI/businessesAPI.js');
 
 const signupApi = require('./virtualInterviewAPI/signupApi.js');
 
+const stripeRoutes = require('./virtualInterviewAPI/stripeRoutes.js');
+
 const { Http2ServerRequest } = require('http2');
 
 const app = express();
@@ -182,7 +184,7 @@ app.use(warmupInbox);
 app.use(prospectsAPI);
 app.use(businessesAPI.router);
 app.use(signupApi);
-
+app.use(stripeRoutes);
 const options = {
   key: fs.readFileSync('./onepgr.com.key', 'utf8'),
   cert: fs.readFileSync('./STAR_onepgr_com.crt', 'utf8'),

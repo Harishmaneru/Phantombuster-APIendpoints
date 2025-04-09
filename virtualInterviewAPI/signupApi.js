@@ -16,7 +16,7 @@ const connectToMongoDB = async () => {
         await mongoose.connect(process.env.ONEPGR_MONGO_URI, {
             useNewUrlParser: true,
             useUnifiedTopology: true,
-            dbName: 'onepgr_apps'  // Explicitly specify database name
+            dbName: 'onepgr_apps'   
         });
         console.log('Connected to MongoDB onepgr_apps database');
     } catch (error) {

@@ -34,6 +34,7 @@
     "puppeteer-extra": "^3.3.6",
     "puppeteer-extra-plugin-anonymize-ua": "^2.4.6",
     "puppeteer-extra-plugin-stealth": "^2.11.2",
+    "stripe": "^18.0.0",
     "whisper-node": "^1.1.1",
     "yahoo-finance2": "^2.13.3"
   },
