@@ -52,9 +52,19 @@ router.post('/webhook', express.raw({ type: 'application/json' }), async (req, r
     let event;
     try {
         event = stripe.webhooks.constructEvent(req.body, sig, webhookSecret);
+        console.log('[stripeRoutes.js] Webhook signature verified successfully');
     } catch (err) {
+        console.error('[stripeRoutes.js] Webhook signature verification failed:', err.message);
         return res.status(400).send(`Webhook Error: ${err.message}`);
     }
+
+    // Log the event type and basic info
+    console.log('[stripeRoutes.js] Webhook Event Details:');
+    console.log(`[stripeRoutes.js] Event ID: ${event.id}`);
+    console.log(`[stripeRoutes.js] Event Type: ${event.type}`);
+    console.log(`[stripeRoutes.js] API Version: ${event.api_version}`);
+    console.log(`[stripeRoutes.js] Created: ${new Date(event.created * 1000).toISOString()}`);
+    console.log(`[stripeRoutes.js] Livemode: ${event.livemode}`);
 
     // Handle the checkout.session.completed event
     if (event.type === 'checkout.session.completed') {
@@ -62,7 +72,18 @@ router.post('/webhook', express.raw({ type: 'application/json' }), async (req, r
         const customerId = session.customer;
         const subscriptionId = session.subscription;
 
-        console.log(`Customer: ${customerId}, Subscription: ${subscriptionId}`);
+        console.log('[stripeRoutes.js] Checkout Session Details:');
+        console.log(`[stripeRoutes.js] Customer ID: ${customerId}`);
+        console.log(`[stripeRoutes.js] Subscription ID: ${subscriptionId}`);
+        console.log(`[stripeRoutes.js] Session ID: ${session.id}`);
+        console.log(`[stripeRoutes.js] Payment Status: ${session.payment_status}`);
+        console.log(`[stripeRoutes.js] Amount Total: ${session.amount_total / 100} ${session.currency}`);
+
+        // Log metadata if present
+        if (session.metadata) {
+            console.log('[stripeRoutes.js] Session Metadata:');
+            console.log(`[stripeRoutes.js] ${JSON.stringify(session.metadata, null, 2)}`);
+        }
 
         // Get user ID from metadata
         const userId = session.metadata.userId;
@@ -81,13 +102,30 @@ router.post('/webhook', express.raw({ type: 'application/json' }), async (req, r
             });
 
             await subscription.save();
-            console.log(`Subscription stored in MongoDB for user ${userId}`);
+            console.log(`[stripeRoutes.js] Subscription stored in MongoDB for user ${userId}`);
+            console.log(`[stripeRoutes.js] Status: ${subscriptionStatus}`);
         } catch (error) {
-            console.error('Error storing subscription data:', error);
+            console.error('[stripeRoutes.js] Error storing subscription data:', error);
         }
     }
     res.json({ received: true });
 });
+
+router.post('/create-checkout-session', async (req, res) => {
+    const { userId, priceId } = req.body;
+
+    const session = await stripe.checkout.sessions.create({
+        mode: 'subscription',
+        payment_method_types: ['card'],
+        line_items: [{ price: priceId, quantity: 1 }],
+        success_url: 'https://www.recordedinterview.com/success?session_id={CHECKOUT_SESSION_ID}',
+        cancel_url: 'https://www.recordedinterview.com/cancel',
+        metadata: { userId }
+    });
+
+    res.json({ url: session.url });
+});
+
 
 // Get Subscription Details
 router.post('/get-subscription', async (req, res) => {
@@ -184,27 +222,27 @@ router.post('/get-user-subscription', async (req, res) => {
 
 router.post('/update-subscription', async (req, res) => {
     const { subscriptionId, subscriptionItemId, newPriceId } = req.body;
-  
+
     try {
-      const updatedSubscription = await stripe.subscriptions.update(subscriptionId, {
-        items: [
-          {
-            id: subscriptionItemId,
-            price: newPriceId
-          }
-        ],
-        proration_behavior: 'create_prorations' // or 'always_invoice' to charge immediately
-      });
-  
-      res.json({
-        message: 'Subscription updated successfully',
-        subscription: updatedSubscription
-      });
+        const updatedSubscription = await stripe.subscriptions.update(subscriptionId, {
+            items: [
+                {
+                    id: subscriptionItemId,
+                    price: newPriceId
+                }
+            ],
+            proration_behavior: 'create_prorations' // or 'always_invoice' to charge immediately
+        });
+
+        res.json({
+            message: 'Subscription updated successfully',
+            subscription: updatedSubscription
+        });
     } catch (error) {
-      console.error('Upgrade/Downgrade error:', error.message);
-      res.status(500).json({ error: error.message });
+        console.error('Upgrade/Downgrade error:', error.message);
+        res.status(500).json({ error: error.message });
     }
-  });
-  
+});
+
 
 module.exports = router;
