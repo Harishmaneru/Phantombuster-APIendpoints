@@ -123,15 +123,19 @@ app.use(
       "https://www.getprospectsignals.com",
       "https://getprospectsignals.com",
       "https://record.onepgr.com/"
-
     ],
     methods: ["GET", "PUT", "POST", "DELETE", "OPTIONS"],
-    allowedHeaders: ["Content-Type", "Authorization", "X-Requested-With"],
+    allowedHeaders: ["Content-Type", "Authorization", "X-Requested-With", "stripe-signature"],
     credentials: true,
   })
 );
 
+// Register Stripe webhook route before body parser
+app.use('/api/stripe', stripeRoutes);
+
+// Global middleware for parsing JSON (after webhook route)
 app.use(express.json());
+
 app.use(accountScraper);
 app.use(likesCommentsScraper);
 app.use(profileScraper);
@@ -184,7 +188,7 @@ app.use(warmupInbox);
 app.use(prospectsAPI);
 app.use(businessesAPI.router);
 app.use(signupApi);
-app.use(stripeRoutes);
+
 const options = {
   key: fs.readFileSync('./onepgr.com.key', 'utf8'),
   cert: fs.readFileSync('./STAR_onepgr_com.crt', 'utf8'),

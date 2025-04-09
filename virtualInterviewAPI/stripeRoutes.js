@@ -3,6 +3,15 @@ const router = express.Router();
 const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
 const mongoose = require('mongoose');
 
+// Middleware to parse JSON for all routes except /webhook
+router.use((req, res, next) => {
+    if (req.originalUrl === '/api/stripe/webhook') {
+        next();
+    } else {
+        express.json()(req, res, next);
+    }
+});
+
 // Establish MongoDB connection
 const connectToMongoDB = async () => {
     try {
