@@ -432,7 +432,7 @@ router.get('/users/:userId/subscriptions', async (req, res) => {
 
     // Basic validation (adjust according to your ID format)
     if (!userId) {
-        return res.status(400).json({ 
+        return res.status(400).json({
             error: 'userId is required'
         });
     }
@@ -441,7 +441,7 @@ router.get('/users/:userId/subscriptions', async (req, res) => {
         const subscriptions = await Subscription.find({ userId }).lean();
 
         if (!subscriptions.length) {
-            return res.status(404).json({ 
+            return res.status(404).json({
                 status: "-1",
                 error: 'No subscriptions found',
                 userId
@@ -455,8 +455,8 @@ router.get('/users/:userId/subscriptions', async (req, res) => {
         });
     } catch (error) {
         console.error(`Failed to fetch subscriptions for user ${userId}:`, error);
-        
-        res.status(500).json({ 
+
+        res.status(500).json({
             error: 'Failed to retrieve subscriptions',
             userId,
             details: process.env.NODE_ENV === 'development' ? error.message : undefined
@@ -540,68 +540,55 @@ router.post('/update-subscription', async (req, res) => {
         res.status(500).json({ error: error.message });
     }
 });
-
 // Get Invoice Details
 router.post('/get-invoice', async (req, res) => {
-    // Fetch invoice details by invoice ID or customer ID
     const { invoiceId, customerId, subscriptionId, limit = 10 } = req.body;
 
     try {
-        // Connect to MongoDB
         await connectToMongoDB();
 
-        // Different retrieval strategies based on what's provided
-        let invoiceData;
-
-        // Case 1: Get a specific invoice by ID
+        // Case 1: Specific invoice
         if (invoiceId) {
-            invoiceData = await stripe.invoices.retrieve(invoiceId, {
+            const invoice = await stripe.invoices.retrieve(invoiceId, {
                 expand: ['customer', 'subscription', 'charge', 'payment_intent']
             });
-
-            return res.json({
-                invoice: formatInvoiceResponse(invoiceData)
-            });
+            return res.json({ invoice: formatInvoiceResponse(invoice) });
         }
 
-        // Case 2: Get all invoices for a subscription
-        else if (subscriptionId) {
+        // Case 2: All invoices by subscriptionId
+        if (subscriptionId) {
             const invoices = await stripe.invoices.list({
                 subscription: subscriptionId,
-                limit: limit,
-                expand: ['data.customer', 'data.subscription', 'data.charge', 'data.payment_intent']
+                limit: limit
             });
 
             return res.json({
-                invoices: invoices.data.map(invoice => formatInvoiceResponse(invoice)),
+                invoices: invoices.data.map(formatInvoiceResponse),
                 hasMore: invoices.has_more,
                 totalCount: invoices.data.length
             });
         }
 
-        // Case 3: Get all invoices for a customer
-        else if (customerId) {
+        // Case 3: All invoices by customerId
+        if (customerId) {
             const invoices = await stripe.invoices.list({
                 customer: customerId,
-                limit: limit,
-                expand: ['data.customer', 'data.subscription', 'data.charge', 'data.payment_intent']
+                limit: limit
             });
 
             return res.json({
-                invoices: invoices.data.map(invoice => formatInvoiceResponse(invoice)),
+                invoices: invoices.data.map(formatInvoiceResponse),
                 hasMore: invoices.has_more,
                 totalCount: invoices.data.length
             });
         }
 
-        // No valid parameters provided
-        else {
-            return res.status(400).json({
-                error: 'Please provide either invoiceId, customerId, or subscriptionId'
-            });
-        }
+        return res.status(400).json({
+            error: 'Please provide invoiceId, customerId, or subscriptionId.'
+        });
+
     } catch (error) {
-        console.error('Error in get-invoice:', error);
+        console.error('Error in /get-invoice:', error);
         if (error.type === 'StripeInvalidRequestError') {
             return res.status(404).json({ error: 'Invoice not found in Stripe' });
         }
@@ -611,57 +598,21 @@ router.post('/get-invoice', async (req, res) => {
 function formatInvoiceResponse(invoice) {
     return {
         id: invoice.id,
-        number: invoice.number,
         status: invoice.status,
-        amount: {
-            total: invoice.total / 100,
-            subtotal: invoice.subtotal / 100,
-            tax: invoice.tax ? invoice.tax / 100 : 0,
-            amountPaid: invoice.amount_paid / 100,
-            amountDue: invoice.amount_due / 100,
-            amountRemaining: invoice.amount_remaining / 100,
-            currency: invoice.currency
-        },
-        billing: {
-            invoiceDate: new Date(invoice.created * 1000).toISOString(),
-            dueDate: invoice.due_date ? new Date(invoice.due_date * 1000).toISOString() : null,
-            periodStart: invoice.period_start ? new Date(invoice.period_start * 1000).toISOString() : null,
-            periodEnd: invoice.period_end ? new Date(invoice.period_end * 1000).toISOString() : null
-        },
-        payment: {
-            paid: invoice.paid,
-            attemptCount: invoice.attempt_count,
-            nextPaymentAttempt: invoice.next_payment_attempt ?
-                new Date(invoice.next_payment_attempt * 1000).toISOString() : null,
-            receiptNumber: invoice.receipt_number,
-            receiptUrl: invoice.hosted_invoice_url || null,
-            pdfUrl: invoice.invoice_pdf || null,
-            chargeId: invoice.charge || null,
-            paymentIntentId: invoice.payment_intent || null
-        },
-        customer: invoice.customer ? {
-            id: typeof invoice.customer === 'object' ? invoice.customer.id : invoice.customer,
-            name: typeof invoice.customer === 'object' ? invoice.customer.name : null,
-            email: typeof invoice.customer === 'object' ? invoice.customer.email : null
-        } : null,
-        subscription: invoice.subscription ? {
-            id: typeof invoice.subscription === 'object' ?
-                invoice.subscription.id : invoice.subscription
-        } : null,
-        items: invoice.lines.data.map(item => ({
-            id: item.id,
-            description: item.description,
-            amount: item.amount / 100,
-            currency: invoice.currency,
-            period: {
-                start: item.period.start ? new Date(item.period.start * 1000).toISOString() : null,
-                end: item.period.end ? new Date(item.period.end * 1000).toISOString() : null
-            },
-            priceId: item.price ? item.price.id : null,
-            productId: item.price && item.price.product ? item.price.product : null,
-            quantity: item.quantity || 1
-        })),
-        metadata: invoice.metadata || {}
+        amount_due: invoice.amount_due / 100,
+        currency: invoice.currency,
+        created: new Date(invoice.created * 1000).toISOString(),
+        paid: invoice.paid,
+        hosted_invoice_url: invoice.hosted_invoice_url,
+        invoice_pdf: invoice.invoice_pdf,
+        customer: typeof invoice.customer === 'object' ? {
+            id: invoice.customer.id,
+            name: invoice.customer.name,
+            email: invoice.customer.email
+        } : { id: invoice.customer },
+        subscription: typeof invoice.subscription === 'object' ? {
+            id: invoice.subscription.id
+        } : { id: invoice.subscription }
     };
 }
 
