@@ -397,89 +397,7 @@ router.post('/get-subscription', async (req, res) => {
     }
 });
 
-// router.post('/get-subscription', async (req, res) => {
-//     // Fetch subscription details for the profile section
-//     const { subscriptionId, userId } = req.body;
 
-//     if (!subscriptionId) {
-//         return res.status(400).json({ error: 'subscriptionId is required' });
-//     }
-
-//     try {
-//         // Connect to MongoDB
-//         await connectToMongoDB();
-
-//         // First try to get subscription from Stripe
-//         const subscription = await stripe.subscriptions.retrieve(subscriptionId);
-
-//         if (!subscription) {
-//             return res.status(404).json({ error: 'Subscription not found in Stripe' });
-//         }
-
-//         // Then check if we have this subscription in our database
-//         const subscriptionRecord = await Subscription.findOne({ subscriptionId });
-
-//         // If we have a Stripe subscription but no database record, create one
-//         if (subscription && !subscriptionRecord) {
-//             try {
-//                 // Get the price details
-//                 const price = subscription.items.data[0]?.price;
-//                 if (!price) {
-//                     throw new Error('No price information found in subscription');
-//                 }
-
-//                 // Get the product details
-//                 const product = await stripe.products.retrieve(price.product);
-
-//                 // Validate and convert dates
-//                 const currentPeriodStart = new Date(subscription.current_period_start * 1000);
-//                 const currentPeriodEnd = new Date(subscription.current_period_end * 1000);
-
-//                 if (isNaN(currentPeriodStart.getTime()) || isNaN(currentPeriodEnd.getTime())) {
-//                     throw new Error('Invalid date values from Stripe subscription');
-//                 }
-
-//                 const newSubscription = new Subscription({
-//                     userId: userId,
-//                     customerId: subscription.customer,
-//                     subscriptionId: subscription.id,
-//                     status: subscription.status,
-//                     amount: price.unit_amount / 100,
-//                     currency: price.currency,
-//                     planName: product.name || 'Unknown Plan',
-//                     currentPeriodStart: currentPeriodStart,
-//                     currentPeriodEnd: currentPeriodEnd
-//                 });
-
-//                 await newSubscription.save();
-//                 console.log('Created new subscription record in database');
-//             } catch (saveError) {
-//                 console.error('Error saving subscription to database:', saveError);
-//                 // Continue with the response even if saving to database fails
-//             }
-//         }
-
-//         // Get the latest subscription record after potential creation
-//         const latestSubscriptionRecord = await Subscription.findOne({ subscriptionId });
-
-//         res.json({
-//             plan: subscription.items.data[0].price.nickname || 'Unknown Plan',
-//             status: subscription.status,
-//             amount: subscription.items.data[0].price.unit_amount / 100,
-//             nextBillingDate: new Date(subscription.current_period_end * 1000).toDateString(),
-//             // Include database record data if it exists
-//             userId: latestSubscriptionRecord?.userId || userId,
-//             customerId: latestSubscriptionRecord?.customerId || subscription.customer,
-//             createdAt: latestSubscriptionRecord?.createdAt || new Date()
-//         });
-//     } catch (error) {
-//         console.error('Error in get-subscription:', error);
-//         if (error.type === 'StripeInvalidRequestError') {
-//             return res.status(404).json({ error: 'Subscription not found in Stripe' });
-//         }
-//         res.status(500).json({ error: error.message });
-//     }
-// });
 
 // Create Billing Portal Session
 router.post('/create-billing-portal-session', async (req, res) => {
@@ -508,8 +426,53 @@ router.post('/create-billing-portal-session', async (req, res) => {
     }
 });
 
-// // Get user's subscription by userId
-// router.post('/get-user-subscription', async (req, res) => {
+// Get user's subscription by userId
+
+router.get('/users/:userId/subscriptions', async (req, res) => {
+    const { userId } = req.params;
+
+    // Validate userId format if needed (e.g., MongoDB ObjectId)
+    if (!userId || !isValidId(userId)) {
+        return res.status(400).json({ 
+            error: 'Valid userId is required',
+            details: 'userId must be a valid identifier'
+        });
+    }
+
+    try {
+        // Connection is presumably handled at application startup
+        const subscriptions = await Subscription.find({ userId }).lean();
+
+        if (!subscriptions.length) {
+            return res.status(404).json({ 
+                error: 'No subscriptions found',
+                userId,
+                suggestion: 'Check if the user exists or has active subscriptions'
+            });
+        }
+
+        // No need to manually map if returning the entire document
+        res.json({
+            count: subscriptions.length,
+            subscriptions
+        });
+    } catch (error) {
+        // Log the error for debugging
+        console.error(`Failed to fetch subscriptions for user ${userId}:`, error);
+        
+        res.status(500).json({ 
+            error: 'Failed to retrieve subscriptions',
+            userId,
+            details: process.env.NODE_ENV === 'development' ? error.message : undefined
+        });
+    }
+});
+
+// Helper function (define elsewhere in your utilities)
+function isValidId(id) {
+    return /^[a-f\d]{24}$/i.test(id); // Basic MongoDB ID format check
+}
+// router.post('/get-usersubscriptionfromdb', async (req, res) => {
 //     const { userId } = req.body;
 
 //     if (!userId) {
@@ -520,28 +483,34 @@ router.post('/create-billing-portal-session', async (req, res) => {
 //         // Connect to MongoDB
 //         await connectToMongoDB();
 
-//         // Find subscription by userId
-//         const subscription = await Subscription.findOne({ userId });
+//         // Find all subscriptions by userId
+//         const subscriptions = await Subscription.find({ userId });
 
-//         if (!subscription) {
-//             return res.status(404).json({ error: 'No subscription found for this user' });
+//         if (!subscriptions || subscriptions.length === 0) {
+//             return res.status(404).json({ error: 'No subscriptions found for this user' });
 //         }
 
-//         res.json({
+//         // Map the subscriptions to the response format with all fields
+//         const subscriptionData = subscriptions.map(subscription => ({
 //             userId: subscription.userId,
 //             customerId: subscription.customerId,
 //             subscriptionId: subscription.subscriptionId,
 //             status: subscription.status,
+//             sessionId: subscription.sessionId,
+//             amount: subscription.amount,
+//             currency: subscription.currency,
+//             paymentStatus: subscription.paymentStatus,
+//             planName: subscription.planName,
+//             currentPeriodStart: subscription.currentPeriodStart,
+//             currentPeriodEnd: subscription.currentPeriodEnd,
 //             createdAt: subscription.createdAt
-//         });
+//         }));
+
+//         res.json(subscriptionData);
 //     } catch (error) {
 //         res.status(500).json({ error: error.message });
 //     }
 // });
-
-// Get Subscription Details
-
-
 
 router.post('/update-subscription', async (req, res) => {
     const { subscriptionId, newPriceId } = req.body;
