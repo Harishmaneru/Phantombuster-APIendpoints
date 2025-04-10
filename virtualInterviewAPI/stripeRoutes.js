@@ -427,37 +427,33 @@ router.post('/create-billing-portal-session', async (req, res) => {
 });
 
 // Get user's subscription by userId
-
 router.get('/users/:userId/subscriptions', async (req, res) => {
     const { userId } = req.params;
 
-    // Validate userId format if needed (e.g., MongoDB ObjectId)
-    if (!userId || !isValidId(userId)) {
+    // Basic validation (adjust according to your ID format)
+    if (!userId) {
         return res.status(400).json({ 
-            error: 'Valid userId is required',
-            details: 'userId must be a valid identifier'
+            error: 'userId is required'
         });
     }
 
     try {
-        // Connection is presumably handled at application startup
         const subscriptions = await Subscription.find({ userId }).lean();
 
         if (!subscriptions.length) {
             return res.status(404).json({ 
+                status: "-1",
                 error: 'No subscriptions found',
-                userId,
-                suggestion: 'Check if the user exists or has active subscriptions'
+                userId
             });
         }
 
-        // No need to manually map if returning the entire document
         res.json({
+            status: '1',
             count: subscriptions.length,
             subscriptions
         });
     } catch (error) {
-        // Log the error for debugging
         console.error(`Failed to fetch subscriptions for user ${userId}:`, error);
         
         res.status(500).json({ 
