@@ -229,6 +229,30 @@ router.post('/webhook', express.raw({ type: 'application/json' }), async (req, r
                                     
                                     if (planChanged) {
                                         console.log(`[stripeRoutes.js] Plan changed for subscription ${subscription.id} to ${updateData.planName}`);
+                                        
+                                        // Check for credit notes (refunds) when plan changes
+                                        try {
+                                            const invoices = await stripe.invoices.list({
+                                                subscription: subscription.id,
+                                                limit: 1
+                                            });
+
+                                            if (invoices.data.length > 0) {
+                                                const creditNotes = await stripe.creditNotes.list({
+                                                    invoice: invoices.data[0].id
+                                                });
+
+                                                if (creditNotes.data.length > 0) {
+                                                    const refund = creditNotes.data[0];
+                                                    updateData.refundAmount = refund.amount / 100;
+                                                    updateData.refundDate = new Date(refund.created * 1000);
+                                                    updateData.paymentStatus = 'refunded';
+                                                    console.log(`[stripeRoutes.js] Found credit note for subscription ${subscription.id}`);
+                                                }
+                                            }
+                                        } catch (creditNoteError) {
+                                            console.warn(`[stripeRoutes.js] Could not check credit notes: ${creditNoteError.message}`);
+                                        }
                                     }
                                 } catch (productError) {
                                     console.warn(`[stripeRoutes.js] Could not fetch product: ${productError.message}`);
@@ -478,7 +502,7 @@ router.post('/get-subscription-from-session', async (req, res) => {
         const session = await stripe.checkout.sessions.retrieve(sessionId, {
             expand: ['subscription', 'customer']
         });
-        // console.log('session', session);
+
         if (!session || !session.subscription) {
             return res.status(404).json({ error: 'No subscription found in this session' });
         }
@@ -487,6 +511,33 @@ router.post('/get-subscription-from-session', async (req, res) => {
         const subscription = await stripe.subscriptions.retrieve(session.subscription.id, {
             expand: ['items.data.price.product', 'customer']
         });
+
+        // Check for credit notes (refunds)
+        let refundInfo = null;
+        try {
+            const invoices = await stripe.invoices.list({
+                subscription: subscription.id,
+                limit: 1
+            });
+
+            if (invoices.data.length > 0) {
+                const creditNotes = await stripe.creditNotes.list({
+                    invoice: invoices.data[0].id
+                });
+
+                if (creditNotes.data.length > 0) {
+                    const refund = creditNotes.data[0];
+                    refundInfo = {
+                        amount: refund.amount / 100,
+                        reason: refund.reason,
+                        date: new Date(refund.created * 1000).toISOString(),
+                        memo: refund.memo || ''
+                    };
+                }
+            }
+        } catch (creditNoteError) {
+            console.warn('Could not retrieve credit notes:', creditNoteError);
+        }
 
         // Helper function to safely format dates
         const safeFormatDate = (timestamp) => {
@@ -568,6 +619,7 @@ router.post('/get-subscription-from-session', async (req, res) => {
                         subscription.customer.name : null
                 } : null,
                 payment: paymentInfo,
+                refund: refundInfo,
                 createdAt: createdAt?.iso || null
             }
         });
@@ -837,6 +889,55 @@ function formatInvoiceResponse(invoice) {
     };
 }
 
+router.post('/check-refund-status', async (req, res) => {
+    const { subscriptionId } = req.body;
 
+    if (!subscriptionId) {
+        return res.status(400).json({ error: 'subscriptionId is required' });
+    }
+
+    try {
+        // First check our database
+        await connectToMongoDB();
+        const dbSubscription = await Subscription.findOne({ subscriptionId });
+        
+        if (dbSubscription && dbSubscription.refundAmount > 0) {
+            return res.json({
+                hasRefund: true,
+                amount: dbSubscription.refundAmount,
+                date: dbSubscription.refundDate,
+                source: 'database'
+            });
+        }
+
+        // If not in database, check Stripe directly
+        const invoices = await stripe.invoices.list({
+            subscription: subscriptionId,
+            limit: 1
+        });
+
+        if (invoices.data.length > 0) {
+            const creditNotes = await stripe.creditNotes.list({
+                invoice: invoices.data[0].id
+            });
+
+            if (creditNotes.data.length > 0) {
+                const refund = creditNotes.data[0];
+                return res.json({
+                    hasRefund: true,
+                    amount: refund.amount / 100,
+                    date: new Date(refund.created * 1000).toISOString(),
+                    reason: refund.reason,
+                    source: 'stripe'
+                });
+            }
+        }
+
+        res.json({ hasRefund: false });
+    } catch (error) {
+        console.error('Error checking refund status:', error);
+        res.status(500).json({ error: error.message });
+    }
+});
 
 module.exports = router;
