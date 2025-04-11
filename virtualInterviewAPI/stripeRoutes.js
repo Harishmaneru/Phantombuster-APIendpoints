@@ -334,29 +334,35 @@ router.post('/webhook', express.raw({ type: 'application/json' }), async (req, r
     }
 });
 
-
 router.post('/create-checkout-session', async (req, res) => {
-    const { userId, priceId } = req.body;
+    try {
+        const { userId, priceId } = req.body;
+        const isProduction = process.env.NODE_ENV === 'production';
 
-    const successUrl = isProduction
-        ? 'https://record.onepgr.com/success?session_id={CHECKOUT_SESSION_ID}'
-        : 'http://localhost:3000/success?session_id={CHECKOUT_SESSION_ID}';
+        const successUrl = isProduction
+          ? 'https://record.onepgr.com/success?session_id={CHECKOUT_SESSION_ID}'
+          : 'http://localhost:3000/success?session_id={CHECKOUT_SESSION_ID}';
 
-    const cancelUrl = isProduction
-        ? 'https://record.onepgr.com/pricing'
-        : 'http://localhost:3000/pricing';
+        const cancelUrl = isProduction
+          ? 'https://record.onepgr.com/pricing'
+          : 'http://localhost:3000/pricing';
 
-    const session = await stripe.checkout.sessions.create({
-        mode: 'subscription',
-        payment_method_types: ['card'],
-        line_items: [{ price: priceId, quantity: 1 }],
-        success_url: successUrl,
-        cancel_url: cancelUrl,
-        metadata: { userId }
-    });
+        const session = await stripe.checkout.sessions.create({
+            mode: 'subscription',
+            payment_method_types: ['card'],
+            line_items: [{ price: priceId, quantity: 1 }],
+            success_url: successUrl,
+            cancel_url: cancelUrl,
+            metadata: { userId }
+        });
 
-    res.json({ url: session.url });
+        res.json({ url: session.url });
+    } catch (error) {
+        console.error("Error creating checkout session:", error);
+        res.status(500).json({ error: 'Failed to create checkout session' });
+    }
 });
+
 
 // Get Subscription Details from Checkout Session ID
 router.post('/get-subscription-from-session', async (req, res) => {
