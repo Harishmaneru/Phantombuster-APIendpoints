@@ -633,7 +633,7 @@ router.post('/get-subscription-from-session', async (req, res) => {
     }
 });
 
-// Get Subscription Details
+
 // router.post('/get-subscription', async (req, res) => {
 //     const { subscriptionId } = req.body;
   
@@ -781,8 +781,8 @@ router.get('/users/:userId/subscriptions', async (req, res) => {
           const stripeSub = await stripe.subscriptions.retrieve(record.subscriptionId, {
             expand: ['items.data.price.product', 'customer', 'latest_invoice']
           });
-          //console.log('Subscription Items:', stripeSub);
-          //console.log('Subscription Items:', JSON.stringify(stripeSub.items.data, null, 2));
+         // console.log('Subscription Items:', stripeSub);
+         // console.log('Subscription Items:', JSON.stringify(stripeSub.items.data, null, 2));
 
           if (!stripeSub) return null;
   
@@ -799,11 +799,13 @@ router.get('/users/:userId/subscriptions', async (req, res) => {
   
           // Build a minimal invoice object (if available)
           const invoiceData = stripeSub.latest_invoice
-            ? {
-                id: stripeSub.latest_invoice.id,
-                createdAt: safeDateConvert(stripeSub.latest_invoice.created)
-              }
-            : null;
+          ? {
+              id: stripeSub.latest_invoice.id,
+              createdAt: safeDateConvert(stripeSub.latest_invoice.created),
+              hosted_invoice_url: stripeSub.latest_invoice.hosted_invoice_url,
+              invoice_pdf: stripeSub.latest_invoice.invoice_pdf
+            }
+          : null;
   
           // Extract proration adjustments for potential upgrade/downgrade details.
           const subscriptionChanges =
