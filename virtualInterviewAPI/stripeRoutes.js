@@ -81,15 +81,13 @@ router.post('/webhook', express.raw({ type: 'application/json' }), async (req, r
 
                 const planName = product.name || price.nickname || 'Unknown Plan';
 
-                const currentPeriodStart = new Date(stripeSubscription.current_period_start * 1000);
-                const currentPeriodEnd = new Date(stripeSubscription.current_period_end * 1000);
+                const currentPeriodStart = stripeSubscription.current_period_start ? new Date(stripeSubscription.current_period_start * 1000) : null;
+                const currentPeriodEnd = stripeSubscription.current_period_end ? new Date(stripeSubscription.current_period_end * 1000) : null;
 
-                console.log('Raw Stripe subscription:', {
-                    current_period_start: stripeSubscription.current_period_start,
-                    current_period_end: stripeSubscription.current_period_end,
-                    subscriptionId,
-                    customerId: customer
-                });
+                if (!currentPeriodStart || !currentPeriodEnd || isNaN(currentPeriodStart) || isNaN(currentPeriodEnd)) {
+                    console.error('[stripeRoutes.js] Invalid date from Stripe during subscription creation');
+                    return res.status(400).json({ error: 'Invalid subscription period dates' });
+                }
 
                 try {
                     await Subscription.create({
@@ -120,13 +118,21 @@ router.post('/webhook', express.raw({ type: 'application/json' }), async (req, r
                 if (subscriptionId) {
                     await connectToMongoDB();
 
+                    const currentPeriodStart = invoice.period_start ? new Date(invoice.period_start * 1000) : null;
+                    const currentPeriodEnd = invoice.period_end ? new Date(invoice.period_end * 1000) : null;
+
+                    if (!currentPeriodStart || !currentPeriodEnd || isNaN(currentPeriodStart) || isNaN(currentPeriodEnd)) {
+                        console.warn('[stripeRoutes.js] Invalid invoice dates, skipping update');
+                        break;
+                    }
+
                     try {
                         await Subscription.updateOne(
                             { subscriptionId },
                             {
                                 paymentStatus: 'paid',
-                                currentPeriodStart: new Date(invoice.period_start * 1000),
-                                currentPeriodEnd: new Date(invoice.period_end * 1000)
+                                currentPeriodStart,
+                                currentPeriodEnd
                             }
                         );
                         console.log(`[stripeRoutes.js] Updated subscription ${subscriptionId} for paid invoice`);
@@ -161,6 +167,13 @@ router.post('/webhook', express.raw({ type: 'application/json' }), async (req, r
                     const product = await stripe.products.retrieve(price.product);
 
                     const planName = product.name || price.nickname || 'Updated Plan';
+                    const currentPeriodStart = subscription.current_period_start ? new Date(subscription.current_period_start * 1000) : null;
+                    const currentPeriodEnd = subscription.current_period_end ? new Date(subscription.current_period_end * 1000) : null;
+
+                    if (!currentPeriodStart || !currentPeriodEnd || isNaN(currentPeriodStart) || isNaN(currentPeriodEnd)) {
+                        console.warn('[stripeRoutes.js] Invalid updated subscription dates, skipping update');
+                        break;
+                    }
 
                     await Subscription.updateOne(
                         { subscriptionId: subscription.id },
@@ -170,8 +183,8 @@ router.post('/webhook', express.raw({ type: 'application/json' }), async (req, r
                             currency: price.currency,
                             planName,
                             paymentStatus: subscription.latest_invoice?.paid ? 'paid' : 'unpaid',
-                            currentPeriodStart: new Date(subscription.current_period_start * 1000),
-                            currentPeriodEnd: new Date(subscription.current_period_end * 1000)
+                            currentPeriodStart,
+                            currentPeriodEnd
                         }
                     );
                     console.log(`[stripeRoutes.js] Updated subscription ${subscription.id}`);
@@ -192,6 +205,7 @@ router.post('/webhook', express.raw({ type: 'application/json' }), async (req, r
         res.status(500).json({ error: error.message });
     }
 });
+
 
 // router.post('/webhook', express.raw({ type: 'application/json' }), async (req, res) => {
 //     const sig = req.headers['stripe-signature'];
