@@ -76,6 +76,16 @@ router.post('/webhook', express.raw({ type: 'application/json' }), async (req, r
                 await connectToMongoDB();
 
                 const stripeSubscription = await stripe.subscriptions.retrieve(subscriptionId);
+                console.log('[checkout.session.completed] Raw Stripe period dates:', {
+                    current_period_start: stripeSubscription.current_period_start,
+                    current_period_end: stripeSubscription.current_period_end,
+                    converted_start: stripeSubscription.current_period_start ? new Date(stripeSubscription.current_period_start * 1000) : null,
+                    converted_end: stripeSubscription.current_period_end ? new Date(stripeSubscription.current_period_end * 1000) : null,
+                    subscriptionId: stripeSubscription.id,
+                    eventId: event.id
+                });
+
+
                 const price = stripeSubscription.items.data[0]?.price;
                 const product = await stripe.products.retrieve(price.product);
 
@@ -162,32 +172,114 @@ router.post('/webhook', express.raw({ type: 'application/json' }), async (req, r
                 const subscription = event.data.object;
                 try {
                     await connectToMongoDB();
+                    console.log(`[stripeRoutes.js] Processing subscription update for ${subscription.id}`);
 
-                    const price = subscription.items.data[0]?.price;
-                    const product = await stripe.products.retrieve(price.product);
+                    // Compare current vs previous attributes to detect changes
+                    const previousAttributes = event.data.previous_attributes || {};
 
-                    const planName = product.name || price.nickname || 'Updated Plan';
-                    const currentPeriodStart = subscription.current_period_start ? new Date(subscription.current_period_start * 1000) : null;
-                    const currentPeriodEnd = subscription.current_period_end ? new Date(subscription.current_period_end * 1000) : null;
+                    // Initialize update data with subscription status
+                    const updateData = {
+                        status: subscription.status
+                    };
 
-                    if (!currentPeriodStart || !currentPeriodEnd || isNaN(currentPeriodStart) || isNaN(currentPeriodEnd)) {
-                        console.warn('[stripeRoutes.js] Invalid updated subscription dates, skipping update');
-                        break;
+                    // Safely handle dates
+                    if (subscription.current_period_start) {
+                        const startDate = new Date(subscription.current_period_start * 1000);
+                        if (!isNaN(startDate)) {
+                            updateData.currentPeriodStart = startDate;
+                        }
                     }
 
-                    await Subscription.updateOne(
-                        { subscriptionId: subscription.id },
-                        {
-                            status: subscription.status,
-                            amount: price.unit_amount / 100,
-                            currency: price.currency,
-                            planName,
-                            paymentStatus: subscription.latest_invoice?.paid ? 'paid' : 'unpaid',
-                            currentPeriodStart,
-                            currentPeriodEnd
+                    if (subscription.current_period_end) {
+                        const endDate = new Date(subscription.current_period_end * 1000);
+                        if (!isNaN(endDate)) {
+                            updateData.currentPeriodEnd = endDate;
                         }
+                    }
+
+                    // Handle plan changes (upgrades/downgrades)
+                    if (subscription.items && subscription.items.data && subscription.items.data.length > 0) {
+                        const priceItem = subscription.items.data[0];
+                        const price = priceItem.price;
+
+                        if (price) {
+                            // Check if price ID changed (indicating plan change)
+                            const planChanged = previousAttributes.items ||
+                                (previousAttributes.plan && previousAttributes.plan.id !== price.id);
+
+                            // Always update amount and currency
+                            if (price.unit_amount) {
+                                updateData.amount = price.unit_amount / 100;
+                            }
+
+                            if (price.currency) {
+                                updateData.currency = price.currency;
+                            }
+
+                            // Fetch product details for the price
+                            if (price.product) {
+                                try {
+                                    const product = await stripe.products.retrieve(price.product);
+                                    updateData.planName = product.name || price.nickname || 'Updated Plan';
+
+                                    if (planChanged) {
+                                        console.log(`[stripeRoutes.js] Plan changed for subscription ${subscription.id} to ${updateData.planName}`);
+                                    }
+                                } catch (productError) {
+                                    console.warn(`[stripeRoutes.js] Could not fetch product: ${productError.message}`);
+                                    updateData.planName = price.nickname || 'Updated Plan';
+                                }
+                            }
+                        }
+                    }
+
+                    // Update payment status if available
+                    if (subscription.latest_invoice) {
+                        try {
+                            const invoice = await stripe.invoices.retrieve(subscription.latest_invoice);
+                            updateData.paymentStatus = invoice.paid ? 'paid' : 'unpaid';
+                        } catch (invoiceError) {
+                            console.warn(`[stripeRoutes.js] Could not fetch invoice: ${invoiceError.message}`);
+                        }
+                    }
+
+                    // Find and update the subscription in the database
+                    const result = await Subscription.updateOne(
+                        { subscriptionId: subscription.id },
+                        updateData
                     );
-                    console.log(`[stripeRoutes.js] Updated subscription ${subscription.id}`);
+
+                    if (result.modifiedCount > 0) {
+                        console.log(`[stripeRoutes.js] Successfully updated subscription ${subscription.id} in database`);
+                    } else if (result.matchedCount > 0) {
+                        console.log(`[stripeRoutes.js] Subscription ${subscription.id} found but no changes were needed`);
+                    } else {
+                        console.warn(`[stripeRoutes.js] No subscription found with ID ${subscription.id} to update`);
+
+                        // If subscription doesn't exist in our DB, fetch full details and create it
+                        const fullSubscription = await stripe.subscriptions.retrieve(subscription.id, {
+                            expand: ['customer', 'items.data.price.product']
+                        });
+
+                        if (fullSubscription) {
+                            const price = fullSubscription.items.data[0]?.price;
+                            const product = price?.product;
+
+                            await Subscription.create({
+                                userId: fullSubscription.metadata?.userId || 'unknown',
+                                customerId: fullSubscription.customer.id,
+                                subscriptionId: fullSubscription.id,
+                                status: fullSubscription.status,
+                                amount: price?.unit_amount ? price.unit_amount / 100 : 0,
+                                currency: price?.currency || 'usd',
+                                paymentStatus: fullSubscription.latest_invoice?.paid ? 'paid' : 'unpaid',
+                                planName: product?.name || price?.nickname || 'Standard Plan',
+                                currentPeriodStart: new Date(fullSubscription.current_period_start * 1000),
+                                currentPeriodEnd: new Date(fullSubscription.current_period_end * 1000)
+                            });
+                            console.log(`[stripeRoutes.js] Created missing subscription ${subscription.id}`);
+                        }
+                    }
                 } catch (dbError) {
                     console.error('[stripeRoutes.js] Database update error:', dbError);
                 }
