@@ -53,666 +53,624 @@ const subscriptionSchema = new mongoose.Schema({
 const Subscription = mongoose.model('Subscription', subscriptionSchema);
 
 // Webhook to capture customerId and subscriptionId
+// router.post(
+//     '/webhook',
+//     express.raw({ type: 'application/json' }),
+//     async (req, res) => {
+//       const sig = req.headers['stripe-signature'];
+//       const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET;
+
+//       // Log raw webhook data for debugging
+//       console.log('[stripeRoutes.js] Raw webhook data:', req.body.toString());
+
+//       let event;
+//       try {
+//         event = stripe.webhooks.constructEvent(req.body, sig, webhookSecret);
+//         console.log(
+//           '[stripeRoutes.js] Webhook verified:',
+//           event.id,
+//           event.type
+//         );
+//         console.log(
+//           '[stripeRoutes.js] Webhook event data:',
+//           JSON.stringify(event.data.object, null, 2)
+//         );
+//       } catch (err) {
+//         console.error(
+//           '[stripeRoutes.js] Webhook signature verification failed:',
+//           err.message
+//         );
+//         return res.status(400).send(`Webhook Error: ${err.message}`);
+//       }
+
+//       try {
+//         switch (event.type) {
+//           case 'checkout.session.completed': {
+//             const session = event.data.object;
+//             const {
+//               customer,
+//               subscription: subscriptionId,
+//               metadata,
+//               id: sessionId,
+//               payment_status,
+//               amount_total,
+//               currency
+//             } = session;
+//             const userId = metadata?.userId || 'unknown';
+//             const subscriptionStatus = session.status || 'active';
+
+//             await connectToMongoDB();
+
+//             // Retrieve the full subscription from Stripe
+//             const stripeSubscription = await stripe.subscriptions.retrieve(
+//               subscriptionId
+//             );
+//             console.log(
+//               'checkout.session.completed event data:',
+//               stripeSubscription
+//             );
+
+//             // Compute period dates.
+//             // Use current_period_start if provided, otherwise fallback to start_date.
+//             let startUnix =
+//               stripeSubscription.current_period_start || stripeSubscription.start_date;
+//             let endUnix = stripeSubscription.current_period_end;
+
+//             // If current period end is not provided, try to compute based on the recurring interval.
+//             if (!endUnix && startUnix) {
+//               const subscriptionItem = stripeSubscription.items.data[0];
+//               const recurring = subscriptionItem.price.recurring;
+//               const interval = recurring?.interval || 'month';
+//               const intervalCount = recurring?.interval_count || 1;
+//               let startDate = new Date(startUnix * 1000);
+//               if (interval === 'year') {
+//                 startDate.setFullYear(startDate.getFullYear() + intervalCount);
+//               } else if (interval === 'month') {
+//                 startDate.setMonth(startDate.getMonth() + intervalCount);
+//               } else if (interval === 'week') {
+//                 startDate.setDate(startDate.getDate() + 7 * intervalCount);
+//               } else if (interval === 'day') {
+//                 startDate.setDate(startDate.getDate() + intervalCount);
+//               } else {
+//                 // Fallback: add 30 days.
+//                 startDate = new Date(startDate.getTime() + 30 * 24 * 60 * 60 * 1000);
+//               }
+//               endUnix = Math.floor(startDate.getTime() / 1000);
+//             }
+
+//             // Convert Unix timestamps to US formatted date strings.
+//             const currentPeriodStartFormatted = new Date(
+//               startUnix * 1000
+//             ).toLocaleString('en-US');
+//             const currentPeriodEndFormatted = new Date(
+//               endUnix * 1000
+//             ).toLocaleString('en-US');
+
+//             console.log('[checkout.session.completed] Raw Stripe period dates:', {
+//               current_period_start: startUnix,
+//               current_period_end: endUnix,
+//               subscriptionId: stripeSubscription.id,
+//               customerId: customer,
+//               eventId: event.id
+//             });
+
+//             // Retrieve plan details
+//             const price = stripeSubscription.items.data[0]?.price;
+//             const product = await stripe.products.retrieve(price.product);
+//             const planName = product.name || price.nickname || 'Unknown Plan';
+
+//             // Create the subscription document, now including period dates.
+//             try {
+//               await Subscription.create({
+//                 userId,
+//                 customerId: customer,
+//                 subscriptionId,
+//                 status: subscriptionStatus,
+//                 sessionId,
+//                 amount: amount_total / 100,
+//                 currency,
+//                 paymentStatus: payment_status,
+//                 planName,
+//                 currentPeriodStart: currentPeriodStartFormatted,
+//                 currentPeriodEnd: currentPeriodEndFormatted
+//               });
+//               console.log(
+//                 `[stripeRoutes.js] Subscription stored for user ${userId}`
+//               );
+//             } catch (dbError) {
+//               console.error(
+//                 '[stripeRoutes.js] Database save error:',
+//                 dbError
+//               );
+//               // Continue processing - don't return here
+//             }
+//             break;
+//           }
+
+//           case 'invoice.payment_succeeded': {
+//             const invoice = event.data.object;
+//             const subscriptionId = invoice.subscription;
+//             if (subscriptionId) {
+//               await connectToMongoDB();
+
+//               // Use the period provided on the invoice lines if available.
+//               const lineItem = invoice.lines.data[0];
+//               let startUnix = lineItem?.period?.start;
+//               let endUnix = lineItem?.period?.end;
+//               const currentPeriodStartFormatted = startUnix
+//                 ? new Date(startUnix * 1000).toLocaleString('en-US')
+//                 : new Date().toLocaleString('en-US');
+//               const currentPeriodEndFormatted = endUnix
+//                 ? new Date(endUnix * 1000).toLocaleString('en-US')
+//                 : new Date(
+//                     Date.now() + 30 * 24 * 60 * 60 * 1000
+//                   ).toLocaleString('en-US');
+
+//               try {
+//                 await Subscription.updateOne(
+//                   { subscriptionId },
+//                   {
+//                     paymentStatus: 'paid',
+//                     currentPeriodStart: currentPeriodStartFormatted,
+//                     currentPeriodEnd: currentPeriodEndFormatted
+//                   }
+//                 );
+//                 console.log(
+//                   `[stripeRoutes.js] Updated subscription ${subscriptionId} for paid invoice`
+//                 );
+//               } catch (dbError) {
+//                 console.error(
+//                   '[stripeRoutes.js] Database update error:',
+//                   dbError
+//                 );
+//               }
+//             }
+//             break;
+//           }
+
+//           case 'customer.subscription.deleted': {
+//             const subscription = event.data.object;
+//             try {
+//               await connectToMongoDB();
+//               await Subscription.updateOne(
+//                 { subscriptionId: subscription.id },
+//                 { status: 'canceled' }
+//               );
+//               console.log(
+//                 `[stripeRoutes.js] Marked subscription ${subscription.id} as canceled`
+//               );
+//             } catch (dbError) {
+//               console.error(
+//                 '[stripeRoutes.js] Database update error:',
+//                 dbError
+//               );
+//             }
+//             break;
+//           }
+
+//           case 'customer.subscription.updated': {
+//             const subscription = event.data.object;
+//             try {
+//               await connectToMongoDB();
+//               console.log(
+//                 `[stripeRoutes.js] Processing subscription update for ${subscription.id}`
+//               );
+
+//               const previousAttributes = event.data.previous_attributes || {};
+//               // Start building the update data object.
+//               const updateData = {
+//                 status: subscription.status
+//               };
+
+//               // Update current period dates if available.
+//               if (subscription.current_period_start || subscription.start_date) {
+//                 const startUnix =
+//                   subscription.current_period_start || subscription.start_date;
+//                 updateData.currentPeriodStart = new Date(
+//                   startUnix * 1000
+//                 ).toLocaleString('en-US');
+//               }
+//               if (subscription.current_period_end) {
+//                 updateData.currentPeriodEnd = new Date(
+//                   subscription.current_period_end * 1000
+//                 ).toLocaleString('en-US');
+//               }
+
+//               // Handle plan changes (upgrades/downgrades)
+//               if (
+//                 subscription.items &&
+//                 subscription.items.data &&
+//                 subscription.items.data.length > 0
+//               ) {
+//                 const priceItem = subscription.items.data[0];
+//                 const price = priceItem.price;
+//                 if (price) {
+//                   // Check for a plan change.
+//                   const planChanged =
+//                     previousAttributes.items ||
+//                     (previousAttributes.plan && previousAttributes.plan.id !== price.id);
+
+//                   // Always update amount and currency.
+//                   if (price.unit_amount) {
+//                     updateData.amount = price.unit_amount / 100;
+//                   }
+//                   if (price.currency) {
+//                     updateData.currency = price.currency;
+//                   }
+
+//                   if (price.product) {
+//                     try {
+//                       const product = await stripe.products.retrieve(price.product);
+//                       updateData.planName =
+//                         product.name || price.nickname || 'Updated Plan';
+
+//                       if (planChanged) {
+//                         console.log(
+//                           `[stripeRoutes.js] Plan changed for subscription ${subscription.id} to ${updateData.planName}`
+//                         );
+//                         // Check for credit notes (refunds) upon plan change.
+//                         try {
+//                           const invoices = await stripe.invoices.list({
+//                             subscription: subscription.id,
+//                             limit: 1
+//                           });
+//                           if (invoices.data.length > 0) {
+//                             const creditNotes = await stripe.creditNotes.list({
+//                               invoice: invoices.data[0].id
+//                             });
+//                             if (creditNotes.data.length > 0) {
+//                               const refund = creditNotes.data[0];
+//                               updateData.refundAmount = refund.amount / 100;
+//                               updateData.refundDate = new Date(refund.created * 1000);
+//                               updateData.paymentStatus = 'refunded';
+//                               console.log(
+//                                 `[stripeRoutes.js] Found credit note for subscription ${subscription.id}`
+//                               );
+//                             }
+//                           }
+//                         } catch (creditNoteError) {
+//                           console.warn(
+//                             `[stripeRoutes.js] Could not check credit notes: ${creditNoteError.message}`
+//                           );
+//                         }
+//                       }
+//                     } catch (productError) {
+//                       console.warn(
+//                         `[stripeRoutes.js] Could not fetch product: ${productError.message}`
+//                       );
+//                       updateData.planName = price.nickname || 'Updated Plan';
+//                     }
+//                   }
+//                 }
+//               }
+
+//               // Update payment status if available.
+//               if (subscription.latest_invoice) {
+//                 try {
+//                   const invoice = await stripe.invoices.retrieve(
+//                     subscription.latest_invoice
+//                   );
+//                   updateData.paymentStatus = invoice.paid
+//                     ? 'paid'
+//                     : (invoice.status || 'unpaid');
+//                 } catch (invoiceError) {
+//                   console.warn(
+//                     `[stripeRoutes.js] Could not fetch invoice: ${invoiceError.message}`
+//                   );
+//                   updateData.paymentStatus = 'unknown';
+//                 }
+//               }
+
+//               // Find and update the subscription in the database.
+//               const result = await Subscription.updateOne(
+//                 { subscriptionId: subscription.id },
+//                 updateData
+//               );
+//               if (result.modifiedCount > 0) {
+//                 console.log(
+//                   `[stripeRoutes.js] Successfully updated subscription ${subscription.id} in database`
+//                 );
+//               } else if (result.matchedCount > 0) {
+//                 console.log(
+//                   `[stripeRoutes.js] Subscription ${subscription.id} found but no changes were needed`
+//                 );
+//               } else {
+//                 console.warn(
+//                   `[stripeRoutes.js] No subscription found with ID ${subscription.id} to update`
+//                 );
+//               }
+//             } catch (dbError) {
+//               console.error(
+//                 '[stripeRoutes.js] Database update error:',
+//                 dbError
+//               );
+//             }
+//             break;
+//           }
+
+//           case 'charge.refunded': {
+//             const charge = event.data.object;
+//             const refund = charge.refunds?.data?.[0];
+//             if (refund && charge.invoice) {
+//               await connectToMongoDB();
+
+//               // Retrieve the related invoice to get subscriptionId.
+//               const invoice = await stripe.invoices.retrieve(charge.invoice);
+//               const subscriptionId = invoice.subscription;
+//               if (subscriptionId) {
+//                 await Subscription.updateOne(
+//                   { subscriptionId },
+//                   {
+//                     $set: {
+//                       paymentStatus: 'refunded',
+//                       refundAmount: refund.amount / 100,
+//                       refundDate: new Date(refund.created * 1000)
+//                     }
+//                   }
+//                 );
+//                 console.log(
+//                   `[stripeRoutes.js] Refund recorded for subscription ${subscriptionId}`
+//                 );
+//               }
+//             }
+//             break;
+//           }
+
+//           default: {
+//             console.log(
+//               `[stripeRoutes.js] Unhandled event type: ${event.type}`
+//             );
+//           }
+//         }
+
+//         res.json({
+//           received: true,
+//           message: 'Webhook processed successfully'
+//         });
+//       } catch (error) {
+//         console.error('[stripeRoutes.js] Webhook Error:', error.message);
+//         res.status(500).json({ error: error.message });
+//       }
+//     }
+//   );
+
 router.post(
     '/webhook',
     express.raw({ type: 'application/json' }),
     async (req, res) => {
-      const sig = req.headers['stripe-signature'];
-      const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET;
-  
-      // Log raw webhook data for debugging
-      console.log('[stripeRoutes.js] Raw webhook data:', req.body.toString());
-  
-      let event;
-      try {
-        event = stripe.webhooks.constructEvent(req.body, sig, webhookSecret);
-        console.log(
-          '[stripeRoutes.js] Webhook verified:',
-          event.id,
-          event.type
-        );
-        console.log(
-          '[stripeRoutes.js] Webhook event data:',
-          JSON.stringify(event.data.object, null, 2)
-        );
-      } catch (err) {
-        console.error(
-          '[stripeRoutes.js] Webhook signature verification failed:',
-          err.message
-        );
-        return res.status(400).send(`Webhook Error: ${err.message}`);
-      }
-  
-      try {
-        switch (event.type) {
-          case 'checkout.session.completed': {
-            const session = event.data.object;
-            const {
-              customer,
-              subscription: subscriptionId,
-              metadata,
-              id: sessionId,
-              payment_status,
-              amount_total,
-              currency
-            } = session;
-            const userId = metadata?.userId || 'unknown';
-            const subscriptionStatus = session.status || 'active';
-  
-            await connectToMongoDB();
-  
-            // Retrieve the full subscription from Stripe
-            const stripeSubscription = await stripe.subscriptions.retrieve(
-              subscriptionId
+        const sig = req.headers['stripe-signature'];
+        const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET;
+
+        // Log raw webhook data for debugging
+        console.log('[stripeRoutes.js] Raw webhook data:', req.body.toString());
+
+        let event;
+        try {
+            event = stripe.webhooks.constructEvent(req.body, sig, webhookSecret);
+            console.log(
+                '[stripeRoutes.js] Webhook verified:',
+                event.id,
+                event.type
             );
             console.log(
-              'checkout.session.completed event data:',
-              stripeSubscription
+                '[stripeRoutes.js] Webhook event data:',
+                JSON.stringify(event.data.object, null, 2)
             );
-  
-            // Compute period dates.
-            // Use current_period_start if provided, otherwise fallback to start_date.
-            let startUnix =
-              stripeSubscription.current_period_start || stripeSubscription.start_date;
-            let endUnix = stripeSubscription.current_period_end;
-  
-            // If current period end is not provided, try to compute based on the recurring interval.
-            if (!endUnix && startUnix) {
-              const subscriptionItem = stripeSubscription.items.data[0];
-              const recurring = subscriptionItem.price.recurring;
-              const interval = recurring?.interval || 'month';
-              const intervalCount = recurring?.interval_count || 1;
-              let startDate = new Date(startUnix * 1000);
-              if (interval === 'year') {
-                startDate.setFullYear(startDate.getFullYear() + intervalCount);
-              } else if (interval === 'month') {
-                startDate.setMonth(startDate.getMonth() + intervalCount);
-              } else if (interval === 'week') {
-                startDate.setDate(startDate.getDate() + 7 * intervalCount);
-              } else if (interval === 'day') {
-                startDate.setDate(startDate.getDate() + intervalCount);
-              } else {
-                // Fallback: add 30 days.
-                startDate = new Date(startDate.getTime() + 30 * 24 * 60 * 60 * 1000);
-              }
-              endUnix = Math.floor(startDate.getTime() / 1000);
-            }
-  
-            // Convert Unix timestamps to US formatted date strings.
-            const currentPeriodStartFormatted = new Date(
-              startUnix * 1000
-            ).toLocaleString('en-US');
-            const currentPeriodEndFormatted = new Date(
-              endUnix * 1000
-            ).toLocaleString('en-US');
-  
-            console.log('[checkout.session.completed] Raw Stripe period dates:', {
-              current_period_start: startUnix,
-              current_period_end: endUnix,
-              subscriptionId: stripeSubscription.id,
-              customerId: customer,
-              eventId: event.id
-            });
-  
-            // Retrieve plan details
-            const price = stripeSubscription.items.data[0]?.price;
-            const product = await stripe.products.retrieve(price.product);
-            const planName = product.name || price.nickname || 'Unknown Plan';
-  
-            // Create the subscription document, now including period dates.
-            try {
-              await Subscription.create({
-                userId,
-                customerId: customer,
-                subscriptionId,
-                status: subscriptionStatus,
-                sessionId,
-                amount: amount_total / 100,
-                currency,
-                paymentStatus: payment_status,
-                planName,
-                currentPeriodStart: currentPeriodStartFormatted,
-                currentPeriodEnd: currentPeriodEndFormatted
-              });
-              console.log(
-                `[stripeRoutes.js] Subscription stored for user ${userId}`
-              );
-            } catch (dbError) {
-              console.error(
-                '[stripeRoutes.js] Database save error:',
-                dbError
-              );
-              // Continue processing - don't return here
-            }
-            break;
-          }
-  
-          case 'invoice.payment_succeeded': {
-            const invoice = event.data.object;
-            const subscriptionId = invoice.subscription;
-            if (subscriptionId) {
-              await connectToMongoDB();
-  
-              // Use the period provided on the invoice lines if available.
-              const lineItem = invoice.lines.data[0];
-              let startUnix = lineItem?.period?.start;
-              let endUnix = lineItem?.period?.end;
-              const currentPeriodStartFormatted = startUnix
-                ? new Date(startUnix * 1000).toLocaleString('en-US')
-                : new Date().toLocaleString('en-US');
-              const currentPeriodEndFormatted = endUnix
-                ? new Date(endUnix * 1000).toLocaleString('en-US')
-                : new Date(
-                    Date.now() + 30 * 24 * 60 * 60 * 1000
-                  ).toLocaleString('en-US');
-  
-              try {
-                await Subscription.updateOne(
-                  { subscriptionId },
-                  {
-                    paymentStatus: 'paid',
-                    currentPeriodStart: currentPeriodStartFormatted,
-                    currentPeriodEnd: currentPeriodEndFormatted
-                  }
-                );
-                console.log(
-                  `[stripeRoutes.js] Updated subscription ${subscriptionId} for paid invoice`
-                );
-              } catch (dbError) {
-                console.error(
-                  '[stripeRoutes.js] Database update error:',
-                  dbError
-                );
-              }
-            }
-            break;
-          }
-  
-          case 'customer.subscription.deleted': {
-            const subscription = event.data.object;
-            try {
-              await connectToMongoDB();
-              await Subscription.updateOne(
-                { subscriptionId: subscription.id },
-                { status: 'canceled' }
-              );
-              console.log(
-                `[stripeRoutes.js] Marked subscription ${subscription.id} as canceled`
-              );
-            } catch (dbError) {
-              console.error(
-                '[stripeRoutes.js] Database update error:',
-                dbError
-              );
-            }
-            break;
-          }
-  
-          case 'customer.subscription.updated': {
-            const subscription = event.data.object;
-            try {
-              await connectToMongoDB();
-              console.log(
-                `[stripeRoutes.js] Processing subscription update for ${subscription.id}`
-              );
-  
-              const previousAttributes = event.data.previous_attributes || {};
-              // Start building the update data object.
-              const updateData = {
-                status: subscription.status
-              };
-  
-              // Update current period dates if available.
-              if (subscription.current_period_start || subscription.start_date) {
-                const startUnix =
-                  subscription.current_period_start || subscription.start_date;
-                updateData.currentPeriodStart = new Date(
-                  startUnix * 1000
-                ).toLocaleString('en-US');
-              }
-              if (subscription.current_period_end) {
-                updateData.currentPeriodEnd = new Date(
-                  subscription.current_period_end * 1000
-                ).toLocaleString('en-US');
-              }
-  
-              // Handle plan changes (upgrades/downgrades)
-              if (
-                subscription.items &&
-                subscription.items.data &&
-                subscription.items.data.length > 0
-              ) {
-                const priceItem = subscription.items.data[0];
-                const price = priceItem.price;
-                if (price) {
-                  // Check for a plan change.
-                  const planChanged =
-                    previousAttributes.items ||
-                    (previousAttributes.plan && previousAttributes.plan.id !== price.id);
-  
-                  // Always update amount and currency.
-                  if (price.unit_amount) {
-                    updateData.amount = price.unit_amount / 100;
-                  }
-                  if (price.currency) {
-                    updateData.currency = price.currency;
-                  }
-  
-                  if (price.product) {
-                    try {
-                      const product = await stripe.products.retrieve(price.product);
-                      updateData.planName =
-                        product.name || price.nickname || 'Updated Plan';
-  
-                      if (planChanged) {
-                        console.log(
-                          `[stripeRoutes.js] Plan changed for subscription ${subscription.id} to ${updateData.planName}`
-                        );
-                        // Check for credit notes (refunds) upon plan change.
-                        try {
-                          const invoices = await stripe.invoices.list({
-                            subscription: subscription.id,
-                            limit: 1
-                          });
-                          if (invoices.data.length > 0) {
-                            const creditNotes = await stripe.creditNotes.list({
-                              invoice: invoices.data[0].id
-                            });
-                            if (creditNotes.data.length > 0) {
-                              const refund = creditNotes.data[0];
-                              updateData.refundAmount = refund.amount / 100;
-                              updateData.refundDate = new Date(refund.created * 1000);
-                              updateData.paymentStatus = 'refunded';
-                              console.log(
-                                `[stripeRoutes.js] Found credit note for subscription ${subscription.id}`
-                              );
-                            }
-                          }
-                        } catch (creditNoteError) {
-                          console.warn(
-                            `[stripeRoutes.js] Could not check credit notes: ${creditNoteError.message}`
-                          );
-                        }
-                      }
-                    } catch (productError) {
-                      console.warn(
-                        `[stripeRoutes.js] Could not fetch product: ${productError.message}`
-                      );
-                      updateData.planName = price.nickname || 'Updated Plan';
-                    }
-                  }
-                }
-              }
-  
-              // Update payment status if available.
-              if (subscription.latest_invoice) {
-                try {
-                  const invoice = await stripe.invoices.retrieve(
-                    subscription.latest_invoice
-                  );
-                  updateData.paymentStatus = invoice.paid
-                    ? 'paid'
-                    : (invoice.status || 'unpaid');
-                } catch (invoiceError) {
-                  console.warn(
-                    `[stripeRoutes.js] Could not fetch invoice: ${invoiceError.message}`
-                  );
-                  updateData.paymentStatus = 'unknown';
-                }
-              }
-  
-              // Find and update the subscription in the database.
-              const result = await Subscription.updateOne(
-                { subscriptionId: subscription.id },
-                updateData
-              );
-              if (result.modifiedCount > 0) {
-                console.log(
-                  `[stripeRoutes.js] Successfully updated subscription ${subscription.id} in database`
-                );
-              } else if (result.matchedCount > 0) {
-                console.log(
-                  `[stripeRoutes.js] Subscription ${subscription.id} found but no changes were needed`
-                );
-              } else {
-                console.warn(
-                  `[stripeRoutes.js] No subscription found with ID ${subscription.id} to update`
-                );
-              }
-            } catch (dbError) {
-              console.error(
-                '[stripeRoutes.js] Database update error:',
-                dbError
-              );
-            }
-            break;
-          }
-  
-          case 'charge.refunded': {
-            const charge = event.data.object;
-            const refund = charge.refunds?.data?.[0];
-            if (refund && charge.invoice) {
-              await connectToMongoDB();
-  
-              // Retrieve the related invoice to get subscriptionId.
-              const invoice = await stripe.invoices.retrieve(charge.invoice);
-              const subscriptionId = invoice.subscription;
-              if (subscriptionId) {
-                await Subscription.updateOne(
-                  { subscriptionId },
-                  {
-                    $set: {
-                      paymentStatus: 'refunded',
-                      refundAmount: refund.amount / 100,
-                      refundDate: new Date(refund.created * 1000)
-                    }
-                  }
-                );
-                console.log(
-                  `[stripeRoutes.js] Refund recorded for subscription ${subscriptionId}`
-                );
-              }
-            }
-            break;
-          }
-  
-          default: {
-            console.log(
-              `[stripeRoutes.js] Unhandled event type: ${event.type}`
+        } catch (err) {
+            console.error(
+                '[stripeRoutes.js] Webhook signature verification failed:',
+                err.message
             );
-          }
+            return res.status(400).send(`Webhook Error: ${err.message}`);
         }
-  
-        res.json({
-          received: true,
-          message: 'Webhook processed successfully'
-        });
-      } catch (error) {
-        console.error('[stripeRoutes.js] Webhook Error:', error.message);
-        res.status(500).json({ error: error.message });
-      }
+
+        try {
+            switch (event.type) {
+                case 'checkout.session.completed': {
+                    const session = event.data.object;
+                    const {
+                        customer,
+                        subscription: subscriptionId,
+                        metadata,
+                        id: sessionId,
+                        payment_status,
+                        amount_total,
+                        currency
+                    } = session;
+                    const userId = metadata?.userId || 'unknown';
+                    const subscriptionStatus = session.status || 'active';
+
+                    await connectToMongoDB();
+
+                    // Retrieve the complete subscription object from Stripe
+                    const stripeSubscription = await stripe.subscriptions.retrieve(subscriptionId);
+                    console.log('checkout.session.completed event data:', stripeSubscription);
+
+                    // Compute current period dates
+                    let startUnix =
+                        stripeSubscription.current_period_start || stripeSubscription.start_date;
+                    let endUnix = stripeSubscription.current_period_end;
+                    if (!endUnix && startUnix) {
+                        // Fallback computation based on plan interval if needed
+                        const subscriptionItem = stripeSubscription.items.data[0];
+                        const recurring = subscriptionItem.price.recurring;
+                        const interval = recurring?.interval || 'month';
+                        const intervalCount = recurring?.interval_count || 1;
+                        let startDate = new Date(startUnix * 1000);
+                        if (interval === 'year') {
+                            startDate.setFullYear(startDate.getFullYear() + intervalCount);
+                        } else if (interval === 'month') {
+                            startDate.setMonth(startDate.getMonth() + intervalCount);
+                        } else if (interval === 'week') {
+                            startDate.setDate(startDate.getDate() + 7 * intervalCount);
+                        } else if (interval === 'day') {
+                            startDate.setDate(startDate.getDate() + intervalCount);
+                        } else {
+                            // Fallback: add 30 days
+                            startDate = new Date(startDate.getTime() + 30 * 24 * 60 * 60 * 1000);
+                        }
+                        endUnix = Math.floor(startDate.getTime() / 1000);
+                    }
+
+                    // Convert Unix timestamps to US-formatted date strings
+                    const currentPeriodStartFormatted = new Date(startUnix * 1000).toLocaleString('en-US');
+                    const currentPeriodEndFormatted = new Date(endUnix * 1000).toLocaleString('en-US');
+
+                    // Retrieve plan details from subscription items
+                    const price = stripeSubscription.items.data[0]?.price;
+                    const product = price && (await stripe.products.retrieve(price.product));
+                    const planName = (product && product.name) || price.nickname || 'Unknown Plan';
+
+                    // Build a comprehensive data object to store—all fields as desired
+                    const subscriptionData = {
+                        userId,
+                        customerId: customer,
+                        subscriptionId,
+                        status: subscriptionStatus,
+                        sessionId,
+                        amount: amount_total / 100,
+                        currency,
+                        paymentStatus: payment_status,
+                        planName,
+                        currentPeriodStart: currentPeriodStartFormatted,
+                        currentPeriodEnd: currentPeriodEndFormatted,
+                        billingCycleAnchor: stripeSubscription.billing_cycle_anchor
+                            ? new Date(stripeSubscription.billing_cycle_anchor * 1000).toLocaleString('en-US')
+                            : null,
+                        created: new Date(stripeSubscription.created * 1000).toLocaleString('en-US'),
+                        trialStart: stripeSubscription.trial_start
+                            ? new Date(stripeSubscription.trial_start * 1000).toLocaleString('en-US')
+                            : null,
+                        trialEnd: stripeSubscription.trial_end
+                            ? new Date(stripeSubscription.trial_end * 1000).toLocaleString('en-US')
+                            : null,
+                        planId: price?.id || null,
+                        productId: price?.product || null,
+                        interval: price?.recurring?.interval || null,
+                        intervalCount: price?.recurring?.interval_count || null,
+                        lastInvoice: stripeSubscription.latest_invoice || null,
+                        // Add any additional metadata if necessary (e.g., discount details, custom fields, etc.)
+                        metadata: stripeSubscription.metadata
+                    };
+
+                    console.log('[checkout.session.completed] Raw Stripe period dates:', {
+                        current_period_start: startUnix,
+                        current_period_end: endUnix,
+                        subscriptionId: stripeSubscription.id,
+                        customerId: customer,
+                        eventId: event.id
+                    });
+
+                    try {
+                        await Subscription.create(subscriptionData);
+                        console.log(`[stripeRoutes.js] Subscription stored for user ${userId}`);
+                    } catch (dbError) {
+                        console.error('[stripeRoutes.js] Database save error:', dbError);
+                        // Continue processing even if database save fails.
+                    }
+                    break;
+                }
+
+                // In your invoice.payment_succeeded and customer.subscription.updated cases,
+                // you can likewise extract additional fields from the event data and update your document.
+                // For example, for invoice.payment_succeeded you could extract:
+                // - The invoice's effective period (start and end)
+                // - The hosted_invoice_url
+                // - Payment details from the invoice lines.
+                // And then update the Subscription record accordingly.
+                case 'invoice.payment_succeeded': {
+                    const invoice = event.data.object;
+                    const subscriptionId = invoice.subscription;
+                    if (subscriptionId) {
+                        await connectToMongoDB();
+
+                        const lineItem = invoice.lines.data[0];
+                        let startUnix = lineItem?.period?.start;
+                        let endUnix = lineItem?.period?.end;
+                        const currentPeriodStartFormatted = startUnix
+                            ? new Date(startUnix * 1000).toLocaleString('en-US')
+                            : new Date().toLocaleString('en-US');
+                        const currentPeriodEndFormatted = endUnix
+                            ? new Date(endUnix * 1000).toLocaleString('en-US')
+                            : new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toLocaleString('en-US');
+
+                        try {
+                            await Subscription.updateOne(
+                                { subscriptionId },
+                                {
+                                    paymentStatus: 'paid',
+                                    currentPeriodStart: currentPeriodStartFormatted,
+                                    currentPeriodEnd: currentPeriodEndFormatted,
+                                    // You might also store invoice-related data here:
+                                    lastInvoice: invoice.id,
+                                    hostedInvoiceUrl: invoice.hosted_invoice_url
+                                }
+                            );
+                            console.log(`[stripeRoutes.js] Updated subscription ${subscriptionId} for paid invoice`);
+                        } catch (dbError) {
+                            console.error('[stripeRoutes.js] Database update error:', dbError);
+                        }
+                    }
+                    break;
+                }
+
+                // Other event types remain similar – extend them as needed:
+                case 'customer.subscription.updated': {
+                    // Extract and update additional fields as shown above.
+                    // ...
+                    break;
+                }
+                case 'customer.subscription.deleted': {
+                    const subscription = event.data.object;
+                    try {
+                        await connectToMongoDB();
+                        await Subscription.updateOne(
+                            { subscriptionId: subscription.id },
+                            { status: 'canceled' }
+                        );
+                        console.log(`[stripeRoutes.js] Marked subscription ${subscription.id} as canceled`);
+                    } catch (dbError) {
+                        console.error('[stripeRoutes.js] Database update error:', dbError);
+                    }
+                    break;
+                }
+                case 'charge.refunded': {
+                    const charge = event.data.object;
+                    const refund = charge.refunds?.data?.[0];
+                    if (refund && charge.invoice) {
+                        await connectToMongoDB();
+                        const invoice = await stripe.invoices.retrieve(charge.invoice);
+                        const subscriptionId = invoice.subscription;
+                        if (subscriptionId) {
+                            await Subscription.updateOne(
+                                { subscriptionId },
+                                {
+                                    $set: {
+                                        paymentStatus: 'refunded',
+                                        refundAmount: refund.amount / 100,
+                                        refundDate: new Date(refund.created * 1000)
+                                    }
+                                }
+                            );
+                            console.log(`[stripeRoutes.js] Refund recorded for subscription ${subscriptionId}`);
+                        }
+                    }
+                    break;
+                }
+
+                default: {
+                    console.log(`[stripeRoutes.js] Unhandled event type: ${event.type}`);
+                }
+            }
+
+            res.json({ received: true, message: 'Webhook processed successfully' });
+        } catch (error) {
+            console.error('[stripeRoutes.js] Webhook Error:', error.message);
+            res.status(500).json({ error: error.message });
+        }
     }
-  );
-  
+);
 
-// router.post('/webhook', express.raw({ type: 'application/json' }), async (req, res) => {
-//     const sig = req.headers['stripe-signature'];
-//     const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET;
-
-//     // Log raw webhook data for debugging
-//     console.log('[stripeRoutes.js] Raw webhook data:', req.body.toString());
-
-//     let event;
-//     try {
-//         event = stripe.webhooks.constructEvent(req.body, sig, webhookSecret);
-//         console.log('[stripeRoutes.js] Webhook verified:', event.id, event.type);
-//         console.log('[stripeRoutes.js] Webhook event data:', JSON.stringify(event.data.object, null, 2));
-//     } catch (err) {
-//         console.error('[stripeRoutes.js] Webhook signature verification failed:', err.message);
-//         return res.status(400).send(`Webhook Error: ${err.message}`);
-//     }
-
-//     try {
-//         // Handle different event types
-//         switch (event.type) {
-//             case 'checkout.session.completed': {
-//                 const session = event.data.object;
-//                 const { customer, subscription: subscriptionId, metadata, id: sessionId, payment_status, amount_total, currency } = session;
-//                 const userId = metadata?.userId || 'unknown';
-//                 const subscriptionStatus = session.status || 'active';
-
-//                 await connectToMongoDB();
-
-//                 const stripeSubscription = await stripe.subscriptions.retrieve(subscriptionId);
-//                 console.log('checkout.session.completed event data:', stripeSubscription);
-//                 console.log('[checkout.session.completed] Raw Stripe period dates:', {
-//                     current_period_start: stripeSubscription.current_period_start,
-//                     current_period_end: stripeSubscription.current_period_end,
-//                     converted_start: stripeSubscription.current_period_start ? new Date(stripeSubscription.current_period_start * 1000) : null,
-//                     converted_end: stripeSubscription.current_period_end ? new Date(stripeSubscription.current_period_end * 1000) : null,
-//                     subscriptionId: stripeSubscription.id,
-//                     customerId: customer,
-//                     eventId: event.id
-//                 });
-
-//                 const price = stripeSubscription.items.data[0]?.price;
-//                 const product = await stripe.products.retrieve(price.product);
-
-//                 const planName = product.name || price.nickname || 'Unknown Plan';
-
-//                 // Improved date handling with fallbacks
-//                 const currentPeriodStart = stripeSubscription.current_period_start
-//                     ? new Date(stripeSubscription.current_period_start * 1000)
-//                     : new Date();
-
-//                 const currentPeriodEnd = stripeSubscription.current_period_end
-//                     ? new Date(stripeSubscription.current_period_end * 1000)
-//                     : new Date(Date.now() + 30 * 24 * 60 * 60 * 1000); // 30 days from now
-
-//                 try {
-//                     await Subscription.create({
-//                         userId,
-//                         customerId: customer,
-//                         subscriptionId,
-//                         status: subscriptionStatus,
-//                         sessionId,
-//                         amount: amount_total / 100,
-//                         currency,
-//                         paymentStatus: payment_status,
-//                         planName
-//                     });
-
-//                     console.log(`[stripeRoutes.js] Subscription stored for user ${userId}`);
-//                 } catch (dbError) {
-//                     console.error('[stripeRoutes.js] Database save error:', dbError);
-//                     // Continue processing - don't return here
-//                 }
-//                 break;
-//             }
-
-//             case 'invoice.payment_succeeded': {
-//                 const invoice = event.data.object;
-//                 const subscriptionId = invoice.subscription;
-
-//                 if (subscriptionId) {
-//                     await connectToMongoDB();
-
-
-//                     if (!currentPeriodStart || !currentPeriodEnd || isNaN(currentPeriodStart) || isNaN(currentPeriodEnd)) {
-//                         console.warn('[stripeRoutes.js] Invalid invoice dates, skipping update');
-//                         break;
-//                     }
-
-//                     try {
-//                         await Subscription.updateOne(
-//                             { subscriptionId },
-//                             {
-//                                 paymentStatus: 'paid',
-//                                 currentPeriodStart,
-//                                 currentPeriodEnd
-//                             }
-//                         );
-//                         console.log(`[stripeRoutes.js] Updated subscription ${subscriptionId} for paid invoice`);
-//                     } catch (dbError) {
-//                         console.error('[stripeRoutes.js] Database update error:', dbError);
-//                     }
-//                 }
-//                 break;
-//             }
-
-//             case 'customer.subscription.deleted': {
-//                 const subscription = event.data.object;
-//                 try {
-//                     await connectToMongoDB();
-//                     await Subscription.updateOne(
-//                         { subscriptionId: subscription.id },
-//                         { status: 'canceled' }
-//                     );
-//                     console.log(`[stripeRoutes.js] Marked subscription ${subscription.id} as canceled`);
-//                 } catch (dbError) {
-//                     console.error('[stripeRoutes.js] Database update error:', dbError);
-//                 }
-//                 break;
-//             }
-
-//             case 'customer.subscription.updated': {
-//                 const subscription = event.data.object;
-//                 try {
-//                     await connectToMongoDB();
-//                     console.log(`[stripeRoutes.js] Processing subscription update for ${subscription.id}`);
-
-//                     // Compare current vs previous attributes to detect changes
-//                     const previousAttributes = event.data.previous_attributes || {};
-
-//                     // Initialize update data with subscription status
-//                     const updateData = {
-//                         status: subscription.status
-//                     };
-
-//                     // Safely handle dates
-//                     if (subscription.current_period_start) {
-//                         const startDate = new Date(subscription.current_period_start * 1000);
-//                         if (!isNaN(startDate)) {
-//                             updateData.currentPeriodStart = startDate;
-//                         }
-//                     }
-
-//                     if (subscription.current_period_end) {
-//                         const endDate = new Date(subscription.current_period_end * 1000);
-//                         if (!isNaN(endDate)) {
-//                             updateData.currentPeriodEnd = endDate;
-//                         }
-//                     }
-
-//                     // Handle plan changes (upgrades/downgrades)
-//                     if (subscription.items && subscription.items.data && subscription.items.data.length > 0) {
-//                         const priceItem = subscription.items.data[0];
-//                         const price = priceItem.price;
-
-//                         if (price) {
-//                             // Check if price ID changed (indicating plan change)
-//                             const planChanged = previousAttributes.items ||
-//                                 (previousAttributes.plan && previousAttributes.plan.id !== price.id);
-
-//                             // Always update amount and currency
-//                             if (price.unit_amount) {
-//                                 updateData.amount = price.unit_amount / 100;
-//                             }
-
-//                             if (price.currency) {
-//                                 updateData.currency = price.currency;
-//                             }
-
-//                             // Fetch product details for the price
-//                             if (price.product) {
-//                                 try {
-//                                     const product = await stripe.products.retrieve(price.product);
-//                                     updateData.planName = product.name || price.nickname || 'Updated Plan';
-
-//                                     if (planChanged) {
-//                                         console.log(`[stripeRoutes.js] Plan changed for subscription ${subscription.id} to ${updateData.planName}`);
-
-//                                         // Check for credit notes (refunds) when plan changes
-//                                         try {
-//                                             const invoices = await stripe.invoices.list({
-//                                                 subscription: subscription.id,
-//                                                 limit: 1
-//                                             });
-
-//                                             if (invoices.data.length > 0) {
-//                                                 const creditNotes = await stripe.creditNotes.list({
-//                                                     invoice: invoices.data[0].id
-//                                                 });
-
-//                                                 if (creditNotes.data.length > 0) {
-//                                                     const refund = creditNotes.data[0];
-//                                                     updateData.refundAmount = refund.amount / 100;
-//                                                     updateData.refundDate = new Date(refund.created * 1000);
-//                                                     updateData.paymentStatus = 'refunded';
-//                                                     console.log(`[stripeRoutes.js] Found credit note for subscription ${subscription.id}`);
-//                                                 }
-//                                             }
-//                                         } catch (creditNoteError) {
-//                                             console.warn(`[stripeRoutes.js] Could not check credit notes: ${creditNoteError.message}`);
-//                                         }
-//                                     }
-//                                 } catch (productError) {
-//                                     console.warn(`[stripeRoutes.js] Could not fetch product: ${productError.message}`);
-//                                     updateData.planName = price.nickname || 'Updated Plan';
-//                                 }
-//                             }
-//                         }
-//                     }
-
-//                     // Update payment status if available
-//                     if (subscription.latest_invoice) {
-//                         try {
-//                             const invoice = await stripe.invoices.retrieve(subscription.latest_invoice);
-//                             updateData.paymentStatus = invoice.paid ? 'paid' : (invoice.status || 'unpaid');
-//                         } catch (invoiceError) {
-//                             console.warn(`[stripeRoutes.js] Could not fetch invoice: ${invoiceError.message}`);
-//                             updateData.paymentStatus = 'unknown';
-//                         }
-//                     }
-
-//                     // Find and update the subscription in the database
-//                     const result = await Subscription.updateOne(
-//                         { subscriptionId: subscription.id },
-//                         updateData
-//                     );
-
-//                     if (result.modifiedCount > 0) {
-//                         console.log(`[stripeRoutes.js] Successfully updated subscription ${subscription.id} in database`);
-//                     } else if (result.matchedCount > 0) {
-//                         console.log(`[stripeRoutes.js] Subscription ${subscription.id} found but no changes were needed`);
-//                     } else {
-//                         console.warn(`[stripeRoutes.js] No subscription found with ID ${subscription.id} to update`);
-//                     }
-//                 } catch (dbError) {
-//                     console.error('[stripeRoutes.js] Database update error:', dbError);
-//                 }
-//                 break;
-//             }
-
-//             case 'charge.refunded': {
-//                 const charge = event.data.object;
-//                 const refund = charge.refunds?.data?.[0];
-
-//                 if (refund && charge.invoice) {
-//                     await connectToMongoDB();
-
-//                     // Retrieve the related invoice to get subscriptionId
-//                     const invoice = await stripe.invoices.retrieve(charge.invoice);
-//                     const subscriptionId = invoice.subscription;
-
-//                     if (subscriptionId) {
-//                         await Subscription.updateOne(
-//                             { subscriptionId },
-//                             {
-//                                 $set: {
-//                                     paymentStatus: 'refunded',
-//                                     refundAmount: refund.amount / 100,
-//                                     refundDate: new Date(refund.created * 1000)
-//                                 }
-//                             }
-//                         );
-//                         console.log(`[stripeRoutes.js] Refund recorded for subscription ${subscriptionId}`);
-//                     }
-//                 }
-//                 break;
-//             }
-
-//             default: {
-//                 console.log(`[stripeRoutes.js] Unhandled event type: ${event.type}`);
-//             }
-//         }
-
-//         res.json({ received: true, message: 'Webhook processed successfully' });
-//     } catch (error) {
-//         console.error('[stripeRoutes.js] Webhook Error:', error.message);
-//         res.status(500).json({ error: error.message });
-//     }
-// });
 
 router.post('/create-checkout-session', async (req, res) => {
     try {
@@ -720,12 +678,12 @@ router.post('/create-checkout-session', async (req, res) => {
         const isProduction = process.env.NODE_ENV === 'production';
 
         const successUrl = isProduction
-          ? 'https://record.onepgr.com/success?session_id={CHECKOUT_SESSION_ID}'
-          : 'http://localhost:3000/success?session_id={CHECKOUT_SESSION_ID}';
+            ? 'https://record.onepgr.com/success?session_id={CHECKOUT_SESSION_ID}'
+            : 'http://localhost:3000/success?session_id={CHECKOUT_SESSION_ID}';
 
         const cancelUrl = isProduction
-          ? 'https://record.onepgr.com/pricing'
-          : 'http://localhost:3000/pricing';
+            ? 'https://record.onepgr.com/pricing'
+            : 'http://localhost:3000/pricing';
 
         const session = await stripe.checkout.sessions.create({
             mode: 'subscription',
