@@ -209,14 +209,14 @@ router.post('/webhook', express.raw({ type: 'application/json' }), async (req, r
 
                         if (price) {
                             // Check if price ID changed (indicating plan change)
-                            const planChanged = previousAttributes.items || 
+                            const planChanged = previousAttributes.items ||
                                 (previousAttributes.plan && previousAttributes.plan.id !== price.id);
 
                             // Always update amount and currency
                             if (price.unit_amount) {
                                 updateData.amount = price.unit_amount / 100;
                             }
-                            
+
                             if (price.currency) {
                                 updateData.currency = price.currency;
                             }
@@ -226,10 +226,10 @@ router.post('/webhook', express.raw({ type: 'application/json' }), async (req, r
                                 try {
                                     const product = await stripe.products.retrieve(price.product);
                                     updateData.planName = product.name || price.nickname || 'Updated Plan';
-                                    
+
                                     if (planChanged) {
                                         console.log(`[stripeRoutes.js] Plan changed for subscription ${subscription.id} to ${updateData.planName}`);
-                                        
+
                                         // Check for credit notes (refunds) when plan changes
                                         try {
                                             const invoices = await stripe.invoices.list({
@@ -333,7 +333,6 @@ router.post('/webhook', express.raw({ type: 'application/json' }), async (req, r
 });
 
 
-// router.post('/webhook', express.raw({ type: 'application/json' }), async (req, res) => {
 //     const sig = req.headers['stripe-signature'];
 //     const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET;
 
@@ -512,6 +511,8 @@ router.post('/get-subscription-from-session', async (req, res) => {
             expand: ['items.data.price.product', 'customer']
         });
 
+        console.log('[stripeRoutes.js] subscription', JSON.stringify(subscription, null, 2));
+
         // Check for credit notes (refunds)
         let refundInfo = null;
         try {
@@ -632,80 +633,343 @@ router.post('/get-subscription-from-session', async (req, res) => {
     }
 });
 
-
-
 // Get Subscription Details
-router.post('/get-subscription', async (req, res) => {
-    const { subscriptionId } = req.body;
+// router.post('/get-subscription', async (req, res) => {
+//     const { subscriptionId } = req.body;
+  
+//     if (!subscriptionId) {
+//       return res.status(400).json({ error: 'subscriptionId is required' });
+//     }
+  
+//     try {
+//       const subscription = await stripe.subscriptions.retrieve(subscriptionId, {
+//         expand: ['items.data.price.product', 'customer', 'latest_invoice']
+//       });
+  
+//       if (!subscription) {
+//         return res.status(404).json({ error: 'Subscription not found in Stripe' });
+//       }
+  
+//       const priceItem = subscription.items.data[0];
+//       const price = priceItem.price;
+//       const product = typeof price.product === 'string'
+//         ? { id: price.product, name: 'Unknown Product' }
+//         : price.product;
+  
+//       // Convert Unix timestamps to a US formatted date string.
+//       // Using "America/New_York" timezone. Adjust if needed.
+//       const safeDateConvert = (timestamp) => {
+//         if (!timestamp) return null;
+//         const date = new Date(timestamp * 1000);
+//         return isNaN(date.getTime())
+//           ? null
+//           : date.toLocaleString('en-US', { timeZone: 'America/New_York' });
+//       };
+  
+//       // Use subscription item's period for billing dates.
+//       const currentPeriodStart = priceItem.current_period_start;
+//       const currentPeriodEnd = priceItem.current_period_end;
+  
+//       // Build a minimal invoice object with only the desired fields.
+//       const invoiceData = subscription.latest_invoice
+//         ? {
+//             id: subscription.latest_invoice.id,
+//             createdAt: safeDateConvert(subscription.latest_invoice.created)
+//           }
+//         : null;
+  
+//       // Extract proration adjustments that typically represent upgrade/downgrade changes.
+//       const subscriptionChanges =
+//         subscription.latest_invoice &&
+//         subscription.latest_invoice.lines &&
+//         Array.isArray(subscription.latest_invoice.lines.data)
+//           ? subscription.latest_invoice.lines.data
+//               .filter(line =>
+//                 line.parent &&
+//                 line.parent.subscription_item_details &&
+//                 line.parent.subscription_item_details.proration === true
+//               )
+//               .map(line => ({
+//                 id: line.id,
+//                 description: line.description,
+//                 // Convert cents to dollars
+//                 amount: line.amount / 100,
+//                 currency: line.currency,
+//                 period: {
+//                   start: safeDateConvert(line.period.start),
+//                   end: safeDateConvert(line.period.end)
+//                 }
+//               }))
+//           : [];
+  
+//       const response = {
+//         subscription: {
+//           id: subscription.id,
+//           status: subscription.status,
+//           plan: {
+//             id: price.id,
+//             name: product.name || price.nickname || 'Standard Plan',
+//             amount: price.unit_amount / 100,
+//             currency: price.currency,
+//             interval: price.recurring
+//               ? `${price.recurring.interval_count} ${price.recurring.interval}`
+//               : 'one-time'
+//           },
+//           billing: {
+//             nextBillingDate: safeDateConvert(currentPeriodEnd),
+//             currentPeriodStart: safeDateConvert(currentPeriodStart),
+//             currentPeriodEnd: safeDateConvert(currentPeriodEnd),
+//             billingAnchor: safeDateConvert(subscription.billing_cycle_anchor),
+//             startDate: safeDateConvert(subscription.start_date),
+//             cancelAtPeriodEnd: subscription.cancel_at_period_end
+//           },
+//           invoice: invoiceData,
+//           // Include details about any upgrade/downgrade changes in the subscription
+//           subscriptionChanges,
+//           createdAt: safeDateConvert(subscription.created),
+//           customer: {
+//             id: subscription.customer.id,
+//             email: subscription.customer.email,
+//             name: subscription.customer.name || ''
+//           }
+//         }
+//       };
+  
+//       res.json(response);
+//     } catch (error) {
+//       console.error('Error in get-subscription:', error);
+//       if (error.type === 'StripeInvalidRequestError') {
+//         return res.status(404).json({ error: 'Subscription not found' });
+//       }
+//       res.status(500).json({ error: 'Failed to retrieve subscription' });
+//     }
+//   });
 
-    if (!subscriptionId) {
-        return res.status(400).json({ error: 'subscriptionId is required' });
+router.get('/users/:userId/subscriptions', async (req, res) => {
+    const { userId } = req.params;
+  
+    // Basic validation
+    if (!userId) {
+      return res.status(400).json({ error: 'userId is required' });
     }
-
+  
     try {
-        // Retrieve the subscription with expanded data
-        const subscription = await stripe.subscriptions.retrieve(subscriptionId, {
-            expand: ['items.data.price.product', 'customer']
+      // Fetch subscription records from MongoDB using the provided userId
+      const userSubscriptions = await Subscription.find({ userId }).lean();
+    //  console.log('userSubscriptions', userSubscriptions);
+      if (!userSubscriptions || userSubscriptions.length === 0) {
+        return res.status(404).json({
+          status: "-1",
+          error: 'No subscriptions found',
+          userId
         });
+      }
+  
+      // Helper function to convert Unix timestamps to US formatted date strings.
+      // Timezone: America/New_York.
+      const safeDateConvert = (timestamp) => {
+        if (!timestamp) return null;
+        const date = new Date(timestamp * 1000);
+        return isNaN(date.getTime())
+          ? null
+          : date.toLocaleString('en-US', { timeZone: 'America/New_York' });
+      };
+  
+      // For each subscription record stored in Mongo, retrieve the up-to-date details from Stripe
+      const stripeSubscriptions = await Promise.all(userSubscriptions.map(async (record) => {
+        try {
+          const stripeSub = await stripe.subscriptions.retrieve(record.subscriptionId, {
+            expand: ['items.data.price.product', 'customer', 'latest_invoice']
+          });
+          //console.log('Subscription Items:', stripeSub);
+          //console.log('Subscription Items:', JSON.stringify(stripeSub.items.data, null, 2));
 
-        // console.log('[stripeRoutes.js] subscription', subscription);
-
-        if (!subscription) {
-            return res.status(404).json({ error: 'Subscription not found in Stripe' });
-        }
-
-        // Extract price and product data
-        const priceItem = subscription.items.data[0];
-        const price = priceItem.price;
-        const product = typeof price.product === 'string'
+          if (!stripeSub) return null;
+  
+          // Get price and product details
+          const priceItem = stripeSub.items.data[0];
+          const price = priceItem.price;
+          const product = typeof price.product === 'string'
             ? { id: price.product, name: 'Unknown Product' }
             : price.product;
-
-        // Helper function to safely convert Stripe timestamps
-        const safeDateConvert = (timestamp) => {
-            if (!timestamp) return null;
-            const date = new Date(timestamp * 1000);
-            return isNaN(date.getTime()) ? null : date.toISOString();
-        };
-
-        // Build the response object
-        const response = {
-            subscription: {
-                id: subscription.id,
-                status: subscription.status,
-                plan: {
-                    id: price.id,
-                    name: product.name || price.nickname || 'Standard Plan',
-                    description: product.description || '',
-                    amount: price.unit_amount ? price.unit_amount / 100 : 0,
-                    currency: price.currency,
-                    interval: price.recurring ?
-                        `${price.recurring.interval_count} ${price.recurring.interval}` : 'one-time'
-                },
-                billing: {
-                    nextBillingDate: safeDateConvert(subscription.current_period_end),
-                    currentPeriodStart: safeDateConvert(subscription.current_period_start),
-                    currentPeriodEnd: safeDateConvert(subscription.current_period_end),
-                    cancelAtPeriodEnd: subscription.cancel_at_period_end
-                },
-                customer: {
-                    id: subscription.customer.id,
-                    email: subscription.customer.email,
-                    name: subscription.customer.name || ''
-                },
-                createdAt: safeDateConvert(subscription.created)
+  
+          // Determine the current billing period dates from the subscription item
+          const currentPeriodStart = priceItem.current_period_start;
+          const currentPeriodEnd = priceItem.current_period_end;
+  
+          // Build a minimal invoice object (if available)
+          const invoiceData = stripeSub.latest_invoice
+            ? {
+                id: stripeSub.latest_invoice.id,
+                createdAt: safeDateConvert(stripeSub.latest_invoice.created)
+              }
+            : null;
+  
+          // Extract proration adjustments for potential upgrade/downgrade details.
+          const subscriptionChanges =
+            stripeSub.latest_invoice &&
+            stripeSub.latest_invoice.lines &&
+            Array.isArray(stripeSub.latest_invoice.lines.data)
+              ? stripeSub.latest_invoice.lines.data
+                  .filter(line =>
+                    line.parent &&
+                    line.parent.subscription_item_details &&
+                    line.parent.subscription_item_details.proration === true
+                  )
+                  .map(line => ({
+                    id: line.id,
+                    description: line.description,
+                    // Convert cents to dollars
+                    amount: line.amount / 100,
+                    currency: line.currency,
+                    period: {
+                      start: safeDateConvert(line.period.start),
+                      end: safeDateConvert(line.period.end)
+                    }
+                  }))
+              : [];
+  
+          // Build and return the formatted subscription details
+          return {
+            id: stripeSub.id,
+            status: stripeSub.status,
+            plan: {
+              id: price.id,
+              name: product.name || price.nickname || 'Standard Plan',
+              amount: price.unit_amount / 100,
+              currency: price.currency,
+              interval: price.recurring
+                ? `${price.recurring.interval_count} ${price.recurring.interval}`
+                : 'one-time'
+            },
+            billing: {
+              nextBillingDate: safeDateConvert(currentPeriodEnd),
+              currentPeriodStart: safeDateConvert(currentPeriodStart),
+              currentPeriodEnd: safeDateConvert(currentPeriodEnd),
+              billingAnchor: safeDateConvert(stripeSub.billing_cycle_anchor),
+              startDate: safeDateConvert(stripeSub.start_date),
+              cancelAtPeriodEnd: stripeSub.cancel_at_period_end
+            },
+            invoice: invoiceData,
+            subscriptionChanges,
+            createdAt: safeDateConvert(stripeSub.created),
+            customer: {
+              id: stripeSub.customer.id,
+              email: stripeSub.customer.email,
+              name: stripeSub.customer.name || ''
             }
-        };
-
-        res.json(response);
-    } catch (error) {
-        console.error('Error in get-subscription:', error);
-        if (error.type === 'StripeInvalidRequestError') {
-            return res.status(404).json({ error: 'Subscription not found' });
+          };
+        } catch (e) {
+          console.error(`Error retrieving subscription with ID ${record.subscriptionId}:`, e.message);
+          return null; // Skip any subscription that cannot be retrieved
         }
-        res.status(500).json({ error: 'Failed to retrieve subscription' });
+      }));
+  
+      // Filter out any subscriptions that failed retrieval
+      const validSubscriptions = stripeSubscriptions.filter(sub => sub !== null);
+  
+      res.json({
+        status: '1',
+        count: validSubscriptions.length,
+        subscriptions: validSubscriptions
+      });
+    } catch (error) {
+      console.error(`Failed to fetch subscriptions for user ${userId}:`, error);
+      res.status(500).json({
+        error: 'Failed to retrieve subscriptions',
+        userId,
+        details: process.env.NODE_ENV === 'development' ? error.message : undefined
+      });
     }
-});
+  });
+  
+
+  
+// router.post('/get-subscription', async (req, res) => {
+//     const { subscriptionId } = req.body;
+
+//     if (!subscriptionId) {
+//         return res.status(400).json({ error: 'subscriptionId is required' });
+//     }
+
+//     try {
+//         const subscription = await stripe.subscriptions.retrieve(subscriptionId, {
+//             expand: ['items.data.price.product', 'customer', 'latest_invoice']
+//         });
+//         console.log('Subscription:', subscription);
+//         console.log('Subscription Items:', JSON.stringify(subscription.items.data, null, 2));
+//         console.log('Subscription lines data:', JSON.stringify(subscription.lines?.data || [], null, 2));
+//         if (!subscription) {
+//             return res.status(404).json({ error: 'Subscription not found in Stripe' });
+//         }
+
+//         const priceItem = subscription.items.data[0];
+//         const price = priceItem.price;
+//         const product = typeof price.product === 'string'
+//             ? { id: price.product, name: 'Unknown Product' }
+//             : price.product;
+
+//         // Updated safeDateConvert function to convert Unix timestamps to a US formatted date string.
+//         const safeDateConvert = (timestamp) => {
+//             if (!timestamp) return null;
+//             const date = new Date(timestamp * 1000);
+//             return isNaN(date.getTime())
+//                 ? null
+//                 : date.toLocaleString('en-US', { timeZone: 'America/New_York' });
+//         };
+
+//         // Use the subscription item's current period for billing dates.
+//         const currentPeriodStart = priceItem.current_period_start;
+//         const currentPeriodEnd = priceItem.current_period_end;
+
+//         // Build a minimal invoice object with only the desired fields.
+//         const invoiceData = subscription.latest_invoice
+//             ? {
+//                 id: subscription.latest_invoice.id,
+//                 createdAt: safeDateConvert(subscription.latest_invoice.created)
+//             }
+//             : null;
+
+//         const response = {
+//             subscription: {
+//                 id: subscription.id,
+//                 status: subscription.status,
+//                 plan: {
+//                     id: price.id,
+//                     name: product.name || price.nickname || 'Standard Plan',
+//                     amount: price.unit_amount / 100,
+//                     currency: price.currency,
+//                     interval: price.recurring
+//                         ? `${price.recurring.interval_count} ${price.recurring.interval}`
+//                         : 'one-time'
+//                 },
+//                 billing: {
+//                     nextBillingDate: safeDateConvert(currentPeriodEnd),
+//                     currentPeriodStart: safeDateConvert(currentPeriodStart),
+//                     currentPeriodEnd: safeDateConvert(currentPeriodEnd),
+//                     billingAnchor: safeDateConvert(subscription.billing_cycle_anchor),
+//                     startDate: safeDateConvert(subscription.start_date),
+//                     cancelAtPeriodEnd: subscription.cancel_at_period_end
+//                 },
+//                 invoice: invoiceData,
+//                 createdAt: safeDateConvert(subscription.created),
+//                 customer: {
+//                     id: subscription.customer.id,
+//                     email: subscription.customer.email,
+//                     name: subscription.customer.name || ''
+//                 }
+//             }
+//         };
+
+//         res.json(response);
+//     } catch (error) {
+//         console.error('Error in get-subscription:', error);
+//         if (error.type === 'StripeInvalidRequestError') {
+//             return res.status(404).json({ error: 'Subscription not found' });
+//         }
+//         res.status(500).json({ error: 'Failed to retrieve subscription' });
+//     }
+// });
 
 
 
@@ -737,81 +1001,50 @@ router.post('/create-billing-portal-session', async (req, res) => {
 });
 
 // Get user's subscription by userId
-router.get('/users/:userId/subscriptions', async (req, res) => {
-    const { userId } = req.params;
+// router.get('/users/:userId/subscriptions', async (req, res) => {
+//     const { userId } = req.params;
 
-    // Basic validation (adjust according to your ID format)
-    if (!userId) {
-        return res.status(400).json({
-            error: 'userId is required'
-        });
-    }
-
-    try {
-        const subscriptions = await Subscription.find({ userId }).lean();
-
-        if (!subscriptions.length) {
-            return res.status(404).json({
-                status: "-1",
-                error: 'No subscriptions found',
-                userId
-            });
-        }
-
-        res.json({
-            status: '1',
-            count: subscriptions.length,
-            subscriptions
-        });
-    } catch (error) {
-        console.error(`Failed to fetch subscriptions for user ${userId}:`, error);
-
-        res.status(500).json({
-            error: 'Failed to retrieve subscriptions',
-            userId,
-            details: process.env.NODE_ENV === 'development' ? error.message : undefined
-        });
-    }
-});
-
-// Helper function (define elsewhere in your utilities)
-function isValidId(id) {
-    return /^[a-f\d]{24}$/i.test(id); // Basic MongoDB ID format check
-}
-
-
-// router.post('/update-subscription', async (req, res) => {
-//     const { subscriptionId, newPriceId } = req.body;
+//     // Basic validation (adjust according to your ID format)
+//     if (!userId) {
+//         return res.status(400).json({
+//             error: 'userId is required'
+//         });
+//     }
 
 //     try {
-//         // 1. Fetch current subscription from Stripe
-//         const subscription = await stripe.subscriptions.retrieve(subscriptionId);
+//         const subscriptions = await Subscription.find({ userId }).lean();
 
-//         const subscriptionItemId = subscription.items.data[0]?.id;
-//         if (!subscriptionItemId) {
-//             return res.status(400).json({ error: 'Subscription item ID not found' });
+//         if (!subscriptions.length) {
+//             return res.status(404).json({
+//                 status: "-1",
+//                 error: 'No subscriptions found',
+//                 userId
+//             });
 //         }
 
-//         // 3. Update the subscription with new price
-//         const updatedSubscription = await stripe.subscriptions.update(subscriptionId, {
-//             items: [
-//                 {
-//                     id: subscriptionItemId,
-//                     price: newPriceId
-//                 }
-//             ],
-//             proration_behavior: 'create_prorations'
-//         });
-
 //         res.json({
-//             message: 'Subscription updated successfully',
-//             subscription: updatedSubscription
+//             status: '1',
+//             count: subscriptions.length,
+//             subscriptions
 //         });
 //     } catch (error) {
-//         console.error('Upgrade/Downgrade error:', error.message);
-//         res.status(500).json({ error: error.message });
+//         console.error(`Failed to fetch subscriptions for user ${userId}:`, error);
+
+//         res.status(500).json({
+//             error: 'Failed to retrieve subscriptions',
+//             userId,
+//             details: process.env.NODE_ENV === 'development' ? error.message : undefined
+//         });
 //     }
 // });
+
+
+// function isValidId(id) {
+//     return /^[a-f\d]{24}$/i.test(id); // Basic MongoDB ID format check
+// }
+
+
+
 // Get Invoice Details
 
 router.post('/get-invoice', async (req, res) => {
@@ -900,7 +1133,7 @@ router.post('/check-refund-status', async (req, res) => {
         // First check our database
         await connectToMongoDB();
         const dbSubscription = await Subscription.findOne({ subscriptionId });
-        
+
         if (dbSubscription && dbSubscription.refundAmount > 0) {
             return res.json({
                 hasRefund: true,
