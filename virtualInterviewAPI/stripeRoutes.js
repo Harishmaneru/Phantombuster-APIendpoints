@@ -44,6 +44,8 @@ const subscriptionSchema = new mongoose.Schema({
     planName: { type: String },
     currentPeriodStart: { type: Date, required: true },
     currentPeriodEnd: { type: Date, required: true },
+    refundAmount: { type: Number, default: 0 },
+    refundDate: { type: Date, default: null },
     createdAt: { type: Date, default: Date.now }
 }, { collection: 'user_subscriptions' });
 
@@ -76,28 +78,30 @@ router.post('/webhook', express.raw({ type: 'application/json' }), async (req, r
                 await connectToMongoDB();
 
                 const stripeSubscription = await stripe.subscriptions.retrieve(subscriptionId);
+                console.log('[checkout.session.completed] Stripe subscription:', stripeSubscription);
                 console.log('[checkout.session.completed] Raw Stripe period dates:', {
                     current_period_start: stripeSubscription.current_period_start,
                     current_period_end: stripeSubscription.current_period_end,
                     converted_start: stripeSubscription.current_period_start ? new Date(stripeSubscription.current_period_start * 1000) : null,
                     converted_end: stripeSubscription.current_period_end ? new Date(stripeSubscription.current_period_end * 1000) : null,
                     subscriptionId: stripeSubscription.id,
+                    customerId: customer,
                     eventId: event.id
                 });
-
 
                 const price = stripeSubscription.items.data[0]?.price;
                 const product = await stripe.products.retrieve(price.product);
 
                 const planName = product.name || price.nickname || 'Unknown Plan';
 
-                const currentPeriodStart = stripeSubscription.current_period_start ? new Date(stripeSubscription.current_period_start * 1000) : null;
-                const currentPeriodEnd = stripeSubscription.current_period_end ? new Date(stripeSubscription.current_period_end * 1000) : null;
+                // Improved date handling with fallbacks
+                const currentPeriodStart = stripeSubscription.current_period_start
+                    ? new Date(stripeSubscription.current_period_start * 1000)
+                    : new Date();
 
-                if (!currentPeriodStart || !currentPeriodEnd || isNaN(currentPeriodStart) || isNaN(currentPeriodEnd)) {
-                    console.error('[stripeRoutes.js] Invalid date from Stripe during subscription creation');
-                    return res.status(400).json({ error: 'Invalid subscription period dates' });
-                }
+                const currentPeriodEnd = stripeSubscription.current_period_end
+                    ? new Date(stripeSubscription.current_period_end * 1000)
+                    : new Date(Date.now() + 30 * 24 * 60 * 60 * 1000); // 30 days from now
 
                 try {
                     await Subscription.create({
@@ -117,6 +121,7 @@ router.post('/webhook', express.raw({ type: 'application/json' }), async (req, r
                     console.log(`[stripeRoutes.js] Subscription stored for user ${userId}`);
                 } catch (dbError) {
                     console.error('[stripeRoutes.js] Database save error:', dbError);
+                    // Continue processing - don't return here
                 }
                 break;
             }
@@ -204,14 +209,14 @@ router.post('/webhook', express.raw({ type: 'application/json' }), async (req, r
 
                         if (price) {
                             // Check if price ID changed (indicating plan change)
-                            const planChanged = previousAttributes.items ||
+                            const planChanged = previousAttributes.items || 
                                 (previousAttributes.plan && previousAttributes.plan.id !== price.id);
 
                             // Always update amount and currency
                             if (price.unit_amount) {
                                 updateData.amount = price.unit_amount / 100;
                             }
-
+                            
                             if (price.currency) {
                                 updateData.currency = price.currency;
                             }
@@ -221,7 +226,7 @@ router.post('/webhook', express.raw({ type: 'application/json' }), async (req, r
                                 try {
                                     const product = await stripe.products.retrieve(price.product);
                                     updateData.planName = product.name || price.nickname || 'Updated Plan';
-
+                                    
                                     if (planChanged) {
                                         console.log(`[stripeRoutes.js] Plan changed for subscription ${subscription.id} to ${updateData.planName}`);
                                     }
@@ -237,9 +242,10 @@ router.post('/webhook', express.raw({ type: 'application/json' }), async (req, r
                     if (subscription.latest_invoice) {
                         try {
                             const invoice = await stripe.invoices.retrieve(subscription.latest_invoice);
-                            updateData.paymentStatus = invoice.paid ? 'paid' : 'unpaid';
+                            updateData.paymentStatus = invoice.paid ? 'paid' : (invoice.status || 'unpaid');
                         } catch (invoiceError) {
                             console.warn(`[stripeRoutes.js] Could not fetch invoice: ${invoiceError.message}`);
+                            updateData.paymentStatus = 'unknown';
                         }
                     }
 
@@ -255,33 +261,37 @@ router.post('/webhook', express.raw({ type: 'application/json' }), async (req, r
                         console.log(`[stripeRoutes.js] Subscription ${subscription.id} found but no changes were needed`);
                     } else {
                         console.warn(`[stripeRoutes.js] No subscription found with ID ${subscription.id} to update`);
-
-                        // If subscription doesn't exist in our DB, fetch full details and create it
-                        const fullSubscription = await stripe.subscriptions.retrieve(subscription.id, {
-                            expand: ['customer', 'items.data.price.product']
-                        });
-
-                        if (fullSubscription) {
-                            const price = fullSubscription.items.data[0]?.price;
-                            const product = price?.product;
-
-                            await Subscription.create({
-                                userId: fullSubscription.metadata?.userId || 'unknown',
-                                customerId: fullSubscription.customer.id,
-                                subscriptionId: fullSubscription.id,
-                                status: fullSubscription.status,
-                                amount: price?.unit_amount ? price.unit_amount / 100 : 0,
-                                currency: price?.currency || 'usd',
-                                paymentStatus: fullSubscription.latest_invoice?.paid ? 'paid' : 'unpaid',
-                                planName: product?.name || price?.nickname || 'Standard Plan',
-                                currentPeriodStart: new Date(fullSubscription.current_period_start * 1000),
-                                currentPeriodEnd: new Date(fullSubscription.current_period_end * 1000)
-                            });
-                            console.log(`[stripeRoutes.js] Created missing subscription ${subscription.id}`);
-                        }
                     }
                 } catch (dbError) {
                     console.error('[stripeRoutes.js] Database update error:', dbError);
+                }
+                break;
+            }
+
+            case 'charge.refunded': {
+                const charge = event.data.object;
+                const refund = charge.refunds?.data?.[0];
+
+                if (refund && charge.invoice) {
+                    await connectToMongoDB();
+
+                    // Retrieve the related invoice to get subscriptionId
+                    const invoice = await stripe.invoices.retrieve(charge.invoice);
+                    const subscriptionId = invoice.subscription;
+
+                    if (subscriptionId) {
+                        await Subscription.updateOne(
+                            { subscriptionId },
+                            {
+                                $set: {
+                                    paymentStatus: 'refunded',
+                                    refundAmount: refund.amount / 100,
+                                    refundDate: new Date(refund.created * 1000)
+                                }
+                            }
+                        );
+                        console.log(`[stripeRoutes.js] Refund recorded for subscription ${subscriptionId}`);
+                    }
                 }
                 break;
             }
