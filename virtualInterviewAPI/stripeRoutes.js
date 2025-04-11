@@ -57,15 +57,20 @@ router.post('/webhook', express.raw({ type: 'application/json' }), async (req, r
     const sig = req.headers['stripe-signature'];
     const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET;
 
+    // Log raw webhook data for debugging
+    console.log('[stripeRoutes.js] Raw webhook data:', req.body);
+    console.log('[stripeRoutes.js] Stripe signature:', sig);
+
     let event;
     try {
         event = stripe.webhooks.constructEvent(req.body, sig, webhookSecret);
         console.log('[stripeRoutes.js] Webhook verified:', event.id, event.type);
+        console.log('[stripeRoutes.js] Webhook event data:', JSON.stringify(event.data.object, null, 2));
     } catch (err) {
         console.error('[stripeRoutes.js] Webhook signature verification failed:', err.message);
         return res.status(400).send(`Webhook Error: ${err.message}`);
     }
-
+    
     try {
         // Handle different event types
         switch (event.type) {
