@@ -672,25 +672,45 @@ router.post(
 );
 
 
+// router.post('/create-checkout-session', async (req, res) => {
+//     try {
+//         const { userId, priceId } = req.body;
+//         const isProduction = process.env.NODE_ENV === 'production';
+
+//         const successUrl = isProduction
+//             ? 'https://record.onepgr.com/success?session_id={CHECKOUT_SESSION_ID}'
+//             : 'http://localhost:3000/success?session_id={CHECKOUT_SESSION_ID}';
+
+//         const cancelUrl = isProduction
+//             ? 'https://record.onepgr.com/pricing'
+//             : 'http://localhost:3000/pricing';
+
+//         const session = await stripe.checkout.sessions.create({
+//             mode: 'subscription',
+//             payment_method_types: ['card'],
+//             line_items: [{ price: priceId, quantity: 1 }],
+//             success_url: successUrl,
+//             cancel_url: cancelUrl,
+//             metadata: { userId }
+//         });
+
+//         res.json({ url: session.url });
+//     } catch (error) {
+//         console.error("Error creating checkout session:", error);
+//         res.status(500).json({ error: 'Failed to create checkout session' });
+//     }
+// });
+
 router.post('/create-checkout-session', async (req, res) => {
     try {
         const { userId, priceId } = req.body;
-        const isProduction = process.env.NODE_ENV === 'production';
-
-        const successUrl = isProduction
-            ? 'https://record.onepgr.com/success?session_id={CHECKOUT_SESSION_ID}'
-            : 'http://localhost:3000/success?session_id={CHECKOUT_SESSION_ID}';
-
-        const cancelUrl = isProduction
-            ? 'https://record.onepgr.com/pricing'
-            : 'http://localhost:3000/pricing';
 
         const session = await stripe.checkout.sessions.create({
             mode: 'subscription',
             payment_method_types: ['card'],
             line_items: [{ price: priceId, quantity: 1 }],
-            success_url: successUrl,
-            cancel_url: cancelUrl,
+            success_url: 'https://record.onepgr.com/success?session_id={CHECKOUT_SESSION_ID}',
+            cancel_url: 'https://record.onepgr.com/pricing',
             metadata: { userId }
         });
 
