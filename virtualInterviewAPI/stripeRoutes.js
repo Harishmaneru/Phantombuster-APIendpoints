@@ -447,8 +447,8 @@ router.post('/create-checkout-session', async (req, res) => {
         mode: 'subscription',
         payment_method_types: ['card'],
         line_items: [{ price: priceId, quantity: 1 }],
-        success_url: 'https://www.recordedinterview.com/success?session_id={CHECKOUT_SESSION_ID}',
-        cancel_url: 'https://www.recordedinterview.com/cancel',
+        success_url: 'https://record.onepgr.com/pricing?session_id={CHECKOUT_SESSION_ID}',
+        cancel_url: 'https://record.onepgr.com/pricing',
         metadata: { userId }
     });
 
