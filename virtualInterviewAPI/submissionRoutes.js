@@ -385,7 +385,6 @@ async function evaluateSubmissionVideos(submission) {
 }
 
 router.post('/submit', ensureDbConnection, handleUpload, async (req, res) => {
-  const session = await mongoose.startSession();
   let savedId = null;
   let savedSubmission = null;
 
@@ -438,14 +437,11 @@ router.post('/submit', ensureDbConnection, handleUpload, async (req, res) => {
       });
     }
 
-    // Start transaction
-    session.startTransaction();
-
     // Increment application count in Interview model
     const interview = await mongoose.model('Interview').findOneAndUpdate(
       { applicationLink },
       { $inc: { applicationCount: 1 } },
-      { new: true, session }
+      { new: true }
     );
 
     if (!interview) {
@@ -506,10 +502,10 @@ router.post('/submit', ensureDbConnection, handleUpload, async (req, res) => {
       resume
     });
 
-    savedSubmission = await submission.save({ session });
+    savedSubmission = await submission.save();
     savedId = savedSubmission._id;
 
-    const verifySubmission = await Submission.findById(savedId).session(session);
+    const verifySubmission = await Submission.findById(savedId);
 
     if (!verifySubmission) {
       throw new Error('Submission verification failed');
@@ -521,9 +517,6 @@ router.post('/submit', ensureDbConnection, handleUpload, async (req, res) => {
       hasResume: !!resume,
       videoCount: videoResponses.length
     });
-
-    await session.commitTransaction();
-    logSubmissionActivity('Transaction Committed', { submissionId: savedId });
 
     // Check if the applicant requested an email summary.
     const sendSummary = req.body.receiveEmailSummary === 'true';
@@ -574,9 +567,6 @@ router.post('/submit', ensureDbConnection, handleUpload, async (req, res) => {
       phase: savedId ? 'post-save' : 'pre-save'
     });
 
-    await session.abortTransaction();
-    logSubmissionActivity('Transaction Aborted', { error: err.message });
-
     if (!res.headersSent) {
       res.status(500).json({
         success: false,
@@ -584,12 +574,6 @@ router.post('/submit', ensureDbConnection, handleUpload, async (req, res) => {
         error: err.message
       });
     }
-  } finally {
-    session.endSession();
-    logSubmissionActivity('Session Ended', {
-      submissionId: savedId,
-      success: !!savedId
-    });
   }
 });
 
