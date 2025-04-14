@@ -36,9 +36,6 @@ const upload = multer({
       cb(null, `${folder}/${Date.now()}-${file.originalname}`);
     }
   }),
-  limits: {
-    fileSize: 50 * 1024 * 1024 // 50MB limit for all files
-  },
   fileFilter: function (req, file, cb) {
     // Accept video files and document files
     const allowedMimeTypes = [
