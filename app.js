@@ -193,9 +193,9 @@ const options = {
   key: fs.readFileSync('./onepgr.com.key', 'utf8'),
   cert: fs.readFileSync('./STAR_onepgr_com.crt', 'utf8'),
   ca: fs.readFileSync('./STAR_onepgr_com.ca-bundle', 'utf8'),
-  timeout: 30 * 60 * 1000, // 30 minutes
-  keepAliveTimeout: 30 * 60 * 1000, // 30 minutes
-  headersTimeout: 30 * 60 * 1000, // 30 minutes
+  requestTimeout: 30 * 60 * 1000, // 30 minutes
+  headersTimeout: 15 * 60 * 1000, // 15 minutes
+  keepAliveTimeout: 10 * 60 * 1000, // 5 minutes
 };
 
 const server = https.createServer(options, app);
