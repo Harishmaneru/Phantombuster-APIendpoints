@@ -122,7 +122,8 @@ app.use(
       "https://app.recordedinterview.com",
       "https://www.getprospectsignals.com",
       "https://getprospectsignals.com",
-      "https://record.onepgr.com/"
+      "https://record.onepgr.com/",
+      "https://record.onepgr.com"
     ],
     methods: ["GET", "PUT", "POST", "DELETE", "OPTIONS"],
     allowedHeaders: ["Content-Type", "Authorization", "X-Requested-With", "stripe-signature"],
