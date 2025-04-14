@@ -37,7 +37,7 @@ const upload = multer({
     }
   }),
   limits: {
-    fileSize: 500 * 1024 * 1024 // 500MB limit for videos
+    fileSize: 50 * 1024 * 1024 // 50MB limit for all files
   },
   fileFilter: function (req, file, cb) {
     // Accept video files and document files
@@ -51,20 +51,6 @@ const upload = multer({
     ];
 
     if (allowedMimeTypes.includes(file.mimetype)) {
-      // Apply different size limits based on file type
-      if (file.mimetype.startsWith('video/')) {
-        // 500MB limit for videos
-        if (file.size > 500 * 1024 * 1024) {
-          cb(new Error('Video file size exceeds 500MB limit'));
-          return;
-        }
-      } else {
-        // 5MB limit for resumes
-        if (file.size > 5 * 1024 * 1024) {
-          cb(new Error('Resume file size exceeds 5MB limit'));
-          return;
-        }
-      }
       cb(null, true);
     } else {
       cb(new Error('Invalid file type. Only video and document files are allowed.'));
@@ -475,6 +461,16 @@ router.post('/submit', ensureDbConnection, handleUpload, async (req, res) => {
       } else if (file.mimetype === 'application/pdf' ||
         file.mimetype === 'application/msword' ||
         file.mimetype === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document') {
+        
+        // ✅ Resume file size validation (50MB max)
+        const resumeSizeMB = file.size / (1024 * 1024);
+        if (resumeSizeMB > 50) {
+          return res.status(400).json({
+            success: false,
+            message: 'Resume file size exceeds 50MB limit'
+          });
+        }
+
         logSubmissionActivity('Processing Resume File', {
           fileName: file.originalname,
           mimeType: file.mimetype,

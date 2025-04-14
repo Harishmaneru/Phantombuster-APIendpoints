@@ -193,9 +193,15 @@ const options = {
   key: fs.readFileSync('./onepgr.com.key', 'utf8'),
   cert: fs.readFileSync('./STAR_onepgr_com.crt', 'utf8'),
   ca: fs.readFileSync('./STAR_onepgr_com.ca-bundle', 'utf8'),
+  timeout: 30 * 60 * 1000, // 30 minutes
+  keepAliveTimeout: 30 * 60 * 1000, // 30 minutes
+  headersTimeout: 30 * 60 * 1000, // 30 minutes
 };
 
 const server = https.createServer(options, app);
+
+// Set server timeout
+server.setTimeout(30 * 60 * 1000); // 30 minutes
 
 server.listen(port, () => {
   console.log(`Server running on port:${port}`);
