@@ -13,6 +13,16 @@ const axios = require('axios');
 const { OpenAI } = require('openai');
 const crypto = require('crypto');
 
+// Create a dedicated logger for FFmpeg operations
+const ffmpegLogger = {
+  error: (message, data = {}) => {
+    console.error(`[FFMPEG ERROR] ${message}`, JSON.stringify(data, null, 2));
+  },
+  info: (message, data = {}) => {
+    console.log(`[FFMPEG INFO] ${message}`, JSON.stringify(data, null, 2));
+  }
+};
+
 const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY,
 });
@@ -372,18 +382,18 @@ router.post('/submit', ensureDbConnection, handleUpload, async (req, res) => {
   let savedSubmission = null;
 
   try {
-    // Log initial request details
-    logSubmissionActivity('Submission Request Received', {
-      userId: req.body.userId,
-      applicationLink: req.body.applicationLink,
-      applicantName: req.body.applicantName,
-      email: req.body.email,
-      timestamp: new Date().toISOString(),
-      filesCount: req?.files?.length || 0
-    });
+    // logSubmissionActivity('Request Received', {
+    //   userId: req.body.userId,
+    //   applicationLink: req.body.applicationLink,
+    //   hiringManagerEmail: req.body.hiringManagerEmail,
+    //   applicantName: req.body.applicantName,
+    //   email: req.body.email,
+    //   linkedInUrl: req.body.linkedInUrl,
+    //   filesCount: req?.files?.length || 0
+    // });
 
-    const dbState = verifyDbConnection();
-    logSubmissionActivity('Database Connection Check', { state: dbState });
+    // const dbState = verifyDbConnection();
+    // logSubmissionActivity('DB State Check', { state: dbState });
 
     if (dbState !== 'connected') {
       throw new Error(`Database not properly connected. Current state: ${dbState}`);
@@ -399,19 +409,6 @@ router.post('/submit', ensureDbConnection, handleUpload, async (req, res) => {
       textResponse,
       textQuestion
     } = req.body;
-
-    // Log validation check
-    logSubmissionActivity('Submission Validation', {
-      hasUserId: !!userId,
-      hasApplicationLink: !!applicationLink,
-      hasHiringManagerEmail: !!hiringManagerEmail,
-      hasApplicantName: !!applicantName,
-      hasEmail: !!email,
-      hasLinkedInUrl: !!linkedInUrl,
-      hasTextResponse: !!textResponse,
-      hasTextQuestion: !!textQuestion,
-      hasFiles: !!(req.files && req.files.length > 0)
-    });
 
     if (!userId || !applicationLink || !hiringManagerEmail || !applicantName || !email || !linkedInUrl || !textResponse || !textQuestion || !req.files || req.files.length === 0) {
       logSubmissionActivity('Validation Error', {
@@ -433,9 +430,6 @@ router.post('/submit', ensureDbConnection, handleUpload, async (req, res) => {
       });
     }
 
-    // Log interview update attempt
-    logSubmissionActivity('Updating Interview Count', { applicationLink });
-
     // Increment application count in Interview model
     const interview = await mongoose.model('Interview').findOneAndUpdate(
       { applicationLink },
@@ -444,22 +438,12 @@ router.post('/submit', ensureDbConnection, handleUpload, async (req, res) => {
     );
 
     if (!interview) {
-      logSubmissionActivity('Interview Not Found', { applicationLink });
       throw new Error('Interview not found');
     }
-
-    // Log interview update success
-    logSubmissionActivity('Interview Count Updated', {
-      applicationLink,
-      newCount: interview.applicationCount
-    });
 
     // Process files: separate videos and resume
     const videoResponses = [];
     let resume = null;
-
-    // Log file processing start
-    logSubmissionActivity('Processing Files', { totalFiles: req.files.length });
 
     for (const file of req.files) {
       if (file.mimetype.startsWith('video/')) {
@@ -485,7 +469,15 @@ router.post('/submit', ensureDbConnection, handleUpload, async (req, res) => {
         file.mimetype === 'application/msword' ||
         file.mimetype === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document') {
         
-        // Log resume processing
+        // ✅ Resume file size validation (50MB max)
+        const resumeSizeMB = file.size / (1024 * 1024);
+        if (resumeSizeMB > 50) {
+          return res.status(400).json({
+            success: false,
+            message: 'Resume file size exceeds 50MB limit'
+          });
+        }
+
         logSubmissionActivity('Processing Resume File', {
           fileName: file.originalname,
           mimeType: file.mimetype,
@@ -499,14 +491,6 @@ router.post('/submit', ensureDbConnection, handleUpload, async (req, res) => {
         };
       }
     }
-
-    // Log submission creation
-    logSubmissionActivity('Creating Submission', {
-      userId,
-      applicationLink,
-      videoCount: videoResponses.length,
-      hasResume: !!resume
-    });
 
     const submission = new Submission({
       userId,
@@ -524,22 +508,21 @@ router.post('/submit', ensureDbConnection, handleUpload, async (req, res) => {
     savedSubmission = await submission.save();
     savedId = savedSubmission._id;
 
-    // Log successful save
-    logSubmissionActivity('Submission Saved Successfully', {
-      submissionId: savedId,
-      timestamp: new Date().toISOString()
-    });
-
     const verifySubmission = await Submission.findById(savedId);
 
     if (!verifySubmission) {
-      logSubmissionActivity('Submission Verification Failed', { submissionId: savedId });
       throw new Error('Submission verification failed');
     }
 
-    // Check if the applicant requested an email summary
+    logSubmissionActivity('Submission Saved', {
+      submissionId: savedId,
+      verified: !!verifySubmission,
+      hasResume: !!resume,
+      videoCount: videoResponses.length
+    });
+
+    // Check if the applicant requested an email summary.
     const sendSummary = req.body.receiveEmailSummary === 'true';
-    logSubmissionActivity('Email Summary Preference', { sendSummary });
 
     // Send emails
     const emailResult = await sendSubmissionEmails(savedSubmission, sendSummary);
@@ -554,35 +537,17 @@ router.post('/submit', ensureDbConnection, handleUpload, async (req, res) => {
 
     try {
       if (savedSubmission.videoResponses && savedSubmission.videoResponses.length > 0) {
-        logSubmissionActivity('Starting Video Evaluation', {
-          submissionId: savedId,
-          videoCount: savedSubmission.videoResponses.length
-        });
-
         const evaluations = await evaluateSubmissionVideos(savedSubmission);
         savedSubmission.score = evaluations;
         await savedSubmission.save();
-        
-        logSubmissionActivity('Video Evaluation Completed', {
-          submissionId: savedId,
-          score: evaluations
-        });
+        logSubmissionActivity('Evaluation Completed', { submissionId: savedId, score: evaluations });
       }
     } catch (evalError) {
-      logSubmissionActivity('Video Evaluation Error', {
-        submissionId: savedId,
-        error: evalError.message
-      });
+      logSubmissionActivity('Evaluation Error', { error: evalError.message });
+      // Optionally, update the submission score field with an error message
       savedSubmission.score = { error: evalError.message };
       await savedSubmission.save();
     }
-
-    // Log final success response
-    logSubmissionActivity('Submission Process Complete', {
-      submissionId: savedId,
-      status: 'success',
-      timestamp: new Date().toISOString()
-    });
 
     res.status(201).json({
       success: true,
@@ -599,12 +564,10 @@ router.post('/submit', ensureDbConnection, handleUpload, async (req, res) => {
     });
 
   } catch (err) {
-    // Log error details
-    logSubmissionActivity('Submission Error', {
+    logSubmissionActivity('Error', {
       error: err.message,
       stack: err.stack,
-      phase: savedId ? 'post-save' : 'pre-save',
-      timestamp: new Date().toISOString()
+      phase: savedId ? 'post-save' : 'pre-save'
     });
 
     if (!res.headersSent) {
@@ -754,8 +717,19 @@ router.get('/submissions', ensureDbConnection, async (req, res) => {
 // NEW Transcription Logic for Audio/Video Files
 // -------------------------------------
 
-// Convert video to audio (.mp3) using ffmpeg
+// Ensure logs directory exists
+const ensureLogsDirectory = () => {
+  const logsDir = path.join(__dirname, 'logs');
+  if (!fs.existsSync(logsDir)) {
+    fs.mkdirSync(logsDir, { recursive: true });
+    ffmpegLogger.info('Created logs directory', { path: logsDir });
+  }
+};
 
+// Create logs directory when module is loaded
+ensureLogsDirectory();
+
+// Convert video to audio (.mp3) using ffmpeg
 function convertVideoToAudio(videoPath, outputAudioPath) {
   return new Promise((resolve, reject) => {
     const outputPathWithExtension = outputAudioPath.endsWith('.mp3')
@@ -763,24 +737,30 @@ function convertVideoToAudio(videoPath, outputAudioPath) {
       : `${outputAudioPath}.mp3`;
 
     const ffmpegArgs = ['-y', '-i', videoPath, '-vn', '-q:a', '0', '-map', 'a', outputPathWithExtension];
-    // console.log('Running FFmpeg command:', `ffmpeg ${ffmpegArgs.join(' ')}`);
+    ffmpegLogger.info('Running FFmpeg command', { command: `ffmpeg ${ffmpegArgs.join(' ')}` });
 
     const ffmpeg = spawn('ffmpeg', ffmpegArgs);
 
     ffmpeg.stderr.on('data', (data) => {
-      console.error(`FFmpeg error output: ${data.toString()}`);
+      const message = data.toString().trim();
+      if (message) {
+        ffmpegLogger.error('FFmpeg error output', { message });
+      }
     });
 
     ffmpeg.on('close', (code) => {
       if (fs.existsSync(outputPathWithExtension) && fs.statSync(outputPathWithExtension).size > 0) {
-        console.log('Audio extraction successful:', outputPathWithExtension);
+        ffmpegLogger.info('Audio extraction successful', { outputPath: outputPathWithExtension });
         resolve(outputPathWithExtension);
       } else {
-        reject(new Error(`FFmpeg failed with exit code ${code}`));
+        const error = new Error(`FFmpeg failed with exit code ${code}`);
+        ffmpegLogger.error('FFmpeg process failed', { error: error.message, code });
+        reject(error);
       }
     });
 
     ffmpeg.on('error', (err) => {
+      ffmpegLogger.error('FFmpeg encountered an error', { error: err.message });
       reject(new Error(`FFmpeg encountered an error: ${err.message}`));
     });
   });
@@ -798,19 +778,24 @@ function getAudioDuration(inputPath) {
         const minutes = parseInt(match[2], 10);
         const seconds = parseFloat(match[3]);
         const totalSeconds = hours * 3600 + minutes * 60 + seconds;
+        ffmpegLogger.info('Audio duration calculated', { 
+          inputPath, 
+          duration: { hours, minutes, seconds, totalSeconds }
+        });
         resolve(totalSeconds);
       }
     });
     ffmpegProcess.on('close', (code) => {
       if (code !== 0) {
-        reject(new Error(`FFmpeg process exited with code ${code}`));
+        const error = new Error(`FFmpeg process exited with code ${code}`);
+        ffmpegLogger.error('Failed to get audio duration', { error: error.message, code });
+        reject(error);
       }
     });
   });
 }
 
 // Split audio file into chunks based on a max size (in MB)
-
 function splitAudioFile(inputPath, outputDir, maxChunkSizeMB = 20) {
   return new Promise(async (resolve, reject) => {
     try {
@@ -819,6 +804,15 @@ function splitAudioFile(inputPath, outputDir, maxChunkSizeMB = 20) {
       const bitrate = (fileSizeMB * 8) / duration;
       const chunkDuration = (maxChunkSizeMB * 8) / bitrate;
       const outputPattern = path.join(outputDir, 'chunk_%03d.mp3');
+
+      ffmpegLogger.info('Splitting audio file', {
+        inputPath,
+        duration,
+        fileSizeMB,
+        bitrate,
+        chunkDuration,
+        outputPattern
+      });
 
       const ffmpegProcess = spawn('ffmpeg', [
         '-i', inputPath,
@@ -829,28 +823,41 @@ function splitAudioFile(inputPath, outputDir, maxChunkSizeMB = 20) {
       ]);
 
       ffmpegProcess.stderr.on('data', (data) => {
-        // Optionally log data for debugging
-        // console.log(`FFmpeg split output: ${data.toString()}`);
+        const message = data.toString().trim();
+        if (message) {
+          ffmpegLogger.info('FFmpeg split progress', { message });
+        }
       });
 
       ffmpegProcess.on('close', (code) => {
-        // Check if output files exist regardless of exit code
         fs.readdir(outputDir, (err, files) => {
           if (err) {
+            ffmpegLogger.error('Error reading output directory', { error: err.message });
             return reject(err);
           }
           const chunkPaths = files
             .filter(file => file.startsWith('chunk_'))
             .map(file => path.join(outputDir, file));
           if (chunkPaths.length > 0) {
-            // Even if ffmpeg returned a non-zero code, we consider it a success if chunks exist.
+            ffmpegLogger.info('Audio split successful', { 
+              chunksCreated: chunkPaths.length,
+              outputDir
+            });
             resolve(chunkPaths);
           } else {
-            reject(new Error(`FFmpeg process exited with code ${code} and no chunks were created.`));
+            const error = new Error(`FFmpeg process exited with code ${code} and no chunks were created.`);
+            ffmpegLogger.error('Audio split failed', { error: error.message, code });
+            reject(error);
           }
         });
       });
+
+      ffmpegProcess.on('error', (err) => {
+        ffmpegLogger.error('FFmpeg process error', { error: err.message });
+        reject(err);
+      });
     } catch (error) {
+      ffmpegLogger.error('Error in splitAudioFile', { error: error.message });
       reject(error);
     }
   });
@@ -874,23 +881,31 @@ function getFileStream(filePath) {
 // Transcribe an audio chunk using OpenAI's Whisper API
 async function transcribeAudioToText(audioPath) {
   try {
-    // console.log("Sending file to OpenAI Whisper for transcription:", audioPath);
+    ffmpegLogger.info('Starting audio transcription', { audioPath });
     const fileStream = await getFileStream(audioPath);
     const response = await openai.audio.transcriptions.create({
       file: fileStream,
       model: "whisper-1"
     });
-    //console.log("Transcription API response:", response);
 
-    // Adjust response extraction: use response.text if available
     const transcriptionText = response.text || (response.data && response.data.text);
 
     if (!transcriptionText) {
-      throw new Error("Unexpected transcription API response");
+      const error = new Error("Unexpected transcription API response");
+      ffmpegLogger.error('Transcription failed', { error: error.message });
+      throw error;
     }
+
+    ffmpegLogger.info('Transcription completed successfully', { 
+      audioPath,
+      textLength: transcriptionText.length
+    });
     return transcriptionText;
   } catch (error) {
-    console.error("Error transcribing audio:", error);
+    ffmpegLogger.error('Error transcribing audio', { 
+      error: error.message,
+      audioPath
+    });
     throw error;
   }
 }
