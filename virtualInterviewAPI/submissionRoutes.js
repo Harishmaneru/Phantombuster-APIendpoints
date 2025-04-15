@@ -13,15 +13,6 @@ const axios = require('axios');
 const { OpenAI } = require('openai');
 const crypto = require('crypto');
 
-// Create a dedicated logger for FFmpeg operations
-const ffmpegLogger = {
-  error: (message, data = {}) => {
-    console.error(`[FFMPEG ERROR] ${message}`, JSON.stringify(data, null, 2));
-  },
-  info: (message, data = {}) => {
-    console.log(`[FFMPEG INFO] ${message}`, JSON.stringify(data, null, 2));
-  }
-};
 
 const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY,
@@ -122,7 +113,7 @@ async function connectDB() {
   const mongoURI = process.env.ONEPGR_MONGO_URI
 
   const options = {
-    serverSelectionTimeoutMS: 60000,
+    serverSelectionTimeoutMS: 120000,
     socketTimeoutMS: 120000,
     connectTimeoutMS: 60000,
     maxPoolSize: 10,
@@ -169,12 +160,6 @@ const transporter = nodemailer.createTransport({
   },
 });
 
-// Log transporter config on startup (without exposing the password)
-// console.log('Email transporter configuration:', {
-//   service: 'gmail',
-//   user: 'admin@recordedinterview.com',
-//   passProvided: !!process.env.EMAIL_PASSWORD
-// });
 
 // Immediately verify transporter on module load
 (async function () {
@@ -377,25 +362,220 @@ async function evaluateSubmissionVideos(submission) {
   return evaluations;
 }
 
+// router.post('/submit', ensureDbConnection, handleUpload, async (req, res) => {
+//   let savedId = null;
+//   let savedSubmission = null;
+
+//   try {
+//     // logSubmissionActivity('Request Received', {
+//     //   userId: req.body.userId,
+//     //   applicationLink: req.body.applicationLink,
+//     //   hiringManagerEmail: req.body.hiringManagerEmail,
+//     //   applicantName: req.body.applicantName,
+//     //   email: req.body.email,
+//     //   linkedInUrl: req.body.linkedInUrl,
+//     //   filesCount: req?.files?.length || 0
+//     // });
+
+//     // Check database connection state
+//     const dbState = verifyDbConnection();
+//     logSubmissionActivity('DB State Check', { state: dbState });
+
+//     if (dbState !== 'connected') {
+//       throw new Error(`Database not properly connected. Current state: ${dbState}`);
+//     }
+
+//     const {
+//       userId,
+//       applicationLink,
+//       hiringManagerEmail,
+//       applicantName,
+//       email,
+//       linkedInUrl,
+//       textResponse,
+//       textQuestion
+//     } = req.body;
+
+//     if (!userId || !applicationLink || !hiringManagerEmail || !applicantName || !email || !linkedInUrl || !textResponse || !textQuestion || !req.files || req.files.length === 0) {
+//       logSubmissionActivity('Validation Error', {
+//         missing: {
+//           userId: !userId,
+//           applicationLink: !applicationLink,
+//           hiringManagerEmail: !hiringManagerEmail,
+//           applicantName: !applicantName,
+//           email: !email,
+//           linkedInUrl: !linkedInUrl,
+//           textResponse: !textResponse,
+//           textQuestion: !textQuestion,
+//           files: !req.files || req.files.length === 0
+//         }
+//       });
+//       return res.status(400).json({
+//         success: false,
+//         message: 'Missing required fields'
+//       });
+//     }
+
+//     // Increment application count in Interview model
+//     const interview = await mongoose.model('Interview').findOneAndUpdate(
+//       { applicationLink },
+//       { $inc: { applicationCount: 1 } },
+//       { new: true }
+//     );
+
+//     if (!interview) {
+//       throw new Error('Interview not found');
+//     }
+
+//     // Process files: separate videos and resume
+//     const videoResponses = [];
+//     let resume = null;
+
+//     for (const file of req.files) {
+//       if (file.mimetype.startsWith('video/')) {
+//         const questionNumber = videoResponses.length + 1;
+//         const question = req.body[`videoQuestion${questionNumber}`];
+
+//         logSubmissionActivity('Processing Video File', {
+//           index: questionNumber,
+//           fileName: file.originalname,
+//           mimeType: file.mimetype,
+//           size: file.size,
+//           question
+//         });
+
+//         videoResponses.push({
+//           questionIndex: questionNumber,
+//           question: question,
+//           videoUrl: file.location,
+//           fileName: file.originalname,
+//           mimeType: file.mimetype
+//         });
+//       } else if (file.mimetype === 'application/pdf' ||
+//         file.mimetype === 'application/msword' ||
+//         file.mimetype === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document') {
+
+//         // resume file size validation (50MB max)
+//         const resumeSizeMB = file.size / (1024 * 1024);
+//         if (resumeSizeMB > 50) {
+//           return res.status(400).json({
+//             success: false,
+//             message: 'Resume file size exceeds 50MB limit'
+//           });
+//         }
+
+//         logSubmissionActivity('Processing Resume File', {
+//           fileName: file.originalname,
+//           mimeType: file.mimetype,
+//           size: file.size
+//         });
+
+//         resume = {
+//           url: file.location,
+//           fileName: file.originalname,
+//           mimeType: file.mimetype
+//         };
+//       }
+//     }
+
+//     const submission = new Submission({
+//       userId,
+//       applicationLink,
+//       hiringManagerEmail,
+//       applicantName,
+//       email,
+//       linkedInUrl,
+//       textQuestion,
+//       textResponse,
+//       videoResponses,
+//       resume
+//     });
+
+//     savedSubmission = await submission.save();
+//     savedId = savedSubmission._id;
+
+//     const verifySubmission = await Submission.findById(savedId);
+
+//     if (!verifySubmission) {
+//       throw new Error('Submission verification failed');
+//     }
+
+//     logSubmissionActivity('Submission Saved', {
+//       submissionId: savedId,
+//       verified: !!verifySubmission,
+//       hasResume: !!resume,
+//       videoCount: videoResponses.length
+//     });
+
+//     // Check if the applicant requested an email summary.
+//     const sendSummary = req.body.receiveEmailSummary === 'true';
+
+//     // Send emails
+//     const emailResult = await sendSubmissionEmails(savedSubmission, sendSummary);
+
+//     // Log email status
+//     if (!emailResult.success) {
+//       logSubmissionActivity('Email Sending Error', { error: emailResult.error });
+//       console.error('Failed to send notification emails:', emailResult.error);
+//     } else {
+//       logSubmissionActivity('Email Sending Success', { success: true });
+//     }
+
+//     try {
+//       if (savedSubmission.videoResponses && savedSubmission.videoResponses.length > 0) {
+//         const evaluations = await evaluateSubmissionVideos(savedSubmission);
+//         savedSubmission.score = evaluations;
+//         await savedSubmission.save();
+//         logSubmissionActivity('Evaluation Completed', { submissionId: savedId, score: evaluations });
+//       }
+//     } catch (evalError) {
+//       logSubmissionActivity('Evaluation Error', { error: evalError.message });
+//       // Optionally, update the submission score field with an error message
+//       savedSubmission.score = { error: evalError.message };
+//       await savedSubmission.save();
+//     }
+
+//     res.status(201).json({
+//       success: true,
+//       message: 'Submission saved successfully',
+//       data: {
+//         submissionId: savedId,
+//         submittedAt: new Date(),
+//         emailStatus: emailResult.success ? 'sent' : 'failed',
+//         emailError: emailResult.success ? null : emailResult.error,
+//         applicationCount: interview.applicationCount,
+//         hasResume: !!resume,
+//         videoCount: videoResponses.length
+//       }
+//     });
+
+//   } catch (err) {
+//     logSubmissionActivity('Error', {
+//       error: err.message,
+//       stack: err.stack,
+//       phase: savedId ? 'post-save' : 'pre-save'
+//     });
+
+//     if (!res.headersSent) {
+//       res.status(500).json({
+//         success: false,
+//         message: 'Failed to process submission',
+//         error: err.message
+//       });
+//     }
+//   }
+// });
+
 router.post('/submit', ensureDbConnection, handleUpload, async (req, res) => {
   let savedId = null;
   let savedSubmission = null;
 
   try {
-    // logSubmissionActivity('Request Received', {
-    //   userId: req.body.userId,
-    //   applicationLink: req.body.applicationLink,
-    //   hiringManagerEmail: req.body.hiringManagerEmail,
-    //   applicantName: req.body.applicantName,
-    //   email: req.body.email,
-    //   linkedInUrl: req.body.linkedInUrl,
-    //   filesCount: req?.files?.length || 0
-    // });
+    logSubmissionActivity('Flow Start', { message: 'Received submission request' });
 
     // Check database connection state
     const dbState = verifyDbConnection();
     logSubmissionActivity('DB State Check', { state: dbState });
-
     if (dbState !== 'connected') {
       throw new Error(`Database not properly connected. Current state: ${dbState}`);
     }
@@ -411,7 +591,19 @@ router.post('/submit', ensureDbConnection, handleUpload, async (req, res) => {
       textQuestion
     } = req.body;
 
-    if (!userId || !applicationLink || !hiringManagerEmail || !applicantName || !email || !linkedInUrl || !textResponse || !textQuestion || !req.files || req.files.length === 0) {
+    // Validate required fields
+    if (
+      !userId ||
+      !applicationLink ||
+      !hiringManagerEmail ||
+      !applicantName ||
+      !email ||
+      !linkedInUrl ||
+      !textResponse ||
+      !textQuestion ||
+      !req.files ||
+      req.files.length === 0
+    ) {
       logSubmissionActivity('Validation Error', {
         missing: {
           userId: !userId,
@@ -430,6 +622,7 @@ router.post('/submit', ensureDbConnection, handleUpload, async (req, res) => {
         message: 'Missing required fields'
       });
     }
+    logSubmissionActivity('Validation Passed', {});
 
     // Increment application count in Interview model
     const interview = await mongoose.model('Interview').findOneAndUpdate(
@@ -437,20 +630,18 @@ router.post('/submit', ensureDbConnection, handleUpload, async (req, res) => {
       { $inc: { applicationCount: 1 } },
       { new: true }
     );
-
     if (!interview) {
       throw new Error('Interview not found');
     }
+    logSubmissionActivity('Interview Updated', { applicationCount: interview.applicationCount });
 
     // Process files: separate videos and resume
     const videoResponses = [];
     let resume = null;
-
     for (const file of req.files) {
       if (file.mimetype.startsWith('video/')) {
         const questionNumber = videoResponses.length + 1;
         const question = req.body[`videoQuestion${questionNumber}`];
-
         logSubmissionActivity('Processing Video File', {
           index: questionNumber,
           fileName: file.originalname,
@@ -458,7 +649,6 @@ router.post('/submit', ensureDbConnection, handleUpload, async (req, res) => {
           size: file.size,
           question
         });
-
         videoResponses.push({
           questionIndex: questionNumber,
           question: question,
@@ -466,25 +656,25 @@ router.post('/submit', ensureDbConnection, handleUpload, async (req, res) => {
           fileName: file.originalname,
           mimeType: file.mimetype
         });
-      } else if (file.mimetype === 'application/pdf' ||
+      } else if (
+        file.mimetype === 'application/pdf' ||
         file.mimetype === 'application/msword' ||
-        file.mimetype === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document') {
-        
-        // ✅ Resume file size validation (50MB max)
+        file.mimetype === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+      ) {
+        // Resume file size validation (50MB max)
         const resumeSizeMB = file.size / (1024 * 1024);
         if (resumeSizeMB > 50) {
+          logSubmissionActivity('Resume File Rejected', { fileName: file.originalname, sizeMB: resumeSizeMB });
           return res.status(400).json({
             success: false,
             message: 'Resume file size exceeds 50MB limit'
           });
         }
-
         logSubmissionActivity('Processing Resume File', {
           fileName: file.originalname,
           mimeType: file.mimetype,
           size: file.size
         });
-
         resume = {
           url: file.location,
           fileName: file.originalname,
@@ -492,7 +682,12 @@ router.post('/submit', ensureDbConnection, handleUpload, async (req, res) => {
         };
       }
     }
+    logSubmissionActivity('File Processing Completed', {
+      videoCount: videoResponses.length,
+      hasResume: !!resume
+    });
 
+    // Create the submission record in the database
     const submission = new Submission({
       userId,
       applicationLink,
@@ -505,30 +700,21 @@ router.post('/submit', ensureDbConnection, handleUpload, async (req, res) => {
       videoResponses,
       resume
     });
-
     savedSubmission = await submission.save();
     savedId = savedSubmission._id;
+    logSubmissionActivity('Submission Saved', { submissionId: savedId });
 
     const verifySubmission = await Submission.findById(savedId);
-
     if (!verifySubmission) {
       throw new Error('Submission verification failed');
     }
-
-    logSubmissionActivity('Submission Saved', {
-      submissionId: savedId,
-      verified: !!verifySubmission,
-      hasResume: !!resume,
-      videoCount: videoResponses.length
-    });
+    logSubmissionActivity('Submission Verified', { submissionId: savedId });
 
     // Check if the applicant requested an email summary.
     const sendSummary = req.body.receiveEmailSummary === 'true';
 
     // Send emails
     const emailResult = await sendSubmissionEmails(savedSubmission, sendSummary);
-
-    // Log email status
     if (!emailResult.success) {
       logSubmissionActivity('Email Sending Error', { error: emailResult.error });
       console.error('Failed to send notification emails:', emailResult.error);
@@ -536,23 +722,10 @@ router.post('/submit', ensureDbConnection, handleUpload, async (req, res) => {
       logSubmissionActivity('Email Sending Success', { success: true });
     }
 
-    try {
-      if (savedSubmission.videoResponses && savedSubmission.videoResponses.length > 0) {
-        const evaluations = await evaluateSubmissionVideos(savedSubmission);
-        savedSubmission.score = evaluations;
-        await savedSubmission.save();
-        logSubmissionActivity('Evaluation Completed', { submissionId: savedId, score: evaluations });
-      }
-    } catch (evalError) {
-      logSubmissionActivity('Evaluation Error', { error: evalError.message });
-      // Optionally, update the submission score field with an error message
-      savedSubmission.score = { error: evalError.message };
-      await savedSubmission.save();
-    }
-
+    // Send immediate response to client so that the heavy processing doesn't hold up the response.
     res.status(201).json({
       success: true,
-      message: 'Submission saved successfully',
+      message: 'Submission saved successfully. Processing in background.',
       data: {
         submissionId: savedId,
         submittedAt: new Date(),
@@ -563,14 +736,36 @@ router.post('/submit', ensureDbConnection, handleUpload, async (req, res) => {
         videoCount: videoResponses.length
       }
     });
+    logSubmissionActivity('Response Sent to Client', { submissionId: savedId });
 
+    // Background processing for video evaluations
+    setImmediate(async () => {
+      try {
+        logSubmissionActivity('Background Processing Started', { submissionId: savedId });
+        if (savedSubmission.videoResponses && savedSubmission.videoResponses.length > 0) {
+          const evaluations = await evaluateSubmissionVideos(savedSubmission);
+          savedSubmission.score = evaluations;
+          await savedSubmission.save();
+          logSubmissionActivity('Evaluation Completed (Background)', {
+            submissionId: savedId,
+            score: evaluations
+          });
+        } else {
+          logSubmissionActivity('No Video Responses to Evaluate', { submissionId: savedId });
+        }
+      } catch (evalError) {
+        logSubmissionActivity('Evaluation Error (Background)', { error: evalError.message });
+        // Optionally update the submission with an error message
+        savedSubmission.score = { error: evalError.message };
+        await savedSubmission.save();
+      }
+    });
   } catch (err) {
     logSubmissionActivity('Error', {
       error: err.message,
       stack: err.stack,
       phase: savedId ? 'post-save' : 'pre-save'
     });
-
     if (!res.headersSent) {
       res.status(500).json({
         success: false,
@@ -581,6 +776,14 @@ router.post('/submit', ensureDbConnection, handleUpload, async (req, res) => {
   }
 });
 
+
+
+
+
+
+
+
+//=======================================================================================================
 
 // -------------------------
 // DELETE /submissions/:submissionId route
@@ -738,30 +941,29 @@ function convertVideoToAudio(videoPath, outputAudioPath) {
       : `${outputAudioPath}.mp3`;
 
     const ffmpegArgs = ['-y', '-i', videoPath, '-vn', '-q:a', '0', '-map', 'a', outputPathWithExtension];
-    ffmpegLogger.info('Running FFmpeg command', { command: `ffmpeg ${ffmpegArgs.join(' ')}` });
+    console.log(`[FFMPEG] Running command: ffmpeg ${ffmpegArgs.join(' ')}`);
 
     const ffmpeg = spawn('ffmpeg', ffmpegArgs);
-
-    ffmpeg.stderr.on('data', (data) => {
-      const message = data.toString().trim();
-      if (message) {
-        ffmpegLogger.error('FFmpeg error output', { message });
-      }
+    let errorData = '';
+    // Collect any error messages from FFmpeg
+    ffmpegProcess.stderr.on('data', (data) => {
+      errorData += data.toString();
     });
 
-    ffmpeg.on('close', (code) => {
-      if (fs.existsSync(outputPathWithExtension) && fs.statSync(outputPathWithExtension).size > 0) {
-        ffmpegLogger.info('Audio extraction successful', { outputPath: outputPathWithExtension });
-        resolve(outputPathWithExtension);
+    ffmpegProcess.on('close', (code) => {
+      // Check if the file exists and it has a non-zero size
+      if (fs.existsSync(finalAudioPath) && fs.statSync(finalAudioPath).size > 0) {
+        const fileSizeBytes = fs.statSync(finalAudioPath).size;
+        console.log(`[FFMPEG INFO] Audio extraction successful. Audio file size: ${fileSizeBytes} bytes`);
+        resolve(finalAudioPath);
       } else {
-        const error = new Error(`FFmpeg failed with exit code ${code}`);
-        ffmpegLogger.error('FFmpeg process failed', { error: error.message, code });
-        reject(error);
+        console.error(`[FFMPEG ERROR] Audio extraction failed with exit code ${code}. Error: ${errorData.trim()}`);
+        reject(new Error(`FFmpeg failed with exit code ${code}`));
       }
     });
 
     ffmpeg.on('error', (err) => {
-      ffmpegLogger.error('FFmpeg encountered an error', { error: err.message });
+      console.error(`[FFMPEG ERROR] FFmpeg encountered an error: ${err.message}`);
       reject(new Error(`FFmpeg encountered an error: ${err.message}`));
     });
   });
@@ -779,8 +981,8 @@ function getAudioDuration(inputPath) {
         const minutes = parseInt(match[2], 10);
         const seconds = parseFloat(match[3]);
         const totalSeconds = hours * 3600 + minutes * 60 + seconds;
-        ffmpegLogger.info('Audio duration calculated', { 
-          inputPath, 
+        ffmpegLogger.info('Audio duration calculated', {
+          inputPath,
           duration: { hours, minutes, seconds, totalSeconds }
         });
         resolve(totalSeconds);
@@ -840,7 +1042,7 @@ function splitAudioFile(inputPath, outputDir, maxChunkSizeMB = 20) {
             .filter(file => file.startsWith('chunk_'))
             .map(file => path.join(outputDir, file));
           if (chunkPaths.length > 0) {
-            ffmpegLogger.info('Audio split successful', { 
+            ffmpegLogger.info('Audio split successful', {
               chunksCreated: chunkPaths.length,
               outputDir
             });
@@ -882,7 +1084,7 @@ function getFileStream(filePath) {
 // Transcribe an audio chunk using OpenAI's Whisper API
 async function transcribeAudioToText(audioPath) {
   try {
-    ffmpegLogger.info('Starting audio transcription', { audioPath });
+    console.log(`[Whisper] Starting transcription for: ${audioPath}`);
     const fileStream = await getFileStream(audioPath);
     const response = await openai.audio.transcriptions.create({
       file: fileStream,
@@ -897,16 +1099,10 @@ async function transcribeAudioToText(audioPath) {
       throw error;
     }
 
-    ffmpegLogger.info('Transcription completed successfully', { 
-      audioPath,
-      textLength: transcriptionText.length
-    });
+    console.log(`[Whisper] Transcription completed successfully. Length: ${transcriptionText.length} characters`);
     return transcriptionText;
   } catch (error) {
-    ffmpegLogger.error('Error transcribing audio', { 
-      error: error.message,
-      audioPath
-    });
+    console.error(`[Whisper ERROR] Transcription failed: ${error.message}`);
     throw error;
   }
 }
