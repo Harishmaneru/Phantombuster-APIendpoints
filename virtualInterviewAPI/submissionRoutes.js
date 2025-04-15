@@ -748,7 +748,8 @@ router.post('/submit', ensureDbConnection, handleUpload, async (req, res) => {
           await savedSubmission.save();
           logSubmissionActivity('Evaluation Completed (Background)', {
             submissionId: savedId,
-            score: evaluations
+            evaluated: true,
+            videoCount: savedSubmission.videoResponses.length
           });
         } else {
           logSubmissionActivity('No Video Responses to Evaluate', { submissionId: savedId });
@@ -1108,7 +1109,7 @@ async function transcribeAudioToText(audioPath) {
       throw error;
     }
 
-    console.log(`[Whisper] Transcription completed successfully. Length: ${transcriptionText.length} characters`);
+    //console.log(`[Whisper] Transcription completed successfully. Length: ${transcriptionText.length} characters`);
     return transcriptionText;
   } catch (error) {
     console.error(`[Whisper ERROR] Transcription failed: ${error.message}`);
