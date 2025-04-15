@@ -392,8 +392,9 @@ router.post('/submit', ensureDbConnection, handleUpload, async (req, res) => {
     //   filesCount: req?.files?.length || 0
     // });
 
-    // const dbState = verifyDbConnection();
-    // logSubmissionActivity('DB State Check', { state: dbState });
+    // Check database connection state
+    const dbState = verifyDbConnection();
+    logSubmissionActivity('DB State Check', { state: dbState });
 
     if (dbState !== 'connected') {
       throw new Error(`Database not properly connected. Current state: ${dbState}`);
