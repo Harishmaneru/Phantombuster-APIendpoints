@@ -372,18 +372,18 @@ router.post('/submit', ensureDbConnection, handleUpload, async (req, res) => {
   let savedSubmission = null;
 
   try {
-    logSubmissionActivity('Request Received', {
+    // Log initial request details
+    logSubmissionActivity('Submission Request Received', {
       userId: req.body.userId,
       applicationLink: req.body.applicationLink,
-      hiringManagerEmail: req.body.hiringManagerEmail,
       applicantName: req.body.applicantName,
       email: req.body.email,
-      linkedInUrl: req.body.linkedInUrl,
+      timestamp: new Date().toISOString(),
       filesCount: req?.files?.length || 0
     });
 
     const dbState = verifyDbConnection();
-    logSubmissionActivity('DB State Check', { state: dbState });
+    logSubmissionActivity('Database Connection Check', { state: dbState });
 
     if (dbState !== 'connected') {
       throw new Error(`Database not properly connected. Current state: ${dbState}`);
@@ -399,6 +399,19 @@ router.post('/submit', ensureDbConnection, handleUpload, async (req, res) => {
       textResponse,
       textQuestion
     } = req.body;
+
+    // Log validation check
+    logSubmissionActivity('Submission Validation', {
+      hasUserId: !!userId,
+      hasApplicationLink: !!applicationLink,
+      hasHiringManagerEmail: !!hiringManagerEmail,
+      hasApplicantName: !!applicantName,
+      hasEmail: !!email,
+      hasLinkedInUrl: !!linkedInUrl,
+      hasTextResponse: !!textResponse,
+      hasTextQuestion: !!textQuestion,
+      hasFiles: !!(req.files && req.files.length > 0)
+    });
 
     if (!userId || !applicationLink || !hiringManagerEmail || !applicantName || !email || !linkedInUrl || !textResponse || !textQuestion || !req.files || req.files.length === 0) {
       logSubmissionActivity('Validation Error', {
@@ -420,6 +433,9 @@ router.post('/submit', ensureDbConnection, handleUpload, async (req, res) => {
       });
     }
 
+    // Log interview update attempt
+    logSubmissionActivity('Updating Interview Count', { applicationLink });
+
     // Increment application count in Interview model
     const interview = await mongoose.model('Interview').findOneAndUpdate(
       { applicationLink },
@@ -428,12 +444,22 @@ router.post('/submit', ensureDbConnection, handleUpload, async (req, res) => {
     );
 
     if (!interview) {
+      logSubmissionActivity('Interview Not Found', { applicationLink });
       throw new Error('Interview not found');
     }
+
+    // Log interview update success
+    logSubmissionActivity('Interview Count Updated', {
+      applicationLink,
+      newCount: interview.applicationCount
+    });
 
     // Process files: separate videos and resume
     const videoResponses = [];
     let resume = null;
+
+    // Log file processing start
+    logSubmissionActivity('Processing Files', { totalFiles: req.files.length });
 
     for (const file of req.files) {
       if (file.mimetype.startsWith('video/')) {
@@ -459,15 +485,7 @@ router.post('/submit', ensureDbConnection, handleUpload, async (req, res) => {
         file.mimetype === 'application/msword' ||
         file.mimetype === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document') {
         
-        // ✅ Resume file size validation (50MB max)
-        const resumeSizeMB = file.size / (1024 * 1024);
-        if (resumeSizeMB > 50) {
-          return res.status(400).json({
-            success: false,
-            message: 'Resume file size exceeds 50MB limit'
-          });
-        }
-
+        // Log resume processing
         logSubmissionActivity('Processing Resume File', {
           fileName: file.originalname,
           mimeType: file.mimetype,
@@ -481,6 +499,14 @@ router.post('/submit', ensureDbConnection, handleUpload, async (req, res) => {
         };
       }
     }
+
+    // Log submission creation
+    logSubmissionActivity('Creating Submission', {
+      userId,
+      applicationLink,
+      videoCount: videoResponses.length,
+      hasResume: !!resume
+    });
 
     const submission = new Submission({
       userId,
@@ -498,21 +524,22 @@ router.post('/submit', ensureDbConnection, handleUpload, async (req, res) => {
     savedSubmission = await submission.save();
     savedId = savedSubmission._id;
 
+    // Log successful save
+    logSubmissionActivity('Submission Saved Successfully', {
+      submissionId: savedId,
+      timestamp: new Date().toISOString()
+    });
+
     const verifySubmission = await Submission.findById(savedId);
 
     if (!verifySubmission) {
+      logSubmissionActivity('Submission Verification Failed', { submissionId: savedId });
       throw new Error('Submission verification failed');
     }
 
-    logSubmissionActivity('Submission Saved', {
-      submissionId: savedId,
-      verified: !!verifySubmission,
-      hasResume: !!resume,
-      videoCount: videoResponses.length
-    });
-
-    // Check if the applicant requested an email summary.
+    // Check if the applicant requested an email summary
     const sendSummary = req.body.receiveEmailSummary === 'true';
+    logSubmissionActivity('Email Summary Preference', { sendSummary });
 
     // Send emails
     const emailResult = await sendSubmissionEmails(savedSubmission, sendSummary);
@@ -527,17 +554,35 @@ router.post('/submit', ensureDbConnection, handleUpload, async (req, res) => {
 
     try {
       if (savedSubmission.videoResponses && savedSubmission.videoResponses.length > 0) {
+        logSubmissionActivity('Starting Video Evaluation', {
+          submissionId: savedId,
+          videoCount: savedSubmission.videoResponses.length
+        });
+
         const evaluations = await evaluateSubmissionVideos(savedSubmission);
         savedSubmission.score = evaluations;
         await savedSubmission.save();
-        logSubmissionActivity('Evaluation Completed', { submissionId: savedId, score: evaluations });
+        
+        logSubmissionActivity('Video Evaluation Completed', {
+          submissionId: savedId,
+          score: evaluations
+        });
       }
     } catch (evalError) {
-      logSubmissionActivity('Evaluation Error', { error: evalError.message });
-      // Optionally, update the submission score field with an error message
+      logSubmissionActivity('Video Evaluation Error', {
+        submissionId: savedId,
+        error: evalError.message
+      });
       savedSubmission.score = { error: evalError.message };
       await savedSubmission.save();
     }
+
+    // Log final success response
+    logSubmissionActivity('Submission Process Complete', {
+      submissionId: savedId,
+      status: 'success',
+      timestamp: new Date().toISOString()
+    });
 
     res.status(201).json({
       success: true,
@@ -554,10 +599,12 @@ router.post('/submit', ensureDbConnection, handleUpload, async (req, res) => {
     });
 
   } catch (err) {
-    logSubmissionActivity('Error', {
+    // Log error details
+    logSubmissionActivity('Submission Error', {
       error: err.message,
       stack: err.stack,
-      phase: savedId ? 'post-save' : 'pre-save'
+      phase: savedId ? 'post-save' : 'pre-save',
+      timestamp: new Date().toISOString()
     });
 
     if (!res.headersSent) {
