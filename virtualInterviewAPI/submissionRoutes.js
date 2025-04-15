@@ -926,7 +926,7 @@ const ensureLogsDirectory = () => {
   const logsDir = path.join(__dirname, 'logs');
   if (!fs.existsSync(logsDir)) {
     fs.mkdirSync(logsDir, { recursive: true });
-    ffmpegLogger.info('Created logs directory', { path: logsDir });
+    console.log('Created logs directory', { path: logsDir });
   }
 };
 
@@ -943,7 +943,7 @@ function convertVideoToAudio(videoPath, outputAudioPath) {
     const ffmpegArgs = ['-y', '-i', videoPath, '-vn', '-q:a', '0', '-map', 'a', outputPathWithExtension];
     console.log(`[FFMPEG] Running command: ffmpeg ${ffmpegArgs.join(' ')}`);
 
-    const ffmpeg = spawn('ffmpeg', ffmpegArgs);
+    const ffmpegProcess = spawn('ffmpeg', ffmpegArgs);
     let errorData = '';
     // Collect any error messages from FFmpeg
     ffmpegProcess.stderr.on('data', (data) => {
@@ -952,17 +952,17 @@ function convertVideoToAudio(videoPath, outputAudioPath) {
 
     ffmpegProcess.on('close', (code) => {
       // Check if the file exists and it has a non-zero size
-      if (fs.existsSync(finalAudioPath) && fs.statSync(finalAudioPath).size > 0) {
-        const fileSizeBytes = fs.statSync(finalAudioPath).size;
+      if (fs.existsSync(outputPathWithExtension) && fs.statSync(outputPathWithExtension).size > 0) {
+        const fileSizeBytes = fs.statSync(outputPathWithExtension).size;
         console.log(`[FFMPEG INFO] Audio extraction successful. Audio file size: ${fileSizeBytes} bytes`);
-        resolve(finalAudioPath);
+        resolve(outputPathWithExtension);
       } else {
         console.error(`[FFMPEG ERROR] Audio extraction failed with exit code ${code}. Error: ${errorData.trim()}`);
         reject(new Error(`FFmpeg failed with exit code ${code}`));
       }
     });
 
-    ffmpeg.on('error', (err) => {
+    ffmpegProcess.on('error', (err) => {
       console.error(`[FFMPEG ERROR] FFmpeg encountered an error: ${err.message}`);
       reject(new Error(`FFmpeg encountered an error: ${err.message}`));
     });
@@ -973,27 +973,36 @@ function convertVideoToAudio(videoPath, outputAudioPath) {
 function getAudioDuration(inputPath) {
   return new Promise((resolve, reject) => {
     const ffmpegProcess = spawn('ffmpeg', ['-i', inputPath]);
+    let durationFound = false;
+    
     ffmpegProcess.stderr.on('data', (data) => {
       const output = data.toString();
       const match = output.match(/Duration: (\d+):(\d+):(\d+\.\d+)/);
       if (match) {
+        durationFound = true;
         const hours = parseInt(match[1], 10);
         const minutes = parseInt(match[2], 10);
         const seconds = parseFloat(match[3]);
         const totalSeconds = hours * 3600 + minutes * 60 + seconds;
-        ffmpegLogger.info('Audio duration calculated', {
+        console.log('Audio duration calculated', {
           inputPath,
           duration: { hours, minutes, seconds, totalSeconds }
         });
         resolve(totalSeconds);
       }
     });
+
     ffmpegProcess.on('close', (code) => {
-      if (code !== 0) {
-        const error = new Error(`FFmpeg process exited with code ${code}`);
-        ffmpegLogger.error('Failed to get audio duration', { error: error.message, code });
+      if (!durationFound) {
+        const error = new Error(`FFmpeg process exited with code ${code}, no duration extracted`);
+        console.error('Failed to get audio duration', { error: error.message, code });
         reject(error);
       }
+    });
+
+    ffmpegProcess.on('error', (err) => {
+      console.error('FFmpeg process error', { error: err.message });
+      reject(err);
     });
   });
 }
@@ -1008,7 +1017,7 @@ function splitAudioFile(inputPath, outputDir, maxChunkSizeMB = 20) {
       const chunkDuration = (maxChunkSizeMB * 8) / bitrate;
       const outputPattern = path.join(outputDir, 'chunk_%03d.mp3');
 
-      ffmpegLogger.info('Splitting audio file', {
+      console.log('Splitting audio file', {
         inputPath,
         duration,
         fileSizeMB,
@@ -1028,39 +1037,39 @@ function splitAudioFile(inputPath, outputDir, maxChunkSizeMB = 20) {
       ffmpegProcess.stderr.on('data', (data) => {
         const message = data.toString().trim();
         if (message) {
-          ffmpegLogger.info('FFmpeg split progress', { message });
+          console.log('FFmpeg split progress', { message });
         }
       });
 
       ffmpegProcess.on('close', (code) => {
         fs.readdir(outputDir, (err, files) => {
           if (err) {
-            ffmpegLogger.error('Error reading output directory', { error: err.message });
+            console.error('Error reading output directory', { error: err.message });
             return reject(err);
           }
           const chunkPaths = files
             .filter(file => file.startsWith('chunk_'))
             .map(file => path.join(outputDir, file));
           if (chunkPaths.length > 0) {
-            ffmpegLogger.info('Audio split successful', {
+            console.log('Audio split successful', {
               chunksCreated: chunkPaths.length,
               outputDir
             });
             resolve(chunkPaths);
           } else {
             const error = new Error(`FFmpeg process exited with code ${code} and no chunks were created.`);
-            ffmpegLogger.error('Audio split failed', { error: error.message, code });
+            console.error('Audio split failed', { error: error.message, code });
             reject(error);
           }
         });
       });
 
       ffmpegProcess.on('error', (err) => {
-        ffmpegLogger.error('FFmpeg process error', { error: err.message });
+        console.error('FFmpeg process error', { error: err.message });
         reject(err);
       });
     } catch (error) {
-      ffmpegLogger.error('Error in splitAudioFile', { error: error.message });
+      console.error('Error in splitAudioFile', { error: error.message });
       reject(error);
     }
   });
@@ -1095,7 +1104,7 @@ async function transcribeAudioToText(audioPath) {
 
     if (!transcriptionText) {
       const error = new Error("Unexpected transcription API response");
-      ffmpegLogger.error('Transcription failed', { error: error.message });
+      console.error('Transcription failed', { error: error.message });
       throw error;
     }
 
@@ -1127,14 +1136,31 @@ async function processAudioVideo(filePath, originalName) {
 
         const audioChunks = await splitAudioFile(audioPath, tempDir, 20);
         for (const chunk of audioChunks) {
-          const chunkText = await transcribeAudioToText(chunk);
-          textContent += chunkText + ' ';
-          fs.unlinkSync(chunk);
+          try {
+            const chunkText = await transcribeAudioToText(chunk);
+            textContent += chunkText + ' ';
+            try {
+              fs.unlinkSync(chunk);
+            } catch (unlinkError) {
+              console.error('Error deleting chunk file:', chunk, unlinkError);
+            }
+          } catch (chunkError) {
+            console.error('Error processing chunk:', chunk, chunkError);
+            // Continue with next chunk even if one fails
+          }
         }
-        fs.rmSync(tempDir, { recursive: true, force: true });
+        try {
+          fs.rmSync(tempDir, { recursive: true, force: true });
+        } catch (rmError) {
+          console.error('Error removing temp directory:', tempDir, rmError);
+        }
       }
 
-      fs.unlinkSync(audioPath);
+      try {
+        fs.unlinkSync(audioPath);
+      } catch (unlinkError) {
+        console.error('Error deleting audio file:', audioPath, unlinkError);
+      }
     } else {
       throw new Error('Unsupported file format for audio/video processing');
     }
