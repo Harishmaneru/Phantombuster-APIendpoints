@@ -12,7 +12,7 @@ const { spawn } = require('child_process');
 const axios = require('axios');
 const { OpenAI } = require('openai');
 const crypto = require('crypto');
-const { spawn } = require('child_process');
+
 
 
 const openai = new OpenAI({
