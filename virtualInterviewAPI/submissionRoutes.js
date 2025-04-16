@@ -1051,9 +1051,14 @@ router.post('/evaluate-videos', ensureDbConnection, async (req, res) => {
       fs.unlinkSync(videoPath);
     }
 
+    // Update the submission with evaluation results
+    submission.score = evaluations;
+    await submission.save();
+
     res.status(200).json({
       success: true,
-      data: evaluations
+      data: evaluations,
+      message: 'Evaluation results stored successfully'
     });
   } catch (err) {
     console.error('Error evaluating videos:', err);
