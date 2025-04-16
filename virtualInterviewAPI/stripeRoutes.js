@@ -1052,48 +1052,48 @@ router.get('/users/:userId/subscriptions', async (req, res) => {
 router.post('/create-billing-portal-session', async (req, res) => {
     // Extract customerId and subscriptionId (if available) from the body
     const { customerId, subscriptionId, userId } = req.body;
-  
+
     try {
-      // Ensure MongoDB connection is established
-      await connectToMongoDB();
-  
-      // Optionally verify that the customer exists in your database
-      const subscriptionRecord = await Subscription.findOne({ customerId });
-      if (!subscriptionRecord && userId) {
-        console.log(`Warning: Creating portal for customer ${customerId} not in our database`);
-      }
-  
-      // Create a Billing Portal session to manage subscription
-      const portalSession = await stripe.billingPortal.sessions.create({
-        customer: customerId,
-        return_url: 'https://record.onepgr.com/profile',
-      });
-  
-      // Retrieve upcoming invoice details to show additional proration/credit info
-      // Note: subscriptionId is helpful here; if not provided, you may try to retrieve it from your subscriptionRecord.
-      let upcomingInvoice = null;
-      if (subscriptionId) {
-        upcomingInvoice = await stripe.invoices.retrieveUpcoming({
-          customer: customerId,
-          subscription: subscriptionId,
+        // Ensure MongoDB connection is established
+        await connectToMongoDB();
+
+        // Optionally verify that the customer exists in your database
+        const subscriptionRecord = await Subscription.findOne({ customerId });
+        if (!subscriptionRecord && userId) {
+            console.log(`Warning: Creating portal for customer ${customerId} not in our database`);
+        }
+
+        // Create a Billing Portal session to manage subscription
+        const portalSession = await stripe.billingPortal.sessions.create({
+            customer: customerId,
+            return_url: 'https://record.onepgr.com/profile',
         });
-      } else {
-        // Optional: If subscriptionId is not provided, you could retrieve the latest subscription record 
-        // and use its subscriptionId field (if available)
-        console.warn('Subscription ID not provided; skipping upcoming invoice retrieval');
-      }
-  
-      // Respond with both the portal session URL and the upcoming invoice details.
-      res.json({ 
-        url: portalSession.url,
-        upcomingInvoice  // This object contains line items, amount_due, credits, etc.
-      });
+
+        // Retrieve upcoming invoice details to show additional proration/credit info
+        // Note: subscriptionId is helpful here; if not provided, you may try to retrieve it from your subscriptionRecord.
+        let upcomingInvoice = null;
+        if (subscriptionId) {
+            upcomingInvoice = await stripe.invoices.retrieveUpcoming({
+                customer: customerId,
+                subscription: subscriptionId,
+            });
+        } else {
+            // Optional: If subscriptionId is not provided, you could retrieve the latest subscription record 
+            // and use its subscriptionId field (if available)
+            console.warn('Subscription ID not provided; skipping upcoming invoice retrieval');
+        }
+
+        // Respond with both the portal session URL and the upcoming invoice details.
+        res.json({
+            url: portalSession.url,
+            upcomingInvoice  // This object contains line items, amount_due, credits, etc.
+        });
     } catch (error) {
-      console.error('Error creating billing portal session:', error.message);
-      res.status(500).json({ error: error.message });
+        console.error('Error creating billing portal session:', error.message);
+        res.status(500).json({ error: error.message });
     }
-  });
-  
+});
+
 
 // Get Invoice Details
 

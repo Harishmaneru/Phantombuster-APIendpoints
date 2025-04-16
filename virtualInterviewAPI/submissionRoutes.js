@@ -12,6 +12,7 @@ const { spawn } = require('child_process');
 const axios = require('axios');
 const { OpenAI } = require('openai');
 const crypto = require('crypto');
+const { spawn } = require('child_process');
 
 
 const openai = new OpenAI({
@@ -367,7 +368,7 @@ router.post('/submit', ensureDbConnection, handleUpload, async (req, res) => {
   let savedSubmission = null;
 
   try {
-    logSubmissionActivity('Flow Start', { 
+    logSubmissionActivity('Flow Start', {
       message: 'Received submission request',
       applicantName: req.body.applicantName,
       email: req.body.email,
@@ -543,7 +544,7 @@ router.post('/submit', ensureDbConnection, handleUpload, async (req, res) => {
         videoCount: videoResponses.length
       }
     });
-    logSubmissionActivity('Response Sent to Client', { 
+    logSubmissionActivity('Response Sent to Client', {
       submissionId: savedId,
       applicantName,
       email,
@@ -553,7 +554,7 @@ router.post('/submit', ensureDbConnection, handleUpload, async (req, res) => {
     // Background processing for video evaluations
     setImmediate(async () => {
       try {
-        logSubmissionActivity('Background Processing Started', { 
+        logSubmissionActivity('Background Processing Started', {
           submissionId: savedId,
           applicantName,
           email
@@ -571,7 +572,7 @@ router.post('/submit', ensureDbConnection, handleUpload, async (req, res) => {
             status: 'success'
           });
         } else {
-          logSubmissionActivity('No Video Responses to Evaluate', { 
+          logSubmissionActivity('No Video Responses to Evaluate', {
             submissionId: savedId,
             applicantName,
             email,
@@ -579,7 +580,7 @@ router.post('/submit', ensureDbConnection, handleUpload, async (req, res) => {
           });
         }
       } catch (evalError) {
-        logSubmissionActivity('Evaluation Error (Background)', { 
+        logSubmissionActivity('Evaluation Error (Background)', {
           submissionId: savedId,
           applicantName,
           email,
@@ -804,42 +805,79 @@ function convertVideoToAudio(videoPath, outputAudioPath) {
 }
 
 // Get duration of an audio file using ffmpeg
+// function getAudioDuration(inputPath) {
+//   return new Promise((resolve, reject) => {
+//     const ffmpegProcess = spawn('ffmpeg', ['-i', inputPath]);
+//     let durationFound = false;
+
+//     ffmpegProcess.stderr.on('data', (data) => {
+//       const output = data.toString();
+//       const match = output.match(/Duration: (\d+):(\d+):(\d+\.\d+)/);
+//       if (match) {
+//         durationFound = true;
+//         const hours = parseInt(match[1], 10);
+//         const minutes = parseInt(match[2], 10);
+//         const seconds = parseFloat(match[3]);
+//         const totalSeconds = hours * 3600 + minutes * 60 + seconds;
+//         console.log('Audio duration calculated', {
+//           inputPath,
+//           duration: { hours, minutes, seconds, totalSeconds }
+//         });
+//         resolve(totalSeconds);
+//       }
+//     });
+
+//     ffmpegProcess.on('close', (code) => {
+//       if (!durationFound) {
+//         const error = new Error(`FFmpeg process exited with code ${code}, no duration extracted`);
+//         console.error('Failed to get audio duration', { error: error.message, code });
+//         reject(error);
+//       }
+//     });
+
+//     ffmpegProcess.on('error', (err) => {
+//       console.error('FFmpeg process error', { error: err.message });
+//       reject(err);
+//     });
+//   });
+// }
+
+
 function getAudioDuration(inputPath) {
   return new Promise((resolve, reject) => {
-    const ffmpegProcess = spawn('ffmpeg', ['-i', inputPath]);
-    let durationFound = false;
+    const ffprobeProcess = spawn('ffprobe', [
+      '-v', 'error',
+      '-show_entries', 'format=duration',
+      '-of', 'default=noprint_wrappers=1:nokey=1',
+      inputPath
+    ]);
 
-    ffmpegProcess.stderr.on('data', (data) => {
-      const output = data.toString();
-      const match = output.match(/Duration: (\d+):(\d+):(\d+\.\d+)/);
-      if (match) {
-        durationFound = true;
-        const hours = parseInt(match[1], 10);
-        const minutes = parseInt(match[2], 10);
-        const seconds = parseFloat(match[3]);
-        const totalSeconds = hours * 3600 + minutes * 60 + seconds;
-        console.log('Audio duration calculated', {
-          inputPath,
-          duration: { hours, minutes, seconds, totalSeconds }
-        });
-        resolve(totalSeconds);
-      }
+    let output = '';
+
+    ffprobeProcess.stdout.on('data', (data) => {
+      output += data.toString();
     });
 
-    ffmpegProcess.on('close', (code) => {
-      if (!durationFound) {
-        const error = new Error(`FFmpeg process exited with code ${code}, no duration extracted`);
-        console.error('Failed to get audio duration', { error: error.message, code });
-        reject(error);
+    ffprobeProcess.on('close', (code) => {
+      if (code !== 0) {
+        return reject(new Error(`ffprobe exited with code ${code}`));
       }
+      output = output.trim();
+      if (!output) {
+        return reject(new Error('No duration extracted'));
+      }
+      resolve(parseFloat(output));
     });
 
-    ffmpegProcess.on('error', (err) => {
-      console.error('FFmpeg process error', { error: err.message });
+    ffprobeProcess.on('error', (err) => {
       reject(err);
     });
   });
 }
+
+
+
+
 
 // Split audio file into chunks based on a max size (in MB)
 function splitAudioFile(inputPath, outputDir, maxChunkSizeMB = 20) {
