@@ -706,12 +706,14 @@ router.post('/create-checkout-session', async (req, res) => {
         const { userId, priceId } = req.body;
 
         // Determine success URL based on environment
-        const successUrl = process.env.NODE_ENV === 'production' 
-            ? 'https://record.onepgr.com/success?session_id={CHECKOUT_SESSION_ID}'
-            
-            : process.env.NODE_ENV === 'development'
-            ? 'https://virtual-interview-qgvo2.vercel.app/success?session_id={CHECKOUT_SESSION_ID}'
-            : 'http://localhost:3000/success?session_id={CHECKOUT_SESSION_ID}';
+        let successUrl;
+        if (process.env.NODE_ENV === 'production') {
+            successUrl = 'https://record.onepgr.com/success?session_id={CHECKOUT_SESSION_ID}';
+        } else if (process.env.NODE_ENV === 'development' && process.env.IS_VERCEL_DEPLOYMENT === 'true') {
+            successUrl = 'https://virtual-interview-qgvo2.vercel.app/success?session_id={CHECKOUT_SESSION_ID}';
+        } else {
+            successUrl = 'http://localhost:3000/success?session_id={CHECKOUT_SESSION_ID}';
+        }
 
         const session = await stripe.checkout.sessions.create({
             mode: 'subscription',
