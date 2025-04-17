@@ -81,8 +81,8 @@ const SubmissionSchema = new mongoose.Schema({
   applicantName: { type: String, required: true },
   email: { type: String, required: true },
   linkedInUrl: { type: String, required: true },
-  textQuestion: { type: String, required: true },
-  textResponse: { type: String, required: true },
+  textQuestions: [{ type: String, required: true }],
+  textResponses: [{ type: String, required: true }],
   resume: {
     url: { type: String },
     fileName: { type: String },
@@ -388,10 +388,20 @@ router.post('/submit', ensureDbConnection, handleUpload, async (req, res) => {
       hiringManagerEmail,
       applicantName,
       email,
-      linkedInUrl,
-      textResponse,
-      textQuestion
+      linkedInUrl
     } = req.body;
+
+    // Collect all text questions and responses
+    const textQuestions = [];
+    const textResponses = [];
+    let index = 1;
+
+    // Keep collecting questions and responses as long as they exist
+    while (req.body[`textQuestion${index}`] && req.body[`textResponse${index}`]) {
+      textQuestions.push(req.body[`textQuestion${index}`]);
+      textResponses.push(req.body[`textResponse${index}`]);
+      index++;
+    }
 
     // Validate required fields
     if (
@@ -401,8 +411,8 @@ router.post('/submit', ensureDbConnection, handleUpload, async (req, res) => {
       !applicantName ||
       !email ||
       !linkedInUrl ||
-      !textResponse ||
-      !textQuestion ||
+      textQuestions.length === 0 ||
+      textResponses.length === 0 ||
       !req.files ||
       req.files.length === 0
     ) {
@@ -416,8 +426,8 @@ router.post('/submit', ensureDbConnection, handleUpload, async (req, res) => {
           applicantName: !applicantName,
           email: !email,
           linkedInUrl: !linkedInUrl,
-          textResponse: !textResponse,
-          textQuestion: !textQuestion,
+          textQuestions: textQuestions.length === 0,
+          textResponses: textResponses.length === 0,
           files: !req.files || req.files.length === 0
         }
       });
@@ -503,8 +513,8 @@ router.post('/submit', ensureDbConnection, handleUpload, async (req, res) => {
       applicantName,
       email,
       linkedInUrl,
-      textQuestion,
-      textResponse,
+      textQuestions,
+      textResponses,
       videoResponses,
       resume
     });
@@ -541,7 +551,8 @@ router.post('/submit', ensureDbConnection, handleUpload, async (req, res) => {
         emailError: emailResult.success ? null : emailResult.error,
         applicationCount: interview.applicationCount,
         hasResume: !!resume,
-        videoCount: videoResponses.length
+        videoCount: videoResponses.length,
+        textQuestionCount: textQuestions.length
       }
     });
     logSubmissionActivity('Response Sent to Client', {
