@@ -25,7 +25,13 @@ const InterviewSchema = new mongoose.Schema({
     jobPostingUrl: { type: String, required: true },
     companyUrl: String,
     companyLogoUrl: String,
-    questions: { type: [String], required: true },
+    questions: { 
+        type: {
+            textQuestions: [String],
+            videoQuestions: [String]
+        },
+        required: true 
+    },
     applicationLink: { type: String, unique: true, required: true },
     createdAt: { type: Date, default: Date.now },
     status: { type: String, enum: ['active', 'deleted'], default: 'active' },
@@ -55,7 +61,16 @@ router.post('/interviewlink', upload.single('companyLogo'), async (req, res) => 
         const applicationLink = providedApplicationLink || generateUniqueLink();
         const companyLogoUrl = req.file ? `data:${req.file.mimetype};base64,${req.file.buffer.toString('base64')}` : null;
 
-        const parsedQuestions = Array.isArray(questions) ? questions : JSON.parse(questions);
+        // Parse questions if they are strings
+        const parsedQuestions = typeof questions === 'string' ? JSON.parse(questions) : questions;
+        
+        // Validate questions structure
+        if (!parsedQuestions.textQuestions && !parsedQuestions.videoQuestions) {
+            return res.status(400).json({ 
+                success: false, 
+                message: 'Questions must contain either textQuestions or videoQuestions' 
+            });
+        }
 
         const interview = new Interview({
             userId,
@@ -80,7 +95,8 @@ router.post('/interviewlink', upload.single('companyLogo'), async (req, res) => 
                 jobPostingUrl,
                 companyUrl,
                 questions: parsedQuestions,
-                numberOfQuestions: parsedQuestions.length
+                numberOfTextQuestions: parsedQuestions.textQuestions?.length || 0,
+                numberOfVideoQuestions: parsedQuestions.videoQuestions?.length || 0
             }
         });
     } catch (err) {
@@ -201,7 +217,7 @@ router.get('/allinterviews', async (req, res) => {
             applicationLink: `https://record.onepgr.com/InterviewPage/${interview.applicationLink}`,
             createdAt: interview.createdAt,
             status: interview.status,
-            numberOfQuestions: interview.questions.length
+            numberOfQuestions: interview.questions.textQuestions.length + interview.questions.videoQuestions.length
         }));
 
         // Send paginated response
@@ -252,7 +268,7 @@ router.get('/interview/:linkId', async (req, res) => {
                 hiringManagerEmail: interview.email,
                 jobPostingUrl: interview.jobPostingUrl,
                 companyUrl: interview.companyUrl,
-                questions: interview.questions || [],
+                questions: interview.questions,
                 applicationLink: interview.applicationLink,
                 companyLogoUrl: interview.companyLogoUrl,
                 viewCount: interview.viewCount,
