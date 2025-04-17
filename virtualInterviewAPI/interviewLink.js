@@ -25,12 +25,12 @@ const InterviewSchema = new mongoose.Schema({
     jobPostingUrl: { type: String, required: true },
     companyUrl: String,
     companyLogoUrl: String,
-    questions: { 
+    questions: {
         type: {
             textQuestions: [String],
             videoQuestions: [String]
         },
-        required: true 
+        required: true
     },
     applicationLink: { type: String, unique: true, required: true },
     createdAt: { type: Date, default: Date.now },
@@ -63,12 +63,12 @@ router.post('/interviewlink', upload.single('companyLogo'), async (req, res) => 
 
         // Parse questions if they are strings
         const parsedQuestions = typeof questions === 'string' ? JSON.parse(questions) : questions;
-        
+
         // Validate questions structure
         if (!parsedQuestions.textQuestions && !parsedQuestions.videoQuestions) {
-            return res.status(400).json({ 
-                success: false, 
-                message: 'Questions must contain either textQuestions or videoQuestions' 
+            return res.status(400).json({
+                success: false,
+                message: 'Questions must contain either textQuestions or videoQuestions'
             });
         }
 
@@ -217,7 +217,9 @@ router.get('/allinterviews', async (req, res) => {
             applicationLink: `https://record.onepgr.com/InterviewPage/${interview.applicationLink}`,
             createdAt: interview.createdAt,
             status: interview.status,
-            numberOfQuestions: interview.questions.textQuestions.length + interview.questions.videoQuestions.length
+            numberOfTextQuestions: interview.questions?.textQuestions?.length || 0,
+            numberOfVideoQuestions: interview.questions?.videoQuestions?.length || 0,
+            totalQuestions: (interview.questions?.textQuestions?.length || 0) + (interview.questions?.videoQuestions?.length || 0)
         }));
 
         // Send paginated response
