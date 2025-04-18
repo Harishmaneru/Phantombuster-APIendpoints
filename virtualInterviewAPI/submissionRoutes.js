@@ -1155,47 +1155,122 @@ const downloadFileFromS3 = async (fileUrl) => {
 
 
 // Function to evaluate transcription using the AI API
+// Function to evaluate transcription using the AI API
 async function evaluateTranscription(transcription, question) {
-  const scorePrompt = `Based on the provided transcription, please evaluate the candidate on the following criteria and return the evaluation in plain text using the format specified below.
+  const scorePrompt = `
+You are an expert interviewer and subject‑matter specialist. You will be given:
+  • The original interview question.
+  • The candidate’s spoken response transcription.
 
-  Criteria:
-  1. Articulation and Clarity – Provide a score out of 5 and a brief insight.
-  2. Technical Knowledge – Provide a score out of 5 and a brief insight.
-  3. Depth and Detail – Provide a score out of 5 and a brief insight.
-  4. Conversational Effectiveness – Provide a score out of 5 and a brief insight.
-  
-  Return the output exactly in this format:
-  
-  Articulation and Clarity: [score]/5
-  Insight: [insight for articulation and clarity]
-  
-  Technical Knowledge: [score]/5
-  Insight: [insight for technical knowledge]
-  
-  Depth and Detail: [score]/5
-  Insight: [insight for depth and detail]
-  
-  Conversational Effectiveness: [score]/5
-  Insight: [insight for conversational effectiveness]
-  
-  Text: ${transcription}`;
+First, check for a substantive answer:
+
+  – If the transcription is fewer than 10 words, or
+  – If it contains only generic phrases (e.g. “Thank you”, “You”, “Hi”), or
+  – If it’s entirely non‑English or gibberish,
+
+then assign 0/5 on all criteria with the insight:
+  "No substantive response provided."
+
+Otherwise, compare the transcription to the question. For each criterion below, assign a score from 0–5 (0 = no evidence, 5 = exceptional) and in your insight:
+  – Quote or paraphrase a specific excerpt.
+  – Explain why it shows strength or weakness.
+  – Suggest how to improve.
+
+Criteria:
+  1. Articulation & Clarity  
+  2. Technical Knowledge  
+  3. Depth & Detail  
+  4. Conversational Effectiveness  
+
+Return exactly valid JSON in this format:
+
+\`\`\`json
+{
+  "Articulation and Clarity": {
+    "score": X,
+    "insight": "…"
+  },
+  "Technical Knowledge": {
+    "score": Y,
+    "insight": "…"
+  },
+  "Depth and Detail": {
+    "score": Z,
+    "insight": "…"
+  },
+  "Conversational Effectiveness": {
+    "score": W,
+    "insight": "…"
+  }
+}
+\`\`\`
+
+Begin now.  
+Question: “${question}”  
+Transcription: “${transcription}”
+  `.trim();
 
   const payload = {
     prompt: scorePrompt,
     subject: 0
   };
 
-
-  const response = await axios.post('https://app.onepgr.com/session/generateAiResponse', payload, {
-    headers: {
-      'Authorization': `Bearer ${process.env.OPENAI_API_KEY}`
+  const response = await axios.post(
+    'https://app.onepgr.com/session/generateAiResponse',
+    payload,
+    {
+      headers: {
+        'Authorization': `Bearer ${process.env.OPENAI_API_KEY}`
+      }
     }
+  );
 
-  });
+  // response.data.message should now be a JSON string matching the schema above
   console.log(response.data.message)
-  return response.data;
-
+  return JSON.parse(response.data.message);
 }
+
+// async function evaluateTranscription(transcription, question) {
+//   const scorePrompt = `Based on the provided transcription, please evaluate the candidate on the following criteria and return the evaluation in plain text using the format specified below.
+
+//   Criteria:
+//   1. Articulation and Clarity – Provide a score out of 5 and a brief insight.
+//   2. Technical Knowledge – Provide a score out of 5 and a brief insight.
+//   3. Depth and Detail – Provide a score out of 5 and a brief insight.
+//   4. Conversational Effectiveness – Provide a score out of 5 and a brief insight.
+
+//   Return the output exactly in this format:
+
+//   Articulation and Clarity: [score]/5
+//   Insight: [insight for articulation and clarity]
+
+//   Technical Knowledge: [score]/5
+//   Insight: [insight for technical knowledge]
+
+//   Depth and Detail: [score]/5
+//   Insight: [insight for depth and detail]
+
+//   Conversational Effectiveness: [score]/5
+//   Insight: [insight for conversational effectiveness]
+
+//   Text: ${transcription}`;
+
+//   const payload = {
+//     prompt: scorePrompt,
+//     subject: 0
+//   };
+
+
+//   const response = await axios.post('https://app.onepgr.com/session/generateAiResponse', payload, {
+//     headers: {
+//       'Authorization': `Bearer ${process.env.OPENAI_API_KEY}`
+//     }
+
+//   });
+//   console.log(response.data.message)
+//   return response.data;
+
+// }
 
 // New GET endpoint to fetch the evaluation/score for a submission
 router.get('/score/:submissionId', ensureDbConnection, async (req, res) => {
