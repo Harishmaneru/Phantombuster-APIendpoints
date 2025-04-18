@@ -7,8 +7,8 @@ router.use(express.json());
 // Person Search Endpoint
 router.post('/personsearch', async (req, res) => {
     const { location, job_company_name, job_title } = req.body;
-    const apiKey = req.headers['x-api-key'];  
-    
+    const apiKey = req.headers['x-api-key'];
+
     if (!apiKey) {
         return res.status(400).json({
             error: "API key is required in headers as 'x-api-key'."
@@ -41,7 +41,7 @@ router.post('/personsearch', async (req, res) => {
     if (job_company_name) queryObject.bool.must.push({ term: { job_company_name } });
     if (location) queryObject.bool.must.push({ term: { location_country: location } });
 
-    console.log('Query Object:', JSON.stringify(queryObject, null, 2));
+    console.log('[peopledatalabs person search api]Query Object:', JSON.stringify(queryObject, null, 2));
 
     const url = `https://api.peopledatalabs.com/v5/person/search`;
 
@@ -61,10 +61,10 @@ router.post('/personsearch', async (req, res) => {
             }
         );
 
-        console.log(`Total persons received: ${response.data.data.length}`);
+        console.log(`[peopledatalabs person search api]Total persons received: ${response.data.data.length}`);
         res.json(response.data);
     } catch (error) {
-        console.error('Error fetching data:', error.response ? error.response.data : error.message);
+        console.error('[peopledatalabs person search api]Error fetching data:', error.response ? error.response.data : error.message);
         res.status(500).json({
             error: error.response ? error.response.data : error.message
         });
