@@ -1190,9 +1190,11 @@ Transcription: "${transcription}"
 
   // 3) Try to parse JSON; if that fails, throw error
   try {
-    return JSON.parse(envelope.message);
+    // Remove any HTML breaks from the data
+    const rawData = envelope.data.replace(/<br\s*\/?>/g, '');
+    return JSON.parse(rawData);
   } catch (parseErr) {
-    console.error('Failed to parse AI response as JSON:', parseErr.message, 'raw:', envelope.message);
+    console.error('Failed to parse AI response as JSON:', parseErr.message, 'raw:', envelope.data);
     throw new Error(`Invalid JSON from AI service: ${parseErr.message}`);
   }
 }

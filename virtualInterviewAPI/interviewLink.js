@@ -25,7 +25,7 @@ const InterviewSchema = new mongoose.Schema({
     jobPostingUrl: { type: String, required: true },
     companyUrl: String,
     companyLogoUrl: String,
-    videoResponseDurationLimit: { type: Number, default: 120 }, // Default 120 seconds (2 minutes)
+    videoResponseDurationLimit: { type: Number, default: 300 }, // Default 300 seconds (5 minutes)
     questions: {
         type: {
             textQuestions: [String],
@@ -106,7 +106,10 @@ router.post('/interviewlink', upload.single('companyLogo'), async (req, res) => 
                 jobPostingUrl,
                 companyUrl,
                 videoResponseDurationLimit: interview.videoResponseDurationLimit,
-                questions: parsedQuestions,
+                questions: {
+                    textQuestions: parsedQuestions.textQuestions?.map((q, index) => `${index + 1}. ${q}`) || [],
+                    videoQuestions: parsedQuestions.videoQuestions?.map((q, index) => `${(parsedQuestions.textQuestions?.length || 0) + index + 1}. ${q}`) || []
+                },
                 numberOfTextQuestions: parsedQuestions.textQuestions?.length || 0,
                 numberOfVideoQuestions: parsedQuestions.videoQuestions?.length || 0
             }
