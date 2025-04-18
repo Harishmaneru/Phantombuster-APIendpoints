@@ -25,6 +25,7 @@ const InterviewSchema = new mongoose.Schema({
     jobPostingUrl: { type: String, required: true },
     companyUrl: String,
     companyLogoUrl: String,
+    videoResponseDurationLimit: { type: Number, default: 120 }, // Default 120 seconds (2 minutes)
     questions: {
         type: {
             textQuestions: [String],
@@ -52,7 +53,16 @@ function generateUniqueLink() {
 // Create interview link route
 router.post('/interviewlink', upload.single('companyLogo'), async (req, res) => {
     try {
-        const { userId, interviewTitle, email, jobPostingUrl, companyUrl, questions, applicationLink: providedApplicationLink } = req.body;
+        const {
+            userId,
+            interviewTitle,
+            email,
+            jobPostingUrl,
+            companyUrl,
+            questions,
+            applicationLink: providedApplicationLink,
+            videoResponseDurationLimit
+        } = req.body;
 
         if (!userId || !interviewTitle || !email || !jobPostingUrl || !questions) {
             return res.status(400).json({ success: false, message: 'Missing required fields' });
@@ -79,6 +89,7 @@ router.post('/interviewlink', upload.single('companyLogo'), async (req, res) => 
             jobPostingUrl,
             companyUrl,
             companyLogoUrl,
+            videoResponseDurationLimit: videoResponseDurationLimit ? parseInt(videoResponseDurationLimit) : 120,
             questions: parsedQuestions,
             applicationLink
         });
@@ -94,6 +105,7 @@ router.post('/interviewlink', upload.single('companyLogo'), async (req, res) => 
                 email,
                 jobPostingUrl,
                 companyUrl,
+                videoResponseDurationLimit: interview.videoResponseDurationLimit,
                 questions: parsedQuestions,
                 numberOfTextQuestions: parsedQuestions.textQuestions?.length || 0,
                 numberOfVideoQuestions: parsedQuestions.videoQuestions?.length || 0
