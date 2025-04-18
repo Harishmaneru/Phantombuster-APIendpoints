@@ -290,6 +290,7 @@ router.get('/interview/:linkId', async (req, res) => {
             data: {
                 userId: interview.userId,
                 interviewTitle: interview.interviewTitle,
+                videoResponseDurationLimit: interview.videoResponseDurationLimit,
                 hiringManagerEmail: interview.email,
                 jobPostingUrl: interview.jobPostingUrl,
                 companyUrl: interview.companyUrl,
