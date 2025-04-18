@@ -107,8 +107,16 @@ router.post('/interviewlink', upload.single('companyLogo'), async (req, res) => 
                 companyUrl,
                 videoResponseDurationLimit: interview.videoResponseDurationLimit,
                 questions: {
-                    textQuestions: parsedQuestions.textQuestions?.map((q, index) => `${index + 1}. ${q}`) || [],
-                    videoQuestions: parsedQuestions.videoQuestions?.map((q, index) => `${(parsedQuestions.textQuestions?.length || 0) + index + 1}. ${q}`) || []
+                    textQuestions: parsedQuestions.textQuestions?.map((q, index) => {
+                        // Remove any existing numbering from the question
+                        const cleanQuestion = q.replace(/^\d+\.\s*/, '');
+                        return `${index + 1}. ${cleanQuestion}`;
+                    }) || [],
+                    videoQuestions: parsedQuestions.videoQuestions?.map((q, index) => {
+                        // Remove any existing numbering from the question
+                        const cleanQuestion = q.replace(/^\d+\.\s*/, '');
+                        return `${(parsedQuestions.textQuestions?.length || 0) + index + 1}. ${cleanQuestion}`;
+                    }) || []
                 },
                 numberOfTextQuestions: parsedQuestions.textQuestions?.length || 0,
                 numberOfVideoQuestions: parsedQuestions.videoQuestions?.length || 0
