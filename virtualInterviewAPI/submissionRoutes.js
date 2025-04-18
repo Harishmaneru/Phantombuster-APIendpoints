@@ -622,13 +622,6 @@ router.post('/submit', ensureDbConnection, handleUpload, async (req, res) => {
   }
 });
 
-
-
-
-
-
-
-
 //=======================================================================================================
 
 // -------------------------
@@ -814,44 +807,6 @@ function convertVideoToAudio(videoPath, outputAudioPath) {
     });
   });
 }
-
-// Get duration of an audio file using ffmpeg
-// function getAudioDuration(inputPath) {
-//   return new Promise((resolve, reject) => {
-//     const ffmpegProcess = spawn('ffmpeg', ['-i', inputPath]);
-//     let durationFound = false;
-
-//     ffmpegProcess.stderr.on('data', (data) => {
-//       const output = data.toString();
-//       const match = output.match(/Duration: (\d+):(\d+):(\d+\.\d+)/);
-//       if (match) {
-//         durationFound = true;
-//         const hours = parseInt(match[1], 10);
-//         const minutes = parseInt(match[2], 10);
-//         const seconds = parseFloat(match[3]);
-//         const totalSeconds = hours * 3600 + minutes * 60 + seconds;
-//         console.log('Audio duration calculated', {
-//           inputPath,
-//           duration: { hours, minutes, seconds, totalSeconds }
-//         });
-//         resolve(totalSeconds);
-//       }
-//     });
-
-//     ffmpegProcess.on('close', (code) => {
-//       if (!durationFound) {
-//         const error = new Error(`FFmpeg process exited with code ${code}, no duration extracted`);
-//         console.error('Failed to get audio duration', { error: error.message, code });
-//         reject(error);
-//       }
-//     });
-
-//     ffmpegProcess.on('error', (err) => {
-//       console.error('FFmpeg process error', { error: err.message });
-//       reject(err);
-//     });
-//   });
-// }
 
 
 function getAudioDuration(inputPath) {
@@ -1083,18 +1038,27 @@ router.post('/evaluate-videos', ensureDbConnection, async (req, res) => {
     // Process each video response using the new transcription logic
     for (const videoResponse of videoResponses) {
       const videoUrl = videoResponse.videoUrl;
-
       const videoPath = await downloadFileFromS3(videoUrl);
-
       const transcription = await processAudioVideo(videoPath, videoResponse.fileName);
 
-      const evaluation = await evaluateTranscription(transcription, videoResponse.question);
-
-      evaluations.push({
-        question: videoResponse.question,
-        transcription,
-        evaluation
-      });
+      try {
+        const evaluation = await evaluateTranscription(transcription, videoResponse.question);
+        evaluations.push({
+          question: videoResponse.question,
+          transcription,
+          evaluation
+        });
+      } catch (evalError) {
+        console.error('Scoring failure for question:', videoResponse.question, 'error:', evalError.message);
+        // Clean up the video file before returning error
+        fs.unlinkSync(videoPath);
+        return res.status(502).json({
+          success: false,
+          message: 'AI scoring failed',
+          error: evalError.message,
+          question: videoResponse.question
+        });
+      }
 
       // Clean up: Delete the downloaded video file
       fs.unlinkSync(videoPath);
@@ -1155,23 +1119,22 @@ const downloadFileFromS3 = async (fileUrl) => {
 
 
 // Function to evaluate transcription using the AI API
-// Function to evaluate transcription using the AI API
 async function evaluateTranscription(transcription, question) {
+  // 1) Build the JSON‑only prompt with your custom guardrail text
   const scorePrompt = `
 You are an expert interviewer and subject‑matter specialist. You will be given:
   • The original interview question.
-  • The candidate’s spoken response transcription.
+  • The candidate's spoken response transcription.
 
 First, check for a substantive answer:
-
   – If the transcription is fewer than 10 words, or
-  – If it contains only generic phrases (e.g. “Thank you”, “You”, “Hi”), or
-  – If it’s entirely non‑English or gibberish,
+  – If it contains only generic phrases (e.g. "Thank you", "You", "Hi"), or
+  – If it's entirely non‑English or gibberish,
 
 then assign 0/5 on all criteria with the insight:
-  "No substantive response provided."
+  "Candidate did not provide a response."
 
-Otherwise, compare the transcription to the question. For each criterion below, assign a score from 0–5 (0 = no evidence, 5 = exceptional) and in your insight:
+Otherwise, compare the transcription to the question. For each criterion below, assign a score from 0–5 and in your insight:
   – Quote or paraphrase a specific excerpt.
   – Explain why it shows strength or weakness.
   – Suggest how to improve.
@@ -1183,53 +1146,59 @@ Criteria:
   4. Conversational Effectiveness  
 
 Return exactly valid JSON in this format:
-
 \`\`\`json
 {
-  "Articulation and Clarity": {
-    "score": X,
-    "insight": "…"
-  },
-  "Technical Knowledge": {
-    "score": Y,
-    "insight": "…"
-  },
-  "Depth and Detail": {
-    "score": Z,
-    "insight": "…"
-  },
-  "Conversational Effectiveness": {
-    "score": W,
-    "insight": "…"
-  }
+  "Articulation and Clarity":    { "score": 0, "insight": "" },
+  "Technical Knowledge":        { "score": 0, "insight": "" },
+  "Depth and Detail":           { "score": 0, "insight": "" },
+  "Conversational Effectiveness":{ "score": 0, "insight": "" }
 }
 \`\`\`
 
 Begin now.  
-Question: “${question}”  
-Transcription: “${transcription}”
+Question: "${question}"  
+Transcription: "${transcription}"
   `.trim();
 
-  const payload = {
-    prompt: scorePrompt,
-    subject: 0
-  };
+  const payload = { prompt: scorePrompt, subject: 0 };
 
-  const response = await axios.post(
-    'https://app.onepgr.com/session/generateAiResponse',
-    payload,
-    {
-      headers: {
-        'Authorization': `Bearer ${process.env.OPENAI_API_KEY}`
+  // 2) Call the API, catching any network or API‐side errors
+  let envelope;
+  try {
+    const response = await axios.post(
+      'https://app.onepgr.com/session/generateAiResponse',
+      payload,
+      {
+        headers: {
+          'Authorization': `Bearer ${process.env.OPENAI_API_KEY}`
+        }
       }
-    }
-  );
+    );
+    console.log('AI raw response:', response.data);
+    envelope = response.data;
+  } catch (apiErr) {
+    console.error('AI API call failed:', apiErr.message);
+    throw new Error(`AI service unreachable: ${apiErr.message}`);
+  }
 
-  // response.data.message should now be a JSON string matching the schema above
-  console.log(response.data.message)
-  return JSON.parse(response.data.message);
+  // Proxy-level error
+  if (envelope.status !== 0) {
+    const msg = envelope.data?.error?.message || envelope.message || 'Unknown AI proxy error';
+    console.error('AI proxy error:', msg);
+    throw new Error(msg);
+  }
+
+  // 3) Try to parse JSON; if that fails, throw error
+  try {
+    return JSON.parse(envelope.message);
+  } catch (parseErr) {
+    console.error('Failed to parse AI response as JSON:', parseErr.message, 'raw:', envelope.message);
+    throw new Error(`Invalid JSON from AI service: ${parseErr.message}`);
+  }
 }
 
+
+//old evaluation function
 // async function evaluateTranscription(transcription, question) {
 //   const scorePrompt = `Based on the provided transcription, please evaluate the candidate on the following criteria and return the evaluation in plain text using the format specified below.
 
