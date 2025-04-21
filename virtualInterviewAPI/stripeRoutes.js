@@ -627,34 +627,6 @@ router.get('/users/:userId/subscriptions', async (req, res) => {
 
 
 
-
-// Create Billing Portal Session
-// router.post('/create-billing-portal-session', async (req, res) => {
-//     // Generate a Billing Portal session for subscription management
-//     const { customerId, userId } = req.body;
-
-//     try {
-//         // Connect to MongoDB
-//         await connectToMongoDB();
-
-//         // Verify customer exists in our database
-//         const subscriptionRecord = await Subscription.findOne({ customerId });
-
-//         if (!subscriptionRecord && userId) {
-//             console.log(`Warning: Creating portal for customer ${customerId} not in our database`);
-//         }
-
-//         const portalSession = await stripe.billingPortal.sessions.create({
-//             customer: customerId,
-//             return_url: 'https://record.onepgr.com/profile',
-//         });
-
-//         res.json({ url: portalSession.url });
-//     } catch (error) {
-//         res.status(500).json({ error: error.message });
-//     }
-// });
-
 router.post('/create-billing-portal-session', async (req, res) => {
     // Extract customerId and subscriptionId (if available) from the body
     const { customerId, subscriptionId, userId } = req.body;
