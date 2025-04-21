@@ -132,19 +132,25 @@ router.post('/interviewlink', upload.single('companyLogo'), async (req, res) => 
 router.post('/editinterview/:id', async (req, res) => {
     try {
         const { id } = req.params;
-        const { questions, email, interviewTitle } = req.body;
+        const { questions, interviewTitle } = req.body;
 
         // Create update object
         const updateObject = {};
 
         // Add fields to update object if they exist
-        if (questions && Array.isArray(questions)) {
+        if (questions && typeof questions === 'object') {
+            // Validate questions structure
+            if (!questions.textQuestions && !questions.videoQuestions) {
+                return res.status(400).json({
+                    success: false,
+                    message: 'Questions must contain either textQuestions or videoQuestions'
+                });
+            }
             updateObject.questions = questions;
         } else if (questions) {
             return res.status(400).json({ success: false, message: "Invalid questions data" });
         }
 
-        if (email) updateObject.email = email;
         if (interviewTitle) updateObject.interviewTitle = interviewTitle;
 
         // Check if there's anything to update
