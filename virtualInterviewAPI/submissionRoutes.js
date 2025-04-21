@@ -1572,7 +1572,7 @@ router.post('/ricontact', async (req, res) => {
     // Configure email options with improved subject line
     const mailOptions = {
       from: '"RecordedInterview Support" <admin@recordedinterview.com>',
-      to: 'harish@onepgr.com',
+      to: 'harish@onepgr.us',
       subject: `${planName} Inquiry: ${firstName} ${lastName} from ${companyUrl}`,
       html: htmlContent
     };
