@@ -1491,4 +1491,111 @@ router.get('/email-status', async (req, res) => {
   }
 });
 
+
+/**
+ * POST /contact
+ * Handles contact form submissions
+ */
+router.post('/ricontact', async (req, res) => {
+  try {
+    // Verify email transporter first
+    const isTransporterValid = await verifyEmailTransporter();
+    if (!isTransporterValid) {
+      console.error('Email transporter is not valid');
+      return res.status(500).json({
+        success: false,
+        message: 'Email service is not available at the moment. Please try again later.'
+      });
+    }
+
+    // Extract form data
+    const {
+      firstName,
+      lastName,
+      email,
+      companyUrl,
+      phone,
+      message,
+      plan // Added plan field
+    } = req.body;
+
+    // Validate required fields
+    if (!firstName || !lastName || !email || !companyUrl || !message) {
+      return res.status(400).json({
+        success: false,
+        message: 'Missing required fields. Please complete all required information.'
+      });
+    }
+
+    // Validate email format
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!emailRegex.test(email)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid email format. Please provide a valid email address.'
+      });
+    }
+
+    // Get plan name for subject line
+    let planName = "Inquiry";
+    if (plan) {
+      if (plan === "1") planName = "Personal Plan";
+      else if (plan === "2") planName = "Business Plan";
+      else if (plan === "3") planName = "Custom Plan";
+    }
+
+    // Create email HTML content with more professional styling
+    const htmlContent = `
+      <div style="font-family: Arial, sans-serif; max-width: 600px; padding: 20px; border: 1px solid #e0e0e0; border-radius: 5px;">
+        <h2 style="color: #333; border-bottom: 1px solid #e0e0e0; padding-bottom: 10px;">New ${planName} Inquiry</h2>
+        
+        <div style="margin-bottom: 20px;">
+          <h3 style="color: #555; margin-bottom: 5px;">Contact Information</h3>
+          <p style="margin: 5px 0;"><strong>Name:</strong> ${firstName} ${lastName}</p>
+          <p style="margin: 5px 0;"><strong>Email:</strong> ${email}</p>
+          <p style="margin: 5px 0;"><strong>Company:</strong> ${companyUrl}</p>
+          ${phone ? `<p style="margin: 5px 0;"><strong>Phone:</strong> ${phone}</p>` : ''}
+          ${plan ? `<p style="margin: 5px 0;"><strong>Plan Interest:</strong> ${planName}</p>` : ''}
+        </div>
+        
+        <div style="background-color: #f9f9f9; padding: 15px; border-radius: 5px;">
+          <h3 style="color: #555; margin-top: 0;">Message:</h3>
+          <p style="white-space: pre-wrap; margin-bottom: 0;">${message}</p>
+        </div>
+        
+        <p style="font-size: 12px; color: #777; margin-top: 20px; text-align: center;">
+          This inquiry was submitted via the RecordedInterview.com contact form on ${new Date().toLocaleDateString()}.
+        </p>
+      </div>
+    `;
+
+    // Configure email options with improved subject line
+    const mailOptions = {
+      from: '"RecordedInterview Support" <admin@recordedinterview.com>',
+      to: 'harish@onepgr.com',
+      subject: `${planName} Inquiry: ${firstName} ${lastName} from ${companyUrl}`,
+      html: htmlContent
+    };
+
+    // Send the email
+    const info = await transporter.sendMail(mailOptions);
+    console.log('Contact form email sent:', info.messageId);
+
+    // Improved success message
+    return res.status(200).json({
+      success: true,
+      message: 'Thank you for your inquiry! Your message has been received and our team will contact you shortly.',
+      reference: info.messageId.substring(0, 8) // Provide a shortened reference ID
+    });
+
+  } catch (error) {
+    console.error('Error processing contact form:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'We apologize, but we encountered an issue processing your request. Please try again or contact support directly.',
+      error: error.message
+    });
+  }
+});
+
 module.exports = router;
