@@ -88,6 +88,7 @@ const fetchBusinessEvents = async (businessIds, timestampFrom) => {
         throw new Error('Failed to fetch business events');
     }
 };
+
 // Reusable method for fetching funding and acquisition data
 const fetchFundingAndAcquisition = async (businessId) => {
     try {
@@ -105,6 +106,7 @@ const fetchFundingAndAcquisition = async (businessId) => {
         throw new Error('Failed to fetch funding and acquisition data');
     }
 };
+
 router.post('/fetchFundingAndProductLaunchdata', async (req, res) => {
     try {
         const { name, domain, url, year } = req.body;
@@ -219,7 +221,10 @@ const fetchFundingAndProductLaunchSignals = async ({ name, domain, url, year }) 
     // Validate required parameters
     if (!name && !domain && !url) {
         console.error('[EXPLORIUM_BUSINESSES_API] Validation Error: No identifier provided');
-        throw new Error('At least one of: name, domain, or url is required');
+        return {
+            status: '-1',
+            message: 'At least one of: name, domain, or url is required'
+        };
     }
 
     try {
@@ -232,7 +237,10 @@ const fetchFundingAndProductLaunchSignals = async ({ name, domain, url, year }) 
         const businessIds = await matchBusinesses({ name, domain, url });
         if (!businessIds.length) {
             console.error('[EXPLORIUM_BUSINESSES_API] No businesses found for criteria:', { name, domain, url });
-            throw new Error('No businesses found for the given criteria');
+            return {
+                status: '-1',
+                message: 'No businesses found for the given criteria'
+            };
         }
         console.log('[EXPLORIUM_BUSINESSES_API] Found business IDs:', businessIds);
 
@@ -240,10 +248,20 @@ const fetchFundingAndProductLaunchSignals = async ({ name, domain, url, year }) 
         const events = await fetchBusinessEvents(businessIds, timestampFrom);
         console.log('[EXPLORIUM_BUSINESSES_API] Retrieved events count:', events.length);
 
+        // Check if events are empty
+        if (!events.output_events || events.output_events.length === 0) {
+            return {
+                status: '-1',
+                message: 'No funding announcements found for the provided company',
+                timestamp_from: timestampFrom,
+                matched_business_ids: businessIds
+            };
+        }
+
         const response = {
             status: '1',
             fundingInvestmentAndProductLaunchData: events,
-            count: events.length,
+            count: events.output_events ? events.output_events.length : 0,
             timestamp_from: timestampFrom,
             matched_business_ids: businessIds
         };
@@ -251,7 +269,10 @@ const fetchFundingAndProductLaunchSignals = async ({ name, domain, url, year }) 
         return response;
     } catch (error) {
         console.error('[EXPLORIUM_BUSINESSES_API] Error in fetchFundingAndProductLaunchSignals:', error.message);
-        throw error;
+        return {
+            status: '-1',
+            message: error.message || 'An error occurred during processing'
+        };
     }
 };
 
@@ -262,7 +283,10 @@ const fetchFundingAcquisitionInfo = async ({ name, domain, url }) => {
     // Validate required parameters
     if (!name && !domain && !url) {
         console.error('[EXPLORIUM_BUSINESSES_API] Validation Error: No identifier provided');
-        throw new Error('At least one of: name, domain, or url is required');
+        return {
+            status: '-1',
+            message: 'At least one of: name, domain, or url is required'
+        };
     }
 
     try {
@@ -271,7 +295,10 @@ const fetchFundingAcquisitionInfo = async ({ name, domain, url }) => {
         const businessIds = await matchBusinesses({ name, domain, url });
         if (!businessIds.length) {
             console.error('[EXPLORIUM_BUSINESSES_API] No businesses found for criteria:', { name, domain, url });
-            throw new Error('No businesses found for the given criteria');
+            return {
+                status: '-1',
+                message: 'No businesses found for the given criteria'
+            };
         }
         console.log('[EXPLORIUM_BUSINESSES_API] Found business IDs:', businessIds);
 
@@ -279,6 +306,15 @@ const fetchFundingAcquisitionInfo = async ({ name, domain, url }) => {
         console.log('[EXPLORIUM_BUSINESSES_API] Fetching funding data for business ID:', businessIds[0]);
         const fundingData = await fetchFundingAndAcquisition(businessIds[0]);
         console.log('[EXPLORIUM_BUSINESSES_API] Retrieved funding data:', !!fundingData);
+
+        // Check if the response data is empty
+        if (!fundingData || Object.keys(fundingData).length === 0) {
+            return {
+                status: '-1',
+                message: 'No funding and acquisition data found for the provided company',
+                business_id: businessIds[0]
+            };
+        }
 
         const response = {
             status: '1',
@@ -289,7 +325,10 @@ const fetchFundingAcquisitionInfo = async ({ name, domain, url }) => {
         return response;
     } catch (error) {
         console.error('[EXPLORIUM_BUSINESSES_API] Error in fetchFundingAcquisitionInfo:', error.message);
-        throw error;
+        return {
+            status: '-1',
+            message: error.message || 'An error occurred during processing'
+        };
     }
 };
 
@@ -365,7 +404,10 @@ const fetchTechnographicsInfo = async ({ domain }) => {
     // Validate required parameters
     if (!domain) {
         console.error('[EXPLORIUM_BUSINESSES_API] Validation Error: Domain is required');
-        throw new Error('Domain is required');
+        return {
+            status: '-1',
+            message: 'Domain is required'
+        };
     }
 
     try {
@@ -374,7 +416,10 @@ const fetchTechnographicsInfo = async ({ domain }) => {
         const businessIds = await matchBusinesses({ domain });
         if (!businessIds.length) {
             console.error('[EXPLORIUM_BUSINESSES_API] No businesses found for domain:', domain);
-            throw new Error('No businesses found for the given domain');
+            return {
+                status: '-1',
+                message: 'No businesses found for the given domain'
+            };
         }
         console.log('[EXPLORIUM_BUSINESSES_API] Found business IDs:', businessIds);
 
@@ -382,6 +427,15 @@ const fetchTechnographicsInfo = async ({ domain }) => {
         console.log('[EXPLORIUM_BUSINESSES_API] Fetching technographics data for business ID:', businessIds[0]);
         const technographicsData = await fetchTechnographicsData(businessIds[0]);
         console.log('[EXPLORIUM_BUSINESSES_API] Retrieved technographics data:', !!technographicsData);
+
+        // Check if the response data is empty
+        if (!technographicsData || Object.keys(technographicsData).length === 0) {
+            return {
+                status: '-1',
+                message: 'No technographics data found for the provided company',
+                business_id: businessIds[0]
+            };
+        }
 
         const response = {
             status: '1',
@@ -392,7 +446,10 @@ const fetchTechnographicsInfo = async ({ domain }) => {
         return response;
     } catch (error) {
         console.error('[EXPLORIUM_BUSINESSES_API] Error in fetchTechnographicsInfo:', error.message);
-        throw error;
+        return {
+            status: '-1',
+            message: error.message || 'An error occurred during processing'
+        };
     }
 };
 
