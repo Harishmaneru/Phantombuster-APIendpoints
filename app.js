@@ -30,6 +30,7 @@ const warmupEmail = require('./SmartLeadAPI/warmupEmail.js');
 const emailValidation = require('./naverBounceAPI/emailValidation.js');
 
 const webhook = require('./TrigifyAPI/webhook.js');
+const rb2bEvents = require('./webhooks/rb2bevents.js');
 
 const phoneValidationApi = require('./TrestleAPI/phoneValidationApi.js');
 
@@ -157,6 +158,7 @@ app.use(linkdinMessagesScraper);
 app.use(emailValidation);
 app.use(personSearch);
 app.use(webhook);
+app.use(rb2bEvents);
 app.use(phoneValidationApi);
 app.use(realContact);
 app.use(findPerson);

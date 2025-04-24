@@ -221,8 +221,8 @@ router.post('/fetch-person-changes', async (req, res) => {
         if (!changes || changes.length === 0) {
             return res.status(404).json({
                 status: '-1',
-                message: 'No changes or events found for the given prospect(s) since ' + 
-                         new Date(timestampFrom).getFullYear()
+                message: 'No changes or events found for the given prospect(s) since ' +
+                    new Date(timestampFrom).getFullYear()
             });
         }
 
