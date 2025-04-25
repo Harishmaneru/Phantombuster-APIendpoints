@@ -31,7 +31,7 @@ const emailValidation = require('./naverBounceAPI/emailValidation.js');
 
 const webhook = require('./TrigifyAPI/webhook.js');
 const rb2bEvents = require('./webhooks/rb2bevents.js');
-const slackEvents = require('./webhooks/rislackEvents.js');
+const slackEvents = require('./webhooks/slackEvents.js');
 
 const phoneValidationApi = require('./TrestleAPI/phoneValidationApi.js');
 
@@ -194,7 +194,7 @@ app.use(warmupInbox);
 app.use(prospectsAPI);
 app.use(businessesAPI.router);
 app.use(signupApi);
-app.use('/webhooks/slack', slackEvents);
+app.use(slackEvents);
 
 const options = {
   key: fs.readFileSync('./onepgr.com.key', 'utf8'),
