@@ -209,7 +209,6 @@ const server = https.createServer(options, app);
 
 // Set server timeout
 server.setTimeout(30 * 60 * 1000); // 30 minutes
-
 server.listen(port, () => {
   console.log(`Server running on port:${port}`);
 })
