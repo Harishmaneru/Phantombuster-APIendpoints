@@ -194,7 +194,10 @@ app.use(warmupInbox);
 app.use(prospectsAPI);
 app.use(businessesAPI.router);
 app.use(signupApi);
-app.use(slackEvents);
+app.use(
+  '/webhook/rb2b-ri-visitors',
+  slackEvents
+);
 
 const options = {
   key: fs.readFileSync('./onepgr.com.key', 'utf8'),
