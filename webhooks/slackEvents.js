@@ -1,103 +1,124 @@
-// slackEvents.js
-const express = require('express');
-const crypto = require('crypto');
+
+
+const express    = require('express');
+const bodyParser = require('body-parser');
+const crypto     = require('crypto');
 
 const router = express.Router();
 
-// ─── Config ───────────────────────────────────────────────────────────────
+// ─── Configuration ─────────────────────────────────────────────────────────
 const SIGNING_SECRET = process.env.SLACK_SIGNING_SECRET;
-const TARGET_CHANNEL = process.env.SLACK_TARGET_CHANNEL_ID;
-if (!SIGNING_SECRET) console.error('⚠️ Missing SLACK_SIGNING_SECRET');
-if (!TARGET_CHANNEL) console.error('⚠️ Missing SLACK_TARGET_CHANNEL_ID');
+const CHANNEL_ID     = process.env.SLACK_TARGET_CHANNEL_ID; 
+// e.g. C0123456789 for #rb2b-hp-recorded-int
 
-// ─── Body + Raw capture ────────────────────────────────────────────────────
-router.use(express.json({
-  verify(req, res, buf) { req.rawBody = buf; }
-}));
+if (!SIGNING_SECRET) {
+  console.log('  Missing required env var SLACK_SIGNING_SECRET');
+}
+if (!CHANNEL_ID) {
+  console.log('  Missing required env var SLACK_TARGET_CHANNEL_ID');
+}
 
-// ─── Verify Slack signature & timestamp ────────────────────────────────────
-router.use((req, res, next) => {
-  const sig = req.headers['x-slack-signature'];
-  const ts = req.headers['x-slack-request-timestamp'];
-  if (!sig || !ts) {
-    console.warn('Missing Slack headers');
-    return res.status(400).send('Bad request');
-  }
+// ─── 1) Health‐check (Slack’s UI “Retry” does a GET) ─────────────────────────
+router.get('/webhooks/rb2b-ri-visitors', (_req, res) => {
+  res.send('OK');
+});
 
-  // replay protection
-  const now = Math.floor(Date.now() / 1000);
-  if (Math.abs(now - Number(ts)) > 300) {
-    console.warn('Stale Slack request');
-    return res.status(400).send('Stale request');
-  }
+// ─── 2) Main Events POST ────────────────────────────────────────────────────
+router.post(
+  '/slack/rb2b-ri-visitors',
 
-  // recreate signature
-  const base = `v0:${ts}:${req.rawBody.toString('utf8')}`;
-  const myHash = 'v0='
-    + crypto.createHmac('sha256', SIGNING_SECRET)
+  // A) grab raw body for signature verification
+  bodyParser.raw({ type: 'application/json' }),
+
+  // B) verify Slack signature & timestamp
+  (req, res, next) => {
+    const slackSig = req.headers['x-slack-signature'];
+    const slackTs  = req.headers['x-slack-request-timestamp'];
+    if (!slackSig || !slackTs) {
+      console.warn('⚠️  Missing Slack signature headers on POST');
+      return res.status(400).send('Bad request');
+    }
+
+    // prevent replay attacks (5-minute window)
+    const now = Math.floor(Date.now() / 1000);
+    if (Math.abs(now - Number(slackTs)) > 300) {
+      console.warn('⚠️  Stale Slack request:', now - Number(slackTs), 'seconds old');
+      return res.status(400).send('Stale request');
+    }
+
+    // reconstruct Slack’s signing base string
+    const base = `v0:${slackTs}:${req.body.toString('utf8')}`;
+    const myHash = 'v0=' + crypto
+      .createHmac('sha256', SIGNING_SECRET)
       .update(base)
       .digest('hex');
 
-  if (!crypto.timingSafeEqual(
-    Buffer.from(myHash, 'utf8'),
-    Buffer.from(sig, 'utf8')
-  )) {
-    console.warn('Invalid Slack signature');
-    return res.status(401).send('Invalid signature');
-  }
-  next();
-});
+    if (!crypto.timingSafeEqual(
+      Buffer.from(myHash, 'utf8'),
+      Buffer.from(slackSig, 'utf8')
+    )) {
+      console.warn('⚠️  Invalid Slack signature');
+      return res.status(401).send('Invalid signature');
+    }
 
-// ─── Main handler ──────────────────────────────────────────────────────────
-router.post('/', (req, res) => {
-  try {
-    const { type, challenge, event } = req.body;
-    console.info('[SlackEvent] type=', type);
+    // signature verified
+    next();
+  },
 
-    // 1) URL verification
+  // C) handle the event
+  (req, res) => {
+    let body;
+    try {
+      body = JSON.parse(req.body.toString('utf8'));
+    } catch (err) {
+      console.error('❌ Failed to parse Slack JSON body', err);
+      return res.sendStatus(400);
+    }
+
+    const { type, challenge, event } = body;
+    console.info('[SlackEvent] payload type=', type);
+
+    // 1) URL verification handshake
     if (type === 'url_verification') {
-      console.info('[SlackEvent] responding to URL verification');
-      // **IMPORTANT**: echo the raw challenge string
+      console.info('[SlackEvent] responding to challenge');
+      // echo the raw challenge string **exactly**
       return res.send(challenge);
     }
 
-    // 2) Acknowledge callback
+    // 2) Acknowledge receipt so Slack stops retrying
     res.sendStatus(200);
 
-    // 3) Validate event object
+    // 3) guard: must have an event
     if (!event) {
       console.warn('[SlackEvent] no event object');
       return;
     }
 
-    // 4) Only handle our target channel
-    if (event.channel !== TARGET_CHANNEL) {
-      console.info(`[SlackEvent] skipping channel ${event.channel}`);
+    // 4) only process our RB2B channel
+    if (event.channel !== CHANNEL_ID) {
+      console.info(`[SlackEvent] ignoring channel ${event.channel}`);
       return;
     }
 
-    // 5) Dispatch on event.type
-    console.info(`[SlackEvent] event.type=${event.type}`);
+    // 5) dispatch by type
     switch (event.type) {
       case 'message':
-        console.info('[SlackEvent] message:', event.text);
-        // ← parse & persist your visitor here
+        console.info('[SlackEvent] message text:', event.text);
+        // ► parse & persist your visitor-profile here
         break;
 
       case 'reaction_added':
-        console.info('[SlackEvent] reaction:', event.reaction);
+        console.info('[SlackEvent] reaction added:', event.reaction);
         break;
 
       case 'app_mention':
-        console.info('[SlackEvent] mention:', event.text);
+        console.info('[SlackEvent] app mentioned:', event.text);
         break;
 
       default:
-        console.info('[SlackEvent] unhandled type:', event.type);
+        console.info('[SlackEvent] unhandled event type:', event.type);
     }
-  } catch (err) {
-    console.error('[SlackEvent] handler error:', err);
   }
-});
+);
 
 module.exports = router;

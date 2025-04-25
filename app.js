@@ -194,10 +194,7 @@ app.use(warmupInbox);
 app.use(prospectsAPI);
 app.use(businessesAPI.router);
 app.use(signupApi);
-app.use(
-  '/webhook/rb2b-ri-visitors',
-  slackEvents
-);
+app.use(slackEvents);
 
 const options = {
   key: fs.readFileSync('./onepgr.com.key', 'utf8'),
@@ -215,4 +212,4 @@ server.setTimeout(30 * 60 * 1000); // 30 minutes
 
 server.listen(port, () => {
   console.log(`Server running on port:${port}`);
-});
+})
