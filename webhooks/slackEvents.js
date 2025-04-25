@@ -26,13 +26,18 @@ router.post(
   '/slack/rb2b-ri-visitors',
 
   // A) Capture raw body for HMAC
-  express.raw({ type: 'application/json' }),
+  express.raw({ 
+    type: 'application/json',
+    verify: (req, _res, buf, encoding) => {
+      req.rawBody = buf.toString(encoding || 'utf8');
+    }
+  }),
 
   // B) Signature & timestamp validation
   (req, res, next) => {
     const ts = req.headers['x-slack-request-timestamp'];
     const sig = req.headers['x-slack-signature'];
-    const text = req.body.toString('utf8');
+    const text = req.rawBody || req.body.toString('utf8');
 
     console.info('[SlackEvent] Incoming POST:', { ts, sig, body: text });
 
@@ -55,14 +60,21 @@ router.post(
       .update(base)
       .digest('hex');
 
+    console.info('[SlackEvent] Received signature:', sig);
     console.info('[SlackEvent] Computed signature:', myHash);
 
-    if (!crypto.timingSafeEqual(
-      Buffer.from(myHash, 'utf8'),
-      Buffer.from(sig, 'utf8')
-    )) {
-      console.warn('⚠️  Invalid signature');
-      return res.status(401).send('Invalid signature');
+    // Use Buffer comparison for consistent length comparison
+    try {
+      if (!crypto.timingSafeEqual(
+        Buffer.from(myHash, 'utf8'),
+        Buffer.from(sig, 'utf8')
+      )) {
+        console.warn('⚠️  Invalid signature');
+        return res.status(401).send('Invalid signature');
+      }
+    } catch (error) {
+      console.error('❌ Error comparing signatures:', error.message);
+      return res.status(401).send('Signature verification error');
     }
 
     next();
@@ -72,7 +84,7 @@ router.post(
   (req, res) => {
     let payload;
     try {
-      payload = JSON.parse(req.body.toString('utf8'));
+      payload = JSON.parse(req.rawBody || req.body.toString('utf8'));
     } catch (e) {
       console.error('❌  JSON parse error:', e);
       return res.sendStatus(400);
