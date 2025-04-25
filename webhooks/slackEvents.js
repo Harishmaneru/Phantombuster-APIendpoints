@@ -19,7 +19,7 @@ if (!CHANNEL_ID) {
 }
 
 // ─── 1) Health‐check (Slack’s UI “Retry” does a GET) ─────────────────────────
-router.get('/webhooks/rb2b-ri-visitors', (_req, res) => {
+router.get('/slack/rb2b-ri-visitors', (_req, res) => {
   res.send('OK');
 });
 
