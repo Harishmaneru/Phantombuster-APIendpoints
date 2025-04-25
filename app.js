@@ -142,9 +142,19 @@ app.use(
 // Register Stripe webhook route before body parser
 app.use('/api/stripe', stripeRoutes);
 
+// ─── Slack needs raw body for signature verification ───────────────────────
+// Mount the raw-body parser *only* on your Slack endpoint, before express.json()
+app.use(
+  '/slack/rb2b-ri-visitors',
+  express.raw({ type: 'application/json' })
+);
+
 // Global middleware for parsing JSON (after webhook route)
 app.use(express.json());
-app.use(slackEvents);
+
+// Mount your Slack routes (they do GET/POST on /slack/rb2b-ri-visitors)
+app.use('/', slackEvents);
+
 app.use(accountScraper);
 app.use(likesCommentsScraper);
 app.use(profileScraper);
