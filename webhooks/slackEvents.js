@@ -1,5 +1,30 @@
 const express = require('express');
 const crypto = require('crypto');
+const mongoose = require('mongoose');
+
+// MongoDB connection
+mongoose.connect(process.env.ONEPGR_MONGO_URI, {
+  useNewUrlParser: true,
+  useUnifiedTopology: true,
+  dbName: 'onepgr_apps'
+});
+
+// Define visitor schema
+const VisitorSchema = new mongoose.Schema({
+  slackId: { type: String, unique: true },
+  name: String,
+  title: String,
+  company: String,
+  email: String,
+  linkedin: String,
+  location: String,
+  pageCount: Number,
+  firstSeen: Date,
+  lastSeen: Date,
+});
+
+// Create Visitor model using 'slack_ri_events' collection
+const Visitor = mongoose.model('Visitor', VisitorSchema, 'slack_ri_events');
 
 const router = express.Router();
 const SIGNING_SECRET = process.env.SLACK_SIGNING_SECRET;
@@ -66,6 +91,32 @@ router.post('/slack/rb2b-ri-visitors', (req, res, next) => {
   const { event } = payload;
   if (!event) return;
   if (event.channel !== CHANNEL_ID) return;
+
+  // Store event in database
+  try {
+    if (event.type === 'message' && event.user) {
+      // Update or create visitor record
+      Visitor.findOneAndUpdate(
+        { slackId: event.user },
+        {
+          $set: {
+            lastSeen: new Date()
+          },
+          $setOnInsert: {
+            slackId: event.user,
+            firstSeen: new Date(),
+            pageCount: 1
+          },
+          $inc: {
+            pageCount: 0  // Only increment on first creation due to $setOnInsert
+          }
+        },
+        { upsert: true, new: true }
+      ).catch(err => console.error('Error storing visitor event:', err));
+    }
+  } catch (dbError) {
+    console.error('Database error:', dbError);
+  }
 
   switch (event.type) {
     case 'message':
