@@ -21,6 +21,16 @@ console.info('[SlackEvent] Environment:', {
   CHANNEL_ID: CHANNEL_ID || 'missing'
 });
 
+// Define raw body middleware separately for better control
+const rawBodyMiddleware = express.raw({ 
+  type: 'application/json',
+  verify: (req, _res, buf, encoding) => {
+    if (buf && buf.length) {
+      req.rawBody = buf.toString(encoding || 'utf8');
+    }
+  }
+});
+
 // ─── Health-check GET ──────────────────────────────────────────────────────
 router.get('/slack/rb2b-ri-visitors', (_req, res) => {
   console.info('[SlackEvent] GET /webhooks/rb2b-ri-visitors → OK');
@@ -31,13 +41,8 @@ router.get('/slack/rb2b-ri-visitors', (_req, res) => {
 router.post(
   '/slack/rb2b-ri-visitors',
 
-  // A) Capture raw body for HMAC
-  express.raw({ 
-    type: 'application/json',
-    verify: (req, _res, buf, encoding) => {
-      req.rawBody = buf.toString(encoding || 'utf8');
-    }
-  }),
+  // A) Capture raw body for HMAC - apply as first middleware
+  rawBodyMiddleware,
 
   // B) Signature & timestamp validation
   (req, res, next) => {
@@ -47,6 +52,8 @@ router.post(
     // Ensure we have the raw body
     if (!req.rawBody) {
       console.error('❌ Missing rawBody');
+      console.debug('[DEBUG] Headers:', req.headers);
+      console.debug('[DEBUG] Body type:', typeof req.body);
       return res.status(400).send('Bad request: Missing raw body');
     }
     
