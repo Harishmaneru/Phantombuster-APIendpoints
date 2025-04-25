@@ -15,6 +15,12 @@ if (!CHANNEL_ID) {
   console.error('⚠️  Missing SLACK_TARGET_CHANNEL_ID');
 }
 
+// Log environment variables for debugging
+console.info('[SlackEvent] Environment:', {
+  SIGNING_SECRET: SIGNING_SECRET ? 'present' : 'missing',
+  CHANNEL_ID: CHANNEL_ID || 'missing'
+});
+
 // ─── Health-check GET ──────────────────────────────────────────────────────
 router.get('/slack/rb2b-ri-visitors', (_req, res) => {
   console.info('[SlackEvent] GET /webhooks/rb2b-ri-visitors → OK');
@@ -37,9 +43,20 @@ router.post(
   (req, res, next) => {
     const ts = req.headers['x-slack-request-timestamp'];
     const sig = req.headers['x-slack-signature'];
-    const text = req.rawBody || req.body.toString('utf8');
-
-    console.info('[SlackEvent] Incoming POST:', { ts, sig, body: text });
+    
+    // Ensure we have the raw body
+    if (!req.rawBody) {
+      console.error('❌ Missing rawBody');
+      return res.status(400).send('Bad request: Missing raw body');
+    }
+    
+    // Debug logging
+    console.info('[SlackEvent] Incoming POST:', { 
+      ts, 
+      sig, 
+      rawBodyLength: req.rawBody?.length,
+      rawBodyPreview: req.rawBody?.substring(0, 100) 
+    });
 
     if (!ts || !sig) {
       console.warn('⚠️  Missing Slack headers');
@@ -53,8 +70,8 @@ router.post(
       return res.status(400).send('Stale request');
     }
 
-    // Recompute signature
-    const base = `v0:${ts}:${text}`;
+    // Recompute signature using the raw body
+    const base = `v0:${ts}:${req.rawBody}`;
     const myHash = 'v0=' + crypto
       .createHmac('sha256', SIGNING_SECRET)
       .update(base)
@@ -84,7 +101,7 @@ router.post(
   (req, res) => {
     let payload;
     try {
-      payload = JSON.parse(req.rawBody || req.body.toString('utf8'));
+      payload = JSON.parse(req.rawBody);
     } catch (e) {
       console.error('❌  JSON parse error:', e);
       return res.sendStatus(400);
