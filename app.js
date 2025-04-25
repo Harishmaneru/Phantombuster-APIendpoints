@@ -5,6 +5,10 @@ const fs = require('fs');
 const cors = require('cors');
 require('dotenv').config();
 
+
+const slackEvents = require('./webhooks/slackEvents.js');
+
+
 const accountScraper = require('./PhantombusterAPI/AccountScraper.js');
 const companyEmployesScrap = require('./PhantombusterAPI/companyEmployesScrap.js');
 const likesCommentsScraper = require('./PhantombusterAPI/LikesCommentsScrap.js');
@@ -31,7 +35,7 @@ const emailValidation = require('./naverBounceAPI/emailValidation.js');
 
 const webhook = require('./TrigifyAPI/webhook.js');
 const rb2bEvents = require('./webhooks/rb2bevents.js');
-const slackEvents = require('./webhooks/slackEvents.js');
+
 
 const phoneValidationApi = require('./TrestleAPI/phoneValidationApi.js');
 
@@ -140,7 +144,7 @@ app.use('/api/stripe', stripeRoutes);
 
 // Global middleware for parsing JSON (after webhook route)
 app.use(express.json());
-
+app.use(slackEvents);
 app.use(accountScraper);
 app.use(likesCommentsScraper);
 app.use(profileScraper);
@@ -194,7 +198,7 @@ app.use(warmupInbox);
 app.use(prospectsAPI);
 app.use(businessesAPI.router);
 app.use(signupApi);
-app.use(slackEvents);
+
 
 const options = {
   key: fs.readFileSync('./onepgr.com.key', 'utf8'),

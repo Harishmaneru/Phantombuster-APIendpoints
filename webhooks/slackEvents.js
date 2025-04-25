@@ -10,7 +10,7 @@ const CHANNEL_ID     = process.env.SLACK_TARGET_CHANNEL_ID;
 if (!SIGNING_SECRET)  console.error('⚠️ Missing SLACK_SIGNING_SECRET');
 if (!CHANNEL_ID)      console.error('⚠️ Missing SLACK_TARGET_CHANNEL_ID');
 
-// ─── 1) Health-check so Slack’s UI “Retry” (GET) passes ────────────────
+// ─── 1) Health-check so Slack's UI "Retry" (GET) passes ────────────────
 router.get('/slack/rb2b-ri-visitors', (_req, res) => {
   res.send('OK');
 });
@@ -26,7 +26,10 @@ router.post(
   (req, res, next) => {
     const ts  = req.headers['x-slack-request-timestamp'];
     const sig = req.headers['x-slack-signature'];
-    const bodyText = req.body.toString('utf8');
+    
+    // Make sure req.body is a Buffer
+    const rawBody = Buffer.isBuffer(req.body) ? req.body : Buffer.from(req.body);
+    const bodyText = rawBody.toString('utf8');
 
     console.info('[SlackEvent] headers:', {
       ts, sig
@@ -62,6 +65,9 @@ router.post(
       return res.status(401).send('Invalid signature');
     }
 
+    // Store the parsed body text for the next middleware
+    req.rawBodyText = bodyText;
+    
     // Passed verification
     next();
   },
@@ -70,7 +76,8 @@ router.post(
   (req, res) => {
     let payload;
     try {
-      payload = JSON.parse(req.body.toString('utf8'));
+      // Use the stored body text from previous middleware
+      payload = JSON.parse(req.rawBodyText);
     } catch (err) {
       console.error('❌ JSON parse error:', err);
       return res.sendStatus(400);
