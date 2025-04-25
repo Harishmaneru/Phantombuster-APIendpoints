@@ -9,13 +9,17 @@ mongoose.connect(process.env.ONEPGR_MONGO_URI, {
   dbName: 'onepgr_apps'
 });
 
+// Connection error handling
+mongoose.connection
+  .on('error', err => console.error('[slackEvents]MongoDB error', err))
+  .once('open', () => console.log('[slackEvents] MongoDB connected'));
+
 // Define visitor schema
 const VisitorSchema = new mongoose.Schema({
-  slackId: { type: String, unique: true },
   name: String,
   title: String,
   company: String,
-  email: String,
+  email: { type: String, unique: true },
   linkedin: String,
   location: String,
   pageCount: Number,
@@ -23,25 +27,51 @@ const VisitorSchema = new mongoose.Schema({
   lastSeen: Date,
 });
 
+// Ensure indexes are created
+VisitorSchema.index({ email: 1 }, { unique: true });
+
 // Create Visitor model using 'slack_ri_events' collection
 const Visitor = mongoose.model('Visitor', VisitorSchema, 'slack_ri_events');
+
+// Helper function to parse visitor information from message text
+function parseVisitorText(text) {
+  const lines = text.split('\n');
+  const v = {};
+  for (let line of lines) {
+    const [key, ...rest] = line.split(':');
+    const val = rest.join(':').trim();
+    switch (key.trim()) {
+      case 'Name': v.name = val; break;
+      case 'Title': v.title = val; break;
+      case 'Company': v.company = val; break;
+      case 'Email': v.email = val; break;
+      case 'LinkedIn': v.linkedin = val; break;
+      case 'Location': v.location = val; break;
+      default:
+        const m = line.match(/visited\s+(\d+)\s+pages/);
+        if (m) v.pageCount = Number(m[1]);
+    }
+  }
+  return v;
+}
 
 const router = express.Router();
 const SIGNING_SECRET = process.env.SLACK_SIGNING_SECRET;
 const CHANNEL_ID = process.env.SLACK_TARGET_CHANNEL_ID;
+const RB2B_BOT_ID = process.env.RB2B_BOT_ID;
 
 // Health-check
 router.get('/slack/rb2b-ri-visitors', (_req, res) => {
   res.send('OK');
 });
 
-router.post('/slack/rb2b-ri-visitors', (req, res, next) => {
+router.post('/slack/rb2b-ri-visitors', async (req, res) => {
   const ts = req.headers['x-slack-request-timestamp'];
   const sig = req.headers['x-slack-signature'];
   const raw = req.body;         // <-- Buffer now
 
   if (!raw || !Buffer.isBuffer(raw)) {
-    console.error('❌ Missing raw body buffer');
+    console.error('[slackEvents] Missing raw body buffer');
     return res.status(400).send('Bad request: Missing raw body');
   }
 
@@ -73,7 +103,7 @@ router.post('/slack/rb2b-ri-visitors', (req, res, next) => {
   try {
     payload = JSON.parse(raw.toString('utf8'));
   } catch (err) {
-    console.error('❌ JSON parse error:', err);
+    console.error('[slackEvents] JSON parse error:', err);
     return res.sendStatus(400);
   }
 
@@ -87,51 +117,56 @@ router.post('/slack/rb2b-ri-visitors', (req, res, next) => {
   // Acknowledge to Slack immediately
   res.sendStatus(200);
 
-  // …and then handle your events…
+  // Process the event
   const { event } = payload;
   if (!event) return;
+
+  // Filter to target channel only
   if (event.channel !== CHANNEL_ID) return;
 
-  // Store event in database
-  try {
-    if (event.type === 'message' && event.user) {
-      // Update or create visitor record
-      Visitor.findOneAndUpdate(
-        { slackId: event.user },
-        {
-          $set: {
-            lastSeen: new Date()
-          },
-          $setOnInsert: {
-            slackId: event.user,
-            firstSeen: new Date(),
-            pageCount: 1
-          },
-          $inc: {
-            pageCount: 0  // Only increment on first creation due to $setOnInsert
-          }
-        },
-        { upsert: true, new: true }
-      ).catch(err => console.error('Error storing visitor event:', err));
-    }
-  } catch (dbError) {
-    console.error('Database error:', dbError);
+  // Only process bot posts from RB2B scraper
+  if (
+    event.type !== 'message' ||
+    event.subtype !== 'bot_message' ||
+    event.bot_id !== RB2B_BOT_ID
+  ) {
+    return;
   }
 
-  switch (event.type) {
-    case 'message':
-      console.log('[SlackEvent] Message:', event.text);
-      break;
-    case 'reaction_added':
-      console.info('[SlackEvent] Reaction added:', event.reaction);
-      break;
-    case 'app_mention':
-      console.info('[SlackEvent] App mentioned with:', event.text);
-      break;
-    default:
-      console.info('[SlackEvent] Unhandled event type:', event.type);
+  try {
+    // Parse the visitor fields out of event.text
+    const visitor = parseVisitorText(event.text);
+
+    // Skip if no email (our unique key)
+    if (!visitor.email) {
+      console.warn('[slackEvents] Missing email in visitor data, skipping');
+      return;
+    }
+
+    // Upsert by email (unique visitor key)
+    await Visitor.findOneAndUpdate(
+      { email: visitor.email },
+      {
+        $setOnInsert: {
+          firstSeen: new Date(),
+        },
+        $set: {
+          name: visitor.name,
+          title: visitor.title,
+          company: visitor.company,
+          linkedin: visitor.linkedin,
+          location: visitor.location,
+          lastSeen: new Date(),
+          pageCount: visitor.pageCount || 1
+        }
+      },
+      { upsert: true, new: true }
+    );
+
+    console.log('[slackEvents] Visitor saved:', visitor.email);
+  } catch (err) {
+    console.error('[slackEvents]Error saving visitor:', err);
   }
-}
-);
+});
 
 module.exports = router;
