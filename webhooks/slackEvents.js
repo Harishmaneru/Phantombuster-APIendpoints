@@ -1,6 +1,10 @@
 const express = require('express');
 const crypto = require('crypto');
 const mongoose = require('mongoose');
+const { WebClient } = require('@slack/web-api');
+
+// Initialize Slack Web API client
+const slack = new WebClient(process.env.SLACK_BOT_TOKEN);
 
 // MongoDB connection
 mongoose.connect(process.env.ONEPGR_MONGO_URI, {
@@ -32,6 +36,41 @@ VisitorSchema.index({ email: 1 }, { unique: true });
 
 // Create Visitor model using 'slack_ri_events' collection
 const Visitor = mongoose.model('Visitor', VisitorSchema, 'slack_ri_events');
+
+/**
+ * Post visitor information to Slack using a bot user
+ * This ensures Events API will trigger with message.channels events
+ * that our webhook handler can process
+ * 
+ * @param {Object} visitor - Visitor data object
+ * @returns {Promise<Object>} - Result from Slack API
+ */
+async function postVisitorToSlack(visitor) {
+  const text = [
+    `Name: ${visitor.name || 'Unknown'}`,
+    `Title: ${visitor.title || ''}`,
+    `Company: ${visitor.company || ''}`,
+    `Email: ${visitor.email || ''}`,
+    `LinkedIn: ${visitor.linkedin || ''}`,
+    `Location: ${visitor.location || ''}`,
+    visitor.pageCount ? `Has visited ${visitor.pageCount} pages` : 'Has visited your website'
+  ].join('\n');
+
+  try {
+    const result = await slack.chat.postMessage({
+      channel: process.env.SLACK_TARGET_CHANNEL_ID,
+      text,
+      unfurl_links: false,
+      unfurl_media: false
+    });
+
+    console.log('[slackEvents] Posted visitor to Slack:', visitor.email);
+    return result;
+  } catch (error) {
+    console.error('[slackEvents] Error posting to Slack:', error);
+    throw error;
+  }
+}
 
 // Helper function to parse visitor information from message text
 function parseVisitorText(text) {
@@ -69,8 +108,9 @@ router.get('/slack/rb2b-ri-visitors', (_req, res) => {
 router.post('/slack/rb2b-ri-visitors', async (req, res) => {
   console.log('[slackEvents] POST hit', {
     isBuffer: Buffer.isBuffer(req.body),
-    headers:  req.headers
+    headers: req.headers
   });
+
   const ts = req.headers['x-slack-request-timestamp'];
   const sig = req.headers['x-slack-signature'];
   const raw = req.body;         // <-- Buffer now
@@ -107,6 +147,7 @@ router.post('/slack/rb2b-ri-visitors', async (req, res) => {
   let payload;
   try {
     payload = JSON.parse(raw.toString('utf8'));
+    console.log('[slackEvents] Full payload:', JSON.stringify(payload, null, 2));
   } catch (err) {
     console.error('[slackEvents] JSON parse error:', err);
     return res.sendStatus(400);
@@ -127,10 +168,10 @@ router.post('/slack/rb2b-ri-visitors', async (req, res) => {
   if (!event) return;
 
   console.log('[slackEvents] GOT BOT_ID:', {
-    bot_id:  event.bot_id,
+    bot_id: event.bot_id,
     subtype: event.subtype,
     channel: event.channel,
-    text:    event.text?.slice(0,50)
+    text: event.text?.slice(0, 50)
   });
 
   // Filter to target channel only
@@ -181,4 +222,8 @@ router.post('/slack/rb2b-ri-visitors', async (req, res) => {
   }
 });
 
-module.exports = router;
+// Export both the router and the postVisitorToSlack function
+module.exports = {
+  router,
+  postVisitorToSlack
+};
