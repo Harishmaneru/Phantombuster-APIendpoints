@@ -63,7 +63,7 @@ const RB2B_BOT_ID = process.env.RB2B_BOT_ID;
 // Health-check
 router.get('/slack/rb2b-ri-visitors', (_req, res) => {
   console.log('[slackEvents] GET /slack/rb2b-ri-visitors hit');
-  res.send('OK');
+  res.send('OK_test');
 });
 
 router.post('/slack/rb2b-ri-visitors', async (req, res) => {
