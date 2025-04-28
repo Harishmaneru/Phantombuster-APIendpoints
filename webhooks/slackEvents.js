@@ -29,6 +29,13 @@ const VisitorSchema = new mongoose.Schema({
   pageCount: Number,
   firstSeen: Date,
   lastSeen: Date,
+
+  // new fields
+  aboutName: String,
+  website: String,
+  employees: String,
+  industry: String,
+  revenue: String
 });
 
 // Ensure indexes are created
@@ -75,10 +82,37 @@ async function postVisitorToSlack(visitor) {
 // Helper function to parse visitor information from message text
 function parseVisitorText(text) {
   const lines = text.split('\n');
-  const v     = {};
+  const v = {};
+
+  let inAboutSection = false;
+
   for (let line of lines) {
+    line = line.trim();
+    if (!line) continue;
+
+    // detect About heading
+    if (line.startsWith('About ')) {
+      inAboutSection = true;
+      v.aboutName = line.slice('About '.length).trim();
+      continue;
+    }
+
+    // once in About, parse its 4 properties
+    if (inAboutSection) {
+      const [key, ...rest] = line.split(':');
+      const val = rest.join(':').trim();
+      switch (key.trim()) {
+        case 'Website': v.website = val; break;
+        case 'Est. Employees': v.employees = val; break;
+        case 'Industry': v.industry = val; break;
+        case 'Est. Revenue': v.revenue = val; break;
+      }
+      continue;
+    }
+
+    // still in the top block: same as before
     const [key, ...rest] = line.split(':');
-    let   val            = rest.join(':').trim();
+    let val = rest.join(':').trim();
 
     // If Slack wrapped this in <...>, grab the part after the pipe or the URL itself
     if (val.startsWith('<') && val.endsWith('>')) {
@@ -89,10 +123,10 @@ function parseVisitorText(text) {
     }
 
     switch (key.trim()) {
-      case 'Name':     v.name     = val; break;
-      case 'Title':    v.title    = val; break;
-      case 'Company':  v.company  = val; break;
-      case 'Email':    v.email    = val; break;
+      case 'Name': v.name = val; break;
+      case 'Title': v.title = val; break;
+      case 'Company': v.company = val; break;
+      case 'Email': v.email = val; break;
       case 'LinkedIn': v.linkedin = val; break;
       case 'Location': v.location = val; break;
       default:
@@ -111,24 +145,21 @@ const RB2B_BOT_ID = process.env.RB2B_BOT_ID;
 
 // Health-check
 router.get('/', (_req, res) => {
-  console.log('[slackEvents] GET /slack/rb2b-ri-visitors hit');
+
   res.send('OK_test');
 });
 
 router.post('/', express.raw({ type: 'application/json' }), async (req, res) => {
-  console.log('[slackEvents] POST hit', {
-    isBuffer: Buffer.isBuffer(req.body),
-    headers: req.headers
-  });
-
-  const ts = req.headers['x-slack-request-timestamp'];
-  const sig = req.headers['x-slack-signature'];
-  const raw = req.body;         // <-- Buffer now
+  // Parse JSON from raw buffer
+  const raw = req.body;
 
   if (!raw || !Buffer.isBuffer(raw)) {
     console.error('[slackEvents] Missing raw body buffer');
     return res.status(400).send('Bad request: Missing raw body');
   }
+
+  const ts = req.headers['x-slack-request-timestamp'];
+  const sig = req.headers['x-slack-signature'];
 
   // Reject old requests
   const age = Math.floor(Date.now() / 1000) - Number(ts);
@@ -177,6 +208,12 @@ router.post('/', express.raw({ type: 'application/json' }), async (req, res) => 
   const { event } = payload;
   if (!event) return;
 
+  console.log('[slackEvents] Incoming event.bot_id =', event.bot_id);
+  console.log('[slackEvents] POST hit', {
+    isBuffer: Buffer.isBuffer(req.body),
+    headers: req.headers
+  });
+
   console.log('[slackEvents] GOT BOT_ID:', {
     bot_id: event.bot_id,
     subtype: event.subtype,
@@ -219,7 +256,14 @@ router.post('/', express.raw({ type: 'application/json' }), async (req, res) => 
           linkedin: visitor.linkedin,
           location: visitor.location,
           lastSeen: new Date(),
-          pageCount: visitor.pageCount || 1
+          pageCount: visitor.pageCount || 1,
+
+          // new about section fields
+          aboutName: visitor.aboutName,
+          website: visitor.website,
+          employees: visitor.employees,
+          industry: visitor.industry,
+          revenue: visitor.revenue
         }
       },
       { upsert: true, new: true }
