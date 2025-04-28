@@ -5,8 +5,7 @@ const fs = require('fs');
 const cors = require('cors');
 require('dotenv').config();
 
-
-const { router: slackEventsRouter } = require('./webhooks/slackEvents.js');
+const { router: slackRouter } = require('./webhooks/slackEvents');
 
 
 const accountScraper = require('./PhantombusterAPI/AccountScraper.js');
@@ -146,8 +145,7 @@ app.use('/api/stripe', stripeRoutes);
 // Mount both the raw parser AND the router *together* on the same path:
 app.use(
   '/slack/rb2b-ri-visitors',
-  express.raw({ type: 'application/json' }),
-  slackEventsRouter
+  slackRouter
 );
 
 // Global middleware for parsing JSON (after webhook route)

@@ -100,12 +100,12 @@ const CHANNEL_ID = process.env.SLACK_TARGET_CHANNEL_ID;
 const RB2B_BOT_ID = process.env.RB2B_BOT_ID;
 
 // Health-check
-router.get('/slack/rb2b-ri-visitors', (_req, res) => {
+router.get('/', (_req, res) => {
   console.log('[slackEvents] GET /slack/rb2b-ri-visitors hit');
   res.send('OK_test');
 });
 
-router.post('/slack/rb2b-ri-visitors', async (req, res) => {
+router.post('/', express.raw({type:'application/json'}), async (req, res) => {
   console.log('[slackEvents] POST hit', {
     isBuffer: Buffer.isBuffer(req.body),
     headers: req.headers
