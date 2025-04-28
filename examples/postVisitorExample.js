@@ -4,6 +4,7 @@
  * This approach uses the Bot User method that ensures Events API callbacks are triggered
  * Rather than using Incoming Webhooks which don't trigger Events API events.
  */
+require('dotenv').config();
 
 // Import the postVisitorToSlack function
 const { postVisitorToSlack } = require('../webhooks/slackEvents');
@@ -40,6 +41,12 @@ async function processNewVisitor(visitorData) {
 }
 
 // Example usage (comment out in production)
-// processNewVisitor(exampleVisitor).catch(console.error);
+processNewVisitor(exampleVisitor)
+  .then(() => process.exit(0))
+  .catch(err => {
+    console.error(err);
+    process.exit(1);
+  });
+
 
 module.exports = { processNewVisitor }; 
