@@ -11,11 +11,11 @@ const { postVisitorToSlack } = require('../webhooks/slackEvents');
 
 // Example visitor data
 const exampleVisitor = {
-  name: "John Doe",
+  name: "Test User",
   title: "CTO",
   company: "Example Corp",
-  email: "john@example.com",
-  linkedin: "https://linkedin.com/in/johndoe",
+  email: "test@example.com",
+  linkedin: "https://linkedin.com/in/testuser",
   location: "San Francisco, CA",
   pageCount: 5
 };
