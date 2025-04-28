@@ -21,8 +21,8 @@ const connectToMongoDB = async () => {
         }
 
         await mongoose.connect(process.env.ONEPGR_MONGO_URI, {
-            useNewUrlParser: true,
-            useUnifiedTopology: true,
+            // useNewUrlParser: true,
+            // useUnifiedTopology: true,
             dbName: 'onepgr_apps'
         });
         console.log('Connected to MongoDB onepgr_apps database');
@@ -301,17 +301,17 @@ router.post('/create-checkout-session', async (req, res) => {
         let successUrl;
 
         if (process.env.NODE_ENV === 'production') {
-          // Use PRODUCTION_SUCCESS_URL, falling back to record.onepgr.com if unset
-          successUrl = process.env.PRODUCTION_SUCCESS_URL
-            ?? 'https://record.onepgr.com/success?session_id={CHECKOUT_SESSION_ID}';
+            // Use PRODUCTION_SUCCESS_URL, falling back to record.onepgr.com if unset
+            successUrl = process.env.PRODUCTION_SUCCESS_URL
+                ?? 'https://record.onepgr.com/success?session_id={CHECKOUT_SESSION_ID}';
         }
         else if (process.env.NODE_ENV === 'development' && process.env.IS_VERCEL_DEPLOYMENT === 'true') {
-          successUrl = 'https://virtual-interview-qgvo2.vercel.app/success?session_id={CHECKOUT_SESSION_ID}';
+            successUrl = 'https://virtual-interview-qgvo2.vercel.app/success?session_id={CHECKOUT_SESSION_ID}';
         }
         else {
-          successUrl = 'http://localhost:3000/success?session_id={CHECKOUT_SESSION_ID}';
+            successUrl = 'http://localhost:3000/success?session_id={CHECKOUT_SESSION_ID}';
         }
-        
+
 
         const session = await stripe.checkout.sessions.create({
             mode: 'subscription',
@@ -325,16 +325,16 @@ router.post('/create-checkout-session', async (req, res) => {
         res.json({ url: session.url });
     } catch (err) {
         console.error("Stripe error:", {
-          statusCode: err.statusCode,
-          code: err.code,
-          message: err.message,
-          request_log_url: err.request_log_url
+            statusCode: err.statusCode,
+            code: err.code,
+            message: err.message,
+            request_log_url: err.request_log_url
         });
         // send both HTTP status and the raw message back
         return res
-          .status(err.statusCode || 500)
-          .json({ error: err.message });
-      }
+            .status(err.statusCode || 500)
+            .json({ error: err.message });
+    }
 });
 
 

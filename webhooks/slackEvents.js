@@ -8,8 +8,8 @@ const slack = new WebClient(process.env.SLACK_BOT_TOKEN);
 
 // MongoDB connection
 mongoose.connect(process.env.ONEPGR_MONGO_URI, {
-  useNewUrlParser: true,
-  useUnifiedTopology: true,
+  // useNewUrlParser: true,
+  // useUnifiedTopology: true,
   dbName: 'onepgr_apps'
 });
 
@@ -37,9 +37,6 @@ const VisitorSchema = new mongoose.Schema({
   industry: String,
   revenue: String
 });
-
-// Ensure indexes are created
-VisitorSchema.index({ email: 1 }, { unique: true });
 
 // Create Visitor model using 'slack_ri_events' collection
 const Visitor = mongoose.model('Visitor', VisitorSchema, 'slack_ri_events');

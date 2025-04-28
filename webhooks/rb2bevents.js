@@ -22,8 +22,8 @@ const connectToMongoDB = async () => {
         }
 
         await mongoose.connect(process.env.ONEPGR_MONGO_URI, {
-            useNewUrlParser: true,
-            useUnifiedTopology: true,
+            // useNewUrlParser: true,
+            // useUnifiedTopology: true,
             dbName: 'onepgr_apps'
         });
         logRB2B('Connected to MongoDB onepgr_apps database for RB2B events');
@@ -76,7 +76,7 @@ const ensureDbConnection = async (req, res, next) => {
 // Webhook endpoint for RB2B events
 router.post('/rb2b/webhook', ensureDbConnection, async (req, res) => {
     logRB2B('Received webhook event');
-    
+
     try {
         const eventData = req.body;
         logRB2B('Event data received', {
