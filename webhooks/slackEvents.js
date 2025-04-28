@@ -75,24 +75,34 @@ async function postVisitorToSlack(visitor) {
 // Helper function to parse visitor information from message text
 function parseVisitorText(text) {
   const lines = text.split('\n');
-  const v = {};
+  const v     = {};
   for (let line of lines) {
     const [key, ...rest] = line.split(':');
-    const val = rest.join(':').trim();
+    let   val            = rest.join(':').trim();
+
+    // If Slack wrapped this in <...>, grab the part after the pipe or the URL itself
+    if (val.startsWith('<') && val.endsWith('>')) {
+      const inner = val.slice(1, -1);      // e.g. "mailto:john@example.com|john@example.com"
+      const parts = inner.split('|');      // ["mailto:john@example.com","john@example.com"]
+      // Use display text if present, otherwise the URL/mailto:
+      val = parts[1] || parts[0];
+    }
+
     switch (key.trim()) {
-      case 'Name': v.name = val; break;
-      case 'Title': v.title = val; break;
-      case 'Company': v.company = val; break;
-      case 'Email': v.email = val; break;
+      case 'Name':     v.name     = val; break;
+      case 'Title':    v.title    = val; break;
+      case 'Company':  v.company  = val; break;
+      case 'Email':    v.email    = val; break;
       case 'LinkedIn': v.linkedin = val; break;
       case 'Location': v.location = val; break;
       default:
-        const m = line.match(/visited\s+(\d+)\s+pages/);
+        const m = line.match(/visited\s+(\d+)\s+pages/i);
         if (m) v.pageCount = Number(m[1]);
     }
   }
   return v;
 }
+
 
 const router = express.Router();
 const SIGNING_SECRET = process.env.SLACK_SIGNING_SECRET;
@@ -105,7 +115,7 @@ router.get('/', (_req, res) => {
   res.send('OK_test');
 });
 
-router.post('/', express.raw({type:'application/json'}), async (req, res) => {
+router.post('/', express.raw({ type: 'application/json' }), async (req, res) => {
   console.log('[slackEvents] POST hit', {
     isBuffer: Buffer.isBuffer(req.body),
     headers: req.headers
