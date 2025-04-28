@@ -146,7 +146,8 @@ app.use('/api/stripe', stripeRoutes);
 // Mount the raw-body parser *only* on your Slack endpoint, before express.json()
 app.use(
   '/slack/rb2b-ri-visitors',
-  express.raw({ type: 'application/json' })
+  express.raw({ type: 'application/json' }),
+  slackEvents
 );
 
 // Global middleware for parsing JSON (after webhook route)

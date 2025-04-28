@@ -62,6 +62,7 @@ const RB2B_BOT_ID = process.env.RB2B_BOT_ID;
 
 // Health-check
 router.get('/slack/rb2b-ri-visitors', (_req, res) => {
+  console.log('[slackEvents] GET /slack/rb2b-ri-visitors hit');
   res.send('OK');
 });
 
@@ -120,6 +121,13 @@ router.post('/slack/rb2b-ri-visitors', async (req, res) => {
   // Process the event
   const { event } = payload;
   if (!event) return;
+
+  console.log('[slackEvents] GOT BOT_ID:', {
+    bot_id:  event.bot_id,
+    subtype: event.subtype,
+    channel: event.channel,
+    text:    event.text?.slice(0,50)
+  });
 
   // Filter to target channel only
   if (event.channel !== CHANNEL_ID) return;
