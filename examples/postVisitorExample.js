@@ -1,52 +1,46 @@
-/**
- * Example file showing how to use the postVisitorToSlack function
- * 
- * This approach uses the Bot User method that ensures Events API callbacks are triggered
- * Rather than using Incoming Webhooks which don't trigger Events API events.
- */
+// examples/postVisitorExample.js
 require('dotenv').config();
+const { WebClient } = require('@slack/web-api');
+const { router, postVisitorToSlack } = require('../webhooks/slackEvents');
 
-// Import the postVisitorToSlack function
-const { postVisitorToSlack } = require('../webhooks/slackEvents');
+// Note: we import postVisitorToSlack directly so this script can stand alone.
+// The `router` isn’t used here but shows how you’d set it up in your main app.
 
-// Example visitor data
-const exampleVisitor = {
-  name: "Test User",
-  title: "CTO",
-  company: "Example Corp",
-  email: "test@example.com",
-  linkedin: "https://linkedin.com/in/testuser",
-  location: "San Francisco, CA",
-  pageCount: 5
-};
+const slack = new WebClient(process.env.SLACK_BOT_TOKEN);
 
-/**
- * Example function that would be called by your RB2B integration
- * 
- * @param {Object} visitorData - Visitor data from RB2B or Phantombuster
- * @returns {Promise<void>}
- */
-async function processNewVisitor(visitorData) {
+(async () => {
+  // build the same payload shape your RB2B cards have
+  const text = [
+    // ── Top block ────────────────────────────────────────────────
+    `Name: Test User`,
+    `Title: CTO`,
+    `Company: Example Corp`,
+    `Email: test@example.com`,
+    `LinkedIn: https://linkedin.com/in/testuser`,
+    `Location: San Francisco, CA`,
+    `visited 5 pages`,
+    ``,
+    // ── About block ──────────────────────────────────────────────
+    `About Example Corp`,
+    `Website: https://www.example.com`,
+    `Est. Employees: 100-500`,
+    `Industry: Software`,
+    `Est. Revenue: $10M - $50M`
+  ].join('\n');
+
   try {
-    // Instead of sending to a webhook URL with fetch:
-    // OLD: await fetch(process.env.SLACK_WEBHOOK_URL, { method: 'POST', body: JSON.stringify({...}) });
-    
-    // Use the Bot User implementation that will trigger Events API:
-    await postVisitorToSlack(visitorData);
-    
-    console.log('Visitor data posted to Slack successfully');
-  } catch (error) {
-    console.error('Error posting visitor data to Slack:', error);
+    // this will post as your Bot User into the target channel
+    const res = await slack.chat.postMessage({
+      channel: process.env.SLACK_TARGET_CHANNEL_ID,
+      text,
+      unfurl_links: false,
+      unfurl_media: false
+    });
+    console.log(`✅ Test card posted (ts=${res.ts}).`);
+    console.log(`→ Now watch your logs: pm2 logs phantombuster-app | grep slackEvents`);
+  } catch (err) {
+    console.error('❌ Error sending test card:', err);
+  } finally {
+    process.exit(0);
   }
-}
-
-// Example usage (comment out in production)
-processNewVisitor(exampleVisitor)
-  .then(() => process.exit(0))
-  .catch(err => {
-    console.error(err);
-    process.exit(1);
-  });
-
-
-module.exports = { processNewVisitor }; 
+})();

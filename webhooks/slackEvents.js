@@ -113,9 +113,9 @@ function parseVisitorText(text) {
 
     // If Slack wrapped this in <...>, grab the part after the pipe or the URL itself
     if (val.startsWith('<') && val.endsWith('>')) {
-      const inner = val.slice(1, -1);      // e.g. "mailto:john@example.com|john@example.com"
-      const parts = inner.split('|');      // ["mailto:john@example.com","john@example.com"]
-      // Use display text if present, otherwise the URL/mailto:
+      const inner = val.slice(1, -1);      
+      const parts = inner.split('|');      
+ 
       val = parts[1] || parts[0];
     }
 
@@ -221,13 +221,13 @@ router.post('/', express.raw({ type: 'application/json' }), async (req, res) => 
   // Filter to target channel only
   if (event.channel !== CHANNEL_ID) return;
 
-  // Only process bot posts from RB2B scraper
-  if (
-    event.type !== 'message' ||
-    event.bot_id !== RB2B_BOT_ID
-  ) {
-    return;
-  }
+  // Only process bot posts from RB2B  
+  // if (
+  //   event.type !== 'message' ||
+  //   event.bot_id !== RB2B_BOT_ID
+  // ) {
+  //   return;
+  // }
 
   try {
     // Parse the visitor fields out of event.text
