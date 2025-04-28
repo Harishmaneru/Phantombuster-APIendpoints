@@ -13,16 +13,16 @@ const slack = new WebClient(process.env.SLACK_BOT_TOKEN);
   const text = [
     // ── Top block ────────────────────────────────────────────────
     `Name: Test User`,
-    `Title: CTO`,
+    `Title: CFO`,
     `Company: Example Corp`,
-    `Email: test@example.com`,
+    `Email: testuser@example.com`,
     `LinkedIn: https://linkedin.com/in/testuser`,
     `Location: San Francisco, CA`,
     `visited 5 pages`,
     ``,
     // ── About block ──────────────────────────────────────────────
     `About Example Corp`,
-    `Website: https://www.example.com`,
+    `Website: https://www.testuserexample.com`,
     `Est. Employees: 100-500`,
     `Industry: Software`,
     `Est. Revenue: $10M - $50M`
