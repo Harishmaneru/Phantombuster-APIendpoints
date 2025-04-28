@@ -67,6 +67,10 @@ router.get('/slack/rb2b-ri-visitors', (_req, res) => {
 });
 
 router.post('/slack/rb2b-ri-visitors', async (req, res) => {
+  console.log('[slackEvents] POST hit', {
+    isBuffer: Buffer.isBuffer(req.body),
+    headers:  req.headers
+  });
   const ts = req.headers['x-slack-request-timestamp'];
   const sig = req.headers['x-slack-signature'];
   const raw = req.body;         // <-- Buffer now
