@@ -180,7 +180,6 @@ router.post('/', express.raw({type:'application/json'}), async (req, res) => {
   // Only process bot posts from RB2B scraper
   if (
     event.type !== 'message' ||
-    event.subtype !== 'bot_message' ||
     event.bot_id !== RB2B_BOT_ID
   ) {
     return;
