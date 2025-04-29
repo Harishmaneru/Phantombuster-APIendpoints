@@ -1,4 +1,3 @@
-
 require('dotenv').config();
 const express = require('express');
 const axios = require('axios');
@@ -73,15 +72,26 @@ async function registerDomain(domain, duration = 1) {
     const { data: xml } = await axios.get(url);
     const result = await parseXml(xml);
 
-    if (!result?.Results?.Order) {
-        throw new Error('Unexpected API response structure.');
+    // Check if we got a valid response structure
+    if (!result?.Results?.RegisterResponse) {
+        const errorResponse = JSON.stringify(result, null, 2);
+        console.error('Unexpected API response structure:', errorResponse);
+        throw new Error(errorResponse);
     }
 
-    const order = result.Results.Order;
+    const header = result.Results.RegisterResponse.RegisterHeader;
+    
+    // Handle all non-success statuses
+    if (!header || header.Status !== 'success') {
+        const statusMessage = header?.Status || 'unknown_error';
+        const errorMsg = header?.Error || `Domain registration failed: ${statusMessage}`;
+        throw new Error(errorMsg);
+    }
+
     return {
         domain,
-        success: order?.Status === 'success',
-        cost: order?._Cost ? parseFloat(order._Cost) : undefined,
+        success: true,
+        cost: header?.Price ? parseFloat(header.Price) : undefined,
         raw: result
     };
 }
@@ -105,13 +115,27 @@ router.post('/dynadotdomain/register', async (req, res) => {
         if (!domain) throw new Error('Domain is required.');
         const result = await registerDomain(domain, duration);
         res.json({
-            status: result.success ? '1' : '0',
-            message: result.success ? 'Domain registered.' : 'Registration failed.',
+            status: '1',
+            message: 'Domain registered successfully',
             data: result
         });
     } catch (err) {
         console.error('Dynadot register error:', err.message);
-        res.status(400).json({ status: '-1', message: err.message });
+        // If the error message is a JSON string, parse it and send as data
+        try {
+            const errorData = JSON.parse(err.message);
+            res.status(400).json({ 
+                status: '-1', 
+                message: 'Registration failed',
+                data: errorData
+            });
+        } catch (e) {
+            // If not JSON, send as regular error message
+            res.status(400).json({ 
+                status: '-1', 
+                message: err.message 
+            });
+        }
     }
 });
 
