@@ -23,12 +23,13 @@ const VisitorSchema = new mongoose.Schema({
   name: String,
   title: String,
   company: String,
-  email: { type: String, unique: true },
+  email: { type: String, unique: true, sparse: true },
   linkedin: String,
   location: String,
   pageCount: Number,
   firstSeen: Date,
   lastSeen: Date,
+  visitorId: { type: String, unique: true, sparse: true },
 
   // new fields
   aboutName: String,
@@ -37,6 +38,10 @@ const VisitorSchema = new mongoose.Schema({
   industry: String,
   revenue: String
 });
+
+// Add indexes
+VisitorSchema.index({ email: 1 }, { unique: true, sparse: true });
+VisitorSchema.index({ visitorId: 1 }, { unique: true, sparse: true });
 
 // Create Visitor model using 'slack_ri_events' collection
 const Visitor = mongoose.model('Visitor', VisitorSchema, 'slack_ri_events');
@@ -78,10 +83,17 @@ async function postVisitorToSlack(visitor) {
 
 // Helper function to parse visitor information from message text
 function parseVisitorText(text) {
+  if (!text) {
+    console.warn('[slackEvents] No text provided to parseVisitorText');
+    return null;
+  }
+
   const lines = text.split('\n');
   const v = {};
 
   let inAboutSection = false;
+
+  console.log('[slackEvents] Parsing visitor text:', text);
 
   for (let line of lines) {
     line = line.trim();
@@ -98,7 +110,7 @@ function parseVisitorText(text) {
     if (inAboutSection) {
       const [key, ...rest] = line.split(':');
       const val = rest.join(':').trim();
-      switch (key.trim()) {
+      switch (key.trim().replace(/^[*>]\s*/, '')) { // Handle formatting chars
         case 'Website': v.website = val; break;
         case 'Est. Employees': v.employees = val; break;
         case 'Industry': v.industry = val; break;
@@ -107,19 +119,31 @@ function parseVisitorText(text) {
       continue;
     }
 
-    // still in the top block: same as before
-    const [key, ...rest] = line.split(':');
-    let val = rest.join(':').trim();
+    // Handle lines that don't have a colon but might contain email info
+    if (!line.includes(':')) {
+      // Check if line contains email pattern
+      const emailMatch = line.match(/\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b/);
+      if (emailMatch) {
+        v.email = emailMatch[0];
+      }
+      continue;
+    }
+
+    // Handle lines with key-value pairs
+    const colonIndex = line.indexOf(':');
+    const rawKey = line.substring(0, colonIndex).trim();
+    const key = rawKey.replace(/^[*>]\s*/, ''); // Strip leading "*", ">", or other format chars
+    let val = line.substring(colonIndex + 1).trim();
 
     // If Slack wrapped this in <...>, grab the part after the pipe or the URL itself
     if (val.startsWith('<') && val.endsWith('>')) {
-      const inner = val.slice(1, -1);      
-      const parts = inner.split('|');      
- 
+      const inner = val.slice(1, -1);
+      const parts = inner.split('|');
       val = parts[1] || parts[0];
     }
 
-    switch (key.trim()) {
+    // Handle special formatting in keys (e.g., "*Name:" becomes "Name:")
+    switch (key) {
       case 'Name': v.name = val; break;
       case 'Title': v.title = val; break;
       case 'Company': v.company = val; break;
@@ -131,9 +155,19 @@ function parseVisitorText(text) {
         if (m) v.pageCount = Number(m[1]);
     }
   }
+
+  // Generate fallback ID if email is missing - using only name and company for deduplication
+  if (!v.email) {
+    const namePart = v.name ? v.name.replace(/\s+/g, '_').toLowerCase() : 'unknown';
+    const companyPart = v.company ? v.company.replace(/\s+/g, '_').toLowerCase() : 'unknown';
+    v.visitorId = `${namePart}_${companyPart}`;
+    console.log('[slackEvents] Generated fallback visitor ID:', v.visitorId);
+  }
+
+  // Additional debug logging
+  console.log('[slackEvents] Parsed visitor data:', v);
   return v;
 }
-
 
 const router = express.Router();
 const SIGNING_SECRET = process.env.SLACK_SIGNING_SECRET;
@@ -191,6 +225,11 @@ router.post('/', express.raw({ type: 'application/json' }), async (req, res) => 
     return res.sendStatus(400);
   }
 
+  console.log('────────────────────────────────────────');
+  console.log('[slackEvents] Full incoming Slack payload:\n', JSON.stringify(payload, null, 2));
+  console.log('[slackEvents] Request headers:\n', JSON.stringify(req.headers, null, 2));
+  console.log('────────────────────────────────────────');
+
   // URL verification handshake
   if (payload.type === 'url_verification') {
     // Slack wants the raw challenge back
@@ -221,54 +260,67 @@ router.post('/', express.raw({ type: 'application/json' }), async (req, res) => 
   // Filter to target channel only
   if (event.channel !== CHANNEL_ID) return;
 
-  // Only process bot posts from RB2B  
-  // if (
-  //   event.type !== 'message' ||
-  //   event.bot_id !== RB2B_BOT_ID
-  // ) {
-  //   return;
-  // }
+  // 1a) Must be a message
+  if (event.type !== 'message') return;
+
+  // 1b) We *only* care about bot-posted messages (so skip edits/deletes, etc.)
+  if (event.subtype && event.subtype !== 'bot_message') return;
+
+  // 1c) And only from our RB2B bot
+  if (event.bot_id !== RB2B_BOT_ID) {
+    console.log('[slackEvents] Skipping message from non-RB2B bot:', event.bot_id);
+    return;
+  }
+
+  // Guard against missing text
+  if (!event.text) {
+    console.warn('[slackEvents] No text on event, skipping');
+    return;
+  }
 
   try {
     // Parse the visitor fields out of event.text
     const visitor = parseVisitorText(event.text);
-
-    // Skip if no email (our unique key)
-    if (!visitor.email) {
-      console.warn('[slackEvents] Missing email in visitor data, skipping');
+    if (!visitor) {
+      console.warn('[slackEvents] Failed to parse visitor from text');
       return;
     }
 
-    // Upsert by email (unique visitor key)
+    // Create query condition based on whether email exists
+    const query = visitor.email ? { email: visitor.email } : { visitorId: visitor.visitorId };
+
+    // Upsert by email or visitorId
     await Visitor.findOneAndUpdate(
-      { email: visitor.email },
+      query,
       {
         $setOnInsert: {
           firstSeen: new Date(),
+          visitorId: visitor.visitorId // Ensure visitorId is set on insert
         },
         $set: {
-          name: visitor.name,
-          title: visitor.title,
-          company: visitor.company,
-          linkedin: visitor.linkedin,
-          location: visitor.location,
+          name: visitor.name || '',
+          title: visitor.title || '',
+          company: visitor.company || '',
+          email: visitor.email || '',
+          linkedin: visitor.linkedin || '',
+          location: visitor.location || '',
           lastSeen: new Date(),
           pageCount: visitor.pageCount || 1,
 
           // new about section fields
-          aboutName: visitor.aboutName,
-          website: visitor.website,
-          employees: visitor.employees,
-          industry: visitor.industry,
-          revenue: visitor.revenue
+          aboutName: visitor.aboutName || '',
+          website: visitor.website || '',
+          employees: visitor.employees || '',
+          industry: visitor.industry || '',
+          revenue: visitor.revenue || ''
         }
       },
       { upsert: true, new: true }
     );
 
-    console.log('[slackEvents] Visitor saved:', visitor.email);
+    console.log('[slackEvents] Visitor saved:', visitor.email || visitor.visitorId);
   } catch (err) {
-    console.error('[slackEvents]Error saving visitor:', err);
+    console.error('[slackEvents] Error saving visitor:', err);
   }
 });
 
