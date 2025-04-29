@@ -23,13 +23,13 @@ const VisitorSchema = new mongoose.Schema({
   name: String,
   title: String,
   company: String,
-  email: { type: String, unique: true, sparse: true },
+  email: String,
   linkedin: String,
   location: String,
   pageCount: Number,
   firstSeen: Date,
   lastSeen: Date,
-  visitorId: { type: String, unique: true, sparse: true },
+  visitorId: String,
 
   // new fields
   aboutName: String,
@@ -324,7 +324,6 @@ router.post('/', express.raw({ type: 'application/json' }), async (req, res) => 
   }
 });
 
-// Export both the router and the postVisitorToSlack function
 module.exports = {
   router,
   postVisitorToSlack
