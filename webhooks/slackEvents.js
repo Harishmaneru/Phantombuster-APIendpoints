@@ -150,7 +150,6 @@ function parseRB2BMessageEnhanced(event) {
 // --- Helper Function: Parse from Blocks ---
 function parseFromBlocks(blocks) {
   const visitor = {};
-  
   // Use array of [regex, fieldName] pairs instead of object
   const mappings = [
     [/^name$/i, 'name'],
@@ -321,27 +320,27 @@ function parsePageCount(textLine, visitor) {
 async function sendToLeadsAPI(visitor) {
   // 1) The full list of form-fields your leads API expects
   const params = {
-    onepgr_apicall:        '1',
-    name:                  visitor.name,
-    title:                 visitor.title,    // if your API accepts title
-    company:               visitor.company,
-    email:                 visitor.email,
-    Linkedin:              visitor.linkedin,
-    location:              visitor.location, // if your API accepts location
-    aboutName:             visitor.aboutName,
-    website:               visitor.website,
-    employees:             visitor.employees,
-    industry:              visitor.industry,
-    revenue:               visitor.revenue,
-    page_id:               process.env.ONEPGR_PAGE_ID,
-    phone:                 visitor.phone,
-    comment:               visitor.comment,
-    campaign_id:           process.env.ONEPGR_CAMPAIGN_ID,
-    queue_token:           process.env.ONEPGR_QUEUE_TOKEN,
-    appt_event:            (visitor.firstSeen || new Date()).toISOString(),
-    source_type:           'slack',
-    source_name:           process.env.SLACK_TARGET_CHANNEL_ID,
-    slack_org_name:        process.env.SLACK_ORG_NAME
+    onepgr_apicall: '1',
+    name: visitor.name,
+    title: visitor.title,    // if your API accepts title
+    company: visitor.company,
+    email: visitor.email,
+    Linkedin: visitor.linkedin,
+    location: visitor.location, // if your API accepts location
+    aboutName: visitor.aboutName,
+    website: visitor.website,
+    employees: visitor.employees,
+    industry: visitor.industry,
+    revenue: visitor.revenue,
+    page_id: process.env.ONEPGR_PAGE_ID,
+    phone: visitor.phone,
+    comment: visitor.comment,
+    campaign_id: process.env.ONEPGR_CAMPAIGN_ID,
+    queue_token: process.env.ONEPGR_QUEUE_TOKEN,
+    appt_event: (visitor.firstSeen || new Date()).toISOString(),
+    source_type: 'slack',
+    source_name: process.env.SLACK_TARGET_CHANNEL_ID,
+    slack_org_name: process.env.SLACK_ORG_NAME
   };
 
   const form = new FormData();
@@ -353,11 +352,11 @@ async function sendToLeadsAPI(visitor) {
   // 3) Add your gateway headers
   const headers = {
     ...form.getHeaders(),
-    'Accept':                    'application/json',
-    'gateway_type':              process.env.ONEPGR_GATEWAY_TYPE,
-    'gateway_owner_token':       process.env.ONEPGR_OWNER_TOKEN,
+    'Accept': 'application/json',
+    'gateway_type': process.env.ONEPGR_GATEWAY_TYPE,
+    'gateway_owner_token': process.env.ONEPGR_OWNER_TOKEN,
     'gateway_destination_token': process.env.ONEPGR_DEST_TOKEN,
-    'Cookie':                    'visits=3',
+    'Cookie': 'visits=3',
   };
 
   const url = `${process.env.ONEPGR_LEADS_URL}?xhr_flag=1`;
