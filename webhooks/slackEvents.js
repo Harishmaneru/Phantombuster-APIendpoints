@@ -2,6 +2,7 @@ const express = require('express');
 const crypto = require('crypto');
 const mongoose = require('mongoose');
 const { WebClient } = require('@slack/web-api');
+const { parse, isValid } = require('date-fns');
 
 // Initialize Slack Web API client
 const slack = new WebClient(process.env.SLACK_BOT_TOKEN);
@@ -81,92 +82,239 @@ async function postVisitorToSlack(visitor) {
   }
 }
 
-// Helper function to parse visitor information from message text
-function parseVisitorText(text) {
-  if (!text) {
-    console.warn('[slackEvents] No text provided to parseVisitorText');
+/**
+ * More robust RB2B message parser.
+ * Prioritizes parsing structured blocks if available.
+ * Uses flexible matching for text parsing.
+ * Attempts multiple date formats.
+ *
+ * @param {Object} event - The Slack message event object (containing text and/or blocks)
+ * @returns {Object|null} - Parsed visitor data or null if essential info (like name/company) is missing
+ */
+function parseRB2BMessageEnhanced(event) {
+  if (!event) {
+    console.warn('[slackEvents] No event provided to parseRB2BMessageEnhanced');
     return null;
   }
 
-  const lines = text.split('\n');
-  const v = {};
+  let visitor = {};
+
+  // --- Strategy 1: Parse from Blocks (if available) ---
+  if (event.blocks && event.blocks.length > 0) {
+    console.log('[slackEvents] Attempting to parse from Slack Blocks structure.');
+    try {
+      visitor = parseFromBlocks(event.blocks);
+      console.log('[slackEvents] Parsed from blocks:', visitor);
+    } catch (err) {
+      console.warn('[slackEvents] Error parsing from blocks, falling back to text. Error:', err);
+      visitor = {}; // Reset if block parsing failed partially
+    }
+  }
+
+  // --- Strategy 2: Parse from Text (Fallback or primary if no blocks) ---
+  if (!visitor.name && event.text) {
+    console.log('[slackEvents] Parsing from text content.');
+    try {
+      const textVisitor = parseFromText(event.text);
+      visitor = { ...visitor, ...textVisitor };
+      console.log('[slackEvents] Parsed from text:', textVisitor);
+    } catch (err) {
+      console.error('[slackEvents] Error parsing from text:', err);
+    }
+  }
+
+  // --- Final Validation & ID Generation ---
+  if (!visitor.name && !visitor.company) {
+    console.warn('[slackEvents] Parsing failed to find essential fields (Name/Company) in event:', event.ts);
+    return null;
+  }
+
+  // Generate ID
+  visitor.visitorId = visitor.email
+    ? `email-${visitor.email.split('@')[0]}`
+    : `name-${(visitor.name || 'unknown').toLowerCase().replace(/\s+/g, '-')}-company-${(visitor.company || 'unknown').toLowerCase().replace(/\s+/g, '-')}`;
+
+  // Ensure lastSeen is always set/updated
+  visitor.lastSeen = new Date();
+
+  // Default firstSeen if not parsed
+  if (!visitor.firstSeen) {
+    visitor.firstSeen = visitor.lastSeen;
+  }
+
+  return visitor;
+}
+
+// --- Helper Function: Parse from Blocks ---
+function parseFromBlocks(blocks) {
+  const visitor = {};
+  const fieldMappings = {
+    [/^name$/i]: 'name',
+    [/^title|job title$/i]: 'title',
+    [/^company$/i]: 'company',
+    [/^email$/i]: 'email',
+    [/^linkedin$/i]: 'linkedin',
+    [/^location|loc$/i]: 'location',
+    [/^website$/i]: 'website',
+    [/^industry$/i]: 'industry',
+    [/^employees|est\.?\s+employees|employee count$/i]: 'employees',
+    [/^revenue|est\.?\s+revenue|estimated revenue$/i]: 'revenue'
+  };
+
+  for (const block of blocks) {
+    if (block.type === 'section' && block.fields) {
+      for (const field of block.fields) {
+        const text = field.text || '';
+        const match = text.match(/^\*?(.+?)\*?:\s*\n?([\s\S]+)/);
+        if (match) {
+          const keyText = match[1].trim();
+          let valueText = match[2].trim();
+
+          for (const [regex, visitorKey] of Object.entries(fieldMappings)) {
+            if (regex.test(keyText)) {
+              if (visitorKey === 'linkedin') {
+                const urlMatch = valueText.match(/https?:\/\/[^\s]+/);
+                visitor[visitorKey] = urlMatch ? urlMatch[0] : valueText;
+              } else if (visitorKey === 'email' && valueText.includes('---')) {
+                // Skip placeholder emails
+              } else {
+                visitor[visitorKey] = valueText;
+              }
+              break;
+            }
+          }
+        }
+      }
+    }
+    // Handle context blocks for dates and page counts
+    if (block.type === 'context' && block.elements) {
+      const contextText = block.elements.map(el => el.text).join(' ');
+      parseVisitInfo(contextText, visitor);
+      parsePageCount(contextText, visitor);
+    }
+  }
+  return visitor;
+}
+
+// --- Helper Function: Parse from Text ---
+function parseFromText(text) {
+  if (!text) return {};
+
+  // Normalize line breaks and remove markdown emphasis
+  text = text.replace(/\\n/g, '\n').replace(/\*\*/g, '');
+
+  const visitor = {};
+  const lines = text.split('\n').map(line => line.trim()).filter(line => line.length > 0);
+
+  const keyMappings = {
+    name: /^\*?\s*name\s*$/i,
+    title: /^\*?\s*title\s*$/i,
+    company: /^\*?\s*company\s*$/i,
+    email: /^\*?\s*email\s*$/i,
+    linkedin: /^\*?\s*linkedin\s*$/i,
+    location: /^\*?\s*location\s*$/i,
+    website: /^\*?\s*website\s*$/i,
+    industry: /^\*?\s*industry\s*$/i,
+    employees: /^\*?\s*est\.?\s+employees\s*$/i,
+    revenue: /^\*?\s*est\.?\s+revenue\s*$/i
+  };
 
   let inAboutSection = false;
+  let aboutCompanyName = null;
 
-  console.log('[slackEvents] Parsing visitor text:', text);
-
-  for (let line of lines) {
-    line = line.trim();
-    if (!line) continue;
-
-    // detect About heading
-    if (line.startsWith('About ')) {
+  lines.forEach(line => {
+    // Check for "About CompanyName" section start
+    const aboutMatch = line.match(/^About\s+(.+)/i);
+    if (aboutMatch) {
       inAboutSection = true;
-      v.aboutName = line.slice('About '.length).trim();
-      continue;
+      aboutCompanyName = aboutMatch[1].trim();
+      visitor.aboutName = aboutCompanyName;
+      return;
     }
 
-    // once in About, parse its 4 properties
-    if (inAboutSection) {
-      const [key, ...rest] = line.split(':');
-      const val = rest.join(':').trim();
-      switch (key.trim().replace(/^[*>]\s*/, '')) { // Handle formatting chars
-        case 'Website': v.website = val; break;
-        case 'Est. Employees': v.employees = val; break;
-        case 'Industry': v.industry = val; break;
-        case 'Est. Revenue': v.revenue = val; break;
+    // Basic Key-Value Regex
+    const kvMatch = line.match(/^([\w\s.'-]+?)\s*:\s*(.*)$/);
+    if (kvMatch) {
+      const key = kvMatch[1].trim();
+      let value = kvMatch[2].trim();
+
+      // Find corresponding visitor field key
+      let targetField = null;
+      for (const field in keyMappings) {
+        if (keyMappings[field].test(key)) {
+          targetField = field;
+          break;
+        }
       }
-      continue;
-    }
 
-    // Handle lines that don't have a colon but might contain email info
-    if (!line.includes(':')) {
-      // Check if line contains email pattern
-      const emailMatch = line.match(/\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b/);
-      if (emailMatch) {
-        v.email = emailMatch[0];
+      if (targetField) {
+        if (targetField === 'linkedin') {
+          const urlMatch = value.match(/https?:\/\/[^\s>]+/);
+          value = urlMatch ? urlMatch[0] : value;
+        } else if (targetField === 'email' && value.includes('---')) {
+          value = null;
+        }
+
+        if (value !== null) {
+          visitor[targetField] = value;
+        }
+      } else if (!inAboutSection) {
+        console.warn(`[slackEvents] Unmapped key found in text: "${key}"`);
       }
-      continue;
+    } else {
+      parseVisitInfo(line, visitor);
+      parsePageCount(line, visitor);
     }
+  });
 
-    // Handle lines with key-value pairs
-    const colonIndex = line.indexOf(':');
-    const rawKey = line.substring(0, colonIndex).trim();
-    const key = rawKey.replace(/^[*>]\s*/, ''); // Strip leading "*", ">", or other format chars
-    let val = line.substring(colonIndex + 1).trim();
+  return visitor;
+}
 
-    // If Slack wrapped this in <...>, grab the part after the pipe or the URL itself
-    if (val.startsWith('<') && val.endsWith('>')) {
-      const inner = val.slice(1, -1);
-      const parts = inner.split('|');
-      val = parts[1] || parts[0];
+// --- Helper Function: Parse Visit Info (Date) ---
+function parseVisitInfo(textLine, visitor) {
+  if (visitor.firstSeen) return;
+
+  const visitPatterns = [
+    {
+      regex: /(?:First identified|has visited).*?(?:on|since)\s+(.*?)(?:\s+View details|$)/i,
+      formats: [
+        "MMMM d, yyyy 'at' h:mma xxx",
+        "MMMM d, yyyy h:mma xxx",
+        "MMM d, yyyy h:mma xxx",
+        "yyyy-MM-dd'T'HH:mm:ssxxx",
+        "yyyy-MM-dd HH:mm:ss",
+        "MM/dd/yyyy h:mma"
+      ]
     }
+  ];
 
-    // Handle special formatting in keys (e.g., "*Name:" becomes "Name:")
-    switch (key) {
-      case 'Name': v.name = val; break;
-      case 'Title': v.title = val; break;
-      case 'Company': v.company = val; break;
-      case 'Email': v.email = val; break;
-      case 'LinkedIn': v.linkedin = val; break;
-      case 'Location': v.location = val; break;
-      default:
-        const m = line.match(/visited\s+(\d+)\s+pages/i);
-        if (m) v.pageCount = Number(m[1]);
+  for (const pattern of visitPatterns) {
+    const match = textLine.match(pattern.regex);
+    if (match && match[1]) {
+      const dateString = match[1].trim();
+      for (const fmt of pattern.formats) {
+        try {
+          const parsedDate = parse(dateString, fmt, new Date());
+          if (isValid(parsedDate)) {
+            visitor.firstSeen = parsedDate;
+            console.log(`[slackEvents] Parsed firstSeen date: ${parsedDate} using format "${fmt}" from string "${dateString}"`);
+            return;
+          }
+        } catch (e) { /* Ignore parsing error for this format */ }
+      }
+      console.warn(`[slackEvents] Failed to parse date string "${dateString}" with known formats.`);
     }
   }
+}
 
-  // Generate fallback ID if email is missing - using only name and company for deduplication
-  if (!v.email) {
-    const namePart = v.name ? v.name.replace(/\s+/g, '_').toLowerCase() : 'unknown';
-    const companyPart = v.company ? v.company.replace(/\s+/g, '_').toLowerCase() : 'unknown';
-    v.visitorId = `${namePart}_${companyPart}`;
-    console.log('[slackEvents] Generated fallback visitor ID:', v.visitorId);
+// --- Helper Function: Parse Page Count ---
+function parsePageCount(textLine, visitor) {
+  if (visitor.pageCount !== undefined) return;
+
+  const pagesMatch = textLine.match(/has visited (\d+) pages/i);
+  if (pagesMatch && pagesMatch[1]) {
+    visitor.pageCount = parseInt(pagesMatch[1], 10);
   }
-
-  // Additional debug logging
-  console.log('[slackEvents] Parsed visitor data:', v);
-  return v;
 }
 
 const router = express.Router();
@@ -176,7 +324,6 @@ const RB2B_BOT_ID = process.env.RB2B_BOT_ID;
 
 // Health-check
 router.get('/', (_req, res) => {
-
   res.send('OK_test');
 });
 
@@ -258,69 +405,71 @@ router.post('/', express.raw({ type: 'application/json' }), async (req, res) => 
   });
 
   // Filter to target channel only
-  if (event.channel !== CHANNEL_ID) return;
-
-  // 1a) Must be a message
-  if (event.type !== 'message') return;
-
-  // 1b) We *only* care about bot-posted messages (so skip edits/deletes, etc.)
-  if (event.subtype && event.subtype !== 'bot_message') return;
-
-  // 1c) And only from our RB2B bot
-  if (event.bot_id !== RB2B_BOT_ID) {
-    console.log('[slackEvents] Skipping message from non-RB2B bot:', event.bot_id);
+  if (event.channel !== CHANNEL_ID) {
+    console.log('[slackEvents] Skipping message from different channel:', event.channel);
     return;
   }
 
-  // Guard against missing text
-  if (!event.text) {
-    console.warn('[slackEvents] No text on event, skipping');
+  // Must be a message
+  if (event.type !== 'message') {
+    console.log('[slackEvents] Skipping non-message event:', event.type);
     return;
+  }
+
+  // Accept messages from RB2B (either via bot_id or username pattern)
+  const isRB2BMessage =
+    event.bot_id === RB2B_BOT_ID ||
+    (event.username && event.username.toLowerCase().includes('rb2b')) ||
+    /(REPEAT VISITOR SIGNAL|About \w+)/.test(event.text);
+
+  if (!isRB2BMessage) {
+    console.log('[slackEvents] Not an RB2B message:', {
+      bot_id: event.bot_id,
+      username: event.username,
+      text: event.text?.substring(0, 50)
+    });
+    return;
+  }
+
+  // If RB2B uses blocks, reconstruct text for logging/fallback, but prioritize blocks for parsing
+  if (event.blocks) {
+    console.log('[slackEvents] RB2B Blocks Structure:', JSON.stringify(event.blocks, null, 2));
+    // Reconstruct text from blocks *only if needed* as a fallback or for logging
+    if (!event.text) {
+      event.text = event.blocks
+        .map(block => {
+          if (block.type === 'section' && block.text) return block.text.text;
+          if (block.type === 'context' && block.elements) return block.elements.map(el => el.text).join(' ');
+          return '';
+        })
+        .join('\n');
+    }
   }
 
   try {
-    // Parse the visitor fields out of event.text
-    const visitor = parseVisitorText(event.text);
-    if (!visitor) {
-      console.warn('[slackEvents] Failed to parse visitor from text');
+    // Pass the whole event object to the enhanced parser
+    const visitor = parseRB2BMessageEnhanced(event);
+
+    // Check if parser returned a valid visitor object
+    if (!visitor || !visitor.visitorId) {
+      console.warn('[slackEvents] Skipping event - parser did not return a valid visitor object with ID. Event TS:', event.ts);
       return;
     }
 
-    // Create query condition based on whether email exists
-    const query = visitor.email ? { email: visitor.email } : { visitorId: visitor.visitorId };
-
-    // Upsert by email or visitorId
+    // Update database with parsed visitor data
     await Visitor.findOneAndUpdate(
-      query,
+      { visitorId: visitor.visitorId },
       {
-        $setOnInsert: {
-          firstSeen: new Date(),
-          visitorId: visitor.visitorId // Ensure visitorId is set on insert
-        },
-        $set: {
-          name: visitor.name || '',
-          title: visitor.title || '',
-          company: visitor.company || '',
-          email: visitor.email || '',
-          linkedin: visitor.linkedin || '',
-          location: visitor.location || '',
-          lastSeen: new Date(),
-          pageCount: visitor.pageCount || 1,
-
-          // new about section fields
-          aboutName: visitor.aboutName || '',
-          website: visitor.website || '',
-          employees: visitor.employees || '',
-          industry: visitor.industry || '',
-          revenue: visitor.revenue || ''
-        }
+        $set: visitor,
+        $setOnInsert: { firstSeen: visitor.firstSeen }
       },
       { upsert: true, new: true }
     );
 
-    console.log('[slackEvents] Visitor saved:', visitor.email || visitor.visitorId);
+    console.log(`[slackEvents] Processed visitor: ${visitor.name || 'Unknown'} from ${visitor.company || 'Unknown'} (ID: ${visitor.visitorId})`);
+
   } catch (err) {
-    console.error('[slackEvents] Error saving visitor:', err);
+    console.error('[slackEvents] Processing error for event TS:', event.ts, err);
   }
 });
 
