@@ -150,37 +150,41 @@ function parseRB2BMessageEnhanced(event) {
 // --- Helper Function: Parse from Blocks ---
 function parseFromBlocks(blocks) {
   const visitor = {};
-  const fieldMappings = {
-    [/^name$/i]: 'name',
-    [/^title|job title$/i]: 'title',
-    [/^company$/i]: 'company',
-    [/^email$/i]: 'email',
-    [/^linkedin$/i]: 'linkedin',
-    [/^location|loc$/i]: 'location',
-    [/^website$/i]: 'website',
-    [/^industry$/i]: 'industry',
-    [/^employees|est\.?\s+employees|employee count$/i]: 'employees',
-    [/^revenue|est\.?\s+revenue|estimated revenue$/i]: 'revenue'
-  };
+  
+  // Use array of [regex, fieldName] pairs instead of object
+  const mappings = [
+    [/^name$/i, 'name'],
+    [/^title|job title$/i, 'title'],
+    [/^company$/i, 'company'],
+    [/^email$/i, 'email'],
+    [/^linkedin$/i, 'linkedin'],
+    [/^location|loc$/i, 'location'],
+    [/^website$/i, 'website'],
+    [/^industry$/i, 'industry'],
+    [/^employees|est\.?\s+employees|employee count$/i, 'employees'],
+    [/^revenue|est\.?\s+revenue|estimated revenue$/i, 'revenue']
+  ];
 
   for (const block of blocks) {
     if (block.type === 'section' && block.fields) {
       for (const field of block.fields) {
-        const text = field.text || '';
+        // Remove ALL asterisks so match is clean
+        const text = (field.text || '').replace(/\*/g, '').trim();
         const match = text.match(/^\*?(.+?)\*?:\s*\n?([\s\S]+)/);
         if (match) {
           const keyText = match[1].trim();
           let valueText = match[2].trim();
 
-          for (const [regex, visitorKey] of Object.entries(fieldMappings)) {
+          // Find the first regex that matches
+          for (const [regex, fieldName] of mappings) {
             if (regex.test(keyText)) {
-              if (visitorKey === 'linkedin') {
+              if (fieldName === 'linkedin') {
                 const urlMatch = valueText.match(/https?:\/\/[^\s]+/);
-                visitor[visitorKey] = urlMatch ? urlMatch[0] : valueText;
-              } else if (visitorKey === 'email' && valueText.includes('---')) {
+                visitor[fieldName] = urlMatch ? urlMatch[0] : valueText;
+              } else if (fieldName === 'email' && valueText.includes('---')) {
                 // Skip placeholder emails
               } else {
-                visitor[visitorKey] = valueText;
+                visitor[fieldName] = valueText;
               }
               break;
             }
@@ -202,24 +206,25 @@ function parseFromBlocks(blocks) {
 function parseFromText(text) {
   if (!text) return {};
 
-  // Normalize line breaks and remove markdown emphasis
-  text = text.replace(/\\n/g, '\n').replace(/\*\*/g, '');
+  // Normalize line breaks and remove ALL asterisks
+  text = text.replace(/\\n/g, '\n').replace(/\*/g, '');
 
   const visitor = {};
   const lines = text.split('\n').map(line => line.trim()).filter(line => line.length > 0);
 
-  const keyMappings = {
-    name: /^\*?\s*name\s*$/i,
-    title: /^\*?\s*title\s*$/i,
-    company: /^\*?\s*company\s*$/i,
-    email: /^\*?\s*email\s*$/i,
-    linkedin: /^\*?\s*linkedin\s*$/i,
-    location: /^\*?\s*location\s*$/i,
-    website: /^\*?\s*website\s*$/i,
-    industry: /^\*?\s*industry\s*$/i,
-    employees: /^\*?\s*est\.?\s+employees\s*$/i,
-    revenue: /^\*?\s*est\.?\s+revenue\s*$/i
-  };
+  // Use array of [regex, fieldName] pairs instead of object
+  const mappings = [
+    [/^name$/i, 'name'],
+    [/^title|job title$/i, 'title'],
+    [/^company$/i, 'company'],
+    [/^email$/i, 'email'],
+    [/^linkedin$/i, 'linkedin'],
+    [/^location|loc$/i, 'location'],
+    [/^website$/i, 'website'],
+    [/^industry$/i, 'industry'],
+    [/^employees|est\.?\s+employees|employee count$/i, 'employees'],
+    [/^revenue|est\.?\s+revenue|estimated revenue$/i, 'revenue']
+  ];
 
   let inAboutSection = false;
   let aboutCompanyName = null;
@@ -240,28 +245,21 @@ function parseFromText(text) {
       const key = kvMatch[1].trim();
       let value = kvMatch[2].trim();
 
-      // Find corresponding visitor field key
-      let targetField = null;
-      for (const field in keyMappings) {
-        if (keyMappings[field].test(key)) {
-          targetField = field;
+      // Find the first regex that matches
+      for (const [regex, fieldName] of mappings) {
+        if (regex.test(key)) {
+          if (fieldName === 'linkedin') {
+            const urlMatch = value.match(/https?:\/\/[^\s>]+/);
+            value = urlMatch ? urlMatch[0] : value;
+          } else if (fieldName === 'email' && value.includes('---')) {
+            value = null;
+          }
+
+          if (value !== null) {
+            visitor[fieldName] = value;
+          }
           break;
         }
-      }
-
-      if (targetField) {
-        if (targetField === 'linkedin') {
-          const urlMatch = value.match(/https?:\/\/[^\s>]+/);
-          value = urlMatch ? urlMatch[0] : value;
-        } else if (targetField === 'email' && value.includes('---')) {
-          value = null;
-        }
-
-        if (value !== null) {
-          visitor[targetField] = value;
-        }
-      } else if (!inAboutSection) {
-        console.warn(`[slackEvents] Unmapped key found in text: "${key}"`);
       }
     } else {
       parseVisitInfo(line, visitor);
