@@ -1,6 +1,8 @@
 const express = require('express');
 const crypto = require('crypto');
 const mongoose = require('mongoose');
+const axios = require('axios');
+const FormData = require('form-data');
 const { WebClient } = require('@slack/web-api');
 const { parse, isValid } = require('date-fns');
 
@@ -317,6 +319,45 @@ function parsePageCount(textLine, visitor) {
   }
 }
 
+// Helper: Send to your OnePgr leads endpoint
+async function sendToLeadsAPI(visitor) {
+  const form = new FormData();
+  form.append('onepgr_apicall',        '1');
+  form.append('name',                  visitor.name);
+  form.append('email',                 visitor.email);
+  form.append('page_id',               process.env.ONEPGR_PAGE_ID);
+  form.append('phone',                 visitor.phone || '');
+  form.append('company',               visitor.company);
+  form.append('comment',               visitor.comment || '');
+  form.append('campaign_id',           process.env.ONEPGR_CAMPAIGN_ID);
+  form.append('queue_token',           process.env.ONEPGR_QUEUE_TOKEN);
+  form.append('appt_event',            (visitor.firstSeen || new Date()).toISOString());
+  form.append('Linkedin',              visitor.linkedin);
+  form.append('source_type',           'slack');
+  form.append('source_name',           process.env.SLACK_TARGET_CHANNEL_ID);
+  form.append('slack_org_name',        process.env.SLACK_ORG_NAME);
+
+  const headers = {
+    ...form.getHeaders(),
+    'Accept':                   'application/json',
+    'gateway_type':             process.env.ONEPGR_GATEWAY_TYPE,
+    'gateway_owner_token':      process.env.ONEPGR_OWNER_TOKEN,
+    'gateway_destination_token':process.env.ONEPGR_DEST_TOKEN,
+    'Cookie':                   'visits=3',
+  };
+
+  const url = `${process.env.ONEPGR_LEADS_URL}?xhr_flag=1`;
+
+  try {
+    const resp = await axios.post(url, form, { headers });
+    console.log('[slackEvents] Lead API response:', resp.data);
+    return resp.data;
+  } catch (err) {
+    console.error('[slackEvents] Lead API error:', err.response?.data || err.message);
+    // don't rethrow—failure to notify leads API shouldn't crash your Slack handler
+  }
+}
+
 const router = express.Router();
 const SIGNING_SECRET = process.env.SLACK_SIGNING_SECRET;
 const CHANNEL_ID = process.env.SLACK_TARGET_CHANNEL_ID;
@@ -467,6 +508,9 @@ router.post('/', express.raw({ type: 'application/json' }), async (req, res) => 
     );
 
     console.log(`[slackEvents] Processed visitor: ${visitor.name || 'Unknown'} from ${visitor.company || 'Unknown'} (ID: ${visitor.visitorId})`);
+
+    // Call the OnePgr leads endpoint
+    await sendToLeadsAPI(visitor);
 
   } catch (err) {
     console.error('[slackEvents] Processing error for event TS:', event.ts, err);
