@@ -321,29 +321,45 @@ function parsePageCount(textLine, visitor) {
 
 // Helper: Send to your OnePgr leads endpoint
 async function sendToLeadsAPI(visitor) {
-  const form = new FormData();
-  form.append('onepgr_apicall',        '1');
-  form.append('name',                  visitor.name);
-  form.append('email',                 visitor.email);
-  form.append('page_id',               process.env.ONEPGR_PAGE_ID);
-  form.append('phone',                 visitor.phone || '');
-  form.append('company',               visitor.company);
-  form.append('comment',               visitor.comment || '');
-  form.append('campaign_id',           process.env.ONEPGR_CAMPAIGN_ID);
-  form.append('queue_token',           process.env.ONEPGR_QUEUE_TOKEN);
-  form.append('appt_event',            (visitor.firstSeen || new Date()).toISOString());
-  form.append('Linkedin',              visitor.linkedin);
-  form.append('source_type',           'slack');
-  form.append('source_name',           process.env.SLACK_TARGET_CHANNEL_ID);
-  form.append('slack_org_name',        process.env.SLACK_ORG_NAME);
+  // 1) The full list of form-fields your leads API expects
+  const params = {
+    onepgr_apicall:        '1',
+    name:                  visitor.name,
+    title:                 visitor.title,    // if your API accepts title
+    company:               visitor.company,
+    email:                 visitor.email,
+    Linkedin:              visitor.linkedin,
+    location:              visitor.location, // if your API accepts location
+    aboutName:             visitor.aboutName,
+    website:               visitor.website,
+    employees:             visitor.employees,
+    industry:              visitor.industry,
+    revenue:               visitor.revenue,
+    page_id:               process.env.ONEPGR_PAGE_ID,
+    phone:                 visitor.phone,
+    comment:               visitor.comment,
+    campaign_id:           process.env.ONEPGR_CAMPAIGN_ID,
+    queue_token:           process.env.ONEPGR_QUEUE_TOKEN,
+    appt_event:            (visitor.firstSeen || new Date()).toISOString(),
+    source_type:           'slack',
+    source_name:           process.env.SLACK_TARGET_CHANNEL_ID,
+    slack_org_name:        process.env.SLACK_ORG_NAME
+  };
 
+  const form = new FormData();
+  // 2) Append every key—even if the value is missing, default to ''
+  Object.entries(params).forEach(([key, val]) => {
+    form.append(key, val || '');
+  });
+
+  // 3) Add your gateway headers
   const headers = {
     ...form.getHeaders(),
-    'Accept':                   'application/json',
-    'gateway_type':             process.env.ONEPGR_GATEWAY_TYPE,
-    'gateway_owner_token':      process.env.ONEPGR_OWNER_TOKEN,
-    'gateway_destination_token':process.env.ONEPGR_DEST_TOKEN,
-    'Cookie':                   'visits=3',
+    'Accept':                    'application/json',
+    'gateway_type':              process.env.ONEPGR_GATEWAY_TYPE,
+    'gateway_owner_token':       process.env.ONEPGR_OWNER_TOKEN,
+    'gateway_destination_token': process.env.ONEPGR_DEST_TOKEN,
+    'Cookie':                    'visits=3',
   };
 
   const url = `${process.env.ONEPGR_LEADS_URL}?xhr_flag=1`;
@@ -354,7 +370,6 @@ async function sendToLeadsAPI(visitor) {
     return resp.data;
   } catch (err) {
     console.error('[slackEvents] Lead API error:', err.response?.data || err.message);
-    // don't rethrow—failure to notify leads API shouldn't crash your Slack handler
   }
 }
 
