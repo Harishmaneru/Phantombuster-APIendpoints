@@ -535,38 +535,33 @@
 // };
 
 
-// webhooks/slackEvents.js
-
-
-
-// webhooks/slackEvents.js
 
 
 // webhooks/slackEvents.js
 
-const express  = require('express');
-const crypto   = require('crypto');
-const axios    = require('axios');
+const express = require('express');
+const crypto = require('crypto');
+const axios = require('axios');
 const FormData = require('form-data');
 const { parse, isValid } = require('date-fns');
 
 // ─── Environment & Constants ────────────────────────────────────────────────
-const SIGNING_SECRET  = process.env.SLACK_SIGNING_SECRET;
-const CHANNEL_ID      = process.env.SLACK_TARGET_CHANNEL_ID;
-const RB2B_BOT_ID     = process.env.RB2B_BOT_ID;
+const SIGNING_SECRET = process.env.SLACK_SIGNING_SECRET;
+const CHANNEL_ID = process.env.SLACK_TARGET_CHANNEL_ID;
+const RB2B_BOT_ID = process.env.RB2B_BOT_ID;
 
-const ONEPGR_URL      = process.env.ONEPGR_LEADS_URL + '?xhr_flag=1';
-const PAGE_ID         = process.env.ONEPGR_PAGE_ID;
-const CAMPAIGN_ID     = process.env.ONEPGR_CAMPAIGN_ID;
-const QUEUE_TOKEN     = process.env.ONEPGR_QUEUE_TOKEN;
-const GATEWAY_TYPE    = process.env.ONEPGR_GATEWAY_TYPE;
-const OWNER_TOKEN     = process.env.ONEPGR_OWNER_TOKEN;
-const DEST_TOKEN      = process.env.ONEPGR_DEST_TOKEN;
-const ORG_NAME        = process.env.SLACK_ORG_NAME;
+const ONEPGR_URL = process.env.ONEPGR_LEADS_URL + '?xhr_flag=1';
+const PAGE_ID = process.env.ONEPGR_PAGE_ID;
+const CAMPAIGN_ID = process.env.ONEPGR_CAMPAIGN_ID;
+const QUEUE_TOKEN = process.env.ONEPGR_QUEUE_TOKEN;
+const GATEWAY_TYPE = process.env.ONEPGR_GATEWAY_TYPE;
+const OWNER_TOKEN = process.env.ONEPGR_OWNER_TOKEN;
+const DEST_TOKEN = process.env.ONEPGR_DEST_TOKEN;
+const ORG_NAME = process.env.SLACK_ORG_NAME;
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
-/** Parse everything out of Slack’s Blocks payload */
+/** Parse everything out of Slack's Blocks payload */
 function parseFromBlocks(blocks) {
   const v = {};
 
@@ -583,16 +578,16 @@ function parseFromBlocks(blocks) {
   );
   if (info) {
     info.text.text
-      .replace(/\*/g,'')
+      .replace(/\*/g, '')
       .split('\n')
       .map(l => l.trim()).filter(Boolean)
       .forEach(line => {
-        const [rk,...r] = line.split(/\s*:\s*/);
+        const [rk, ...r] = line.split(/\s*:\s*/);
         const key = rk.toLowerCase(), val = r.join(':').trim();
         switch (key) {
-          case 'name':     v.name     = val; break;
-          case 'title':    v.title    = val; break;
-          case 'company':  v.company  = val; break;
+          case 'name': v.name = val; break;
+          case 'title': v.title = val; break;
+          case 'company': v.company = val; break;
           case 'email':
             if (!/^\*+@+\*+$/.test(line)) v.email = val;
             break;
@@ -606,26 +601,26 @@ function parseFromBlocks(blocks) {
   const about = blocks.find(b => b.type === 'section' && Array.isArray(b.fields));
   if (about) {
     about.fields.forEach(f => {
-      const text = f.text.replace(/\*/g,'').trim();
-      const [rk,...r] = text.split(/\s*:\s*/);
+      const text = f.text.replace(/\*/g, '').trim();
+      const [rk, ...r] = text.split(/\s*:\s*/);
       const key = rk.toLowerCase(), val = r.join(':').trim();
-      if (key.startsWith('website'))      v.website   = val;
-      else if (key.includes('employee'))   v.employees = val;
-      else if (key.includes('industry'))   v.industry  = val;
-      else if (key.includes('revenue'))    v.revenue   = val;
+      if (key.startsWith('website')) v.website = val;
+      else if (key.includes('employee')) v.employees = val;
+      else if (key.includes('industry')) v.industry = val;
+      else if (key.includes('revenue')) v.revenue = val;
     });
   }
 
   // 4) Context → firstSeen & pageCount
   const ctx = blocks.find(b => b.type === 'context');
   if (ctx) {
-    const raw = ctx.elements.map(e => e.text).join(' ').replace(/\*/g,'');
-    const m   = raw.match(/(?:First identified|has visited).*?(?:on|since)\s+(.+?)(?:\s|$)/i);
+    const raw = ctx.elements.map(e => e.text).join(' ').replace(/\*/g, '');
+    const m = raw.match(/(?:First identified|has visited).*?(?:on|since)\s+(.+?)(?:\s|$)/i);
     if (m?.[1]) {
-      // parse exactly “May 01, 2025 at 08:04AM EST”
+      // parse exactly "May 01, 2025 at 08:04AM EST"
       const dt = parse(m[1].trim(),
-                       "MMMM dd, yyyy 'at' hh:mma 'EST'",
-                       new Date());
+        "MMMM dd, yyyy 'at' hh:mma 'EST'",
+        new Date());
       if (isValid(dt)) v.firstSeen = dt;
       else console.warn('[slackEvents] Date parse failed on', m[1]);
     }
@@ -637,9 +632,9 @@ function parseFromBlocks(blocks) {
 }
 
 /** POST to your OnePgr leads endpoint */
-async function sendToLeadsAPI(visitor) {
+async function sendToLeadsAPI(visitor, rawMessage) {
   const params = {
-    onepgr_apicall:'1',
+    onepgr_apicall: '1',
     name: visitor.name,
     title: visitor.title,
     company: visitor.company,
@@ -653,33 +648,33 @@ async function sendToLeadsAPI(visitor) {
     revenue: visitor.revenue,
     page_id: PAGE_ID,
     phone: visitor.phone,
-    comment: visitor.comment,
+    comment: rawMessage || visitor.comment || '',
     campaign_id: CAMPAIGN_ID,
     queue_token: QUEUE_TOKEN,
-    appt_event: (visitor.firstSeen||new Date()).toISOString(),
-    source_type:'slack',
-    source_name:CHANNEL_ID,
-    slack_org_name:ORG_NAME
+    appt_event: (visitor.firstSeen || new Date()).toISOString(),
+    source_type: 'slack',
+    source_name: CHANNEL_ID,
+    slack_org_name: ORG_NAME
   };
 
   console.log('[slackEvents] ⏵ OnePgr lead payload:', params);
   const form = new FormData();
-  Object.entries(params).forEach(([k,v]) => form.append(k, v||''));
+  Object.entries(params).forEach(([k, v]) => form.append(k, v || ''));
 
   const headers = {
     ...form.getHeaders(),
-    'Accept':'application/json',
-    'gateway_type':GATEWAY_TYPE,
-    'gateway_owner_token':OWNER_TOKEN,
-    'gateway_destination_token':DEST_TOKEN,
-    'Cookie':'visits=3'
+    'Accept': 'application/json',
+    'gateway_type': GATEWAY_TYPE,
+    'gateway_owner_token': OWNER_TOKEN,
+    'gateway_destination_token': DEST_TOKEN,
+    'Cookie': 'visits=3'
   };
 
   try {
     const { data } = await axios.post(ONEPGR_URL, form, { headers });
     console.log('[slackEvents] Lead API response:', data);
   } catch (err) {
-    console.error('[slackEvents] Lead API error:', err.response?.data||err.message);
+    console.error('[slackEvents] Lead API error:', err.response?.data || err.message);
   }
 }
 
@@ -691,17 +686,17 @@ router.get('/', (_req, res) => res.send('OK'));
 
 // Slack Events endpoint
 router.post(
-  '/', 
-  express.raw({ type:'application/json' }), 
+  '/',
+  express.raw({ type: 'application/json' }),
   async (req, res) => {
     // ─── 1) Signature & replay check ─────────────────────────────
-    const ts  = req.headers['x-slack-request-timestamp'];
+    const ts = req.headers['x-slack-request-timestamp'];
     const sig = req.headers['x-slack-signature'];
-    if (!ts || !sig || Math.abs(Date.now()/1000 - Number(ts)) > 300) {
+    if (!ts || !sig || Math.abs(Date.now() / 1000 - Number(ts)) > 300) {
       return res.status(400).send('Bad request');
     }
     const base = `v0:${ts}:${req.body.toString('utf8')}`;
-    const myH  = 'v0=' + crypto
+    const myH = 'v0=' + crypto
       .createHmac('sha256', SIGNING_SECRET)
       .update(base).digest('hex');
     if (!crypto.timingSafeEqual(Buffer.from(myH), Buffer.from(sig))) {
@@ -718,7 +713,7 @@ router.post(
 
     // ─── 3) URL verification ──────────────────────────────────────
     if (payload.type === 'url_verification') {
-      res.set('Content-Type','text/plain');
+      res.set('Content-Type', 'text/plain');
       return res.send(payload.challenge);
     }
 
@@ -727,28 +722,34 @@ router.post(
 
     // ─── 5) Logging raw payload & headers ────────────────────────
     console.log('────────────────────────────────────────');
-    console.log('[slackEvents] Full incoming Slack payload:\n', 
-                JSON.stringify(payload, null, 2));
-    console.log('[slackEvents] Request headers:\n', 
-                JSON.stringify(req.headers, null, 2));
+    console.log('[slackEvents] Full incoming Slack payload:\n',
+      JSON.stringify(payload, null, 2));
+    console.log('[slackEvents] Request headers:\n',
+      JSON.stringify(req.headers, null, 2));
     console.log('────────────────────────────────────────');
 
     // ─── 6) Filter to the one channel / bot_message ──────────────
     const { event } = payload;
-    if (!event || event.type!=='message' || event.subtype!=='bot_message') 
+    if (!event || event.type !== 'message' || event.subtype !== 'bot_message')
       return;
     if (event.channel !== CHANNEL_ID) return;
-    if (event.bot_id  !== RB2B_BOT_ID)  return;
+    if (event.bot_id !== RB2B_BOT_ID) return;
 
     // ─── 7) Parse & forward ──────────────────────────────────────
     try {
-      const visitor = parseFromBlocks(event.blocks||[]);
+      // Get the raw text or blocks JSON as a fallback
+      const rawMessage = event.text || (event.blocks ? JSON.stringify(event.blocks) : '');
+      console.log('[slackEvents] Raw message content:', rawMessage.substring(0, 150) + '...');
+
+      // Still try to parse critical fields while keeping raw data
+      const visitor = parseFromBlocks(event.blocks || []);
       if (!visitor.name && !visitor.company) {
-        console.warn('[slackEvents] no visitor fields found, skipping');
-        return;
+        console.warn('[slackEvents] no visitor fields found, but forwarding raw message');
       }
       console.log('[slackEvents] visitor parsed:', visitor);
-      await sendToLeadsAPI(visitor);
+
+      // Send both parsed fields AND raw message
+      await sendToLeadsAPI(visitor, rawMessage);
     } catch (err) {
       console.error('[slackEvents] handler error:', err);
     }
