@@ -570,7 +570,7 @@ const ORG_NAME        = process.env.SLACK_ORG_NAME;
 function parseFromBlocks(blocks) {
   const v = {};
 
-  // 1) Header → “Name from Company”
+  // 1) Header → "Name from Company"
   const header = blocks.find(b => b.type === 'header');
   if (header) {
     const m = header.text.text.match(/^(.*) from (.*)$/);
@@ -662,6 +662,7 @@ async function sendToLeadsAPI(visitor) {
     slack_org_name:ORG_NAME
   };
 
+  console.log('[slackEvents] ⏵ OnePgr lead payload:', params);
   const form = new FormData();
   Object.entries(params).forEach(([k,v]) => form.append(k, v||''));
 
