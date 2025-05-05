@@ -1,5 +1,3 @@
-
-
 // webhooks/slackEvents.js
 
 const express = require('express');
@@ -192,6 +190,11 @@ router.post(
     console.log('────────────────────────────────────────');
 
     // ─── 6) Filter to the one channel / bot_message ──────────────
+    // Debug: log channel and bot information before filtering
+    console.log(
+      `[slackEvents] channel=${payload.event.channel}, bot_id=${payload.event.bot_id}, ` +
+      `target_channel=${CHANNEL_ID}, target_bot=${RB2B_BOT_ID}`
+    );
     const { event } = payload;
     if (!event || event.type !== 'message' || event.subtype !== 'bot_message')
       return;
