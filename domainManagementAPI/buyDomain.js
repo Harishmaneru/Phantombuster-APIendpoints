@@ -389,7 +389,6 @@ router.post('/dynadotdomain/register', async (req, res) => {
                 }
             });
         }
-
         // Success
         res.json({
             status: '1',
@@ -406,7 +405,6 @@ router.post('/dynadotdomain/register', async (req, res) => {
         res.status(400).json({ status: '-1', message: err.message });
     }
 });
-
 router.post('/dynadot/domainInfo', async (req, res) => {
     try {
         const { domain } = req.body;
