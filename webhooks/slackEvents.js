@@ -93,7 +93,8 @@ function parseFromBlocks(blocks) {
 }
 
 /** POST to your OnePgr leads endpoint */
-async function sendToLeadsAPI(visitor, rawMessage) {
+async function sendToLeadsAPI(visitor, rawMessage, friendlyChannel) {
+  console.log('[slackEvents] Starting sendToLeadsAPI with visitor:', visitor);
   const params = {
     onepgr_apicall: '1',
     name: visitor.name,
@@ -114,11 +115,12 @@ async function sendToLeadsAPI(visitor, rawMessage) {
     queue_token: QUEUE_TOKEN,
     appt_event: (visitor.firstSeen || new Date()).toISOString(),
     source_type: 'slack',
-    source_name: 'rb2b-hp-recorded-int',
+    source_name: friendlyChannel,
     slack_org_name: ORG_NAME
   };
 
   console.log('[slackEvents] ⏵ OnePgr lead payload:', params);
+  console.log('[slackEvents] ONEPGR_URL:', ONEPGR_URL);
   const form = new FormData();
   Object.entries(params).forEach(([k, v]) => form.append(k, v || ''));
 
@@ -130,12 +132,13 @@ async function sendToLeadsAPI(visitor, rawMessage) {
     'gateway_destination_token': DEST_TOKEN,
     'Cookie': 'visits=3'
   };
-
+  console.log('[slackEvents] Making API request to Create leads API...');
   try {
     const { data } = await axios.post(ONEPGR_URL, form, { headers });
     console.log('[slackEvents] Lead API response:', data);
   } catch (err) {
     console.error('[slackEvents] Lead API error:', err.response?.data || err.message);
+    console.error('[slackEvents] Full error:', err);
   }
 }
 
@@ -221,5 +224,12 @@ router.post(
     }
   }
 );
+
+console.log('[slackEvents] Server started with environment:', {
+  hasOnepgrUrl: !!process.env.ONEPGR_LEADS_URL,
+  hasPageId: !!process.env.ONEPGR_PAGE_ID,
+  hasCampaignId: !!process.env.ONEPGR_CAMPAIGN_ID,
+  hasQueueToken: !!process.env.ONEPGR_QUEUE_TOKEN
+});
 
 module.exports = { router };
