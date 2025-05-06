@@ -1,9 +1,10 @@
+require('dotenv').config();
 const express = require('express');
 const https = require('https');
 const http = require('http');
 const fs = require('fs');
 const cors = require('cors');
-require('dotenv').config();
+
 
 const { router: slackRouter } = require('./webhooks/slackEvents');
 

@@ -7,6 +7,8 @@ package-lock.json
 *.key
 *.crt
 *.ca-bundle
+harish_key_3.pem
+domainManagementAPI/domain-api-458913-9721195ce6ec.json
 
 # Logs
 *.log

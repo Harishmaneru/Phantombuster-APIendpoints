@@ -4,7 +4,10 @@ const express = require('express');
 const { DomainsClient } = require('@google-cloud/domains').v1;
 
 const router = express.Router();
-const client = new DomainsClient();
+const client = new DomainsClient({
+  projectId: process.env.GCP_PROJECT_ID,
+  keyFilename: process.env.GOOGLE_APPLICATION_CREDENTIALS
+});
 const PARENT = `projects/${process.env.GCP_PROJECT_ID}/locations/global`;
 
 /**
@@ -15,24 +18,24 @@ const PARENT = `projects/${process.env.GCP_PROJECT_ID}/locations/global`;
 router.post('/domains/check', async (req, res) => {
   try {
     const { domain } = req.body;
-    if (!domain) 
+    if (!domain)
       return res.status(400).json({ success: false, error: 'domain is required' });
 
     const [resp] = await client.searchDomains({ parent: PARENT, query: domain });
     const params = resp.registerParameters?.[0];
-    if (!params) 
+    if (!params)
       throw new Error('No availability information returned');
 
     const money = params.annualPrice || {};
     const price = {
-      amount:   (money.units || 0) + (money.nanos || 0) / 1e9,
+      amount: (money.units || 0) + (money.nanos || 0) / 1e9,
       currency: money.currencyCode || 'USD'
     };
 
     res.json({
       success: true,
       data: {
-        domain:    params.domainName,
+        domain: params.domainName,
         available: params.availability === 'AVAILABLE',
         price
       }
@@ -47,13 +50,13 @@ router.post('/domains/check', async (req, res) => {
 router.post('/domains/register', async (req, res) => {
   try {
     const { domain, contacts } = req.body;
-    if (!domain || !contacts) 
+    if (!domain || !contacts)
       return res.status(400).json({ success: false, error: 'domain and contacts are required' });
 
     const [operation] = await client.registerDomain({
       parent: PARENT,
       registration: {
-        domainName:     domain,
+        domainName: domain,
         contactSettings: contacts
       }
     });
@@ -80,7 +83,7 @@ router.post('/domains/register', async (req, res) => {
 router.post('/domains/info', async (req, res) => {
   try {
     const { domain } = req.body;
-    if (!domain) 
+    if (!domain)
       return res.status(400).json({ success: false, error: 'domain is required' });
 
     const name = `${PARENT}/registrations/${domain}`;
