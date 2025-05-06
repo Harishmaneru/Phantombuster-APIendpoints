@@ -8,8 +8,30 @@ const { parse, isValid } = require('date-fns');
 
 // ─── Environment & Constants ────────────────────────────────────────────────
 const SIGNING_SECRET = process.env.SLACK_SIGNING_SECRET;
-const CHANNEL_ID = process.env.SLACK_TARGET_CHANNEL_ID;
-const RB2B_BOT_ID = process.env.RB2B_BOT_ID;
+
+// Defensive JSON parsing for environment variables
+function parseEnvJson(jsonString) {
+  try {
+    // First try direct parse
+    return JSON.parse(jsonString);
+  } catch (e) {
+    try {
+      // If that fails, try to fix common JSON formatting issues
+      return JSON.parse(jsonString.replace(/(\w+):/g, '"$1":'));
+    } catch (e2) {
+      console.error('[slackEvents] Failed to parse JSON from env:', jsonString);
+      console.error('[slackEvents] Parse error:', e2.message);
+      return {};
+    }
+  }
+}
+
+const RB2B_CHANNEL_BOT_MAP = parseEnvJson(process.env.RB2B_CHANNEL_BOT_MAP || '{}');
+const RB2B_CHANNEL_NAME_MAP = parseEnvJson(process.env.RB2B_CHANNEL_NAME_MAP || '{}');
+
+// Log the parsed maps for debugging
+console.log('[slackEvents] Parsed channel bot map:', RB2B_CHANNEL_BOT_MAP);
+console.log('[slackEvents] Parsed channel name map:', RB2B_CHANNEL_NAME_MAP);
 
 const ONEPGR_URL = process.env.ONEPGR_LEADS_URL + '?xhr_flag=1';
 const PAGE_ID = process.env.ONEPGR_PAGE_ID;
@@ -196,13 +218,23 @@ router.post(
     // Debug: log channel and bot information before filtering
     console.log(
       `[slackEvents] channel=${payload.event.channel}, bot_id=${payload.event.bot_id}, ` +
-      `target_channel=${CHANNEL_ID}, target_bot=${RB2B_BOT_ID}`
+      `channel_bot_map=${JSON.stringify(RB2B_CHANNEL_BOT_MAP)}`
     );
     const { event } = payload;
     if (!event || event.type !== 'message' || event.subtype !== 'bot_message')
       return;
-    if (event.channel !== CHANNEL_ID) return;
-    if (event.bot_id !== RB2B_BOT_ID) return;
+
+    const expectedBotId = RB2B_CHANNEL_BOT_MAP[event.channel];
+    const friendlyChannel = RB2B_CHANNEL_NAME_MAP[event.channel];
+
+    if (!expectedBotId || event.bot_id !== expectedBotId) {
+      console.log(`[slackEvents] Skipping - channel ${event.channel} bot ${event.bot_id} not in map`);
+      return;
+    }
+
+    if (!friendlyChannel) {
+      console.log(`[slackEvents] Warning - no friendly name for channel ${event.channel}`);
+    }
 
     // ─── 7) Parse & forward ──────────────────────────────────────
     try {
@@ -217,8 +249,8 @@ router.post(
       }
       console.log('[slackEvents] visitor parsed:', visitor);
 
-      // Send both parsed fields AND raw message
-      await sendToLeadsAPI(visitor, rawMessage);
+      // Send both parsed fields AND raw message with friendly channel name
+      await sendToLeadsAPI(visitor, rawMessage, friendlyChannel);
     } catch (err) {
       console.error('[slackEvents] handler error:', err);
     }
