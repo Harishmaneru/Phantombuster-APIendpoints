@@ -10,6 +10,7 @@ const { router: slackRouter } = require('./webhooks/slackEvents');
 // Domain Management API
 const domainManagement = require('./domainManagementAPI/buyDomain.js');
 const zohoMailAPI = require('./domainManagementAPI/zohoMailAPI.js');
+const googleDomainAPI = require('./domainManagementAPI/googleDomainApi.js');
 
 const accountScraper = require('./PhantombusterAPI/AccountScraper.js');
 const companyEmployesScrap = require('./PhantombusterAPI/companyEmployesScrap.js');
@@ -157,6 +158,7 @@ app.use(express.json());
 // Mount domain management routes
 app.use(domainManagement);
 app.use(zohoMailAPI);
+app.use(googleDomainAPI);
 
 app.use(accountScraper);
 app.use(likesCommentsScraper);
