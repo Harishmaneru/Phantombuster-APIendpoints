@@ -8,7 +8,42 @@ const client = new DomainsClient({
   projectId: process.env.GCP_PROJECT_ID,
   keyFilename: process.env.GOOGLE_APPLICATION_CREDENTIALS
 });
+
+// Add validation for the client initialization
+if (!process.env.GCP_PROJECT_ID) {
+  console.error('GCP_PROJECT_ID environment variable is not set');
+  process.exit(1);
+}
+
+if (!process.env.GOOGLE_APPLICATION_CREDENTIALS) {
+  console.error('GOOGLE_APPLICATION_CREDENTIALS environment variable is not set');
+  process.exit(1);
+}
+
 const PARENT = `projects/${process.env.GCP_PROJECT_ID}/locations/global`;
+
+// Add a health check endpoint to verify configuration
+router.get('/domains/health', async (req, res) => {
+  try {
+    // Simple API call to verify connectivity
+    await client.searchDomains({
+      parent: PARENT,
+      query: 'example.com' // Test domain
+    });
+    res.json({ success: true, message: 'API connection successful' });
+  } catch (err) {
+    console.error('Health check failed:', err);
+    res.status(500).json({ 
+      success: false, 
+      error: err.message,
+      details: {
+        projectId: process.env.GCP_PROJECT_ID,
+        credentialsPath: process.env.GOOGLE_APPLICATION_CREDENTIALS,
+        parent: PARENT
+      }
+    });
+  }
+});
 
 /**
  * POST /domains/check
