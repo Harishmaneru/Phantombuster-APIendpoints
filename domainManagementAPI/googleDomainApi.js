@@ -21,8 +21,11 @@ try {
   }
 
   client = new DomainsClient({
-    projectId: process.env.GOOGLE_CLOUD_PROJECT,
-    credentials
+    apiEndpoint: 'domains.googleapis.com',
+    credentials,
+    libName: 'pb-domains',
+    libVersion: '1.0.0',
+    fallback: false // Force gRPC
   });
 } catch (err) {
   console.error('❌ Failed to initialize Google Cloud client:', err.message);
@@ -49,8 +52,7 @@ console.log('🔍 Parent resource string:', `projects/${projectNumber}/locations
 
 // Get parent resource string - used for all API calls
 function getParent() {
-  // use the numeric project number so Cloud Domains will accept it
-  return `projects/${projectNumber}/locations/global`;
+  return 'locations/global';
 }
 
 // Add a debug endpoint to verify configuration
@@ -84,37 +86,39 @@ router.post('/domains/check', async (req, res) => {
     const request = { parent, query: domain };
     console.log('API Request:', JSON.stringify(request, null, 2));
 
-    const [resp] = await client.searchDomains(request);
+    // Add alpha headers
+    const options = {
+      otherArgs: {
+        headers: {
+          'x-goog-api-client': 'pb-domains/1.0.0'
+        }
+      }
+    };
+
+    const [resp] = await client.searchDomains(request, options);
     console.log('API Response:', JSON.stringify(resp, null, 2));
 
-    const params = resp.registerParameters?.[0];
-    if (!params) throw new Error('No availability info returned');
-
-    const money = params.annualPrice || {};
-    const price = {
-      amount: (money.units || 0) + (money.nanos || 0) / 1e9,
-      currency: money.currencyCode || 'USD'
-    };
+    // Process response to match CLI output structure
+    const result = resp.registerParameters.map(param => ({
+      domain: param.domainName,
+      available: param.availability === 'AVAILABLE',
+      price: param.yearlyPrice ? {
+        amount: Number(param.yearlyPrice.units || 0),
+        currency: param.yearlyPrice.currencyCode || 'USD'
+      } : null
+    }));
 
     res.json({
       success: true,
-      data: {
-        domain: params.domainName,
-        available: params.availability === 'AVAILABLE',
-        price
-      }
+      data: result
     });
   } catch (err) {
     console.error('❌ Domain check error:', err);
     res.status(500).json({
       success: false,
       error: err.message,
-      code: err.code,
-      reason: err.reason,
-      domain: err.domain,
-      metadata: err.metadata ? JSON.stringify([...err.metadata.internalRepr.entries()]) : null,
-      statusDetails: err.statusDetails?.map(d => d.toString()) || null,
-      errorInfoMetadata: err.errorInfoMetadata || null
+      details: err.details,
+      metadata: err.metadata?.getMap()
     });
   }
 });
