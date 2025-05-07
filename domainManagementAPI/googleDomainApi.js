@@ -12,17 +12,26 @@ const client = new DomainsClient({
 
 // Read numeric project ID from environment
 const projectId = process.env.GOOGLE_CLOUD_PROJECT;
+const projectNumber = process.env.GOOGLE_CLOUD_PROJECT_NUMBER;
+
 if (!projectId) {
   console.error('❌ GOOGLE_CLOUD_PROJECT not set!');
   process.exit(1);
 }
 
+if (!projectNumber) {
+  console.error('❌ GOOGLE_CLOUD_PROJECT_NUMBER not set!');
+  process.exit(1);
+}
+
 console.log('✅ Using project ID from environment:', projectId);
-console.log('🔍 Parent resource string:', `projects/${projectId}/locations/global`);
+console.log('✅ Using project number from environment:', projectNumber);
+console.log('🔍 Parent resource string:', `projects/${projectNumber}/locations/global`);
 
 // Get parent resource string - used for all API calls
 function getParent() {
-  return `projects/${projectId}/locations/global`;
+  // use the numeric project number so Cloud Domains will accept it
+  return `projects/${projectNumber}/locations/global`;
 }
 
 // Add a debug endpoint to verify configuration
