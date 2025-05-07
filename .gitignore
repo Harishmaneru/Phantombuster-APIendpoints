@@ -8,7 +8,8 @@ package-lock.json
 *.crt
 *.ca-bundle
 harish_key_3.pem
-domainManagementAPI/domain-email-api-459012-0f71327e064d.json
+domainManagementAPI/domain-email-api-459012-cd9e167afe23.json
+domainManagementAPI/domain-email-api-459012-85372904c0cd.json
 
 # Logs
 *.log
