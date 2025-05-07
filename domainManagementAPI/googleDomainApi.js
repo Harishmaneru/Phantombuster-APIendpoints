@@ -22,7 +22,7 @@ console.log('🔍 Parent resource string:', `projects/${projectId}/locations/glo
 
 // Get parent resource string - used for all API calls
 function getParent() {
-  return `projects/${projectId}/locations/us-central1`;
+  return `projects/${projectId}/locations/global`;
 }
 
 // Add a debug endpoint to verify configuration
