@@ -5,10 +5,29 @@ const { DomainsClient } = require('@google-cloud/domains').v1;
 const router = express.Router();
 
 // Initialize client with explicit project ID and credentials
-const client = new DomainsClient({
-  projectId: process.env.GOOGLE_CLOUD_PROJECT,
-  keyFilename: process.env.GOOGLE_APPLICATION_CREDENTIALS
-});
+let client;
+try {
+  const credentialsPath = './domain-email-api-459012-cd9e167afe23.json';
+  if (!credentialsPath) {
+    throw new Error('Credentials path is not set');
+  }
+
+  // Try to load credentials file
+  let credentials;
+  try {
+    credentials = require(credentialsPath);
+  } catch (err) {
+    throw new Error(`Failed to load credentials file at ${credentialsPath}. Please ensure the file exists and is valid JSON.`);
+  }
+
+  client = new DomainsClient({
+    projectId: process.env.GOOGLE_CLOUD_PROJECT,
+    credentials
+  });
+} catch (err) {
+  console.error('❌ Failed to initialize Google Cloud client:', err.message);
+  process.exit(1);
+}
 
 // Read numeric project ID from environment
 const projectId = process.env.GOOGLE_CLOUD_PROJECT;
