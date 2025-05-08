@@ -13,7 +13,7 @@ router.use(express.json());
 // Environment verification middleware
 router.use((req, res, next) => {
   if (!process.env.GOOGLE_APPLICATION_CREDENTIALS || !process.env.GOOGLE_CLOUD_PROJECT) {
-    console.error('Missing required environment variables');
+    console.log('[DomainManagementAPI] Missing required environment variables');
     return res.status(500).json({
       success: false,
       error: 'Server configuration error - missing environment variables',
@@ -30,7 +30,7 @@ router.use((req, res, next) => {
 
 // Global error handling
 process.on('unhandledRejection', (error) => {
-  console.error('Unhandled Rejection:', error);
+  console.log('[DomainManagementAPI] Unhandled Rejection:', error);
 });
 
 // Initialize client
@@ -85,7 +85,7 @@ try {
     fallback: 'rest'
   });
 
-  console.log('✅ Successfully initialized Domains client');
+  console.log('[DomainManagementAPI] ✅ Successfully initialized Domains client');
 } catch (err) {
   console.error('❌ Initialization failed:', {
     message: err.message,
@@ -98,10 +98,10 @@ try {
 // Read project ID
 const projectId = process.env.GOOGLE_CLOUD_PROJECT;
 if (!projectId) {
-  console.error('❌ GOOGLE_CLOUD_PROJECT not set!');
+  console.log('[DomainManagementAPI] ❌ GOOGLE_CLOUD_PROJECT not set!');
   process.exit(1);
 }
-console.log('✅ Using project ID:', projectId);
+console.log('[DomainManagementAPI] ✅ Using project ID:', projectId);
 
 // Get parent
 function getParent() {
@@ -133,9 +133,9 @@ function validateContacts(contacts) {
 // Debug endpoint
 router.get('/domains/debug', async (req, res) => {
   try {
-    console.log('Attempting to generate access token for debug endpoint...');
+    console.log('[DomainManagementAPI] Attempting to generate access token for debug endpoint...');
     const tokenResponse = await authClient.getAccessToken();
-    console.log('Access token generated successfully for debug endpoint');
+    console.log('[DomainManagementAPI] Access token generated successfully for debug endpoint');
     res.json({
       success: true,
       config: {
@@ -159,23 +159,23 @@ router.get('/domains/debug', async (req, res) => {
 
 // Domain Check
 router.post('/domains/check', async (req, res) => {
-  console.log('Received request to /domains/check', { body: req.body });
-  
+  console.log('[DomainManagementAPI] Received request to /domains/check', { body: req.body });
+
   try {
     const { domain } = req.body;
     if (!domain) {
-      console.log('Domain check failed - domain parameter missing');
+      console.log('[DomainManagementAPI] Domain check failed - domain parameter missing');
       return res.status(400).json({
         success: false,
         error: 'domain is required'
       });
     }
 
-    console.log('Checking domain availability using DomainsClient...');
-    
+    console.log('[DomainManagementAPI] Checking domain availability using DomainsClient...');
+
     // Add timeout for the entire operation
     const operationTimeout = 15000; // 15 seconds
-    const timeoutPromise = new Promise((_, reject) => 
+    const timeoutPromise = new Promise((_, reject) =>
       setTimeout(() => reject(new Error('Operation timeout')), operationTimeout)
     );
 
@@ -198,7 +198,7 @@ router.post('/domains/check', async (req, res) => {
       supportedPrivacy: param.supportedPrivacy || []
     })) : [];
 
-    console.log('Domain check successful, returning results');
+    console.log('[DomainManagementAPI] Domain check successful, returning results');
     res.json({ success: true, data: result });
   } catch (err) {
     console.error('❌ Domain check error:', {
@@ -242,18 +242,18 @@ router.post('/domains/info', async (req, res) => {
     const { domain } = req.body;
     if (!domain) return res.status(400).json({ success: false, error: 'domain is required' });
 
-    console.log('Attempting to generate access token for domain info...');
+    console.log('[DomainManagementAPI] Attempting to generate access token for domain info...');
     const tokenResponse = await authClient.getAccessToken();
-    console.log('Access token generated successfully for domain info');
+    console.log('[DomainManagementAPI] Access token generated successfully for domain info');
 
     const parent = getParent();
     const name = `${parent}/registrations/${domain}`;
     const options = getApiOptions();
-    console.log('API Request:', { name });
-    console.log('Request headers:', JSON.stringify(options.otherArgs.headers, null, 2));
+    console.log('[DomainManagementAPI] API Request:', { name });
+    console.log('[DomainManagementAPI] Request headers:', JSON.stringify(options.otherArgs.headers, null, 2));
 
     const [registration] = await client.getRegistration({ name }, options);
-    console.log('API Response:', JSON.stringify(registration, null, 2));
+    console.log('[DomainManagementAPI] API Response:', JSON.stringify(registration, null, 2));
 
     res.json({ success: true, data: registration });
   } catch (err) {
@@ -296,14 +296,14 @@ router.post('/domains/register', async (req, res) => {
       });
     }
 
-    console.log('Attempting to generate access token for domain registration...');
+    console.log('[DomainManagementAPI] Attempting to generate access token for domain registration...');
     const tokenResponse = await authClient.getAccessToken();
-    console.log('Access token generated successfully for domain registration');
+    console.log('[DomainManagementAPI] Access token generated successfully for domain registration');
 
     const parent = getParent();
     const options = getApiOptions();
-    console.log('API Request:', { parent, registration: { domainName: domain, contactSettings: contacts } });
-    console.log('Request headers:', JSON.stringify(options.otherArgs.headers, null, 2));
+    console.log('[DomainManagementAPI] API Request:', { parent, registration: { domainName: domain, contactSettings: contacts } });
+    console.log('[DomainManagementAPI] Request headers:', JSON.stringify(options.otherArgs.headers, null, 2));
 
     const [operation] = await client.registerDomain({
       parent,
@@ -314,7 +314,7 @@ router.post('/domains/register', async (req, res) => {
     }, options);
 
     const [result] = await operation.promise();
-    console.log('API Response:', JSON.stringify(result, null, 2));
+    console.log('[DomainManagementAPI] API Response:', JSON.stringify(result, null, 2));
 
     res.json({
       success: true,
@@ -346,10 +346,10 @@ router.post('/domains/register', async (req, res) => {
 // Health Check
 router.get('/domains/health', async (req, res) => {
   try {
-    console.log('Attempting to generate access token for health check...');
+    console.log('[DomainManagementAPI] Attempting to generate access token for health check...');
     const tokenResponse = await authClient.getAccessToken();
-    console.log('Access token generated successfully for health check');
-    
+    console.log('[DomainManagementAPI] Access token generated successfully for health check');
+
     res.json({
       success: true,
       message: 'API health check successful',
