@@ -5,29 +5,6 @@ const router = express.Router();
 router.use(express.json());
 const apiKey = 'private_abdd5ed846e818d9801cd92810283e4b';
 
-// const resultExplanation = {
-//     'valid': {
-//         description: 'A valid email address has been verified as a real email that is currently accepting mail.',
-//         recommendation: 'SAFE – These emails exist and have been verified for safe sending.'
-//     },
-//     'invalid': {
-//         description: 'An invalid email address has been verified as a bad recipient address that does not exist or is not accepting mail.',
-//         recommendation: 'DON’T SEND – These emails do not exist and are not safe for sending.'
-//     },
-//     'disposable': {
-//         description: 'Disposable emails are temporary accounts used to avoid using a real personal account during a sign-up process.',
-//         recommendation: 'DON’T SEND – These emails are fake or temporary emails and are not safe for sending.'
-//     },
-//     'catchall': {
-//         description: 'Also known as an “accept all”. This is a domain-wide setting where all emails on this domain will be reported as "accept all".',
-//         recommendation: 'SAFE – If you have a dedicated email server with your own IPs, accept all emails may be safe for sending dependent on the overall health of your list. DON’T SEND – If you use a third party email provider that requires a bounce rate below 4%, these emails are not safe for sending.'
-//     },
-//     'unknown': {
-//         description: 'We are unable to definitively determine this email’s status due to the domain and/or server not responding to our requests.',
-//         recommendation: 'SAFE – If you have a dedicated email server with your own IPs, unknown emails are normally safe for sending. DON’T SEND – If you use a third party email provider that requires a bounce rate below 4%, these emails are not safe for sending.'
-//     }
-// };
-
 
 // Format verification result to match UI display
 const formatResult = (verificationResult) => {
@@ -56,16 +33,22 @@ const getRelativeTime = (timestamp) => {
 };
 
 router.post('/validate-bulk-email', async (req, res) => {
+    const startTime = new Date();
     try {
         const { emails } = req.body;
+        console.log(`[Email Validation] Starting bulk validation request at ${startTime.toISOString()}`);
 
         if (!emails || !Array.isArray(emails)) {
+            console.warn('[Email Validation] Invalid input: emails must be an array');
             return res.status(400).json({
                 error: 'Input must be an array of email addresses'
             });
         }
 
+        console.log(`[Email Validation] Processing ${emails.length} emails for validation`);
+
         // Create job
+        console.log('[Email Validation] Creating NeverBounce job...');
         const createJobResponse = await axios.post('https://api.neverbounce.com/v4/jobs/create', {
             key: apiKey,
             input: emails,
@@ -76,6 +59,7 @@ router.post('/validate-bulk-email', async (req, res) => {
         });
 
         if (createJobResponse.data.status !== 'success') {
+            console.error('[Email Validation] Job creation failed:', createJobResponse.data.message);
             return res.status(400).json({
                 status: 'error',
                 message: createJobResponse.data.message
@@ -85,10 +69,15 @@ router.post('/validate-bulk-email', async (req, res) => {
         const jobId = createJobResponse.data.job_id;
         const jobStartTime = new Date();
         console.log(`[Email Validation] Job created successfully. Job ID: ${jobId}`);
+        
         // Poll job status
         let isComplete = false;
+        let pollCount = 0;
 
         while (!isComplete) {
+            pollCount++;
+            console.log(`[Email Validation] Polling job status (attempt ${pollCount}). Job ID: ${jobId}`);
+            
             const statusResponse = await axios.get('https://api.neverbounce.com/v4/jobs/status', {
                 params: {
                     key: apiKey,
@@ -96,42 +85,91 @@ router.post('/validate-bulk-email', async (req, res) => {
                 }
             });
             
+            console.log(`[Email Validation] Current job status: ${statusResponse.data.job_status}`);
+            
             if (statusResponse.data.job_status === 'complete') {
                 isComplete = true;
+                console.log('[Email Validation] Job processing completed successfully');
             } else if (statusResponse.data.job_status === 'failed') {
+                console.error('[Email Validation] Job processing failed');
                 return res.status(400).json({
                     status: 'error',
                     message: 'Job processing failed'
                 });
             } else {
+                console.log('[Email Validation] Job still processing, waiting 5 seconds...');
                 await new Promise(resolve => setTimeout(resolve, 5000));
             }
         }
 
-        console.log('[Email Validation] Fetching job results');
-        const resultsResponse = await axios.get('https://api.neverbounce.com/v4/jobs/results', {
-            params: {
-                key: apiKey,
-                job_id: jobId
-            }
-        });
+        // Fetch ALL results with pagination
+        console.log('[Email Validation] Starting to fetch paginated results...');
+        let allResults = [];
+        let currentPage = 1;
+        const itemsPerPage = 100; // Maximum allowed per request
 
-       
-        const formattedResults = resultsResponse.data.results.map(item => ({
+        while (true) {
+            console.log(`[Email Validation] Fetching page ${currentPage} (${itemsPerPage} items per page)`);
+            const resultsResponse = await axios.get('https://api.neverbounce.com/v4/jobs/results', {
+                params: {
+                    key: apiKey,
+                    job_id: jobId,
+                    page: currentPage,
+                    items_per_page: itemsPerPage
+                }
+            });
+
+            if (!resultsResponse.data.results || resultsResponse.data.results.length === 0) {
+                console.log('[Email Validation] No more results to fetch');
+                break;
+            }
+
+            const pageResults = resultsResponse.data.results;
+            allResults = allResults.concat(pageResults);
+            console.log(`[Email Validation] Fetched ${pageResults.length} results from page ${currentPage}. Total results so far: ${allResults.length}`);
+
+            // Stop if we got fewer results than requested (reached the end)
+            if (pageResults.length < itemsPerPage) {
+                console.log('[Email Validation] Reached last page of results');
+                break;
+            }
+
+            currentPage++;
+        }
+
+        const formattedResults = allResults.map(item => ({
             email: item.data.email,
             result: formatResult(item.verification.result),
-            // explanation: resultExplanation[item.verification.result],
             time: getRelativeTime(jobStartTime)
         }));
-        console.log(`[Email Validation] Validation completed. Processed ${formattedResults.length} emails`);
+
+        const endTime = new Date();
+        const processingTime = (endTime - startTime) / 1000;
+        
+        console.log(`[Email Validation] Validation completed successfully:
+        - Total emails processed: ${formattedResults.length}
+        - Processing time: ${processingTime} seconds
+        - Total pages fetched: ${currentPage}
+        - Job ID: ${jobId}
+        - Start time: ${startTime.toISOString()}
+        - End time: ${endTime.toISOString()}`);
+
         res.status(200).json({
             status: 'success',
             verification_results: formattedResults
-            
         });
 
     } catch (error) {
-        console.error('API Error:', error.response?.data || error.message);
+        const errorTime = new Date();
+        console.error(`[Email Validation] Error occurred at ${errorTime.toISOString()}:`);
+        console.error('- Error message:', error.message);
+        console.error('- Stack trace:', error.stack);
+        if (error.response) {
+            console.error('- API Response data:', JSON.stringify(error.response.data, null, 2));
+            console.error('- API Response status:', error.response.status);
+            console.error('- API Response headers:', JSON.stringify(error.response.headers, null, 2));
+        }
+
         res.status(500).json({
             status: 'error',
             message: 'API Error',

@@ -298,7 +298,7 @@ router.post('/domains/register', async (req, res) => {
 
     console.log('[DomainManagementAPI] Attempting to generate access token for domain registration...');
     const tokenResponse = await authClient.getAccessToken();
-    console.log('[DomainManagementAPI] Access token generated successfully for domain registration');
+    console.log('[DomainManagementAPI] tokenResponse:', tokenResponse);
 
     const parent = getParent();
     const options = getApiOptions();
