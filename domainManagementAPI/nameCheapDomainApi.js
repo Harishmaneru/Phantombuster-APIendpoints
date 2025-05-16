@@ -287,6 +287,9 @@ const express = require('express');
 const xml2js = require('xml2js');
 const router = express.Router();
 
+// Common TLDs for domain suggestions and pricing
+const COMMON_TLDS = ['com', 'net', 'org', 'io', 'ai', 'co', 'app', 'dev', 'tech', 'cloud'];
+
 // Namecheap API Configuration
 const {
     NAMECHEAP_API_USER,
@@ -311,7 +314,6 @@ console.log(`[Namecheap API] User: ${NAMECHEAP_API_USER}`);
 
 // const BASE_URL = 'https://api.namecheap.com/xml.response';
 const BASE_URL = 'https://api.sandbox.namecheap.com/xml.response';
-
 
 // Helper: Validate domain name
 function isValidDomain(domain) {
@@ -373,9 +375,9 @@ async function namecheapRequest(command, params = {}, retryCount = 0) {
         }
 
         if (parsed.ApiResponse.$.Status !== 'OK') {
-            const error = parsed.ApiResponse?.Errors?.Error?._ || 
-                         parsed.ApiResponse?.Errors?.Error || 
-                         'Unknown API error';
+            const error = parsed.ApiResponse?.Errors?.Error?._ ||
+                parsed.ApiResponse?.Errors?.Error ||
+                'Unknown API error';
             throw new Error(`Namecheap API error: ${error}`);
         }
 
@@ -400,7 +402,59 @@ async function namecheapRequest(command, params = {}, retryCount = 0) {
     }
 }
 
+// Helper: Extract 1-year price from getPricing XML response
+function extractOneYearPrice(xml) {
+    try {
+        const result = xml.ApiResponse.CommandResponse.UserGetPricingResult;
+        const productType = result.ProductType;
 
+        // Find all categories
+        const categories = Array.isArray(productType.ProductCategory)
+            ? productType.ProductCategory
+            : [productType.ProductCategory];
+
+        const pricing = {
+            register: null,
+            renew: null,
+            transfer: null,
+            icannFee: 0.18, // Standard ICANN fee
+            currency: 'USD'
+        };
+
+        // Extract prices from each category
+        categories.forEach(category => {
+            const product = category.Product;
+            if (!product) return;
+
+            const prices = Array.isArray(product.Price)
+                ? product.Price
+                : [product.Price];
+
+            const oneYearPrice = prices.find(p => p.$.Duration === '1');
+            if (!oneYearPrice) return;
+
+            const price = parseFloat(oneYearPrice.$.YourPrice);
+            const additionalCost = parseFloat(oneYearPrice.$.YourAdditonalCost || '0');
+
+            switch (category.$.Name.toLowerCase()) {
+                case 'register':
+                    pricing.register = price + additionalCost;
+                    break;
+                case 'renew':
+                    pricing.renew = price + additionalCost;
+                    break;
+                case 'transfer':
+                    pricing.transfer = price + additionalCost;
+                    break;
+            }
+        });
+
+        return pricing;
+    } catch (err) {
+        console.error('[Domain API] Error extracting price:', err.message);
+        return null;
+    }
+}
 
 /**
  * Health Check
@@ -426,7 +480,7 @@ router.get('/namecheap/health', async (req, res) => {
 });
 
 /**
- * Check domain availability
+ * Check domain availability and get detailed information
  */
 router.get('/namecheap/domain/check/:domain', async (req, res) => {
     const domain = req.params.domain;
@@ -444,95 +498,120 @@ router.get('/namecheap/domain/check/:domain', async (req, res) => {
     }
 
     try {
-        // 1. Check domain availability
+        // 1. Check availability
         console.log(`[Domain API] Step 1: Checking availability for ${domain}`);
         const checkResult = await namecheapRequest('namecheap.domains.check', {
-            DomainList: domain,
-            ProductType: 'DOMAIN'
+            DomainList: domain
         });
-
-        console.log('[Domain API] Check response:', JSON.stringify(checkResult, null, 2));
 
         const domainResult = checkResult.ApiResponse.CommandResponse.DomainCheckResult;
         const available = domainResult.$.Available === 'true';
         const isPremium = domainResult.$.IsPremiumName === 'true';
         const price = domainResult.$.Price ? parseFloat(domainResult.$.Price) : null;
+        const premiumRegistrationPrice = domainResult.$.PremiumRegistrationPrice ? parseFloat(domainResult.$.PremiumRegistrationPrice) : null;
+        const premiumRenewalPrice = domainResult.$.PremiumRenewalPrice ? parseFloat(domainResult.$.PremiumRenewalPrice) : null;
+        const premiumTransferPrice = domainResult.$.PremiumTransferPrice ? parseFloat(domainResult.$.PremiumTransferPrice) : null;
+        const icannFee = domainResult.$.IcannFee ? parseFloat(domainResult.$.IcannFee) : null;
+        const eapFee = domainResult.$.EapFee ? parseFloat(domainResult.$.EapFee) : null;
 
-        console.log(`[DomainPrice] ${price}`);
-        console.log(`[Domain API] ✓ Domain ${domain} availability check complete - Available: ${available}`);
+        // pull the TLD (uppercase for API)
+        const tld = domain.split('.').pop().toUpperCase();
 
-        // 3. Generate and check domain suggestions
-        const keyword = domain.split('.')[0];
-        const tlds = ['com', 'net', 'io', 'ai', 'co'];
-        console.log(`[Domain API] Step 3: Generating suggestions for keyword "${keyword}" with ${tlds.length} TLDs`);
-        const suggestions = [];
+        if (available) {
+            // 2. If available → fetch pricing for that TLD
+            console.log(`[Domain API] Step 2: Fetching pricing for TLD ${tld}`);
+            const priceXml = await namecheapRequest('namecheap.users.getPricing', {
+                ProductType: 'DOMAIN',
+                ProductCategory: 'REGISTER',
+                ProductName: tld
+            });
+            const pricing = extractOneYearPrice(priceXml);
 
-        // Check base keyword with different TLDs
-        for (const tld of tlds) {
-            const suggestionDomain = `${keyword}.${tld}`;
-            if (suggestionDomain === domain) {
-                console.log(`[Domain API] Skipping original domain: ${suggestionDomain}`);
-                continue;
-            }
-
-            try {
-                console.log(`[Domain API] Checking suggestion: ${suggestionDomain}`);
-                const suggestionResult = await namecheapRequest('namecheap.domains.check', {
-                    DomainList: suggestionDomain,
-                    ProductType: 'DOMAIN'
-                });
-
-                const suggestionData = suggestionResult.ApiResponse.CommandResponse.DomainCheckResult;
-                const isAvailable = suggestionData.$.Available === 'true';
-                const isPremiumName = suggestionData.$.IsPremiumName === 'true';
-                const suggestionPrice = suggestionData.$.Price ? parseFloat(suggestionData.$.Price) : null;
-
-                if (isAvailable) {
-                    console.log(`[Domain API] ✓ Found available domain: ${suggestionDomain}`);
-                    suggestions.push({
-                        domain: suggestionDomain,
-                        available: true,
-                        isPremium: isPremiumName,
-                        status: 'success',
-                        price: {
-                            register: suggestionPrice,
-                            currency: 'USD',
-                            renew: suggestionPrice
-                        }
-                    });
-                } else {
-                    console.log(`[Domain API] ✗ Domain not available: ${suggestionDomain}`);
+            return res.json({
+                status: "1",
+                message: "Success",
+                data: {
+                    domain,
+                    available: true,
+                    isPremium,
+                    status: "success",
+                    pricing: pricing || {
+                        register: null,
+                        renew: null,
+                        transfer: null,
+                        icannFee: 0.18,
+                        currency: 'USD'
+                    },
+                    apiMode: NAMECHEAP_SANDBOX === 'true' ? 'sandbox' : 'production'
                 }
-            } catch (error) {
-                console.error(`[Domain API] ❌ Error checking suggestion ${suggestionDomain}:`, error.message);
-            }
+            });
+        } else {
+            // 3. If not available → build suggestions and fetch each price
+            const keyword = domain.split('.')[0];
+            console.log(`[Domain API] Step 3: Generating suggestions for keyword "${keyword}"`);
+            const suggestions = [];
+
+            // Check base keyword with different TLDs
+            await Promise.all(COMMON_TLDS.map(async (tld) => {
+                const suggestionDomain = `${keyword}.${tld}`;
+                if (suggestionDomain === domain) return;
+
+                try {
+                    const suggestionResult = await namecheapRequest('namecheap.domains.check', {
+                        DomainList: suggestionDomain
+                    });
+
+                    const suggestionData = suggestionResult.ApiResponse.CommandResponse.DomainCheckResult;
+                    const isAvailable = suggestionData.$.Available === 'true';
+                    const isPremiumName = suggestionData.$.IsPremiumName === 'true';
+                    const suggestionPrice = suggestionData.$.Price ? parseFloat(suggestionData.$.Price) : null;
+
+                    if (isAvailable) {
+                        // Only fetch pricing for available suggestions
+                        const priceXml = await namecheapRequest('namecheap.users.getPricing', {
+                            ProductType: 'DOMAIN',
+                            ProductCategory: 'REGISTER',
+                            ProductName: tld.toUpperCase()
+                        });
+                        const registerPrice = extractOneYearPrice(priceXml);
+
+                        suggestions.push({
+                            domain: suggestionDomain,
+                            available: true,
+                            isPremium: isPremiumName,
+                            status: 'success',
+                            pricing: {
+                                register: suggestionPrice || premiumRegistrationPrice || registerPrice || null,
+                                currency: 'USD'
+                            }
+                        });
+                    }
+                } catch (error) {
+                    console.error(`[Domain API] Error checking suggestion ${suggestionDomain}:`, error.message);
+                }
+            }));
+
+            return res.json({
+                status: "1",
+                message: "Success",
+                data: {
+                    domain,
+                    available: false,
+                    isPremium,
+                    status: "success",
+                    pricing: {
+                        register: price || premiumRegistrationPrice || null,
+                        renew: premiumRenewalPrice,
+                        transfer: premiumTransferPrice,
+                        icannFee,
+                        eapFee,
+                        currency: 'USD'
+                    },
+                    suggestedDomains: suggestions,
+                    apiMode: NAMECHEAP_SANDBOX === 'true' ? 'sandbox' : 'production'
+                }
+            });
         }
-
-        console.log(`[Domain API] ✓ Found ${suggestions.length} available domain suggestions`);
-
-        // 4. Format the final response
-        console.log('[Domain API] Step 4: Formatting final response');
-        const response = {
-            status: "1",
-            message: "Success",
-            data: {
-                domain,
-                available,
-                isPremium,
-                status: "success",
-                price: available ? {
-                    register: price,
-                    currency: 'USD',
-                    renew: price
-                } : null,
-                suggestedDomains: suggestions,
-                apiMode: NAMECHEAP_SANDBOX === 'true' ? 'sandbox' : 'production'
-            }
-        };
-
-        console.log('[Domain API] ✅ Successfully completed domain check process');
-        res.json(response);
-
     } catch (err) {
         console.error('[Domain API] ❌ Error in domain check process:', {
             error: err.message,
@@ -597,17 +676,17 @@ router.get('/namecheap/domain/suggestions', async (req, res) => {
  * Register a domain
  */
 router.post('/namecheap/domain/register', async (req, res) => {
-    const { 
-        domain, 
-        firstName, 
-        lastName, 
-        email, 
-        phone, 
-        address1, 
-        address2 = '', 
-        city, 
-        stateProvince, 
-        country, 
+    const {
+        domain,
+        firstName,
+        lastName,
+        email,
+        phone,
+        address1,
+        address2 = '',
+        city,
+        stateProvince,
+        country,
         postalCode,
         years = '1',
         enablePrivacy = false
@@ -615,8 +694,8 @@ router.post('/namecheap/domain/register', async (req, res) => {
 
     // Validate required fields
     if (!domain || !firstName || !lastName || !email || !phone || !address1 || !city || !stateProvince || !country || !postalCode) {
-        return res.status(400).json({ 
-            success: false, 
+        return res.status(400).json({
+            success: false,
             error: 'Missing required registration fields',
             required: ['domain', 'firstName', 'lastName', 'email', 'phone', 'address1', 'city', 'stateProvince', 'country', 'postalCode']
         });
@@ -653,8 +732,8 @@ router.post('/namecheap/domain/register', async (req, res) => {
         });
 
         if (!isAvailable) {
-            return res.status(400).json({ 
-                success: false, 
+            return res.status(400).json({
+                success: false,
                 error: 'Domain is not available for registration',
                 details: {
                     domain,
@@ -776,8 +855,8 @@ router.post('/namecheap/domain/register', async (req, res) => {
             }
         }
 
-        res.json({ 
-            success: true, 
+        res.json({
+            success: true,
             domain,
             data: {
                 registration: xml.ApiResponse.CommandResponse,
@@ -797,8 +876,8 @@ router.post('/namecheap/domain/register', async (req, res) => {
             responseData: err.response?.data
         });
 
-        res.status(500).json({ 
-            success: false, 
+        res.status(500).json({
+            success: false,
             error: err.message,
             details: err.response?.data?.error || null
         });
@@ -812,85 +891,124 @@ router.post('/namecheap/email/create', async (req, res) => {
     console.log('[Email API] 📧 Starting email creation process');
     console.log('[Email API] Request body:', JSON.stringify(req.body, null, 2));
 
-    const { domain, username, password, mailboxSize = 500 } = req.body;
-    
+    const {
+        domain,
+        username,
+        password,
+        mailboxSize = 500,
+        forwardTo = '',
+        replyTo = '',
+        autoResponder = false,
+        autoResponderMessage = '',
+        autoResponderSubject = ''
+    } = req.body;
+
     // Validate required fields
     if (!domain || !username || !password) {
         console.error('[Email API] ❌ Missing required fields:', { domain, username, password: '***' });
-        return res.status(400).json({ success: false, error: 'Missing domain, username, or password' });
+        return res.status(400).json({
+            success: false,
+            error: 'Missing required fields',
+            required: ['domain', 'username', 'password']
+        });
     }
 
     // Validate domain format
     if (!isValidDomain(domain)) {
         console.error('[Email API] ❌ Invalid domain format:', domain);
-        return res.status(400).json({ success: false, error: 'Invalid domain format' });
+        return res.status(400).json({
+            success: false,
+            error: 'Invalid domain format'
+        });
+    }
+
+    // Validate username format
+    const usernameRegex = /^[a-zA-Z0-9._-]+$/;
+    if (!usernameRegex.test(username)) {
+        console.error('[Email API] ❌ Invalid username format:', username);
+        return res.status(400).json({
+            success: false,
+            error: 'Invalid username format. Username can only contain letters, numbers, dots, underscores, and hyphens.'
+        });
+    }
+
+    // Validate password strength
+    if (password.length < 8) {
+        console.error('[Email API] ❌ Password too short');
+        return res.status(400).json({
+            success: false,
+            error: 'Password must be at least 8 characters long'
+        });
     }
 
     try {
-        console.log('[Email API] 🚀 Calling Namecheap API to create email:', {
-            domain,
-            username,
-            mailboxSize,
-            apiMode: NAMECHEAP_SANDBOX === 'true' ? 'sandbox' : 'production'
+        // First check if domain exists in the account
+        console.log(`[Email API] Checking domain ownership: ${domain}`);
+        const domainCheck = await namecheapRequest('namecheap.domains.getList', {
+            Page: '1',
+            PageSize: '100'
         });
 
-        // Use the correct API command for email creation
-        const xml = await namecheapRequest('namecheap.mail.create', {
-            DomainName: domain,
-            UserName: username,
-            Password: password,
-            MailBoxSize: mailboxSize.toString(),
-            // Additional required parameters
-            ForwardTo: '',  // Optional forwarding email
-            ReplyTo: '',    // Optional reply-to email
-            AutoResponder: 'false',  // Disable auto-responder by default
-            AutoResponderMessage: '', // Empty auto-responder message
-            AutoResponderSubject: ''  // Empty auto-responder subject
-        });
+        const domains = domainCheck.ApiResponse.CommandResponse.DomainGetListResult.Domain;
+        const domainExists = Array.isArray(domains)
+            ? domains.some(d => d.$.Name.toLowerCase() === domain.toLowerCase())
+            : domains.$.Name.toLowerCase() === domain.toLowerCase();
 
-        if (!xml?.ApiResponse?.CommandResponse) {
-            throw new Error('Invalid response format from Namecheap API');
+        if (!domainExists) {
+            console.error(`[Email API] ❌ Domain ${domain} not found in account`);
+            return res.status(404).json({
+                success: false,
+                error: 'Domain not found in your account'
+            });
         }
 
-        console.log('[Email API] ✅ Email created successfully:', {
-            email: `${username}@${domain}`,
-            response: JSON.stringify(xml.ApiResponse.CommandResponse, null, 2)
+        // Check if email already exists using domains.dns.getHosts
+        console.log(`[Email API] Checking email existence: ${username}@${domain}`);
+        const emailCheck = await namecheapRequest('namecheap.domains.dns.getHosts', {
+            DomainName: domain,
+            HostName: username
         });
 
-        res.json({ 
-            success: true, 
-            email: `${username}@${domain}`, 
-            data: xml.ApiResponse.CommandResponse 
+        const emailExists = emailCheck.ApiResponse.CommandResponse.DomainDNSGetHostsResult.Host.some(h => h.$.Name === username);
+
+        if (emailExists) {
+            console.error(`[Email API] ❌ Email ${username}@${domain} already exists`);
+            return res.status(409).json({
+                success: false,
+                error: 'Email already exists'
+            });
+        }
+
+        // Proceed with email creation
+        console.log(`[Email API] Proceeding with email creation for: ${username}@${domain}`);
+        const xml = await namecheapRequest('namecheap.domains.dns.setHosts', {
+            DomainName: domain,
+            HostName: username,
+            Password: password,
+            MailboxType: 'MX',
+            TTL: '3600',
+            MXPref: '10',
+            Note: 'Created by Namecheap Domain API'
         });
+
+        // Verify email creation was successful
+        if (xml?.ApiResponse?.CommandResponse?.DomainDNSGetHostsResult?.Host?.length !== 1) {
+            throw new Error('Email creation failed');
+        }
+
+        res.json({ success: true, data: xml.ApiResponse.CommandResponse });
     } catch (err) {
-        console.error('[Email API] ❌ Error creating email:', {
+        console.error('[Email API] Registration error:', {
             error: err.message,
             domain,
-            username,
             status: err.response?.status,
-            responseData: err.response?.data,
-            stack: err.stack,
-            timestamp: new Date().toISOString()
+            responseData: err.response?.data
         });
 
-        // Handle specific error cases
-        if (err.message.includes('already exists')) {
-            return res.status(409).json({ 
-                success: false, 
-                error: 'Email account already exists' 
-            });
-        }
-
-        if (err.message.includes('Invalid response format')) {
-            return res.status(500).json({ 
-                success: false, 
-                error: 'Invalid response from Namecheap API' 
-            });
-        }
-
-        res.status(500).json({ 
-            success: false, 
-            error: err.message || 'Failed to create email account' 
+        res.status(500).json({
+            success: false,
+            error: err.message,
+            details: err.response?.data?.error || null
         });
     }
 });
