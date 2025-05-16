@@ -30,8 +30,8 @@ const RB2B_CHANNEL_BOT_MAP = parseEnvJson(process.env.RB2B_CHANNEL_BOT_MAP || '{
 const RB2B_CHANNEL_NAME_MAP = parseEnvJson(process.env.RB2B_CHANNEL_NAME_MAP || '{}');
 
 // Log the parsed maps for debugging
-console.log('[slackEvents] Parsed channel bot map:', RB2B_CHANNEL_BOT_MAP);
-console.log('[slackEvents] Parsed channel name map:', RB2B_CHANNEL_NAME_MAP);
+// console.log('[slackEvents] Parsed channel bot map:', RB2B_CHANNEL_BOT_MAP);
+// console.log('[slackEvents] Parsed channel name map:', RB2B_CHANNEL_NAME_MAP);
 
 const ONEPGR_URL = process.env.ONEPGR_LEADS_URL + '?xhr_flag=1';
 const PAGE_ID = process.env.ONEPGR_PAGE_ID;

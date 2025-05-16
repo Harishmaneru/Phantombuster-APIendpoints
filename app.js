@@ -9,10 +9,10 @@ const cors = require('cors');
 const { router: slackRouter } = require('./webhooks/slackEvents');
 
 // Domain Management API
-const domainManagement = require('./domainManagementAPI/buyDomain.js');
+const dynadotDomainApi = require('./domainManagementAPI/dynadotDomainApi.js');
 const zohoMailAPI = require('./domainManagementAPI/zohoMailAPI.js');
 const googleDomainAPI = require('./domainManagementAPI/googleDomainApi.js');
-// const emailCreate = require('./domainManagementAPI/emailCreate.js');
+const nameCheapDomainApi = require('./domainManagementAPI/nameCheapDomainApi.js');
 
 const accountScraper = require('./PhantombusterAPI/AccountScraper.js');
 const companyEmployesScrap = require('./PhantombusterAPI/companyEmployesScrap.js');
@@ -158,10 +158,10 @@ app.use(
 app.use(express.json());
 
 // Mount domain management routes
-app.use(domainManagement);
+app.use(dynadotDomainApi);
 app.use(zohoMailAPI);
 app.use(googleDomainAPI);
-// app.use(emailCreate);
+app.use(nameCheapDomainApi);
 
 app.use(accountScraper);
 app.use(likesCommentsScraper);
@@ -232,5 +232,5 @@ const server = https.createServer(options, app);
 // Set server timeout
 server.setTimeout(30 * 60 * 1000); // 30 minutes
 server.listen(port, () => {
-  console.log(`Server running on port:${port}`);
+  console.log(`________________Server running on port:${port}________________`);
 })
