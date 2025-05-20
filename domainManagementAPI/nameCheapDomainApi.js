@@ -1014,19 +1014,13 @@ router.post('/namecheap/email/create', async (req, res) => {
 });
 
 /**
- * Get all domains for the user
+ * Get all domains for the user with detailed information
  * @api {get} /namecheap/domains/list Get All Domains
  * @apiName GetAllDomains
  * @apiGroup Domains
  * 
  * @apiSuccess {Boolean} success Operation status
- * @apiSuccess {Object[]} domains List of domains
- * @apiSuccess {String} domains.name Domain name
- * @apiSuccess {String} domains.created Date created
- * @apiSuccess {String} domains.expires Expiration date
- * @apiSuccess {Boolean} domains.autoRenew Auto-renewal status
- * @apiSuccess {Boolean} domains.isLocked Registrar lock status
- * @apiSuccess {String} domains.id Domain ID
+ * @apiSuccess {Object[]} domains List of domains with detailed information
  */
 router.get('/namecheap/domains/list', async (req, res) => {
     try {
@@ -1044,24 +1038,97 @@ router.get('/namecheap/domains/list', async (req, res) => {
         // If only one domain, convert to array
         const domainsList = Array.isArray(domains) ? domains : [domains];
 
-        // Format the response
-        const formattedDomains = domainsList.map(domain => ({
-            name: domain.$.Name,
-            created: domain.$.Created,
-            expires: domain.$.Expires,
-            autoRenew: domain.$.AutoRenew === 'true',
-            isLocked: domain.$.IsLocked === 'true',
-            id: domain.$.ID,
-            whoisGuard: domain.$.WhoisGuard === 'ENABLED',
-            isPremium: domain.$.IsPremium === 'true',
-            isOurDNS: domain.$.IsOurDNS === 'true'
+        // Get detailed information for each domain
+        const detailedDomains = await Promise.all(domainsList.map(async (domain) => {
+            try {
+                // Get domain info
+                const domainInfo = await namecheapRequest('namecheap.domains.getInfo', {
+                    DomainName: domain.$.Name
+                });
+
+                // Get DNS hosts (for mailboxes and other records)
+                const dnsHosts = await namecheapRequest('namecheap.domains.dns.getHosts', {
+                    DomainName: domain.$.Name
+                });
+
+                // Extract mailboxes from DNS hosts
+                const hosts = dnsHosts.ApiResponse.CommandResponse.DomainDNSGetHostsResult.Host;
+                const hostsList = Array.isArray(hosts) ? hosts : [hosts];
+                
+                const mailboxes = hostsList
+                    .filter(host => host.$.Type === 'MX' || host.$.Type === 'EMAIL')
+                    .map(host => ({
+                        name: host.$.Name,
+                        type: host.$.Type,
+                        address: host.$.Address,
+                        mxPref: host.$.MXPref,
+                        ttl: host.$.TTL
+                    }));
+
+                // Extract other DNS records
+                const dnsRecords = hostsList
+                    .filter(host => host.$.Type !== 'MX' && host.$.Type !== 'EMAIL')
+                    .map(host => ({
+                        name: host.$.Name,
+                        type: host.$.Type,
+                        address: host.$.Address,
+                        ttl: host.$.TTL
+                    }));
+
+                // Get nameservers
+                const nameservers = domainInfo.ApiResponse.CommandResponse.DomainGetInfoResult.Nameservers;
+                const nameserverList = Array.isArray(nameservers) ? nameservers : [nameservers];
+
+                return {
+                    name: domain.$.Name,
+                    created: domain.$.Created,
+                    expires: domain.$.Expires,
+                    autoRenew: domain.$.AutoRenew === 'true',
+                    isLocked: domain.$.IsLocked === 'true',
+                    id: domain.$.ID,
+                    whoisGuard: domain.$.WhoisGuard === 'ENABLED',
+                    isPremium: domain.$.IsPremium === 'true',
+                    isOurDNS: domain.$.IsOurDNS === 'true',
+                    details: {
+                        status: domainInfo.ApiResponse.CommandResponse.DomainGetInfoResult.$.Status,
+                        isExpired: domainInfo.ApiResponse.CommandResponse.DomainGetInfoResult.$.IsExpired === 'true',
+                        isLocked: domainInfo.ApiResponse.CommandResponse.DomainGetInfoResult.$.IsLocked === 'true',
+                        isPremium: domainInfo.ApiResponse.CommandResponse.DomainGetInfoResult.$.IsPremium === 'true',
+                        isOurDNS: domainInfo.ApiResponse.CommandResponse.DomainGetInfoResult.$.IsOurDNS === 'true',
+                        nameservers: nameserverList.map(ns => ns.$.Name),
+                        mailboxes: mailboxes,
+                        dnsRecords: dnsRecords,
+                        contacts: {
+                            registrant: domainInfo.ApiResponse.CommandResponse.DomainGetInfoResult.Registrant,
+                            tech: domainInfo.ApiResponse.CommandResponse.DomainGetInfoResult.Tech,
+                            admin: domainInfo.ApiResponse.CommandResponse.DomainGetInfoResult.Admin,
+                            auxBilling: domainInfo.ApiResponse.CommandResponse.DomainGetInfoResult.AuxBilling
+                        }
+                    }
+                };
+            } catch (domainErr) {
+                console.error(`[Domain API] Error fetching details for domain ${domain.$.Name}:`, domainErr.message);
+                // Return basic info if detailed fetch fails
+                return {
+                    name: domain.$.Name,
+                    created: domain.$.Created,
+                    expires: domain.$.Expires,
+                    autoRenew: domain.$.AutoRenew === 'true',
+                    isLocked: domain.$.IsLocked === 'true',
+                    id: domain.$.ID,
+                    whoisGuard: domain.$.WhoisGuard === 'ENABLED',
+                    isPremium: domain.$.IsPremium === 'true',
+                    isOurDNS: domain.$.IsOurDNS === 'true',
+                    error: 'Failed to fetch detailed information'
+                };
+            }
         }));
 
         res.json({
             success: true,
             data: {
-                domains: formattedDomains,
-                total: formattedDomains.length,
+                domains: detailedDomains,
+                total: detailedDomains.length,
                 apiMode: NAMECHEAP_SANDBOX === 'true' ? 'sandbox' : 'production'
             }
         });
