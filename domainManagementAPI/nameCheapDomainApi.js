@@ -1013,4 +1013,73 @@ router.post('/namecheap/email/create', async (req, res) => {
     }
 });
 
+/**
+ * Get all domains for the user
+ * @api {get} /namecheap/domains/list Get All Domains
+ * @apiName GetAllDomains
+ * @apiGroup Domains
+ * 
+ * @apiSuccess {Boolean} success Operation status
+ * @apiSuccess {Object[]} domains List of domains
+ * @apiSuccess {String} domains.name Domain name
+ * @apiSuccess {String} domains.created Date created
+ * @apiSuccess {String} domains.expires Expiration date
+ * @apiSuccess {Boolean} domains.autoRenew Auto-renewal status
+ * @apiSuccess {Boolean} domains.isLocked Registrar lock status
+ * @apiSuccess {String} domains.id Domain ID
+ */
+router.get('/namecheap/domains/list', async (req, res) => {
+    try {
+        console.log('[Domain API] 📋 Fetching all domains for user');
+        
+        // Make request to Namecheap API
+        const response = await namecheapRequest('namecheap.domains.getList', {
+            Page: '1',
+            PageSize: '100' // Maximum allowed by Namecheap API
+        });
+
+        // Extract domains from response
+        const domains = response.ApiResponse.CommandResponse.DomainGetListResult.Domain;
+        
+        // If only one domain, convert to array
+        const domainsList = Array.isArray(domains) ? domains : [domains];
+
+        // Format the response
+        const formattedDomains = domainsList.map(domain => ({
+            name: domain.$.Name,
+            created: domain.$.Created,
+            expires: domain.$.Expires,
+            autoRenew: domain.$.AutoRenew === 'true',
+            isLocked: domain.$.IsLocked === 'true',
+            id: domain.$.ID,
+            whoisGuard: domain.$.WhoisGuard === 'ENABLED',
+            isPremium: domain.$.IsPremium === 'true',
+            isOurDNS: domain.$.IsOurDNS === 'true'
+        }));
+
+        res.json({
+            success: true,
+            data: {
+                domains: formattedDomains,
+                total: formattedDomains.length,
+                apiMode: NAMECHEAP_SANDBOX === 'true' ? 'sandbox' : 'production'
+            }
+        });
+    } catch (err) {
+        console.error('[Domain API] ❌ Error fetching domains:', {
+            error: err.message,
+            status: err.response?.status,
+            responseData: err.response?.data,
+            stack: err.stack
+        });
+
+        res.status(500).json({
+            success: false,
+            error: err.message,
+            details: err.response?.data?.error || null,
+            apiMode: NAMECHEAP_SANDBOX === 'true' ? 'sandbox' : 'production'
+        });
+    }
+});
+
 module.exports = router;
