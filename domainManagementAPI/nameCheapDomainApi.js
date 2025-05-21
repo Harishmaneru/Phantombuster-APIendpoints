@@ -962,66 +962,146 @@ router.post('/namecheap/email/create', async (req, res) => {
             });
         }
 
-        // Check if email already exists using domains.dns.getHosts
-        console.log(`[Email API] Checking email existence: ${username}@${domain}`);
-        const emailCheck = await namecheapRequest('namecheap.domains.dns.getHosts', {
-            DomainName: domain,
-            HostName: username
+        // Get domain info to check DNS configuration
+        console.log(`[Email API] Checking domain DNS configuration: ${domain}`);
+        const domainInfo = await namecheapRequest('namecheap.domains.getInfo', {
+            DomainName: domain
         });
 
-        const emailExists = emailCheck.ApiResponse.CommandResponse.DomainDNSGetHostsResult.Host.some(h => h.$.Name === username);
+        const dnsDetails = domainInfo.ApiResponse.CommandResponse.DomainGetInfoResult.DnsDetails;
+        const isOurDNS = dnsDetails.$.IsUsingOurDNS === 'true';
+        const nameservers = dnsDetails.Nameserver;
+        const nameserverList = Array.isArray(nameservers) ? nameservers : [nameservers];
 
-        if (emailExists) {
-            console.error(`[Email API] ❌ Email ${username}@${domain} already exists`);
-            return res.status(409).json({
+        console.log(`[Email API] DNS Configuration:`, {
+            isOurDNS,
+            nameservers: nameserverList,
+            providerType: dnsDetails.$.ProviderType,
+            sandboxMode: NAMECHEAP_SANDBOX === 'true'
+        });
+
+        // In sandbox mode, we'll proceed even if DNS is not set up
+        if (!isOurDNS && NAMECHEAP_SANDBOX !== 'true') {
+            console.error(`[Email API] ❌ Domain ${domain} is not using Namecheap DNS servers`);
+            return res.status(400).json({
                 success: false,
-                error: 'Email already exists'
+                error: 'Domain must be using Namecheap DNS servers to create email accounts. Please update your domain\'s nameservers to Namecheap\'s DNS servers.',
+                details: {
+                    currentNameservers: nameserverList,
+                    requiredNameservers: [
+                        'dns1.registrar-servers.com',
+                        'dns2.registrar-servers.com'
+                    ]
+                }
             });
         }
 
-        // Proceed with email creation
-        console.log(`[Email API] Proceeding with email creation for: ${username}@${domain}`);
-        const xml = await namecheapRequest('namecheap.domains.dns.setHosts', {
-            DomainName: domain,
-            HostName: username,
-            Password: password,
-            MailboxType: 'MX',
-            TTL: '3600',
-            MXPref: '10',
-            Note: 'Created by Namecheap Domain API'
+        // Split domain into SLD and TLD
+        const [sld, tld] = domain.split('.');
+
+        // First, set up the MX records for the domain
+        console.log(`[Email API] Setting up MX records for ${domain}`);
+        const dnsXml = await namecheapRequest('namecheap.domains.dns.setHosts', {
+            SLD: sld,
+            TLD: tld,
+            Nameservers: nameserverList.join(','),
+            Hosts: JSON.stringify([
+                {
+                    HostName: '@',
+                    RecordType: 'MX',
+                    Address: 'mail.privateemail.com',
+                    MXPref: '10',
+                    TTL: '3600'
+                },
+                {
+                    HostName: '@',
+                    RecordType: 'TXT',
+                    Address: 'v=spf1 include:spf.privateemail.com ~all',
+                    TTL: '3600'
+                },
+                {
+                    HostName: 'mail',
+                    RecordType: 'CNAME',
+                    Address: 'ghs.googlehosted.com',
+                    TTL: '3600'
+                }
+            ])
         });
 
-        // Verify email creation was successful
-        if (xml?.ApiResponse?.CommandResponse?.DomainDNSGetHostsResult?.Host?.length !== 1) {
-            throw new Error('Email creation failed');
+        // Verify DNS setup was successful
+        if (dnsXml?.ApiResponse?.CommandResponse?.DomainDNSSetHostsResult?.$.IsSuccess !== 'true') {
+            throw new Error('DNS setup failed');
         }
 
-        res.json({ success: true, data: xml.ApiResponse.CommandResponse });
+        // Now create the email account
+        console.log(`[Email API] Creating email account ${username}@${domain}`);
+        let emailXml;
+        if (NAMECHEAP_SANDBOX === 'true') {
+            console.log('[Email API] Mocking email creation in sandbox mode');
+            emailXml = {
+                ApiResponse: {
+                    CommandResponse: {
+                        EmailCreateResult: {
+                            $: { IsSuccess: 'true', Domain: domain, EmailAddress: `${username}@${domain}` }
+                        }
+                    }
+                }
+            };
+        } else {
+            // Placeholder for production email creation (to be determined)
+            throw new Error('Email creation not supported in production API');
+            // Contact Namecheap support for the correct endpoint
+            /*
+            emailXml = await namecheapRequest('namecheap.email.create', {
+                DomainName: domain,
+                EmailAddress: `${username}@${domain}`,
+                Password: password,
+                MailboxSize: mailboxSize.toString(),
+                MailboxType: 'POP'
+            });
+            */
+        }
+
+        // Log the response for debugging
+        console.log('[Email API] Email creation response:', JSON.stringify(emailXml, null, 2));
+
+        if (emailXml?.ApiResponse?.CommandResponse?.EmailCreateResult?.$.IsSuccess !== 'true') {
+            throw new Error('Email account creation failed');
+        }
+
+        res.json({
+            success: true,
+            data: {
+                email: `${username}@${domain}`,
+                domain,
+                // username,
+                message: 'Email account created successfully',
+                details: {
+                    dns: dnsXml.ApiResponse.CommandResponse,
+                    email: emailXml.ApiResponse.CommandResponse
+                },
+                sandboxMode: NAMECHEAP_SANDBOX === 'true',
+                nameservers: nameserverList
+            }
+        });
     } catch (err) {
         console.error('[Email API] Registration error:', {
             error: err.message,
             domain,
             status: err.response?.status,
-            responseData: err.response?.data
+            responseData: err.response?.data,
+            sandboxMode: NAMECHEAP_SANDBOX === 'true'
         });
 
         res.status(500).json({
             success: false,
             error: err.message,
-            details: err.response?.data?.error || null
+            details: err.response?.data?.error || null,
+            sandboxMode: NAMECHEAP_SANDBOX === 'true'
         });
     }
 });
 
-/**
- * Get all domains for the user with detailed information
- * @api {get} /namecheap/domains/list Get All Domains
- * @apiName GetAllDomains
- * @apiGroup Domains
- * 
- * @apiSuccess {Boolean} success Operation status
- * @apiSuccess {Object[]} domains List of domains with detailed information
- */
 router.get('/namecheap/domains/list', async (req, res) => {
     try {
         console.log('[Domain API] 📋 Fetching all domains for user');
@@ -1145,6 +1225,136 @@ router.get('/namecheap/domains/list', async (req, res) => {
             error: err.message,
             details: err.response?.data?.error || null,
             apiMode: NAMECHEAP_SANDBOX === 'true' ? 'sandbox' : 'production'
+        });
+    }
+});
+
+
+router.post('/namecheap/domain/redirect', async (req, res) => {
+    const {
+        domain,
+        destinationUrl,
+        type = '301',
+        masked = false,
+        title = '',
+        keywords = '',
+        description = ''
+    } = req.body;
+
+    // Validate inputs
+    if (!domain || !destinationUrl) {
+        return res.status(400).json({
+            success: false,
+            error: 'Missing required fields: domain and destinationUrl are required'
+        });
+    }
+
+    if (!/^(https?:\/\/)/.test(destinationUrl)) {
+        return res.status(400).json({
+            success: false,
+            error: 'Destination URL must start with http:// or https://'
+        });
+    }
+
+    try {
+        // 1. Verify domain ownership and get domain info
+        console.log(`[Redirect API] Checking domain info for ${domain}`);
+        const domainInfo = await namecheapRequest('namecheap.domains.getInfo', {
+            DomainName: domain
+        });
+
+        const domainResult = domainInfo.ApiResponse.CommandResponse.DomainGetInfoResult;
+        const isOurDNS = domainResult.DnsDetails.$.IsUsingOurDNS === 'true';
+        const nameservers = domainResult.DnsDetails.Nameserver;
+        const nameserverList = Array.isArray(nameservers) ? nameservers : [nameservers];
+
+        if (!isOurDNS) {
+            return res.status(400).json({
+                success: false,
+                error: 'Domain must use Namecheap DNS servers for URL forwarding',
+                details: {
+                    currentNameservers: nameserverList,
+                    requiredNameservers: [
+                        'dns1.registrar-servers.com',
+                        'dns2.registrar-servers.com'
+                    ]
+                }
+            });
+        }
+
+        // 2. Split domain into SLD and TLD
+        const [sld, tld] = domain.split('.');
+
+        // 3. Set up redirect records directly without getting current records
+        console.log(`[Redirect API] Setting up redirect for ${domain} to ${destinationUrl}`);
+        const redirectRecords = [
+            {
+                HostName: '@',
+                RecordType: type === '301' ? 'URL301' : 'URL302',
+                Address: destinationUrl,
+                TTL: '1800'
+            }
+        ];
+
+        if (masked) {
+            redirectRecords.push({
+                HostName: '@',
+                RecordType: 'FRAME',
+                Address: destinationUrl,
+                TTL: '1800',
+                Title: title,
+                Keywords: keywords,
+                Description: description
+            });
+        }
+
+        // 4. Update DNS records
+        const updateResponse = await namecheapRequest('namecheap.domains.dns.setHosts', {
+            SLD: sld,
+            TLD: tld,
+            Hosts: JSON.stringify(redirectRecords)
+        });
+
+        // 5. Verify update was successful
+        if (updateResponse.ApiResponse.$.Status !== 'OK') {
+            throw new Error('Failed to update DNS records');
+        }
+
+        res.json({
+            success: true,
+            data: {
+                domain,
+                destinationUrl,
+                type,
+                masked,
+                message: 'Domain redirect updated successfully',
+                timestamp: new Date().toISOString(),
+                nameservers: nameserverList
+            }
+        });
+
+    } catch (error) {
+        console.error(`[Redirect Error] Domain: ${domain}`, {
+            error: error.message,
+            stack: error.stack,
+            response: error.response?.data
+        });
+
+        // Handle specific error cases
+        if (error.message.includes('Domain name not found')) {
+            return res.status(404).json({
+                success: false,
+                error: 'Domain not found in your Namecheap account',
+                domain,
+                details: 'Please verify the domain is registered with your Namecheap account'
+            });
+        }
+
+        res.status(500).json({
+            success: false,
+            error: error.message,
+            domain,
+            details: error.response?.data || null
         });
     }
 });
