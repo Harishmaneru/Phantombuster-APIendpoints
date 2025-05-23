@@ -1651,116 +1651,372 @@ router.get('/namecheap/domain/redirects/:domain', async (req, res) => {
 });
 
 /**
- * Delete a domain
+ * Set up DNS management for a domain
  */
-router.delete('/namecheap/domain/delete', async (req, res) => {
+router.post('/namecheap/domain/dns/setup', async (req, res) => {
     const { domain } = req.body;
 
-    // Validate domain parameter
     if (!domain) {
         return res.status(400).json({
             success: false,
-            error: 'Domain name is required'
-        });
-    }
-
-    // Validate domain format
-    if (!isValidDomain(domain)) {
-        return res.status(400).json({
-            success: false,
-            error: 'Invalid domain format'
+            error: 'Domain is required'
         });
     }
 
     try {
-        // 1. First verify domain ownership
-        console.log(`[Domain API] Verifying ownership of domain: ${domain}`);
-        const domainCheck = await namecheapRequest('namecheap.domains.getList', {
-            Page: '1',
-            PageSize: '100'
+        // Split domain into SLD and TLD
+        const [sld, tld] = domain.split('.');
+
+        // Set to Namecheap DNS servers
+        const response = await namecheapRequest('namecheap.domains.dns.setDefault', {
+            SLD: sld,
+            TLD: tld
         });
 
-        const domains = domainCheck.ApiResponse.CommandResponse.DomainGetListResult.Domain;
-        const domainExists = Array.isArray(domains)
-            ? domains.some(d => d.$.Name.toLowerCase() === domain.toLowerCase())
-            : domains.$.Name.toLowerCase() === domain.toLowerCase();
-
-        if (!domainExists) {
-            return res.status(404).json({
-                success: false,
-                error: 'Domain not found in your account'
-            });
+        // Verify the response
+        if (response?.ApiResponse?.CommandResponse?.DomainDNSSetDefaultResult?.$.IsSuccess !== 'true') {
+            throw new Error('Failed to set DNS servers');
         }
 
-        // 2. Get domain info to check if it's locked
-        console.log(`[Domain API] Checking domain status: ${domain}`);
-        const domainInfo = await namecheapRequest('namecheap.domains.getInfo', {
-            DomainName: domain
-        });
-
-        const domainResult = domainInfo.ApiResponse.CommandResponse.DomainGetInfoResult;
-        const isLocked = domainResult.$.IsLocked === 'true';
-
-        if (isLocked) {
-            return res.status(400).json({
-                success: false,
-                error: 'Cannot delete domain while it is locked',
-                details: 'Please unlock the domain before attempting to delete it'
-            });
-        }
-
-        // 3. Attempt to delete the domain
-        console.log(`[Domain API] Attempting to delete domain: ${domain}`);
-        const deleteResponse = await namecheapRequest('namecheap.domains.delete', {
-            DomainName: domain
-        });
-
-        // 4. Verify deletion was successful
-        if (deleteResponse.ApiResponse.$.Status !== 'OK') {
-            const errors = deleteResponse.ApiResponse.Errors?.Error;
-            const errorMessage = Array.isArray(errors) ? errors.map(e => e._).join(', ') : errors?.$_ || 'Unknown error';
-            throw new Error(`Failed to delete domain: ${errorMessage}`);
-        }
-
-        // 5. Return success response
         res.json({
             success: true,
-            message: 'Domain deleted successfully',
+            message: 'DNS servers set to default',
             data: {
                 domain,
-                timestamp: new Date().toISOString(),
-                apiMode: NAMECHEAP_SANDBOX === 'true' ? 'sandbox' : 'production'
+                nameservers: [
+                    'dns1.registrar-servers.com',
+                    'dns2.registrar-servers.com'
+                ],
+                timestamp: new Date().toISOString()
             }
         });
-
     } catch (error) {
-        console.error(`[Domain API] Error deleting domain ${domain}:`, {
+        console.error('[DNS API] Error setting up DNS:', {
             error: error.message,
-            stack: error.stack,
-            response: error.response?.data
+            domain,
+            stack: error.stack
         });
-
-        // Handle specific error cases
-        if (error.message.includes('Domain name not found')) {
-            return res.status(404).json({
-                success: false,
-                error: 'Domain not found in your Namecheap account'
-            });
-        }
-
-        if (error.message.includes('Authentication failed')) {
-            return res.status(401).json({
-                success: false,
-                error: 'Namecheap API authentication failed',
-                details: 'Please check your API credentials'
-            });
-        }
 
         res.status(500).json({
             success: false,
             error: error.message,
-            details: error.response?.data || null,
-            timestamp: new Date().toISOString()
+            details: error.response?.data || null
+        });
+    }
+});
+
+/**
+ * Get detailed domain status and configuration
+ */
+router.get('/namecheap/domain/:domain/status', async (req, res) => {
+    const { domain } = req.params;
+
+    if (!domain) {
+        return res.status(400).json({
+            success: false,
+            error: 'Domain is required'
+        });
+    }
+
+    try {
+        // Get domain info
+        const domainInfo = await namecheapRequest('namecheap.domains.getInfo', {
+            DomainName: domain
+        });
+
+        const result = domainInfo.ApiResponse.CommandResponse.DomainGetInfoResult;
+        const dnsDetails = result.DnsDetails;
+        const domainDetails = result.DomainDetails;
+
+        // Get registrar lock status
+        const lockInfo = await namecheapRequest('namecheap.domains.getRegistrarLock', {
+            DomainName: domain
+        });
+
+        // Get privacy protection status
+        const privacyInfo = await namecheapRequest('namecheap.domains.getPrivacy', {
+            DomainName: domain
+        });
+
+        res.json({
+            success: true,
+            data: {
+                domain,
+                status: {
+                    registration: result.$.Status,
+                    isLocked: result.$.IsLocked === 'true',
+                    autoRenew: result.$.AutoRenew === 'true',
+                    isExpired: result.$.IsExpired === 'true',
+                    isPremium: result.$.IsPremium === 'true'
+                },
+                dns: {
+                    isUsingOurDNS: dnsDetails.$.IsUsingOurDNS === 'true',
+                    nameservers: Array.isArray(dnsDetails.Nameserver) 
+                        ? dnsDetails.Nameserver 
+                        : [dnsDetails.Nameserver]
+                },
+                dates: {
+                    created: domainDetails.$.CreatedDate,
+                    expires: domainDetails.$.ExpiredDate,
+                    lastRenewed: domainDetails.$.LastRenewedDate
+                },
+                security: {
+                    registrarLock: lockInfo.ApiResponse.CommandResponse.DomainGetRegistrarLockResult.$.Status === 'true',
+                    privacyProtection: privacyInfo.ApiResponse.CommandResponse.DomainGetPrivacyResult.$.Status === 'true'
+                },
+                contacts: {
+                    registrant: result.Registrant,
+                    tech: result.Tech,
+                    admin: result.Admin,
+                    auxBilling: result.AuxBilling
+                },
+                timestamp: new Date().toISOString()
+            }
+        });
+    } catch (error) {
+        console.error('[Domain API] Error getting domain status:', {
+            error: error.message,
+            domain,
+            stack: error.stack
+        });
+
+        res.status(500).json({
+            success: false,
+            error: error.message,
+            details: error.response?.data || null
+        });
+    }
+});
+
+/**
+ * Manage domain registrar lock
+ */
+router.put('/namecheap/domain/:domain/lock', async (req, res) => {
+    const { domain } = req.params;
+    const { locked } = req.body;
+
+    if (!domain) {
+        return res.status(400).json({
+            success: false,
+            error: 'Domain is required'
+        });
+    }
+
+    if (typeof locked !== 'boolean') {
+        return res.status(400).json({
+            success: false,
+            error: 'Locked status must be a boolean'
+        });
+    }
+
+    try {
+        const response = await namecheapRequest('namecheap.domains.setRegistrarLock', {
+            DomainName: domain,
+            LockAction: locked ? 'LOCK' : 'UNLOCK'
+        });
+
+        if (response?.ApiResponse?.CommandResponse?.DomainSetRegistrarLockResult?.$.IsSuccess !== 'true') {
+            throw new Error('Failed to update registrar lock status');
+        }
+
+        res.json({
+            success: true,
+            message: `Domain ${locked ? 'locked' : 'unlocked'} successfully`,
+            data: {
+                domain,
+                locked,
+                timestamp: new Date().toISOString()
+            }
+        });
+    } catch (error) {
+        console.error('[Domain API] Error updating registrar lock:', {
+            error: error.message,
+            domain,
+            stack: error.stack
+        });
+
+        res.status(500).json({
+            success: false,
+            error: error.message,
+            details: error.response?.data || null
+        });
+    }
+});
+
+/**
+ * Manage domain auto-renewal
+ */
+router.put('/namecheap/domain/:domain/auto-renew', async (req, res) => {
+    const { domain } = req.params;
+    const { autoRenew } = req.body;
+
+    if (!domain) {
+        return res.status(400).json({
+            success: false,
+            error: 'Domain is required'
+        });
+    }
+
+    if (typeof autoRenew !== 'boolean') {
+        return res.status(400).json({
+            success: false,
+            error: 'Auto-renew status must be a boolean'
+        });
+    }
+
+    try {
+        // Get current domain info
+        const domainInfo = await namecheapRequest('namecheap.domains.getInfo', {
+            DomainName: domain
+        });
+
+        const result = domainInfo.ApiResponse.CommandResponse.DomainGetInfoResult;
+        const currentAutoRenew = result.$.AutoRenew === 'true';
+
+        // Only update if the status is different
+        if (currentAutoRenew !== autoRenew) {
+            const response = await namecheapRequest('namecheap.domains.setAutoRenew', {
+                DomainName: domain,
+                AutoRenew: autoRenew ? 'true' : 'false'
+            });
+
+            if (response?.ApiResponse?.CommandResponse?.DomainSetAutoRenewResult?.$.IsSuccess !== 'true') {
+                throw new Error('Failed to update auto-renewal status');
+            }
+        }
+
+        res.json({
+            success: true,
+            message: `Auto-renewal ${autoRenew ? 'enabled' : 'disabled'} successfully`,
+            data: {
+                domain,
+                autoRenew,
+                timestamp: new Date().toISOString()
+            }
+        });
+    } catch (error) {
+        console.error('[Domain API] Error updating auto-renewal:', {
+            error: error.message,
+            domain,
+            stack: error.stack
+        });
+
+        res.status(500).json({
+            success: false,
+            error: error.message,
+            details: error.response?.data || null
+        });
+    }
+});
+
+/**
+ * Manage domain privacy protection
+ */
+router.put('/namecheap/domain/:domain/privacy', async (req, res) => {
+    const { domain } = req.params;
+    const { enabled } = req.body;
+
+    if (!domain) {
+        return res.status(400).json({
+            success: false,
+            error: 'Domain is required'
+        });
+    }
+
+    if (typeof enabled !== 'boolean') {
+        return res.status(400).json({
+            success: false,
+            error: 'Enabled status must be a boolean'
+        });
+    }
+
+    try {
+        const response = await namecheapRequest(
+            enabled ? 'namecheap.domains.privacy.enable' : 'namecheap.domains.privacy.disable',
+            { DomainName: domain }
+        );
+
+        if (response?.ApiResponse?.CommandResponse?.DomainPrivacyResult?.$.IsSuccess !== 'true') {
+            throw new Error(`Failed to ${enabled ? 'enable' : 'disable'} privacy protection`);
+        }
+
+        res.json({
+            success: true,
+            message: `Privacy protection ${enabled ? 'enabled' : 'disabled'} successfully`,
+            data: {
+                domain,
+                privacyEnabled: enabled,
+                timestamp: new Date().toISOString()
+            }
+        });
+    } catch (error) {
+        console.error('[Domain API] Error managing privacy protection:', {
+            error: error.message,
+            domain,
+            stack: error.stack
+        });
+
+        res.status(500).json({
+            success: false,
+            error: error.message,
+            details: error.response?.data || null
+        });
+    }
+});
+
+/**
+ * Update privacy protection email address
+ */
+router.put('/namecheap/domain/:domain/privacy/email', async (req, res) => {
+    const { domain } = req.params;
+    const { email } = req.body;
+
+    if (!domain || !email) {
+        return res.status(400).json({
+            success: false,
+            error: 'Domain and email are required'
+        });
+    }
+
+    // Validate email format
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!emailRegex.test(email)) {
+        return res.status(400).json({
+            success: false,
+            error: 'Invalid email format'
+        });
+    }
+
+    try {
+        const response = await namecheapRequest('namecheap.domains.privacy.changeEmailAddress', {
+            DomainName: domain,
+            EmailAddress: email
+        });
+
+        if (response?.ApiResponse?.CommandResponse?.DomainPrivacyResult?.$.IsSuccess !== 'true') {
+            throw new Error('Failed to update privacy protection email');
+        }
+
+        res.json({
+            success: true,
+            message: 'Privacy protection email updated successfully',
+            data: {
+                domain,
+                email,
+                timestamp: new Date().toISOString()
+            }
+        });
+    } catch (error) {
+        console.error('[Domain API] Error updating privacy email:', {
+            error: error.message,
+            domain,
+            stack: error.stack
+        });
+
+        res.status(500).json({
+            success: false,
+            error: error.message,
+            details: error.response?.data || null
         });
     }
 });
