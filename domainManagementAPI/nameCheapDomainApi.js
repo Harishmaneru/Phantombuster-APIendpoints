@@ -1349,6 +1349,134 @@ router.get('/namecheap/domains/list', async (req, res) => {
 });
 
 
+// router.post('/namecheap/domain/redirect', async (req, res) => {
+//     const {
+//         domain,
+//         destinationUrl,
+//         type = '301',
+//         masked = false,
+//         title = '',
+//         keywords = '',
+//         description = ''
+//     } = req.body;
+
+//     // Validate inputs
+//     if (!domain || !destinationUrl) {
+//         return res.status(400).json({
+//             success: false,
+//             error: 'Missing required fields: domain and destinationUrl are required'
+//         });
+//     }
+
+//     if (!/^(https?:\/\/)/.test(destinationUrl)) {
+//         return res.status(400).json({
+//             success: false,
+//             error: 'Destination URL must start with http:// or https://'
+//         });
+//     }
+
+//     try {
+//         // 1. Verify domain ownership and get domain info
+//         console.log(`[Redirect API] Checking domain info for ${domain}`);
+//         const domainInfo = await namecheapRequest('namecheap.domains.getInfo', {
+//             DomainName: domain
+//         });
+
+//         const domainResult = domainInfo.ApiResponse.CommandResponse.DomainGetInfoResult;
+//         const isOurDNS = domainResult.DnsDetails.$.IsUsingOurDNS === 'true';
+//         const nameservers = domainResult.DnsDetails.Nameserver;
+//         const nameserverList = Array.isArray(nameservers) ? nameservers : [nameservers];
+
+//         if (!isOurDNS) {
+//             return res.status(400).json({
+//                 success: false,
+//                 error: 'Domain must use Namecheap DNS servers for URL forwarding',
+//                 details: {
+//                     currentNameservers: nameserverList,
+//                     requiredNameservers: [
+//                         'dns1.registrar-servers.com',
+//                         'dns2.registrar-servers.com'
+//                     ]
+//                 }
+//             });
+//         }
+
+//         // 2. Split domain into SLD and TLD
+//         const [sld, tld] = domain.split('.');
+
+//         // 3. Set up redirect records directly without getting current records
+//         console.log(`[Redirect API] Setting up redirect for ${domain} to ${destinationUrl}`);
+//         const redirectRecords = [
+//             {
+//                 HostName: '@',
+//                 RecordType: type === '301' ? 'URL301' : 'URL302',
+//                 Address: destinationUrl,
+//                 TTL: '1800'
+//             }
+//         ];
+
+//         if (masked) {
+//             redirectRecords.push({
+//                 HostName: '@',
+//                 RecordType: 'FRAME',
+//                 Address: destinationUrl,
+//                 TTL: '1800',
+//                 Title: title,
+//                 Keywords: keywords,
+//                 Description: description
+//             });
+//         }
+
+//         // 4. Update DNS records
+//         const updateResponse = await namecheapRequest('namecheap.domains.dns.setHosts', {
+//             SLD: sld,
+//             TLD: tld,
+//             Hosts: JSON.stringify(redirectRecords)
+//         });
+
+//         // 5. Verify update was successful
+//         if (updateResponse.ApiResponse.$.Status !== 'OK') {
+//             throw new Error('Failed to update DNS records');
+//         }
+
+//         res.json({
+//             success: true,
+//             data: {
+//                 domain,
+//                 destinationUrl,
+//                 type,
+//                 masked,
+//                 message: 'Domain redirect updated successfully',
+//                 timestamp: new Date().toISOString(),
+//                 nameservers: nameserverList
+//             }
+//         });
+
+//     } catch (error) {
+//         console.error(`[Redirect Error] Domain: ${domain}`, {
+//             error: error.message,
+//             stack: error.stack,
+//             response: error.response?.data
+//         });
+
+//         // Handle specific error cases
+//         if (error.message.includes('Domain name not found')) {
+//             return res.status(404).json({
+//                 success: false,
+//                 error: 'Domain not found in your Namecheap account',
+//                 domain,
+//                 details: 'Please verify the domain is registered with your Namecheap account'
+//             });
+//         }
+
+//         res.status(500).json({
+//             success: false,
+//             error: error.message,
+//             domain,
+//             details: error.response?.data || null
+//         });
+//     }
+// });
 router.post('/namecheap/domain/redirect', async (req, res) => {
     const {
         domain,
@@ -1368,10 +1496,30 @@ router.post('/namecheap/domain/redirect', async (req, res) => {
         });
     }
 
-    if (!/^(https?:\/\/)/.test(destinationUrl)) {
+    // More robust URL validation
+    try {
+        new URL(destinationUrl);
+    } catch (error) {
         return res.status(400).json({
             success: false,
-            error: 'Destination URL must start with http:// or https://'
+            error: 'Invalid destination URL format'
+        });
+    }
+
+    // Validate redirect type
+    if (!['301', '302'].includes(type)) {
+        return res.status(400).json({
+            success: false,
+            error: 'Redirect type must be either "301" or "302"'
+        });
+    }
+
+    // Validate domain format
+    const domainParts = domain.split('.');
+    if (domainParts.length < 2) {
+        return res.status(400).json({
+            success: false,
+            error: 'Invalid domain format'
         });
     }
 
@@ -1402,43 +1550,94 @@ router.post('/namecheap/domain/redirect', async (req, res) => {
         }
 
         // 2. Split domain into SLD and TLD
-        const [sld, tld] = domain.split('.');
+        const sld = domainParts.slice(0, -1).join('.');
+        const tld = domainParts[domainParts.length - 1];
 
-        // 3. Set up redirect records directly without getting current records
-        console.log(`[Redirect API] Setting up redirect for ${domain} to ${destinationUrl}`);
-        const redirectRecords = [
-            {
-                HostName: '@',
-                RecordType: type === '301' ? 'URL301' : 'URL302',
-                Address: destinationUrl,
-                TTL: '1800'
+        // 3. Get existing DNS records to preserve non-conflicting ones
+        console.log(`[Redirect API] Getting existing DNS records for ${domain}`);
+        const existingRecords = await namecheapRequest('namecheap.domains.dns.getHosts', {
+            SLD: sld,
+            TLD: tld
+        });
+
+        const currentHosts = existingRecords.ApiResponse.CommandResponse.DomainDNSGetHostsResult.host || [];
+        const hostsArray = Array.isArray(currentHosts) ? currentHosts : [currentHosts];
+
+        // 4. Filter out existing @ records that conflict with redirect
+        const preservedRecords = hostsArray.filter(record => {
+            const hostName = record.$.Name;
+            const recordType = record.$.Type;
+            
+            // Remove existing @ records that are A, CNAME, URL301, URL302, or FRAME
+            if (hostName === '@' && ['A', 'CNAME', 'URL301', 'URL302', 'FRAME'].includes(recordType)) {
+                return false;
             }
-        ];
+            return true;
+        }).map(record => ({
+            HostName: record.$.Name,
+            RecordType: record.$.Type,
+            Address: record.$.Address,
+            TTL: record.$.TTL || '1800',
+            ...(record.$.MXPref && { MXPref: record.$.MXPref })
+        }));
+
+        // 5. Create redirect records
+        console.log(`[Redirect API] Setting up redirect for ${domain} to ${destinationUrl}`);
+        const redirectRecords = [];
 
         if (masked) {
+            // For masked redirect, use FRAME record
             redirectRecords.push({
                 HostName: '@',
                 RecordType: 'FRAME',
                 Address: destinationUrl,
                 TTL: '1800',
-                Title: title,
+                Title: title || domain,
                 Keywords: keywords,
                 Description: description
             });
+        } else {
+            // For regular redirect, use URL301 or URL302
+            redirectRecords.push({
+                HostName: '@',
+                RecordType: type === '301' ? 'URL301' : 'URL302',
+                Address: destinationUrl,
+                TTL: '1800'
+            });
         }
 
-        // 4. Update DNS records
+        // 6. Combine preserved records with new redirect records
+        const allRecords = [...preservedRecords, ...redirectRecords];
+
+        // Ensure we have at least one record (Namecheap requirement)
+        if (allRecords.length === 0) {
+            allRecords.push({
+                HostName: '@',
+                RecordType: 'A',
+                Address: '192.0.2.1', // RFC5737 test address
+                TTL: '1800'
+            });
+        }
+
+        console.log(`[Redirect API] Updating DNS with ${allRecords.length} records`);
+
+        // 7. Update DNS records
         const updateResponse = await namecheapRequest('namecheap.domains.dns.setHosts', {
             SLD: sld,
             TLD: tld,
-            Hosts: JSON.stringify(redirectRecords)
+            Hosts: JSON.stringify(allRecords)
         });
 
-        // 5. Verify update was successful
+        // 8. Verify update was successful
         if (updateResponse.ApiResponse.$.Status !== 'OK') {
-            throw new Error('Failed to update DNS records');
+            const errors = updateResponse.ApiResponse.Errors?.Error;
+            const errorMessage = Array.isArray(errors) ? errors.map(e => e._).join(', ') : errors?.$_ || 'Unknown error';
+            throw new Error(`Failed to update DNS records: ${errorMessage}`);
         }
 
+        // 9. Log success and return response
+        console.log(`[Redirect API] Successfully updated redirect for ${domain}`);
+        
         res.json({
             success: true,
             data: {
@@ -1448,7 +1647,9 @@ router.post('/namecheap/domain/redirect', async (req, res) => {
                 masked,
                 message: 'Domain redirect updated successfully',
                 timestamp: new Date().toISOString(),
-                nameservers: nameserverList
+                nameservers: nameserverList,
+                recordsUpdated: allRecords.length,
+                preservedRecords: preservedRecords.length
             }
         });
 
@@ -1460,7 +1661,7 @@ router.post('/namecheap/domain/redirect', async (req, res) => {
         });
 
         // Handle specific error cases
-        if (error.message.includes('Domain name not found')) {
+        if (error.message.includes('Domain name not found') || error.message.includes('Domain not found')) {
             return res.status(404).json({
                 success: false,
                 error: 'Domain not found in your Namecheap account',
@@ -1469,11 +1670,29 @@ router.post('/namecheap/domain/redirect', async (req, res) => {
             });
         }
 
+        if (error.message.includes('Invalid domain name')) {
+            return res.status(400).json({
+                success: false,
+                error: 'Invalid domain name format',
+                domain,
+                details: 'Please check the domain name spelling and format'
+            });
+        }
+
+        if (error.message.includes('Authentication failed')) {
+            return res.status(401).json({
+                success: false,
+                error: 'Namecheap API authentication failed',
+                details: 'Please check your API credentials'
+            });
+        }
+
         res.status(500).json({
             success: false,
             error: error.message,
             domain,
-            details: error.response?.data || null
+            details: error.response?.data || null,
+            timestamp: new Date().toISOString()
         });
     }
 });
