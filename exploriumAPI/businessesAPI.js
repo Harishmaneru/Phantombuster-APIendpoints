@@ -68,7 +68,7 @@ const matchBusinesses = async (businessData) => {
         return businesses.map(b => b.business_id);
     } catch (error) {
         console.error('Error matching businesses:', error.response?.data || error.message);
-        throw new Error('Failed to match businesses');
+        throw error.response?.data || error;
     }
 };
 
@@ -85,7 +85,7 @@ const fetchBusinessEvents = async (businessIds, timestampFrom) => {
         return response.data || [];
     } catch (error) {
         console.error('Error fetching business events:', error.response?.data || error.message);
-        throw new Error('Failed to fetch business events');
+        throw error.response?.data || error;
     }
 };
 
@@ -103,7 +103,7 @@ const fetchFundingAndAcquisition = async (businessId) => {
         return fundingData;
     } catch (error) {
         console.error('Error fetching funding and acquisition data:', error.response?.data || error.message);
-        throw new Error('Failed to fetch funding and acquisition data');
+        throw error.response?.data || error;
     }
 };
 
@@ -162,7 +162,8 @@ router.post('/fetchFundingAndProductLaunchdata', async (req, res) => {
         const statusCode = error.response?.status || 500;
         res.status(statusCode).json({
             status: '-1',
-            message: error.message || 'An error occurred during processing'
+            message: error.details || error.message || 'An error occurred during processing',
+            correlation_id: error.correlation_id
         });
     }
 });
@@ -209,12 +210,13 @@ router.post('/fetchFundingAndAcquisition', async (req, res) => {
         const statusCode = error.response?.status || 500;
         res.status(statusCode).json({
             status: '-1',
-            message: error.message || 'An error occurred during processing'
+            message: error.details || error.message || 'An error occurred during processing',
+            correlation_id: error.correlation_id
         });
     }
 });
 
-// Reusable method for fetching funding announcements
+// Reusable method for fetching funding and product launch signals
 const fetchFundingAndProductLaunchSignals = async ({ name, domain, url, year }) => {
     console.log('[EXPLORIUM_BUSINESSES_API] Starting fetchFundingAndProductLaunchSignals with params:', { name, domain, url, year });
 
@@ -271,7 +273,8 @@ const fetchFundingAndProductLaunchSignals = async ({ name, domain, url, year }) 
         console.error('[EXPLORIUM_BUSINESSES_API] Error in fetchFundingAndProductLaunchSignals:', error.message);
         return {
             status: '-1',
-            message: error.message || 'An error occurred during processing'
+            message: error.details || error.message || 'An error occurred during processing',
+            correlation_id: error.correlation_id
         };
     }
 };
@@ -327,7 +330,8 @@ const fetchFundingAcquisitionInfo = async ({ name, domain, url }) => {
         console.error('[EXPLORIUM_BUSINESSES_API] Error in fetchFundingAcquisitionInfo:', error.message);
         return {
             status: '-1',
-            message: error.message || 'An error occurred during processing'
+            message: error.details || error.message || 'An error occurred during processing',
+            correlation_id: error.correlation_id
         };
     }
 };
@@ -346,7 +350,7 @@ const fetchTechnographicsData = async (businessId) => {
         return technographicsData;
     } catch (error) {
         console.error('[EXPLORIUM_BUSINESSES_API] Error fetching technographics data:', error.response?.data || error.message);
-        throw new Error('Failed to fetch technographics data');
+        throw error.response?.data || error;
     }
 };
 
@@ -392,7 +396,8 @@ router.post('/fetchtechnographicsdata', async (req, res) => {
         const statusCode = error.response?.status || 500;
         res.status(statusCode).json({
             status: '-1',
-            message: error.message || 'An error occurred during processing'
+            message: error.details || error.message || 'An error occurred during processing',
+            correlation_id: error.correlation_id
         });
     }
 });
@@ -448,7 +453,8 @@ const fetchTechnographicsInfo = async ({ domain }) => {
         console.error('[EXPLORIUM_BUSINESSES_API] Error in fetchTechnographicsInfo:', error.message);
         return {
             status: '-1',
-            message: error.message || 'An error occurred during processing'
+            message: error.details || error.message || 'An error occurred during processing',
+            correlation_id: error.correlation_id
         };
     }
 };

@@ -1673,8 +1673,8 @@ router.post('/namecheap/domain/dns/setup', async (req, res) => {
             TLD: tld
         });
 
-        // Verify the response
-        if (response?.ApiResponse?.CommandResponse?.DomainDNSSetDefaultResult?.$.IsSuccess !== 'true') {
+        // Verify the response - Updated to match actual API response structure
+        if (response?.ApiResponse?.CommandResponse?.DomainDNSSetDefaultResult?.$.Updated !== 'true') {
             throw new Error('Failed to set DNS servers');
         }
 
