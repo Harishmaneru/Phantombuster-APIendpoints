@@ -411,8 +411,6 @@ router.post('/submit', ensureDbConnection, handleUpload, async (req, res) => {
       !applicantName ||
       !email ||
       !linkedInUrl ||
-      textQuestions.length === 0 ||
-      textResponses.length === 0 ||
       !req.files ||
       req.files.length === 0
     ) {
@@ -426,8 +424,6 @@ router.post('/submit', ensureDbConnection, handleUpload, async (req, res) => {
           applicantName: !applicantName,
           email: !email,
           linkedInUrl: !linkedInUrl,
-          textQuestions: textQuestions.length === 0,
-          textResponses: textResponses.length === 0,
           files: !req.files || req.files.length === 0
         }
       });

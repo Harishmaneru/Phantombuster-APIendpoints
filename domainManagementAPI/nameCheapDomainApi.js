@@ -1105,7 +1105,7 @@ router.post('/namecheap/email/create', async (req, res) => {
 router.get('/namecheap/domains/list', async (req, res) => {
     try {
         console.log('[Domain API] 📋 Fetching all domains for user');
-        
+
         // Make request to Namecheap API
         const response = await namecheapRequest('namecheap.domains.getList', {
             Page: '1',
@@ -1114,93 +1114,180 @@ router.get('/namecheap/domains/list', async (req, res) => {
 
         // Extract domains from response
         const domains = response.ApiResponse.CommandResponse.DomainGetListResult.Domain;
-        
+
         // If only one domain, convert to array
         const domainsList = Array.isArray(domains) ? domains : [domains];
 
         // Get detailed information for each domain
         const detailedDomains = await Promise.all(domainsList.map(async (domain) => {
+            // Initialize domain object with basic information
+            const domainObj = {
+                name: domain.$.Name,
+                created: domain.$.Created,
+                expires: domain.$.Expires,
+                autoRenew: domain.$.AutoRenew === 'true',
+                isLocked: domain.$.IsLocked === 'true',
+                id: domain.$.ID,
+                whoisGuard: domain.$.WhoisGuard === 'ENABLED',
+                isPremium: domain.$.IsPremium === 'true',
+                details: {
+                    redirects: [], // Initialize empty redirects array
+                    mailboxes: [], // Initialize empty mailboxes array
+                    dnsRecords: [], // Initialize empty DNS records array
+                    nameservers: [] // Initialize empty nameservers array
+                }
+            };
+
             try {
                 // Get domain info
                 const domainInfo = await namecheapRequest('namecheap.domains.getInfo', {
                     DomainName: domain.$.Name
                 });
 
-                // Get DNS hosts (for mailboxes and other records)
-                const dnsHosts = await namecheapRequest('namecheap.domains.dns.getHosts', {
-                    DomainName: domain.$.Name
-                });
+                const domainResult = domainInfo.ApiResponse.CommandResponse.DomainGetInfoResult;
 
-                // Extract mailboxes from DNS hosts
-                const hosts = dnsHosts.ApiResponse.CommandResponse.DomainDNSGetHostsResult.Host;
-                const hostsList = Array.isArray(hosts) ? hosts : [hosts];
+                // Update domain details with basic info
+                domainObj.details.status = domainResult.$.Status;
+                domainObj.details.isExpired = domainResult.$.IsExpired === 'true';
+                domainObj.details.isLocked = domainResult.$.IsLocked === 'true';
+                domainObj.details.isPremium = domainResult.$.IsPremium === 'true';
                 
-                const mailboxes = hostsList
-                    .filter(host => host.$.Type === 'MX' || host.$.Type === 'EMAIL')
-                    .map(host => ({
-                        name: host.$.Name,
-                        type: host.$.Type,
-                        address: host.$.Address,
-                        mxPref: host.$.MXPref,
-                        ttl: host.$.TTL
-                    }));
-
-                // Extract other DNS records
-                const dnsRecords = hostsList
-                    .filter(host => host.$.Type !== 'MX' && host.$.Type !== 'EMAIL')
-                    .map(host => ({
-                        name: host.$.Name,
-                        type: host.$.Type,
-                        address: host.$.Address,
-                        ttl: host.$.TTL
-                    }));
+                // Use the isOurDNS value from getInfo instead of the list value
+                domainObj.isOurDNS = domainResult.DnsDetails.$.IsUsingOurDNS === 'true';
+                domainObj.details.isOurDNS = domainObj.isOurDNS;
 
                 // Get nameservers
-                const nameservers = domainInfo.ApiResponse.CommandResponse.DomainGetInfoResult.Nameservers;
-                const nameserverList = Array.isArray(nameservers) ? nameservers : [nameservers];
+                const nameservers = domainResult.DnsDetails.Nameserver;
+                domainObj.details.nameservers = Array.isArray(nameservers) ?
+                    nameservers.map(ns => typeof ns === 'string' ? ns : ns.$.Name) :
+                    [typeof nameservers === 'string' ? nameservers : nameservers.$.Name];
 
-                return {
-                    name: domain.$.Name,
-                    created: domain.$.Created,
-                    expires: domain.$.Expires,
-                    autoRenew: domain.$.AutoRenew === 'true',
-                    isLocked: domain.$.IsLocked === 'true',
-                    id: domain.$.ID,
-                    whoisGuard: domain.$.WhoisGuard === 'ENABLED',
-                    isPremium: domain.$.IsPremium === 'true',
-                    isOurDNS: domain.$.IsOurDNS === 'true',
-                    details: {
-                        status: domainInfo.ApiResponse.CommandResponse.DomainGetInfoResult.$.Status,
-                        isExpired: domainInfo.ApiResponse.CommandResponse.DomainGetInfoResult.$.IsExpired === 'true',
-                        isLocked: domainInfo.ApiResponse.CommandResponse.DomainGetInfoResult.$.IsLocked === 'true',
-                        isPremium: domainInfo.ApiResponse.CommandResponse.DomainGetInfoResult.$.IsPremium === 'true',
-                        isOurDNS: domainInfo.ApiResponse.CommandResponse.DomainGetInfoResult.$.IsOurDNS === 'true',
-                        nameservers: nameserverList.map(ns => ns.$.Name),
-                        mailboxes: mailboxes,
-                        dnsRecords: dnsRecords,
-                        contacts: {
-                            registrant: domainInfo.ApiResponse.CommandResponse.DomainGetInfoResult.Registrant,
-                            tech: domainInfo.ApiResponse.CommandResponse.DomainGetInfoResult.Tech,
-                            admin: domainInfo.ApiResponse.CommandResponse.DomainGetInfoResult.Admin,
-                            auxBilling: domainInfo.ApiResponse.CommandResponse.DomainGetInfoResult.AuxBilling
+                // Debug logging for DNS status
+                console.log(`[Domain API] DNS status for ${domain.$.Name}:`, {
+                    isOurDNS: domainObj.isOurDNS,
+                    dnsDetails: domainResult.DnsDetails,
+                    sandboxMode: NAMECHEAP_SANDBOX === 'true'
+                });
+
+                // Only try to get hosts if using Namecheap DNS
+                if (domainObj.isOurDNS) {
+                    try {
+                        const dnsHosts = await namecheapRequest('namecheap.domains.dns.getHosts', {
+                            DomainName: domain.$.Name
+                        });
+
+                        // Debug logging for raw DNS response
+                        console.log(`[Domain API] Raw DNS hosts response for ${domain.$.Name}:`, 
+                            JSON.stringify(dnsHosts, null, 2));
+
+                        // Extract hosts from response with proper null checks
+                        const hostsResult = dnsHosts?.ApiResponse?.CommandResponse?.DomainDNSGetHostsResult;
+                        let hostsList = [];
+
+                        if (hostsResult?.host) {
+                            // Handle both array and single record cases
+                            hostsList = Array.isArray(hostsResult.host) ? 
+                                hostsResult.host : 
+                                [hostsResult.host];
                         }
+
+                        // Debug logging for parsed hosts
+                        console.log(`[Domain API] Parsed hosts for ${domain.$.Name}:`, hostsList);
+
+                        // Extract redirect information with improved error handling
+                        domainObj.details.redirects = hostsList
+                            .filter(host => {
+                                const type = host?.$?.Type;
+                                return type && ['URL', 'URL301', 'URL302', 'FRAME'].includes(type);
+                            })
+                            .map(host => ({
+                                type: host.$.Type,
+                                address: host.$.Address || '',
+                                title: host.$.Title || '',
+                                keywords: host.$.Keywords || '',
+                                description: host.$.Description || '',
+                                ttl: host.$.TTL || '1800',
+                                host: host.$.Name || host.$.HostName || '@'
+                            }));
+
+                        // Add all DNS records with improved error handling
+                        domainObj.details.dnsRecords = hostsList
+                            .filter(host => host?.$?.Type) // Only include records with a type
+                            .map(host => ({
+                                type: host.$.Type,
+                                name: host.$.Name || host.$.HostName || '@',
+                                address: host.$.Address || '',
+                                ttl: host.$.TTL || '1800',
+                                mxPref: host.$.MXPref || '',
+                                associatedAppTitle: host.$.AssociatedAppTitle || ''
+                            }));
+
+                    } catch (hostsError) {
+                        console.error(`[Domain API] Error fetching hosts for domain ${domain.$.Name}:`, {
+                            error: hostsError.message,
+                            code: hostsError.response?.status,
+                            data: hostsError.response?.data,
+                            stack: hostsError.stack
+                        });
+                        
+                        domainObj.details.hostsError = {
+                            message: hostsError.message,
+                            code: hostsError.response?.status,
+                            data: hostsError.response?.data
+                        };
                     }
+                } else if (NAMECHEAP_SANDBOX === 'true') {
+                    // In sandbox mode, add mock data for testing
+                    console.log(`[Domain API] Adding mock DNS data for ${domain.$.Name} in sandbox mode`);
+                    domainObj.details.redirects = [{
+                        type: 'URL301',
+                        address: 'https://example.com',
+                        title: 'Mock Redirect',
+                        ttl: '1800',
+                        host: '@'
+                    }];
+                    domainObj.details.dnsRecords = [
+                        {
+                            type: 'A',
+                            name: '@',
+                            address: '192.168.1.1',
+                            ttl: '1800'
+                        },
+                        {
+                            type: 'MX',
+                            name: '@',
+                            address: 'mail.example.com',
+                            ttl: '3600',
+                            mxPref: '10'
+                        }
+                    ];
+                }
+
+                // Add contact information
+                domainObj.details.contacts = {
+                    registrant: domainResult.Registrant,
+                    tech: domainResult.Tech,
+                    admin: domainResult.Admin,
+                    auxBilling: domainResult.AuxBilling
                 };
+
+                return domainObj;
+
             } catch (domainErr) {
-                console.error(`[Domain API] Error fetching details for domain ${domain.$.Name}:`, domainErr.message);
-                // Return basic info if detailed fetch fails
-                return {
-                    name: domain.$.Name,
-                    created: domain.$.Created,
-                    expires: domain.$.Expires,
-                    autoRenew: domain.$.AutoRenew === 'true',
-                    isLocked: domain.$.IsLocked === 'true',
-                    id: domain.$.ID,
-                    whoisGuard: domain.$.WhoisGuard === 'ENABLED',
-                    isPremium: domain.$.IsPremium === 'true',
-                    isOurDNS: domain.$.IsOurDNS === 'true',
-                    error: 'Failed to fetch detailed information'
+                console.error(`[Domain API] Error fetching details for domain ${domain.$.Name}:`, {
+                    error: domainErr.message,
+                    code: domainErr.response?.status,
+                    data: domainErr.response?.data,
+                    stack: domainErr.stack
+                });
+                
+                domainObj.details.error = {
+                    message: domainErr.message,
+                    code: domainErr.response?.status,
+                    data: domainErr.response?.data
                 };
+                
+                return domainObj; // Return basic info if detailed fetch fails
             }
         }));
 
@@ -1209,7 +1296,9 @@ router.get('/namecheap/domains/list', async (req, res) => {
             data: {
                 domains: detailedDomains,
                 total: detailedDomains.length,
-                apiMode: NAMECHEAP_SANDBOX === 'true' ? 'sandbox' : 'production'
+                apiMode: NAMECHEAP_SANDBOX === 'true' ? 'sandbox' : 'production',
+                sandboxWarning: NAMECHEAP_SANDBOX === 'true' ? 
+                    'Running in sandbox mode - DNS data may not be accurate' : null
             }
         });
     } catch (err) {
@@ -1354,6 +1443,87 @@ router.post('/namecheap/domain/redirect', async (req, res) => {
             success: false,
             error: error.message,
             domain,
+            details: error.response?.data || null
+        });
+    }
+});
+
+router.get('/namecheap/domain/redirects/:domain', async (req, res) => {
+    const { domain } = req.params;
+
+    try {
+        // 1. Get domain info first
+        const domainInfo = await namecheapRequest('namecheap.domains.getInfo', {
+            DomainName: domain
+        });
+
+        const domainResult = domainInfo.ApiResponse.CommandResponse.DomainGetInfoResult;
+        const isOurDNS = domainResult.DnsDetails.$.IsUsingOurDNS === 'true';
+        
+        if (!isOurDNS) {
+            return res.status(400).json({
+                success: false,
+                error: 'Domain must use Namecheap DNS servers',
+                currentNameservers: domainResult.DnsDetails.Nameserver
+            });
+        }
+
+        // 2. Try to get DNS hosts
+        let redirects = [];
+        try {
+            const dnsHosts = await namecheapRequest('namecheap.domains.dns.getHosts', {
+                DomainName: domain
+            });
+
+            const hosts = dnsHosts.ApiResponse.CommandResponse?.DomainDNSGetHostsResult?.host;
+            const hostsList = hosts ? (Array.isArray(hosts) ? hosts : [hosts]) : [];
+
+            redirects = hostsList
+                .filter(host => host.$ && ['URL', 'URL301', 'URL302', 'FRAME'].includes(host.$.Type))
+                .map(host => ({
+                    type: host.$.Type,
+                    address: host.$.Address,
+                    title: host.$.Title || '',
+                    keywords: host.$.Keywords || '',
+                    description: host.$.Description || '',
+                    ttl: host.$.TTL,
+                    host: host.$.Name || '@'
+                }));
+
+        } catch (error) {
+            if (NAMECHEAP_SANDBOX === 'true') {
+                console.warn('Sandbox mode - returning empty redirects');
+                redirects = [];
+            } else {
+                throw error;
+            }
+        }
+
+        res.json({
+            success: true,
+            data: {
+                domain,
+                redirects,
+                count: redirects.length,
+                isOurDNS: true,
+                sandboxMode: NAMECHEAP_SANDBOX === 'true',
+                timestamp: new Date().toISOString()
+            }
+        });
+
+    } catch (error) {
+        console.error(`Error fetching redirects for ${domain}:`, error);
+        
+        if (error.message.includes('Domain name not found')) {
+            return res.status(404).json({
+                success: false,
+                error: 'Domain not found in your Namecheap account'
+            });
+        }
+
+        res.status(500).json({
+            success: false,
+            error: error.message,
             details: error.response?.data || null
         });
     }
