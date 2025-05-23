@@ -1349,134 +1349,7 @@ router.get('/namecheap/domains/list', async (req, res) => {
 });
 
 
-// router.post('/namecheap/domain/redirect', async (req, res) => {
-//     const {
-//         domain,
-//         destinationUrl,
-//         type = '301',
-//         masked = false,
-//         title = '',
-//         keywords = '',
-//         description = ''
-//     } = req.body;
 
-//     // Validate inputs
-//     if (!domain || !destinationUrl) {
-//         return res.status(400).json({
-//             success: false,
-//             error: 'Missing required fields: domain and destinationUrl are required'
-//         });
-//     }
-
-//     if (!/^(https?:\/\/)/.test(destinationUrl)) {
-//         return res.status(400).json({
-//             success: false,
-//             error: 'Destination URL must start with http:// or https://'
-//         });
-//     }
-
-//     try {
-//         // 1. Verify domain ownership and get domain info
-//         console.log(`[Redirect API] Checking domain info for ${domain}`);
-//         const domainInfo = await namecheapRequest('namecheap.domains.getInfo', {
-//             DomainName: domain
-//         });
-
-//         const domainResult = domainInfo.ApiResponse.CommandResponse.DomainGetInfoResult;
-//         const isOurDNS = domainResult.DnsDetails.$.IsUsingOurDNS === 'true';
-//         const nameservers = domainResult.DnsDetails.Nameserver;
-//         const nameserverList = Array.isArray(nameservers) ? nameservers : [nameservers];
-
-//         if (!isOurDNS) {
-//             return res.status(400).json({
-//                 success: false,
-//                 error: 'Domain must use Namecheap DNS servers for URL forwarding',
-//                 details: {
-//                     currentNameservers: nameserverList,
-//                     requiredNameservers: [
-//                         'dns1.registrar-servers.com',
-//                         'dns2.registrar-servers.com'
-//                     ]
-//                 }
-//             });
-//         }
-
-//         // 2. Split domain into SLD and TLD
-//         const [sld, tld] = domain.split('.');
-
-//         // 3. Set up redirect records directly without getting current records
-//         console.log(`[Redirect API] Setting up redirect for ${domain} to ${destinationUrl}`);
-//         const redirectRecords = [
-//             {
-//                 HostName: '@',
-//                 RecordType: type === '301' ? 'URL301' : 'URL302',
-//                 Address: destinationUrl,
-//                 TTL: '1800'
-//             }
-//         ];
-
-//         if (masked) {
-//             redirectRecords.push({
-//                 HostName: '@',
-//                 RecordType: 'FRAME',
-//                 Address: destinationUrl,
-//                 TTL: '1800',
-//                 Title: title,
-//                 Keywords: keywords,
-//                 Description: description
-//             });
-//         }
-
-//         // 4. Update DNS records
-//         const updateResponse = await namecheapRequest('namecheap.domains.dns.setHosts', {
-//             SLD: sld,
-//             TLD: tld,
-//             Hosts: JSON.stringify(redirectRecords)
-//         });
-
-//         // 5. Verify update was successful
-//         if (updateResponse.ApiResponse.$.Status !== 'OK') {
-//             throw new Error('Failed to update DNS records');
-//         }
-
-//         res.json({
-//             success: true,
-//             data: {
-//                 domain,
-//                 destinationUrl,
-//                 type,
-//                 masked,
-//                 message: 'Domain redirect updated successfully',
-//                 timestamp: new Date().toISOString(),
-//                 nameservers: nameserverList
-//             }
-//         });
-
-//     } catch (error) {
-//         console.error(`[Redirect Error] Domain: ${domain}`, {
-//             error: error.message,
-//             stack: error.stack,
-//             response: error.response?.data
-//         });
-
-//         // Handle specific error cases
-//         if (error.message.includes('Domain name not found')) {
-//             return res.status(404).json({
-//                 success: false,
-//                 error: 'Domain not found in your Namecheap account',
-//                 domain,
-//                 details: 'Please verify the domain is registered with your Namecheap account'
-//             });
-//         }
-
-//         res.status(500).json({
-//             success: false,
-//             error: error.message,
-//             domain,
-//             details: error.response?.data || null
-//         });
-//     }
-// });
 router.post('/namecheap/domain/redirect', async (req, res) => {
     const {
         domain,
@@ -1696,7 +1569,6 @@ router.post('/namecheap/domain/redirect', async (req, res) => {
         });
     }
 });
-
 router.get('/namecheap/domain/redirects/:domain', async (req, res) => {
     const { domain } = req.params;
 
@@ -1774,6 +1646,121 @@ router.get('/namecheap/domain/redirects/:domain', async (req, res) => {
             success: false,
             error: error.message,
             details: error.response?.data || null
+        });
+    }
+});
+
+/**
+ * Delete a domain
+ */
+router.delete('/namecheap/domain/delete', async (req, res) => {
+    const { domain } = req.body;
+
+    // Validate domain parameter
+    if (!domain) {
+        return res.status(400).json({
+            success: false,
+            error: 'Domain name is required'
+        });
+    }
+
+    // Validate domain format
+    if (!isValidDomain(domain)) {
+        return res.status(400).json({
+            success: false,
+            error: 'Invalid domain format'
+        });
+    }
+
+    try {
+        // 1. First verify domain ownership
+        console.log(`[Domain API] Verifying ownership of domain: ${domain}`);
+        const domainCheck = await namecheapRequest('namecheap.domains.getList', {
+            Page: '1',
+            PageSize: '100'
+        });
+
+        const domains = domainCheck.ApiResponse.CommandResponse.DomainGetListResult.Domain;
+        const domainExists = Array.isArray(domains)
+            ? domains.some(d => d.$.Name.toLowerCase() === domain.toLowerCase())
+            : domains.$.Name.toLowerCase() === domain.toLowerCase();
+
+        if (!domainExists) {
+            return res.status(404).json({
+                success: false,
+                error: 'Domain not found in your account'
+            });
+        }
+
+        // 2. Get domain info to check if it's locked
+        console.log(`[Domain API] Checking domain status: ${domain}`);
+        const domainInfo = await namecheapRequest('namecheap.domains.getInfo', {
+            DomainName: domain
+        });
+
+        const domainResult = domainInfo.ApiResponse.CommandResponse.DomainGetInfoResult;
+        const isLocked = domainResult.$.IsLocked === 'true';
+
+        if (isLocked) {
+            return res.status(400).json({
+                success: false,
+                error: 'Cannot delete domain while it is locked',
+                details: 'Please unlock the domain before attempting to delete it'
+            });
+        }
+
+        // 3. Attempt to delete the domain
+        console.log(`[Domain API] Attempting to delete domain: ${domain}`);
+        const deleteResponse = await namecheapRequest('namecheap.domains.delete', {
+            DomainName: domain
+        });
+
+        // 4. Verify deletion was successful
+        if (deleteResponse.ApiResponse.$.Status !== 'OK') {
+            const errors = deleteResponse.ApiResponse.Errors?.Error;
+            const errorMessage = Array.isArray(errors) ? errors.map(e => e._).join(', ') : errors?.$_ || 'Unknown error';
+            throw new Error(`Failed to delete domain: ${errorMessage}`);
+        }
+
+        // 5. Return success response
+        res.json({
+            success: true,
+            message: 'Domain deleted successfully',
+            data: {
+                domain,
+                timestamp: new Date().toISOString(),
+                apiMode: NAMECHEAP_SANDBOX === 'true' ? 'sandbox' : 'production'
+            }
+        });
+
+    } catch (error) {
+        console.error(`[Domain API] Error deleting domain ${domain}:`, {
+            error: error.message,
+            stack: error.stack,
+            response: error.response?.data
+        });
+
+        // Handle specific error cases
+        if (error.message.includes('Domain name not found')) {
+            return res.status(404).json({
+                success: false,
+                error: 'Domain not found in your Namecheap account'
+            });
+        }
+
+        if (error.message.includes('Authentication failed')) {
+            return res.status(401).json({
+                success: false,
+                error: 'Namecheap API authentication failed',
+                details: 'Please check your API credentials'
+            });
+        }
+
+        res.status(500).json({
+            success: false,
+            error: error.message,
+            details: error.response?.data || null,
+            timestamp: new Date().toISOString()
         });
     }
 });
