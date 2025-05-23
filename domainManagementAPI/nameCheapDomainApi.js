@@ -336,7 +336,7 @@ async function parseXmlResponse(xml) {
 }
 
 // Send Namecheap XML request
-async function namecheapRequest(command, params = {}, retryCount = 0) {
+async function namecheapRequest(command, params = {}, retryCount = 0, maxRetries = 3) {
     const body = new URLSearchParams({
         ApiUser: NAMECHEAP_API_USER,
         ApiKey: NAMECHEAP_API_KEY,
@@ -350,12 +350,14 @@ async function namecheapRequest(command, params = {}, retryCount = 0) {
         console.log('[Namecheap API] Making request:', {
             command,
             params: { ...params, password: '***' },
-            url: BASE_URL
+            url: BASE_URL,
+            retryCount
         });
 
         const response = await axios.post(BASE_URL, body.toString(), {
             headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
             maxRedirects: 5,
+            timeout: 10000, // 10 second timeout
             validateStatus: function (status) {
                 return status >= 200 && status < 500;
             }
@@ -365,20 +367,39 @@ async function namecheapRequest(command, params = {}, retryCount = 0) {
             throw new Error('Empty response from Namecheap API');
         }
 
+        // Add delay between retries
+        if (retryCount > 0) {
+            await new Promise(resolve => setTimeout(resolve, 1000 * retryCount));
+        }
+
         console.log('[Namecheap API] Raw response:', response.data);
+
+        // Validate response is valid XML
+        if (typeof response.data !== 'string' || !response.data.trim().startsWith('<?xml')) {
+            throw new Error('Invalid XML response from API');
+        }
 
         const parsed = await parseXmlResponse(response.data);
 
-        // Check API response status
-        if (!parsed.ApiResponse) {
-            throw new Error('Invalid API response format');
+        // Enhanced response validation
+        if (!parsed || typeof parsed !== 'object') {
+            throw new Error('Failed to parse API response');
         }
 
+        if (!parsed.ApiResponse) {
+            throw new Error('Missing ApiResponse in parsed data');
+        }
+
+        // Check for API errors
+        if (parsed.ApiResponse.Errors) {
+            const error = parsed.ApiResponse.Errors.Error;
+            const errorMessage = typeof error === 'string' ? error : error._ || 'Unknown API error';
+            throw new Error(`Namecheap API error: ${errorMessage}`);
+        }
+
+        // Check API response status
         if (parsed.ApiResponse.$.Status !== 'OK') {
-            const error = parsed.ApiResponse?.Errors?.Error?._ ||
-                parsed.ApiResponse?.Errors?.Error ||
-                'Unknown API error';
-            throw new Error(`Namecheap API error: ${error}`);
+            throw new Error(`API returned non-OK status: ${parsed.ApiResponse.$.Status}`);
         }
 
         return parsed;
@@ -392,12 +413,21 @@ async function namecheapRequest(command, params = {}, retryCount = 0) {
             stack: err.stack
         });
 
-        // If we haven't retried yet and it's a network error, retry once
-        if (retryCount === 0 && (!err.response || err.response.status >= 500)) {
-            console.log('[Namecheap API] Retrying request...');
-            return namecheapRequest(command, params, retryCount + 1);
+        // Retry logic for specific error cases
+        if (retryCount < maxRetries) {
+            const shouldRetry = 
+                !err.response || // Network error
+                err.response.status >= 500 || // Server error
+                err.message.includes('Invalid XML response') || // XML parsing error
+                err.message.includes('Failed to parse API response'); // Parsing error
+
+            if (shouldRetry) {
+                console.log(`[Namecheap API] Retrying request (attempt ${retryCount + 1}/${maxRetries})...`);
+                return namecheapRequest(command, params, retryCount + 1, maxRetries);
+            }
         }
 
+        // If we've exhausted retries or it's not a retryable error, throw
         throw err;
     }
 }
