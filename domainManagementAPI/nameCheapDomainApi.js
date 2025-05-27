@@ -1143,13 +1143,27 @@ router.get('/namecheap/domains/list', async (req, res) => {
         });
 
         // Extract domains from response
-        const domains = response.ApiResponse.CommandResponse.DomainGetListResult.Domain;
+        const domainResult = response.ApiResponse.CommandResponse.DomainGetListResult;
+        
+        // Handle empty domain list
+        if (!domainResult || !domainResult.Domain) {
+            return res.json({
+                success: true,
+                data: {
+                    domains: [],
+                    total: 0,
+                    apiMode: NAMECHEAP_SANDBOX === 'true' ? 'sandbox' : 'production',
+                    sandboxWarning: NAMECHEAP_SANDBOX === 'true' ? 
+                        'Running in sandbox mode - No domains found' : null
+                }
+            });
+        }
 
         // If only one domain, convert to array
-        const domainsList = Array.isArray(domains) ? domains : [domains];
+        const domains = Array.isArray(domainResult.Domain) ? domainResult.Domain : [domainResult.Domain];
 
         // Get detailed information for each domain
-        const detailedDomains = await Promise.all(domainsList.map(async (domain) => {
+        const detailedDomains = await Promise.all(domains.map(async (domain) => {
             // Initialize domain object with basic information
             const domainObj = {
                 name: domain.$.Name,
