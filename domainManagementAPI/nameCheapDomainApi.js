@@ -1,10 +1,49 @@
-//_____________________________Namecheap API_____________________________
-
 require('dotenv').config();
 const axios = require('axios');
 const express = require('express');
 const xml2js = require('xml2js');
+const rateLimit = require('express-rate-limit');
+const helmet = require('helmet');
 const router = express.Router();
+
+// Security middleware
+router.use(helmet());
+
+// Rate limiting
+const apiLimiter = rateLimit({
+    windowMs: 15 * 60 * 1000, // 15 minutes
+    max: 100, // Limit each IP to 100 requests per windowMs
+    message: {
+        success: false,
+        error: 'Too many requests, please try again later',
+        details: 'Rate limit exceeded'
+    }
+});
+
+// Apply rate limiting to all routes
+router.use(apiLimiter);
+
+// Async handler middleware
+const asyncHandler = fn => (req, res, next) => {
+    Promise.resolve(fn(req, res, next)).catch(next);
+};
+
+// Error handler middleware
+router.use((err, req, res, next) => {
+    console.error('[API Error]', {
+        error: err.message,
+        stack: err.stack,
+        path: req.path,
+        method: req.method
+    });
+
+    res.status(err.status || 500).json({
+        success: false,
+        error: err.message,
+        details: err.response?.data || null,
+        timestamp: new Date().toISOString()
+    });
+});
 
 // Common TLDs for domain suggestions and pricing
 const COMMON_TLDS = ['com', 'net', 'org', 'io', 'ai', 'co', 'app', 'dev', 'tech', 'cloud'];
@@ -33,6 +72,88 @@ console.log(`[Namecheap API] User: ${NAMECHEAP_API_USER}`);
 
 // const BASE_URL = 'https://api.namecheap.com/xml.response';
 const BASE_URL = 'https://api.sandbox.namecheap.com/xml.response';
+
+// cPanel/WHM API Configuration
+const {
+    CPANEL_HOST,
+    CPANEL_USERNAME,
+    CPANEL_TOKEN,
+    WHM_HOST,
+    WHM_USERNAME,
+    WHM_TOKEN
+} = process.env;
+
+// Validate cPanel environment variables
+if (!CPANEL_HOST || !CPANEL_USERNAME || !CPANEL_TOKEN || !WHM_HOST || !WHM_USERNAME || !WHM_TOKEN) {
+    console.error('❌ Missing required cPanel/WHM environment variables:');
+    console.error('  - CPANEL_HOST:', CPANEL_HOST ? '✓' : '✗');
+    console.error('  - CPANEL_USERNAME:', CPANEL_USERNAME ? '✓' : '✗');
+    console.error('  - CPANEL_TOKEN:', CPANEL_TOKEN ? '✓' : '✗');
+    console.error('  - WHM_HOST:', WHM_HOST ? '✓' : '✗');
+    console.error('  - WHM_USERNAME:', WHM_USERNAME ? '✓' : '✗');
+    console.error('  - WHM_TOKEN:', WHM_TOKEN ? '✓' : '✗');
+    throw new Error('Server initialization failed: Missing cPanel/WHM environment variables');
+}
+
+// Helper: Make cPanel API request
+async function cpanelRequest(endpoint, params = {}) {
+    const url = `https://${CPANEL_HOST}:2083/execute/${endpoint}`;
+    
+    try {
+        const response = await axios.post(url, params, {
+            headers: {
+                Authorization: `cpanel ${CPANEL_USERNAME}:${CPANEL_TOKEN}`
+            },
+            timeout: 10000 // 10 second timeout
+        });
+
+        if (!response.data || response.data.status === 0 || response.data.error) {
+            throw new Error(response.data.error || response.data.errors?.[0] || 'Unknown cPanel API error');
+        }
+
+        return response.data;
+    } catch (error) {
+        console.error('[cPanel API] Request failed:', {
+            endpoint,
+            error: error.message,
+            response: error.response?.data,
+            params: { ...params, password: '***' } // Log params but mask password
+        });
+        throw error;
+    }
+}
+
+// Helper: Make WHM API request
+async function whmRequest(endpoint, params = {}) {
+    const url = `https://${WHM_HOST}:2087/json-api/${endpoint}`;
+    
+    try {
+        const response = await axios.get(url, {
+            params: {
+                'api.version': 1,
+                ...params
+            },
+            headers: {
+                Authorization: `WHM ${WHM_USERNAME}:${WHM_TOKEN}`
+            },
+            timeout: 10000 // 10 second timeout
+        });
+
+        if (!response.data || response.data.status === 0 || response.data.error) {
+            throw new Error(response.data.error || response.data.errors?.[0] || 'Unknown WHM API error');
+        }
+
+        return response.data;
+    } catch (error) {
+        console.error('[WHM API] Request failed:', {
+            endpoint,
+            error: error.message,
+            response: error.response?.data,
+            params: { ...params, password: '***' } // Log params but mask password
+        });
+        throw error;
+    }
+}
 
 // Helper: Validate domain name with enhanced support for modern TLDs and IDN
 function isValidDomain(domain) {
@@ -1540,7 +1661,7 @@ router.get('/namecheap/domain/:domain/dns-status', async (req, res) => {
 /**
  * _____________________________Create an email mailbox _____________________________
  */
-router.post('/namecheap/domain/:domain/email', async (req, res) => {
+router.post('/namecheap/domain/:domain/createemail', asyncHandler(async (req, res) => {
     const { domain } = req.params;
     const { username, password, quota = 500 } = req.body;
 
@@ -1593,23 +1714,21 @@ router.post('/namecheap/domain/:domain/email', async (req, res) => {
             });
         }
 
-        // 3. Create email account
-        const response = await namecheapRequest('namecheap.domains.dns.setHosts', {
-            SLD: domain.split('.')[0],
-            TLD: domain.split('.')[1],
-            Hosts: JSON.stringify([
-                {
-                    HostName: username,
-                    RecordType: 'MX',
-                    Address: 'mail.privateemail.com',
-                    MXPref: '10',
-                    TTL: '1800'
-                }
-            ])
+        // 3. Create email account using cPanel API
+        const emailAddress = `${username}@${domain}`;
+        const cpanelResponse = await cpanelRequest('Email/add_pop', {
+            email: username,
+            domain: domain,
+            password,
+            quota: quota.toString()
         });
 
+        if (!cpanelResponse.status) {
+            throw new Error(cpanelResponse.errors?.[0] || 'Failed to create email account');
+        }
+
         // 4. Log the email creation
-        console.log(`[Email API] Created email ${username}@${domain}`, {
+        console.log(`[Email API] Created email ${emailAddress}`, {
             timestamp: new Date().toISOString(),
             domain,
             username,
@@ -1619,7 +1738,7 @@ router.post('/namecheap/domain/:domain/email', async (req, res) => {
         res.json({
             success: true,
             data: {
-                email: `${username}@${domain}`,
+                email: emailAddress,
                 quota,
                 status: 'active',
                 dnsStatus: emailSetup,
@@ -1635,22 +1754,35 @@ router.post('/namecheap/domain/:domain/email', async (req, res) => {
             stack: error.stack
         });
 
-        res.status(500).json({
-            success: false,
-            error: error.message,
-            details: error.response?.data || null
-        });
+        // Handle specific error cases
+        if (error.message.includes('already exists')) {
+            return res.status(409).json({
+                success: false,
+                error: 'Email account already exists',
+                details: 'Please choose a different username'
+            });
+        }
+
+        if (error.message.includes('Invalid domain')) {
+            return res.status(400).json({
+                success: false,
+                error: 'Invalid domain for email creation',
+                details: 'The domain must be properly configured on the server'
+            });
+        }
+
+        throw error; // Let the error handler middleware handle it
     }
-});
+}));
 
 /**
  * List email accounts for a domain
  */
-router.get('/namecheap/domain/:domain/emails', async (req, res) => {
+router.get('/namecheap/domain/:domain/emails', asyncHandler(async (req, res) => {
     const { domain } = req.params;
 
     try {
-        // 1. Get domain info
+        // 1. Get domain info to verify ownership
         const domainInfo = await namecheapRequest('namecheap.domains.getInfo', {
             DomainName: domain
         });
@@ -1666,24 +1798,25 @@ router.get('/namecheap/domain/:domain/emails', async (req, res) => {
             });
         }
 
-        // 2. Get DNS records to find email accounts
-        const dnsHosts = await namecheapRequest('namecheap.domains.dns.getHosts', {
-            DomainName: domain
+        // 2. Get email accounts using cPanel API
+        const cpanelResponse = await cpanelRequest('Email/list_pops', {
+            domain
         });
 
-        const hosts = dnsHosts.ApiResponse.CommandResponse?.DomainDNSGetHostsResult?.host;
-        const hostsList = hosts ? (Array.isArray(hosts) ? hosts : [hosts]) : [];
+        if (!cpanelResponse.status) {
+            throw new Error(cpanelResponse.errors?.[0] || 'Failed to list email accounts');
+        }
 
-        // 3. Extract email accounts from MX records
-        const emailAccounts = hostsList
-            .filter(host => host.$ && host.$.Type === 'MX' && host.$.Name !== '@')
-            .map(host => ({
-                username: host.$.Name,
-                email: `${host.$.Name}@${domain}`,
-                type: 'MX',
-                ttl: host.$.TTL,
-                mxPref: host.$.MXPref
-            }));
+        // 3. Format email accounts data
+        const emailAccounts = cpanelResponse.data.map(account => ({
+            username: account.user,
+            email: account.email,
+            quota: parseInt(account.quota) || 0,
+            used: parseInt(account.used) || 0,
+            suspended: account.suspended === '1',
+            created: account.created,
+            lastLogin: account.last_login || null
+        }));
 
         res.json({
             success: true,
@@ -1703,13 +1836,18 @@ router.get('/namecheap/domain/:domain/emails', async (req, res) => {
             stack: error.stack
         });
 
-        res.status(500).json({
-            success: false,
-            error: error.message,
-            details: error.response?.data || null
-        });
+        // Handle specific error cases
+        if (error.message.includes('Domain not found')) {
+            return res.status(404).json({
+                success: false,
+                error: 'Domain not found on server',
+                details: 'Please ensure the domain is properly configured'
+            });
+        }
+
+        throw error; // Let the error handler middleware handle it
     }
-});
+}));
 
 /**
  * Configure email DNS records with WHM integration
@@ -1797,19 +1935,33 @@ router.post('/dns/configure-email-dns', async (req, res) => {
 
 // Helper function to get DKIM public key from WHM
 async function getDkimPublicKey(domain) {
-  const WHM_HOST = `https://${process.env.WHM_URL}`;
-  const WHM_API_TOKEN = process.env.CPANEL_MASTER_TOKEN;
-  const WHM_USERNAME = process.env.CPANEL_MASTER_USER;
+    const WHM_HOST = process.env.WHM_URL.startsWith('http') ? 
+        process.env.WHM_URL : 
+        `https://${process.env.WHM_URL}`;
+    
+    const url = `${WHM_HOST}/json-api/get_email_dkim?api.version=1&domain=${domain}`;
 
-  const url = `${WHM_HOST}/json-api/get_email_dkim?api.version=1&domain=${domain}`;
+    try {
+        const response = await axios.get(url, {
+            headers: {
+                Authorization: `WHM ${WHM_USERNAME}:${WHM_TOKEN}`
+            },
+            timeout: 10000 // 10 second timeout
+        });
 
-  const response = await axios.get(url, {
-    headers: {
-      Authorization: `WHM ${WHM_USERNAME}:${WHM_API_TOKEN}`
+        if (!response.data || response.data.status === 0 || response.data.error) {
+            throw new Error(response.data.error || response.data.errors?.[0] || 'Failed to fetch DKIM key');
+        }
+
+        return response.data?.data?.dkim?.public_key || null;
+    } catch (error) {
+        console.error('[DKIM API] Error fetching public key:', {
+            error: error.message,
+            domain,
+            response: error.response?.data
+        });
+        throw error;
     }
-  });
-
-  return response.data?.data?.dkim?.public_key || null;
 }
 
 module.exports = router;
