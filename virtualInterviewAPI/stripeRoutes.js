@@ -804,43 +804,62 @@ router.post('/check-refund-status', async (req, res) => {
 // webhook status
 router.get('/webhook-status', async (req, res) => {
     try {
-        // Get webhook endpoints from Stripe
-        const webhooks = await stripe.webhookEndpoints.list();
-        
-        // Find our webhook endpoint
-        const ourWebhook = webhooks.data.find(webhook => 
-            webhook.url.includes('/api/stripe/webhook')
-        );
+        // First check if we can access the webhook endpoints
+        try {
+            const webhooks = await stripe.webhookEndpoints.list();
+            
+            // Find our webhook endpoint
+            const ourWebhook = webhooks.data.find(webhook => 
+                webhook.url.includes('/api/stripe/webhook')
+            );
 
-        if (!ourWebhook) {
-            return res.status(404).json({
-                status: 'not_found',
-                message: 'No webhook endpoint found for /api/stripe/webhook'
+            if (!ourWebhook) {
+                return res.status(404).json({
+                    status: 'not_found',
+                    message: 'No webhook endpoint found for /api/stripe/webhook'
+                });
+            }
+
+            // Try to get recent events, but don't fail if we can't
+            let recentEvents = [];
+            try {
+                const events = await stripe.events.list({
+                    limit: 5,
+                    type: 'webhook.*'
+                });
+                recentEvents = events.data.map(event => ({
+                    id: event.id,
+                    type: event.type,
+                    created: new Date(event.created * 1000).toISOString(),
+                    status: event.data.object.status
+                }));
+            } catch (eventError) {
+                console.warn('Could not fetch recent events:', eventError.message);
+            }
+
+            res.json({
+                status: 'active',
+                webhook: {
+                    id: ourWebhook.id,
+                    url: ourWebhook.url,
+                    status: ourWebhook.status,
+                    enabled_events: ourWebhook.enabled_events,
+                    created: new Date(ourWebhook.created * 1000).toISOString()
+                },
+                recent_events: recentEvents,
+                message: recentEvents.length === 0 ? 'Webhook is configured but recent events could not be fetched. Check your API key permissions.' : null
             });
+        } catch (webhookError) {
+            // If we can't access webhooks, return a more helpful error
+            if (webhookError.type === 'StripePermissionError') {
+                return res.status(403).json({
+                    status: 'error',
+                    message: 'API key does not have required permissions. Please use a secret key (sk_live_ or sk_test_) with webhook read permissions.',
+                    error: webhookError.message
+                });
+            }
+            throw webhookError;
         }
-
-        // Get recent webhook events
-        const events = await stripe.events.list({
-            limit: 5,
-            type: 'webhook.*'
-        });
-
-        res.json({
-            status: 'active',
-            webhook: {
-                id: ourWebhook.id,
-                url: ourWebhook.url,
-                status: ourWebhook.status,
-                enabled_events: ourWebhook.enabled_events,
-                created: new Date(ourWebhook.created * 1000).toISOString()
-            },
-            recent_events: events.data.map(event => ({
-                id: event.id,
-                type: event.type,
-                created: new Date(event.created * 1000).toISOString(),
-                status: event.data.object.status
-            }))
-        });
     } catch (error) {
         console.error('Error checking webhook status:', error);
         res.status(500).json({
