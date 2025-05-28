@@ -194,6 +194,7 @@ router.post('/api/login', ensureDbConnection, async (req, res) => {
                 userId: user.userId,
                 name: user.name,
                 email: user.email,
+                phone: user.phone,
                 subscriptionType: user.subscriptionType,
                 trialStatus: trialStatus,
                 trialEndDate: user.trialEndDate
