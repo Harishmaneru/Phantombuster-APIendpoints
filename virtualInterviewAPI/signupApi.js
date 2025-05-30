@@ -1,213 +1,183 @@
-require('dotenv').config();
 const express = require('express');
+const axios = require('axios');
+const FormData = require('form-data');
+
 const router = express.Router();
-const mongoose = require('mongoose');
-const bcrypt = require('bcrypt');
-// const jwt = require('jsonwebtoken');
 
-// Connect to MongoDB using the ONEPGR_MONGO_URI from .env
-const connectToMongoDB = async () => {
-    try {
-        if (mongoose.connection.readyState === 1) {
-            console.log('MongoDB already connected');
-            return;
-        }
-
-        await mongoose.connect(process.env.ONEPGR_MONGO_URI, {
-            // useNewUrlParser: true,
-            // useUnifiedTopology: true,
-            dbName: 'onepgr_apps'
-        });
-        console.log('Connected to MongoDB onepgr_apps database');
-    } catch (error) {
-        console.error('MongoDB connection error:', error);
-        throw error;
-    }
-};
-
-// Define user schema
-const userSchema = new mongoose.Schema({
-    userId: {
-        type: String,
-        default: () => {
-            // Generate a random 4-digit ID
-            return Math.floor(1000 + Math.random() * 9000).toString();
-        },
-        unique: true
-    },
-    name: { type: String, required: true },
-    email: { type: String, required: true, unique: true },
-    phone: { type: String, required: true },
-    password: { type: String, required: true },
-    appType: { type: String, required: true },
-    subscriptionType: { type: String, default: 'FreeTrial' },
-    signupDate: { type: Date, default: Date.now },
-    trialEndDate: {
-        type: Date, default: function () {
-            // Set trial end date to 14 days from signup
-            const date = new Date();
-            date.setDate(date.getDate() + 14);
-            return date;
-        }
-    }
-}, { collection: 'signup_data' });
-
-// Create the User model
-const User = mongoose.model('User', userSchema, 'signup_data');
-
-// Middleware to ensure database connection
-const ensureDbConnection = async (req, res, next) => {
-    try {
-        await connectToMongoDB();
-        next();
-    } catch (error) {
-        return res.status(500).json({
-            success: false,
-            message: 'Database connection failed'
-        });
-    }
-};
-
-// Signup API endpoint
-router.post('/api/signup', ensureDbConnection, async (req, res) => {
-    try {
-        console.log('[signupApi] Signup request received:', {
-            email: req.body.email,
-            name: req.body.name,
-            appType: req.body.appType
-        });
-
-        const { name, email, phone, password, appType } = req.body;
-
-        // Validate required fields
-        if (!name || !email || !phone || !password || !appType) {
-            console.log('[signupApi] Signup validation failed: Missing required fields');
-            return res.status(400).json({
-                success: false,
-                message: 'All fields are required: name, email, phone, password'
-            });
-        }
-
-        // Check if user already exists
-        const existingUser = await User.findOne({ email });
-        if (existingUser) {
-            console.log('[signupApi] Signup failed: Email already exists', { email });
-            return res.status(409).json({
-                success: false,
-                message: 'User with this email already exists'
-            });
-        }
-
-        // Hash the password
-        const salt = await bcrypt.genSalt(10);
-        const hashedPassword = await bcrypt.hash(password, salt);
-
-        // Create new user
-        const newUser = new User({
-            name,
-            email,
-            phone,
-            password: hashedPassword,
-            appType,
-        });
-
-        // Save user to database
-        await newUser.save();
-        console.log('[signupApi] User registered successfully', {
-            userId: newUser.userId,
-            email: newUser.email,
-            subscriptionType: newUser.subscriptionType
-        });
-
-        // Return success response
-        return res.status(201).json({
-            success: true,
-            message: 'User registered successfully',
-            data: {
-                userId: newUser.userId,
-                name: newUser.name,
-                email: newUser.email,
-                subscriptionType: newUser.subscriptionType,
-                trialEndDate: newUser.trialEndDate
-            }
-        });
-    } catch (error) {
-        console.error('[signupApi] Signup error:', error);
-        return res.status(500).json({
-            success: false,
-            message: 'Server error during signup',
-            error: error.message
-        });
-    }
+// Configure axios with timeout and retry settings
+const apiClient = axios.create({
+  timeout: 30000, // 30 seconds timeout
+  maxRedirects: 5,
+  headers: {
+    'User-Agent': 'Recorded-Interview-API/1.0'
+  }
 });
 
-// Login API endpoint
-router.post('/api/login', ensureDbConnection, async (req, res) => {
+// Retry function for network requests
+async function retryRequest(requestFn, maxRetries = 3, delay = 1000) {
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
     try {
-        console.log('[signupApi] Login request received:', { email: req.body.email });
-
-        const { email, password } = req.body;
-
-        // Validate required fields
-        if (!email || !password) {
-            console.log('[signupApi] Login validation failed: Missing email or password');
-            return res.status(400).json({
-                success: false,
-                message: 'Email and password are required'
-            });
-        }
-
-        // Find user by email
-        const user = await User.findOne({ email });
-        if (!user) {
-            console.log('[signupApi] Login failed: User not found', { email });
-            return res.status(401).json({
-                success: false,
-                message: 'Invalid email or password'
-            });
-        }
-
-        // Compare password
-        const isPasswordValid = await bcrypt.compare(password, user.password);
-        if (!isPasswordValid) {
-            console.log('[signupApi] Login failed: Invalid password', { email });
-            return res.status(401).json({
-                success: false,
-                message: 'Invalid email or password'
-            });
-        }
-
-        // Check if trial has expired
-        const currentDate = new Date();
-        const trialStatus = currentDate <= user.trialEndDate ? 'active' : 'expired';
-        console.log('[signupApi] Login successful', {
-            userId: user.userId,
-            email: user.email,
-            trialStatus: trialStatus
-        });
-
-        // Return success with user data
-        return res.status(200).json({
-            success: true,
-            message: 'Login successful',
-            data: {
-                userId: user.userId,
-                name: user.name,
-                email: user.email,
-                phone: user.phone,
-                subscriptionType: user.subscriptionType,
-                trialStatus: trialStatus,
-                trialEndDate: user.trialEndDate
-            }
-        });
+      console.log(`[signup_api] Attempt ${attempt}/${maxRetries} to call OnePGR API`);
+      return await requestFn();
     } catch (error) {
-        console.error('[signupApi] Login error:', error);
-        return res.status(500).json({
-            success: false,
-            message: 'Server error during login',
-            error: error.message
-        });
+      console.error(`[signup_api] Attempt ${attempt} failed:`);
+      console.error(`[signup_api] Error code: ${error.code}`);
+      console.error(`[signup_api] Error message: ${error.message}`);
+      console.error(`[signup_api] Error cause: ${error.cause}`);
+      console.error(`[signup_api] Full error:`, JSON.stringify({
+        name: error.name,
+        message: error.message,
+        code: error.code,
+        errno: error.errno,
+        syscall: error.syscall,
+        address: error.address,
+        port: error.port
+      }, null, 2));
+      
+      if (attempt === maxRetries) {
+        throw error; // Last attempt failed, throw the error
+      }
+      
+      // Wait before next attempt
+      console.log(`[signup_api] Waiting ${delay}ms before retry...`);
+      await new Promise(resolve => setTimeout(resolve, delay));
+      delay *= 2; // Exponential backoff
     }
+  }
+}
+
+
+router.post('/api/createnewuser', async (req, res) => {
+  console.log('[signup_api] POST /api/createnewuser - Request received');
+  console.log('[signup_api] Request body:', JSON.stringify(req.body, null, 2));
+  
+  try {
+    const {
+      clientname,
+      clientappid,
+      clientappkey,
+      name,
+      password,
+      email,
+      phone_mobile,
+      phone  // Also accept 'phone' as fallback
+    } = req.body;
+
+    // Use phone_mobile if provided, otherwise use phone
+    const phoneNumber = phone_mobile || phone;
+
+    console.log('[signup_api] Extracted user data:', {
+      clientname,
+      clientappid,
+      clientappkey: clientappkey ? '***masked***' : undefined,
+      name,
+      password: password ? '***masked***' : undefined,
+      email,
+      phone_mobile: phoneNumber
+    });
+
+    // Validate required fields
+    if (!clientname || !clientappid || !clientappkey || !name || !password || !email || !phoneNumber) {
+      console.error('[signup_api] Missing required fields');
+      return res.status(400).json({ 
+        error: 'Missing required fields',
+        required: ['clientname', 'clientappid', 'clientappkey', 'name', 'password', 'email', 'phone_mobile or phone']
+      });
+    }
+
+    // 1) Build the multipart form
+    console.log('[signup_api] Building multipart form data');
+    const form = new FormData();
+    form.append('clientname',    clientname);
+    form.append('clientappid',   clientappid);
+    form.append('clientappkey',  clientappkey);
+    form.append('name',          name);
+    form.append('password',      password);
+    form.append('email',         email);
+    form.append('phone_mobile',  phoneNumber);
+
+    console.log('[signup_api] Form data prepared with boundary:', form.getBoundary());
+
+    // 2) Send to the legacy OnePGR endpoint with retry logic
+    console.log('[signup_api] Preparing to send request to OnePGR API...');
+    console.log('[signup_api] Target URL: https://onepgr.com/users/create_api?onepgr_apicall=1&xhr_flag=1');
+    
+    const requestFn = () => {
+      const headers = form.getHeaders();
+      console.log('[signup_api] Request headers:', headers);
+      
+      return apiClient.post(
+        'https://onepgr.com/users/create_api?onepgr_apicall=1&xhr_flag=1',
+        form,
+        {
+          headers: headers,
+          timeout: 30000 // 30 seconds timeout for this specific request
+        }
+      );
+    };
+
+    const onepgrRes = await retryRequest(requestFn, 3, 2000);
+
+    console.log('[signup_api] OnePGR API response received:', {
+      status: onepgrRes.status,
+      statusText: onepgrRes.statusText,
+      data: onepgrRes.data
+    });
+
+    // 3) Proxy back the response
+    console.log('[signup_api] Sending successful response to client');
+    res
+      .status(onepgrRes.status)
+      .json(onepgrRes.data);
+
+  } catch (err) {
+    console.error('[signup_api] Final error occurred:');
+    console.error('[signup_api] Error name:', err.name);
+    console.error('[signup_api] Error message:', err.message);
+    console.error('[signup_api] Error code:', err.code);
+    console.error('[signup_api] Error stack:', err.stack);
+    
+    // Handle specific network errors
+    if (err.code === 'ETIMEDOUT' || err.code === 'ENETUNREACH' || err.code === 'ECONNREFUSED') {
+      console.error('[signup_api] Network connectivity issue with OnePGR API');
+      return res.status(503).json({ 
+        error: 'Service temporarily unavailable',
+        message: 'Unable to connect to user creation service. Please try again later.',
+        code: err.code,
+        details: err.message
+      });
+    }
+    
+    // If OnePGR responded with an error payload, forward that
+    if (err.response) {
+      console.error('[signup_api] OnePGR API error response:', {
+        status: err.response.status,
+        statusText: err.response.statusText,
+        data: err.response.data
+      });
+      
+      return res
+        .status(err.response.status)
+        .json(err.response.data);
+    }
+    
+    // Otherwise it's a local/network error
+    console.error('[signup_api] Local/Network error details:', {
+      name: err.name,
+      message: err.message,
+      code: err.code,
+      stack: err.stack
+    });
+    res
+      .status(500)
+      .json({ 
+        error: 'Internal server error',
+        message: 'An unexpected error occurred while processing your request.',
+        details: err.message
+      });
+  }
 });
 
-module.exports = router;
+module.exports = {
+  router
+};

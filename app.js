@@ -113,6 +113,8 @@ const signupApi = require('./virtualInterviewAPI/signupApi.js');
 
 const stripeRoutes = require('./virtualInterviewAPI/stripeRoutes.js');
 
+const manageSubscriptions = require('./virtualInterviewAPI/manageSubscriptions.js');
+
 const { Http2ServerRequest } = require('http2');
 
 const app = express();
@@ -215,7 +217,8 @@ app.use(secScraper10Q.router);
 app.use(warmupInbox);
 app.use(prospectsAPI);
 app.use(businessesAPI.router);
-app.use(signupApi);
+app.use(signupApi.router);
+app.use(manageSubscriptions.router);
 
 
 const options = {

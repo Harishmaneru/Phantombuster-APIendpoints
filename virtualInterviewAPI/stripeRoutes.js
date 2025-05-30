@@ -484,7 +484,7 @@ router.post('/get-subscription-from-session', async (req, res) => {
 });
 
 
-
+// Get all subscriptions for a user
 router.get('/users/:userId/subscriptions', async (req, res) => {
     const { userId } = req.params;
 
@@ -626,7 +626,7 @@ router.get('/users/:userId/subscriptions', async (req, res) => {
 });
 
 
-
+// Create a Billing Portal session to manage subscription
 router.post('/create-billing-portal-session', async (req, res) => {
     // Extract customerId and subscriptionId (if available) from the body
     const { customerId, subscriptionId, userId } = req.body;

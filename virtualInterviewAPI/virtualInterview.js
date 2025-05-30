@@ -369,7 +369,7 @@ const scrapeJobDescription = async (jobPostingUrl, rayId = null) => {
     const page = await browser.newPage();
 
     // Add page console logs for debugging
-    page.on('console', msg => console.log('PAGE CONSOLE:', msg.text()));
+    // page.on('console', msg => console.log('PAGE CONSOLE:', msg.text()));
 
     try {
         // Set realistic headers and viewport
@@ -1156,7 +1156,10 @@ router.post('/create-interview-page/:category/:subcategory/:applicationLink', as
     }
 });
 
-// Modify the store-jobs endpoint to include interview page creation
+
+
+
+//_____________________________open Jobs API_____________________________ 
 router.post('/store-jobs', async (req, res) => {
     console.log('=== Starting /store-jobs endpoint ===');
     console.log('Request received at:', new Date().toISOString());
