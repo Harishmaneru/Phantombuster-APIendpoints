@@ -98,8 +98,7 @@ const SubmissionSchema = new mongoose.Schema({
   score: { type: mongoose.Schema.Types.Mixed, default: null },
   submittedAt: { type: Date, default: Date.now }
 }, {
-  writeConcern: { w: 1, j: false },
-  bufferCommands: false
+  writeConcern: { w: 1, j: false }
 });
 
 const Submission = mongoose.model('Submission', SubmissionSchema);
@@ -561,6 +560,9 @@ router.post('/submit', ensureDbConnection, handleUpload, async (req, res) => {
     // Background processing for video evaluations
     setImmediate(async () => {
       try {
+        // Ensure database connection is ready for background processing
+        await connectDB();
+        
         logSubmissionActivity('Background Processing Started', {
           submissionId: savedId,
           applicantName,
@@ -595,8 +597,14 @@ router.post('/submit', ensureDbConnection, handleUpload, async (req, res) => {
           status: 'failed'
         });
         // Optionally update the submission with an error message
-        savedSubmission.score = { error: evalError.message };
-        await savedSubmission.save();
+        try {
+          // Ensure connection before saving error
+          await connectDB();
+          savedSubmission.score = { error: evalError.message };
+          await savedSubmission.save();
+        } catch (saveError) {
+          console.error('Failed to save error message to submission:', saveError);
+        }
       }
     });
   } catch (err) {
@@ -1200,7 +1208,7 @@ Transcription: "${transcription}"
 }
 
 
-//old evaluation function
+
 // async function evaluateTranscription(transcription, question) {
 //   const scorePrompt = `Based on the provided transcription, please evaluate the candidate on the following criteria and return the evaluation in plain text using the format specified below.
 
@@ -1234,11 +1242,9 @@ Transcription: "${transcription}"
 
 //   const response = await axios.post('https://app.onepgr.com/session/generateAiResponse', payload, {
 //     headers: {
-//       'Authorization': `Bearer ${process.env.OPENAI_API_KEY}`
-//     }
+//       'Authorization': `Bearer ${process.env.OPENAI_API_KEY}`//     }
 
-//   });
-//   console.log(response.data.message)
+//   });//   console.log(response.data.message)
 //   return response.data;
 
 // }
@@ -1599,3 +1605,4 @@ router.post('/ricontact', async (req, res) => {
 });
 
 module.exports = router;
+

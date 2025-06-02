@@ -306,10 +306,10 @@ router.post('/create-checkout-session', async (req, res) => {
                 ?? 'https://record.onepgr.com/success?session_id={CHECKOUT_SESSION_ID}';
         }
         else if (process.env.NODE_ENV === 'development' && process.env.IS_VERCEL_DEPLOYMENT === 'true') {
-            successUrl = 'https://virtual-interview-qgvo2.vercel.app/success?session_id={CHECKOUT_SESSION_ID}';
+            successUrl = 'http://localhost:4200/success?session_id={CHECKOUT_SESSION_ID}';
         }
         else {
-            successUrl = 'http://localhost:3000/success?session_id={CHECKOUT_SESSION_ID}';
+            successUrl = 'http://localhost:4200/success?session_id={CHECKOUT_SESSION_ID}';
         }
 
 
