@@ -1924,18 +1924,18 @@ router.get('/namecheap/domain/:domain/dns-status', async (req, res) => {
  */
 router.post('/namecheap/domain/:domain/createemail', validateUserId, asyncHandler(async (req, res) => {
     const { domain } = req.params;
-    const { username, password, quota = 500 } = req.body;
+    const { username, password, quota = 1024 } = req.body;
     const userId = req.userId;
 
     // Validate inputs
     if (!username || !password) {
         return res.status(400).json({
             success: false,
-            error: 'Username, password, and userId are required'
+            error: 'Username and password are required'
         });
     }
 
-    // Validate password strength
+    // Password strength check
     if (password.length < 8 || !/[A-Z]/.test(password) || !/[a-z]/.test(password) || !/[0-9]/.test(password)) {
         return res.status(400).json({
             success: false,
@@ -1943,13 +1943,16 @@ router.post('/namecheap/domain/:domain/createemail', validateUserId, asyncHandle
         });
     }
 
-    try {
-        // 1. Verify domain ownership through database
-        const userDomain = await NamecheapDomain.findOne({
-            userId,
-            domain: domain.toLowerCase()
+    // Quota check (max 10GB = 10240 MB)
+    if (isNaN(quota) || quota < 50 || quota > 10240) {
+        return res.status(400).json({
+            success: false,
+            error: 'Quota must be between 50 MB and 10240 MB (10 GB)'
         });
+    }
 
+    try {
+        const userDomain = await NamecheapDomain.findOne({ userId, domain: domain.toLowerCase() });
         if (!userDomain) {
             return res.status(404).json({
                 success: false,
@@ -1958,13 +1961,7 @@ router.post('/namecheap/domain/:domain/createemail', validateUserId, asyncHandle
             });
         }
 
-        console.log(`[Email API] Creating email for ${domain} (User: ${userId})`);
-
-        // 2. Verify domain ownership and DNS setup
-        const domainInfo = await namecheapRequest('namecheap.domains.getInfo', {
-            DomainName: domain
-        });
-
+        const domainInfo = await namecheapRequest('namecheap.domains.getInfo', { DomainName: domain });
         const domainResult = domainInfo.ApiResponse.CommandResponse.DomainGetInfoResult;
         const isOurDNS = domainResult.DnsDetails.$.IsUsingOurDNS === 'true';
 
@@ -1974,15 +1971,11 @@ router.post('/namecheap/domain/:domain/createemail', validateUserId, asyncHandle
                 error: 'Domain must use Namecheap DNS servers for email setup',
                 details: {
                     currentNameservers: domainResult.DnsDetails.Nameserver,
-                    requiredNameservers: [
-                        'dns1.registrar-servers.com',
-                        'dns2.registrar-servers.com'
-                    ]
+                    requiredNameservers: ['dns1.registrar-servers.com', 'dns2.registrar-servers.com']
                 }
             });
         }
 
-        // 3. Configure email DNS if not already set up
         const emailSetup = await configureEmailDns(domain);
         if (!emailSetup.dnsConfigured) {
             return res.status(400).json({
@@ -1992,7 +1985,6 @@ router.post('/namecheap/domain/:domain/createemail', validateUserId, asyncHandle
             });
         }
 
-        // 4. Create email account using cPanel API
         const emailAddress = `${username}@${domain}`;
         const cpanelResponse = await cpanelRequest('Email/add_pop', {
             email: username,
@@ -2005,7 +1997,6 @@ router.post('/namecheap/domain/:domain/createemail', validateUserId, asyncHandle
             throw new Error(cpanelResponse.errors?.[0] || 'Failed to create email account');
         }
 
-        // 5. Update database with new email account
         const emailAccountData = {
             username,
             email: emailAddress,
@@ -2014,19 +2005,10 @@ router.post('/namecheap/domain/:domain/createemail', validateUserId, asyncHandle
             suspended: false
         };
 
-        // Add email account to the domain's email accounts array
         await updateDomainInDatabase(userId, domain, {
             $push: { emailAccounts: emailAccountData },
             'dnsConfiguration.emailDNSConfigured': true,
             'dnsConfiguration.emailDNSConfiguredAt': emailSetup.dnsConfigured ? new Date() : userDomain.dnsConfiguration.emailDNSConfiguredAt
-        });
-
-        // 6. Log the email creation
-        console.log(`[Email API] Created email ${emailAddress} (User: ${userId})`, {
-            timestamp: new Date().toISOString(),
-            domain,
-            username,
-            quota
         });
 
         res.json({
@@ -2038,7 +2020,7 @@ router.post('/namecheap/domain/:domain/createemail', validateUserId, asyncHandle
                 status: 'active',
                 dnsStatus: emailSetup,
                 timestamp: new Date().toISOString(),
-                databaseUpdated: true
+                message: 'Email account created with default quota (recommended 500MB–2GB for shared plans)'
             }
         });
 
@@ -2050,7 +2032,6 @@ router.post('/namecheap/domain/:domain/createemail', validateUserId, asyncHandle
             stack: error.stack
         });
 
-        // Handle specific error cases
         if (error.message.includes('already exists')) {
             return res.status(409).json({
                 success: false,
@@ -2069,9 +2050,10 @@ router.post('/namecheap/domain/:domain/createemail', validateUserId, asyncHandle
             });
         }
 
-        throw error; // Let the error handler middleware handle it
+        throw error;
     }
 }));
+
 
 /**
  * List email accounts for a domain
