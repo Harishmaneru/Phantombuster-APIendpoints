@@ -898,7 +898,8 @@ router.post('/namecheap/domain/register', validateUserId, async (req, res) => {
         return res.status(400).json({
             success: false,
             error: 'Missing required registration fields',
-            required: ['userId', 'domain', 'firstName', 'lastName', 'email', 'phone', 'address1', 'city', 'stateProvince', 'country', 'postalCode']
+            required: ['userId', 'domain', 'firstName', 'lastName', 'email', 'phone', 'address1', 'city', 'stateProvince', 'country', 'postalCode'],
+            optional: ['years', 'enablePrivacy', 'acceptPremiumPricing']
         });
     }
 
@@ -952,8 +953,25 @@ router.post('/namecheap/domain/register', validateUserId, async (req, res) => {
             });
         }
 
+        // For premium domains, require explicit acceptance
+        if (isPremium && !req.body.acceptPremiumPricing) {
+            return res.status(400).json({
+                success: false,
+                error: 'Premium domain requires explicit acceptance',
+                details: {
+                    domain,
+                    isPremium: true,
+                    premiumPrice: price,
+                    eapFee: domainResult.$.EapFee ? parseFloat(domainResult.$.EapFee) : 0,
+                    totalCost: (price || 0) + (domainResult.$.EapFee ? parseFloat(domainResult.$.EapFee) : 0),
+                    message: 'To register this premium domain, include "acceptPremiumPricing": true in your request',
+                    currency: 'USD'
+                }
+            });
+        }
+
         // Register domain with Namecheap
-        console.log(`[Domain API] Registering domain: ${domain} (User: ${userId})`);
+        console.log(`[Domain API] Registering domain: ${domain} (User: ${userId}), Premium: ${isPremium}`);
         const registrationParams = {
             DomainName: domain,
             Years: years,
@@ -999,6 +1017,25 @@ router.post('/namecheap/domain/register', validateUserId, async (req, res) => {
             AuxBillingPostalCode: postalCode,
             EnableWhoisGuard: enablePrivacy ? 'true' : 'false'
         };
+
+        // Add premium pricing parameters if it's a premium domain
+        if (isPremium) {
+            console.log(`[Domain API] Adding premium pricing - Price: ${price}, EAP Fee: ${domainResult.$.EapFee || 0}`);
+            
+            // Include premium registration price
+            if (price) {
+                registrationParams.PremiumPrice = price.toString();
+            }
+            
+            // Include EAP fee if present
+            const eapFee = domainResult.$.EapFee ? parseFloat(domainResult.$.EapFee) : 0;
+            if (eapFee > 0) {
+                registrationParams.EapFee = eapFee.toString();
+            }
+            
+            // Set accept premium flag
+            registrationParams.AcceptPremiumPricing = 'true';
+        }
 
         const registrationResult = await namecheapRequest('namecheap.domains.create', registrationParams);
 
@@ -1125,6 +1162,26 @@ router.post('/namecheap/domain/register', validateUserId, async (req, res) => {
                     ipAddress: ipAddress,
                     errorNumber: '1011150',
                     errorMessage: `Invalid request IP: ${ipAddress}`
+                }
+            });
+        }
+
+        if (error.message.includes('premium domain') || error.message.includes('Premium price')) {
+            return res.status(400).json({
+                success: false,
+                error: 'Premium domain registration failed',
+                details: {
+                    message: 'This is a premium domain that requires additional pricing information',
+                    domain,
+                    isPremium: true,
+                    steps: [
+                        '1. Check domain pricing first using the check endpoint',
+                        '2. Confirm you want to pay the premium price',
+                        '3. Ensure your account has sufficient balance',
+                        '4. Try the registration again'
+                    ],
+                    errorMessage: error.message,
+                    checkPricingEndpoint: `/namecheap/domain/check/${domain}`
                 }
             });
         }
