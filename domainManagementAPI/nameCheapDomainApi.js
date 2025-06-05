@@ -35,16 +35,16 @@ connectToMongoDB();
 
 // Domain Schema for storing user domain data
 const domainSchema = new mongoose.Schema({
-    userId: { 
-        type: String, 
-        required: true, 
-        index: true 
+    userId: {
+        type: String,
+        required: true,
+        index: true
     },
-    domain: { 
-        type: String, 
-        required: true, 
+    domain: {
+        type: String,
+        required: true,
         lowercase: true,
-        index: true 
+        index: true
     },
     registrationData: {
         domainId: String,
@@ -105,10 +105,10 @@ const domainSchema = new mongoose.Schema({
         icannFee: Number,
         currency: { type: String, default: 'USD' }
     },
-    apiMode: { 
-        type: String, 
-        enum: ['sandbox', 'production'], 
-        default: process.env.NAMECHEAP_SANDBOX === 'true' ? 'sandbox' : 'production' 
+    apiMode: {
+        type: String,
+        enum: ['sandbox', 'production'],
+        default: process.env.NAMECHEAP_SANDBOX === 'true' ? 'sandbox' : 'production'
     },
     createdAt: { type: Date, default: Date.now },
     updatedAt: { type: Date, default: Date.now }
@@ -142,7 +142,7 @@ const ensureDbConnection = async (req, res, next) => {
 // Middleware to validate userId
 const validateUserId = (req, res, next) => {
     const userId = req.body.userId || req.query.userId || req.params.userId;
-    
+
     if (!userId) {
         return res.status(400).json({
             success: false,
@@ -150,7 +150,7 @@ const validateUserId = (req, res, next) => {
             details: 'Please provide userId in request body, query parameters, or URL path'
         });
     }
-    
+
     // Add userId to request object for easy access
     req.userId = userId;
     next();
@@ -168,7 +168,7 @@ async function saveDomainToDatabase(userId, domainData) {
             // Update existing domain
             const updatedDomain = await NamecheapDomain.findOneAndUpdate(
                 { userId, domain: domainData.domain.toLowerCase() },
-                { 
+                {
                     ...domainData,
                     updatedAt: new Date()
                 },
@@ -199,7 +199,7 @@ async function getUserDomainsFromDatabase(userId, filters = {}) {
         const domains = await NamecheapDomain.find(query)
             .sort({ createdAt: -1 })
             .lean();
-        
+
         console.log(`[Database] Retrieved ${domains.length} domains for user ${userId}`);
         return domains;
     } catch (error) {
@@ -213,17 +213,17 @@ async function updateDomainInDatabase(userId, domain, updateData) {
     try {
         const updatedDomain = await NamecheapDomain.findOneAndUpdate(
             { userId, domain: domain.toLowerCase() },
-            { 
+            {
                 ...updateData,
                 updatedAt: new Date()
             },
             { new: true }
         );
-        
+
         if (!updatedDomain) {
             throw new Error('Domain not found for this user');
         }
-        
+
         console.log('[Database] Domain updated:', updatedDomain.domain);
         return updatedDomain;
     } catch (error) {
@@ -327,7 +327,7 @@ if (!CPANEL_HOST || !CPANEL_USERNAME || !CPANEL_TOKEN || !WHM_HOST || !WHM_USERN
 // Helper: Make cPanel API request
 async function cpanelRequest(endpoint, params = {}) {
     const url = `https://${CPANEL_HOST}:2083/execute/${endpoint}`;
-    
+
     try {
         const response = await axios.post(url, params, {
             headers: {
@@ -355,7 +355,7 @@ async function cpanelRequest(endpoint, params = {}) {
 // Helper: Make WHM API request
 async function whmRequest(endpoint, params = {}) {
     const url = `https://${WHM_HOST}:2087/json-api/${endpoint}`;
-    
+
     try {
         const response = await axios.get(url, {
             params: {
@@ -485,7 +485,7 @@ async function namecheapRequest(command, params = {}, retryCount = 0, maxRetries
 
         // Retry logic for specific error cases
         if (retryCount < maxRetries) {
-            const shouldRetry = 
+            const shouldRetry =
                 !err.response || // Network error
                 err.response.status >= 500 || // Server error
                 err.message.includes('Invalid XML response') || // XML parsing error
@@ -557,63 +557,85 @@ function extractOneYearPrice(xml) {
 }
 
 /**
- * Configure DNS records for email service
- * This function sets up the necessary DNS records for Namecheap Private Email service:
- * - MX records for email routing
- * - SPF record for email authentication
- * - CNAME record for webmail access
- * 
- * @param {string} domain - The domain to configure (e.g., 'example.com')
- * @returns {Promise<Object>} Configuration result with status and details
- * @property {boolean} dnsConfigured - Whether DNS was successfully configured
- * @property {Array} mxRecords - The MX records that were configured
- * @property {string} lastCheck - Timestamp of the configuration attempt
- * @property {string} [error] - Error message if configuration failed
- * @property {string} [manualSteps] - Instructions for manual configuration if needed
+ * Configure DNS records for email service (MX, SPF, DKIM, DMARC, A)
+ * This now pulls the server's public IP and DKIM key from WHM,
+ * then writes:
+ *   • an A record for "@" → <server IP>
+ *   • MX record "@" → mail.<domain>
+ *   • SPF TXT "@" → v=spf1 a mx ip4:<server IP> ~all
+ *   • DKIM TXT "default._domainkey" → "v=DKIM1; k=rsa; p=<public_key>"
+ *   • DMARC TXT "_dmarc" → "v=DMARC1; p=none; rua=mailto:dmarc@<domain>"
  */
 async function configureEmailDns(domain) {
-    const [sld, tld] = domain.split('.');
-    
-    // MX records for Namecheap Private Email
+    // 1. Fetch your server's public IP
+    let ip;
+    try {
+        const ipResponse = await axios.get('https://api.ipify.org?format=json');
+        ip = ipResponse.data.ip;
+    } catch (err) {
+        console.error('[Email DNS] Failed to fetch public IP:', err.message);
+        throw new Error('Unable to determine server IP for DNS setup');
+    }
+
+    // 2. Get DKIM public key from WHM
+    let dkimPublicKey;
+    try {
+        dkimPublicKey = await getDkimPublicKey(domain);
+        if (!dkimPublicKey) {
+            throw new Error('Empty DKIM key');
+        }
+    } catch (err) {
+        console.error('[Email DNS] Failed to fetch DKIM key from WHM:', err.message);
+        throw new Error('Unable to fetch DKIM public key');
+    }
+
+    // 3. Build all necessary records
+    //    - A record for "@" → server IP
+    //    - MX  record for "@" → mail.<domain>, priority 10
+    //    - SPF TXT for "@" → v=spf1 a mx ip4:<ip> ~all
+    //    - DKIM TXT for "default._domainkey" → "v=DKIM1; k=rsa; p=<public_key>"
+    //    - DMARC TXT for "_dmarc" → "v=DMARC1; p=none; rua=mailto:dmarc@<domain>"
     const records = [
-        { HostName: '@', RecordType: 'MX', Address: 'mx1.privateemail.com', MXPref: '10', TTL: '1800' },
-        { HostName: '@', RecordType: 'MX', Address: 'mx2.privateemail.com', MXPref: '20', TTL: '1800' },
-        { HostName: '@', RecordType: 'TXT', Address: 'v=spf1 include:spf.privateemail.com ~all', TTL: '1800' },
-        { HostName: 'email', RecordType: 'CNAME', Address: 'privateemail.com', TTL: '1800' }
+        { HostName: '@', RecordType: 'A', Address: ip, TTL: '1800' },
+        { HostName: '@', RecordType: 'MX', Address: `mail.${domain}`, MXPref: '10', TTL: '1800' },
+        { HostName: '@', RecordType: 'TXT', Address: `v=spf1 a mx ip4:${ip} ~all`, TTL: '1800' },
+        {
+            HostName: 'default._domainkey',
+            RecordType: 'TXT',
+            Address: `v=DKIM1; k=rsa; p=${dkimPublicKey}`,
+            TTL: '1800'
+        },
+        {
+            HostName: '_dmarc',
+            RecordType: 'TXT',
+            Address: `v=DMARC1; p=none; rua=mailto:dmarc@${domain}`,
+            TTL: '1800'
+        }
     ];
 
+    // 4. Split into SLD/TLD
+    const parts = domain.split('.');
+    const sld = parts.slice(0, -1).join('.');
+    const tld = parts[parts.length - 1];
+
     try {
-        // First verify domain is using Namecheap DNS
-        const domainInfo = await namecheapRequest('namecheap.domains.getInfo', {
-            DomainName: domain
-        });
-
-        const isOurDNS = domainInfo.ApiResponse.CommandResponse.DomainGetInfoResult.DnsDetails.$.IsUsingOurDNS === 'true';
-        
-        if (!isOurDNS) {
-            return {
-                dnsConfigured: false,
-                error: 'Domain is not using Namecheap DNS servers',
-                manualSteps: `Please update nameservers to Namecheap DNS servers and then configure these records: ${JSON.stringify(records)}`,
-                lastCheck: new Date().toISOString()
-            };
-        }
-
-        // Set up DNS records
+        // 5. Push all records at once
         const response = await namecheapRequest('namecheap.domains.dns.setHosts', {
             SLD: sld,
             TLD: tld,
             Hosts: JSON.stringify(records)
         });
 
-        // Verify DNS setup was successful
-        if (response?.ApiResponse?.CommandResponse?.DomainDNSSetHostsResult?.$.IsSuccess !== 'true') {
-            throw new Error('DNS configuration failed');
+        const successFlag =
+            response?.ApiResponse?.CommandResponse?.DomainDNSSetHostsResult?.$?.IsSuccess === 'true';
+
+        if (!successFlag) {
+            throw new Error('DNS configuration failed at Namecheap');
         }
 
         return {
             dnsConfigured: true,
-            mxRecords: records.filter(r => r.RecordType === 'MX'),
+            recordsApplied: records,
             lastCheck: new Date().toISOString(),
             propagationStatus: 'pending',
             estimatedPropagationTime: '5-30 minutes'
@@ -624,7 +646,6 @@ async function configureEmailDns(domain) {
             domain,
             stack: error.stack
         });
-        
         return {
             dnsConfigured: false,
             error: error.message,
@@ -870,7 +891,6 @@ router.post('/namecheap/domain/register', validateUserId, async (req, res) => {
         enablePrivacy = false
     } = req.body;
 
-    // userId is already validated and available in req.userId
     const userId = req.userId;
 
     // Validate required fields
@@ -883,8 +903,8 @@ router.post('/namecheap/domain/register', validateUserId, async (req, res) => {
     }
 
     if (!isValidDomain(domain)) {
-        return res.status(400).json({ 
-            success: false, 
+        return res.status(400).json({
+            success: false,
             error: 'Invalid domain format',
             details: 'Domain must be a valid format and support modern TLDs'
         });
@@ -909,42 +929,16 @@ router.post('/namecheap/domain/register', validateUserId, async (req, res) => {
             });
         }
 
-        // First check if domain is available
+        // Check domain availability
         console.log(`[Domain API] Checking availability for domain: ${domain} (User: ${userId})`);
         const checkResult = await namecheapRequest('namecheap.domains.check', {
             DomainList: domain
         });
 
-        // Handle IP validation error specifically
-        if (checkResult?.ApiResponse?.Errors?.Error) {
-            const error = checkResult.ApiResponse.Errors.Error;
-            if (error.includes('Invalid request IP')) {
-                return res.status(403).json({
-                    success: false,
-                    error: 'API IP validation failed',
-                    details: {
-                        message: 'Your server IP is not whitelisted in Namecheap API settings',
-                        steps: [
-                            '1. Log in to your Namecheap account',
-                            '2. Go to Account > API Access',
-                            '3. Add your server IP to the whitelist',
-                            '4. Wait 5-10 minutes for changes to take effect'
-                        ],
-                        currentIP: NAMECHEAP_CLIENT_IP
-                    }
-                });
-            }
-        }
-
         const domainResult = checkResult.ApiResponse.CommandResponse.DomainCheckResult;
         const isAvailable = domainResult.$.Available === 'true';
         const isPremium = domainResult.$.IsPremiumName === 'true';
         const price = domainResult.$.Price ? parseFloat(domainResult.$.Price) : null;
-        const premiumRegistrationPrice = domainResult.$.PremiumRegistrationPrice ? parseFloat(domainResult.$.PremiumRegistrationPrice) : null;
-        const premiumRenewalPrice = domainResult.$.PremiumRenewalPrice ? parseFloat(domainResult.$.PremiumRenewalPrice) : null;
-        const premiumTransferPrice = domainResult.$.PremiumTransferPrice ? parseFloat(domainResult.$.PremiumTransferPrice) : null;
-        const icannFee = domainResult.$.IcannFee ? parseFloat(domainResult.$.IcannFee) : null;
-        const eapFee = domainResult.$.EapFee ? parseFloat(domainResult.$.EapFee) : null;
 
         if (!isAvailable) {
             return res.status(400).json({
@@ -953,17 +947,13 @@ router.post('/namecheap/domain/register', validateUserId, async (req, res) => {
                 details: {
                     domain,
                     isPremium,
-                    price,
-                    premiumRegistrationPrice,
-                    premiumRenewalPrice,
-                    premiumTransferPrice,
-                    icannFee,
-                    eapFee
+                    price
                 }
             });
         }
 
-        // Prepare registration parameters
+        // Register domain with Namecheap
+        console.log(`[Domain API] Registering domain: ${domain} (User: ${userId})`);
         const registrationParams = {
             DomainName: domain,
             Years: years,
@@ -1010,48 +1000,27 @@ router.post('/namecheap/domain/register', validateUserId, async (req, res) => {
             EnableWhoisGuard: enablePrivacy ? 'true' : 'false'
         };
 
-        // Proceed with domain registration
-        console.log(`[Domain API] Proceeding with registration for domain: ${domain} (User: ${userId})`);
-        const xml = await namecheapRequest('namecheap.domains.create', registrationParams);
+        const registrationResult = await namecheapRequest('namecheap.domains.create', registrationParams);
 
-        // Verify registration was successful
-        if (xml?.ApiResponse?.CommandResponse?.DomainCreateResult?.$?.Registered !== 'true') {
-            throw new Error('Domain registration failed');
-        }
-
-        const chargedAmount = parseFloat(xml.ApiResponse.CommandResponse.DomainCreateResult.$.ChargedAmount);
-        const domainId = xml.ApiResponse.CommandResponse.DomainCreateResult.$.DomainID;
-        const orderId = xml.ApiResponse.CommandResponse.DomainCreateResult.$.OrderID;
-        const transactionId = xml.ApiResponse.CommandResponse.DomainCreateResult.$.TransactionID;
-
-        // Set up DNS for email service
-        console.log(`[Domain API] Setting up DNS for email service on ${domain}`);
-        const emailSetup = await configureEmailDns(domain);
-
-        // Get domain info for additional details
-        const domainInfo = await namecheapRequest('namecheap.domains.getInfo', {
-            DomainName: domain
+        // Set nameservers to cPanel
+        console.log(`[Domain API] Setting nameservers for ${domain} to cPanel`);
+        const [sld, tld] = domain.split('.');
+        const nameserverResult = await namecheapRequest('namecheap.domains.dns.setCustom', {
+            SLD: sld,
+            TLD: tld,
+            NameServers: `${process.env.CPANEL_NS1},${process.env.CPANEL_NS2}`
         });
 
-        const domainDetails = domainInfo.ApiResponse.CommandResponse.DomainGetInfoResult;
-        
-        // Safely extract dates and status with fallbacks
-        const expirationDate = domainDetails?.DomainDetails?.CreatedDate ? 
-            new Date(domainDetails.DomainDetails.CreatedDate).toISOString() : 
-            new Date(Date.now() + (parseInt(years) * 365 * 24 * 60 * 60 * 1000)).toISOString();
-            
-        const whoisGuardStatus = domainDetails?.Whoisguard?.Enabled === 'ENABLED';
-
-        // Prepare domain data for database
+        // Save domain data to database
         const domainData = {
             domain: domain.toLowerCase(),
             registrationData: {
-                domainId,
-                orderId,
-                transactionId,
-                chargedAmount,
+                domainId: registrationResult.ApiResponse.CommandResponse.DomainCreateResult.$.DomainID,
+                orderId: registrationResult.ApiResponse.CommandResponse.DomainCreateResult.$.OrderID,
+                transactionId: registrationResult.ApiResponse.CommandResponse.DomainCreateResult.$.TransactionID,
+                chargedAmount: parseFloat(registrationResult.ApiResponse.CommandResponse.DomainCreateResult.$.ChargedAmount),
                 registrationDate: new Date(),
-                expirationDate: new Date(expirationDate),
+                expirationDate: new Date(Date.now() + (parseInt(years) * 365 * 24 * 60 * 60 * 1000)),
                 years: parseInt(years)
             },
             contactInfo: {
@@ -1070,51 +1039,42 @@ router.post('/namecheap/domain/register', validateUserId, async (req, res) => {
                 isActive: true,
                 isLocked: false,
                 autoRenew: false,
-                whoisGuardEnabled: whoisGuardStatus,
+                whoisGuardEnabled: enablePrivacy,
                 isPremium,
                 status: 'active'
             },
             dnsConfiguration: {
-                isUsingNamecheapDNS: true,
-                nameservers: ['dns1.registrar-servers.com', 'dns2.registrar-servers.com'],
-                emailDNSConfigured: emailSetup.dnsConfigured,
-                emailDNSConfiguredAt: emailSetup.dnsConfigured ? new Date() : null,
+                isUsingNamecheapDNS: false,
+                nameservers: [process.env.CPANEL_NS1, process.env.CPANEL_NS2],
+                emailDNSConfigured: false,
+                emailDNSConfiguredAt: null,
                 lastDNSUpdate: new Date()
             },
             pricing: {
-                registrationPrice: price || premiumRegistrationPrice,
-                renewalPrice: premiumRenewalPrice,
-                transferPrice: premiumTransferPrice,
-                icannFee,
+                registrationPrice: price,
                 currency: 'USD'
             },
             apiMode: NAMECHEAP_SANDBOX === 'true' ? 'sandbox' : 'production'
         };
 
-        // Save domain to database
         const savedDomain = await saveDomainToDatabase(userId, domainData);
 
+        // Return success response
         res.json({
             success: true,
             userId,
             domain,
             data: {
                 registration: {
-                    chargedAmount,
-                    domainId,
-                    orderId,
-                    transactionId,
-                    expirationDate,
-                    whoisGuardStatus
+                    chargedAmount: domainData.registrationData.chargedAmount,
+                    domainId: domainData.registrationData.domainId,
+                    orderId: domainData.registrationData.orderId,
+                    transactionId: domainData.registrationData.transactionId,
+                    expirationDate: domainData.registrationData.expirationDate
                 },
-                emailSetup,
-                pricing: {
-                    registration: price || premiumRegistrationPrice,
-                    renewal: premiumRenewalPrice,
-                    transfer: premiumTransferPrice,
-                    icannFee,
-                    eapFee,
-                    currency: 'USD'
+                dns: {
+                    nameservers: domainData.dnsConfiguration.nameservers,
+                    emailConfigured: false
                 },
                 databaseRecord: {
                     _id: savedDomain._id,
@@ -1128,31 +1088,29 @@ router.post('/namecheap/domain/register', validateUserId, async (req, res) => {
                     estimatedTime: '5-30 minutes'
                 },
                 emailSetup: {
-                    status: emailSetup.dnsConfigured ? 'ready' : 'manual_configuration_needed',
-                    instructions: emailSetup.dnsConfigured ? 
-                        'DNS records configured successfully. Wait for propagation before creating email accounts.' :
-                        'Please configure DNS records manually for email service.'
-                },
-                whoisGuard: {
-                    status: whoisGuardStatus ? 'enabled' : 'disabled',
-                    email: email
+                    status: 'pending_dns',
+                    instructions: 'Please wait for DNS propagation before creating email accounts',
+                    createEmailEndpoint: `/namecheap/domain/${domain}/createemail`
                 }
             },
             apiMode: NAMECHEAP_SANDBOX === 'true' ? 'sandbox' : 'production',
-            sandboxWarning: NAMECHEAP_SANDBOX === 'true' ? 
+            sandboxWarning: NAMECHEAP_SANDBOX === 'true' ?
                 'Running in sandbox mode - Domain registration is simulated' : null
         });
-    } catch (err) {
+
+    } catch (error) {
         console.error('[Domain API] Registration error:', {
-            error: err.message,
+            error: error.message,
             domain,
-            status: err.response?.status,
-            responseData: err.response?.data,
-            stack: err.stack
+            status: error.response?.status,
+            responseData: error.response?.data,
+            stack: error.stack
         });
 
         // Handle specific error cases
-        if (err.message.includes('Invalid request IP')) {
+        if (error.message.includes('Invalid request IP')) {
+            const errorMatch = error.message.match(/Invalid request IP: (\d+\.\d+\.\d+\.\d+)/);
+            const ipAddress = errorMatch ? errorMatch[1] : NAMECHEAP_CLIENT_IP;
             return res.status(403).json({
                 success: false,
                 error: 'API IP validation failed',
@@ -1164,15 +1122,17 @@ router.post('/namecheap/domain/register', validateUserId, async (req, res) => {
                         '3. Add your server IP to the whitelist',
                         '4. Wait 5-10 minutes for changes to take effect'
                     ],
-                    currentIP: NAMECHEAP_CLIENT_IP
+                    ipAddress: ipAddress,
+                    errorNumber: '1011150',
+                    errorMessage: `Invalid request IP: ${ipAddress}`
                 }
             });
         }
 
         res.status(500).json({
             success: false,
-            error: err.message,
-            details: err.response?.data?.error || null,
+            error: error.message,
+            details: error.response?.data?.error || null,
             apiMode: NAMECHEAP_SANDBOX === 'true' ? 'sandbox' : 'production'
         });
     }
@@ -1180,7 +1140,7 @@ router.post('/namecheap/domain/register', validateUserId, async (req, res) => {
 
 router.get('/namecheap/domains/list', validateUserId, async (req, res) => {
     const userId = req.userId;
-    
+
     try {
         console.log(`[Domain API] 📋 Fetching domains for user: ${userId}`);
 
@@ -1216,7 +1176,7 @@ router.get('/namecheap/domains/list', validateUserId, async (req, res) => {
                 pricing: dbDomain.pricing,
                 createdAt: dbDomain.createdAt,
                 updatedAt: dbDomain.updatedAt,
-                
+
                 // Initialize live status
                 liveStatus: {
                     available: false,
@@ -1242,11 +1202,58 @@ router.get('/namecheap/domains/list', validateUserId, async (req, res) => {
                     autoRenew: namecheapResult.$.AutoRenew === 'true',
                     isPremium: namecheapResult.$.IsPremium === 'true',
                     lastChecked: new Date().toISOString(),
-                    nameservers: Array.isArray(namecheapResult.DnsDetails.Nameserver) 
-                        ? namecheapResult.DnsDetails.Nameserver 
+                    nameservers: Array.isArray(namecheapResult.DnsDetails.Nameserver)
+                        ? namecheapResult.DnsDetails.Nameserver
                         : [namecheapResult.DnsDetails.Nameserver],
                     isUsingNamecheapDNS: namecheapResult.DnsDetails.$.IsUsingOurDNS === 'true'
                 };
+
+                // 🔁 Fetch live redirects from DNS hosts
+                try {
+                    const dnsHosts = await namecheapRequest('namecheap.domains.dns.getHosts', {
+                        DomainName: dbDomain.domain
+                    });
+
+                    const hosts = dnsHosts.ApiResponse.CommandResponse?.DomainDNSGetHostsResult?.host;
+                    const hostsList = hosts ? (Array.isArray(hosts) ? hosts : [hosts]) : [];
+
+                    const liveRedirects = hostsList
+                        .filter(host => host.$ && ['URL301', 'URL302', 'FRAME'].includes(host.$.Type))
+                        .map(host => ({
+                            type: host.$.Type,
+                            address: host.$.Address,
+                            title: host.$.Title || '',
+                            keywords: host.$.Keywords || '',
+                            description: host.$.Description || '',
+                            ttl: host.$.TTL,
+                            host: host.$.Name || '@',
+                            lastUpdated: new Date().toISOString(),
+                            source: 'live_dns'
+                        }));
+
+                    // Update redirects with live data if available, otherwise use database data
+                    domainObj.redirects = liveRedirects.length > 0 ? liveRedirects : dbDomain.redirects || [];
+
+                    // Add metadata about redirect source
+                    domainObj.redirectMetadata = {
+                        source: liveRedirects.length > 0 ? 'live_dns' : 'database',
+                        liveCount: liveRedirects.length,
+                        databaseCount: dbDomain.redirects?.length || 0,
+                        lastSync: new Date().toISOString()
+                    };
+
+                    console.log(`[Domain API] Fetched ${liveRedirects.length} live redirects for ${dbDomain.domain}`);
+                } catch (redirectError) {
+                    console.warn(`[Domain API] Could not fetch live redirects for ${dbDomain.domain}:`, redirectError.message);
+                    // Fallback to database redirects
+                    domainObj.redirects = dbDomain.redirects || [];
+                    domainObj.redirectMetadata = {
+                        source: 'database_fallback',
+                        error: redirectError.message,
+                        databaseCount: dbDomain.redirects?.length || 0,
+                        lastSync: new Date().toISOString()
+                    };
+                }
 
                 // Update database with live information if there are significant changes
                 const updateData = {};
@@ -1273,12 +1280,21 @@ router.get('/namecheap/domains/list', validateUserId, async (req, res) => {
                     userId,
                     domain: dbDomain.domain
                 });
-                
+
                 domainObj.liveStatus = {
                     available: false,
                     error: namecheapError.message,
                     lastChecked: new Date().toISOString(),
                     note: 'Using cached database information'
+                };
+
+                // Use database redirects as fallback
+                domainObj.redirects = dbDomain.redirects || [];
+                domainObj.redirectMetadata = {
+                    source: 'database_error_fallback',
+                    error: namecheapError.message,
+                    databaseCount: dbDomain.redirects?.length || 0,
+                    lastSync: new Date().toISOString()
                 };
             }
 
@@ -1297,7 +1313,7 @@ router.get('/namecheap/domains/list', validateUserId, async (req, res) => {
                 apiMode: NAMECHEAP_SANDBOX === 'true' ? 'sandbox' : 'production',
                 dataSource: 'database_with_live_sync',
                 lastSync: new Date().toISOString(),
-                sandboxWarning: NAMECHEAP_SANDBOX === 'true' ? 
+                sandboxWarning: NAMECHEAP_SANDBOX === 'true' ?
                     'Running in sandbox mode - Live status may not be accurate' : null
             }
         });
@@ -1428,7 +1444,7 @@ router.post('/namecheap/domain/redirect', validateUserId, async (req, res) => {
         const preservedRecords = hostsArray.filter(record => {
             const hostName = record.$.Name;
             const recordType = record.$.Type;
-            
+
             // Remove existing @ records that are A, CNAME, URL301, URL302, or FRAME
             if (hostName === '@' && ['A', 'CNAME', 'URL301', 'URL302', 'FRAME'].includes(recordType)) {
                 return false;
@@ -1515,7 +1531,7 @@ router.post('/namecheap/domain/redirect', validateUserId, async (req, res) => {
 
         // 11. Log success and return response
         console.log(`[Redirect API] Successfully updated redirect for ${domain} (User: ${userId})`);
-        
+
         res.json({
             success: true,
             userId,
@@ -1596,7 +1612,7 @@ router.get('/namecheap/domain/redirects/:domain', async (req, res) => {
 
         const domainResult = domainInfo.ApiResponse.CommandResponse.DomainGetInfoResult;
         const isOurDNS = domainResult.DnsDetails.$.IsUsingOurDNS === 'true';
-        
+
         if (!isOurDNS) {
             return res.status(400).json({
                 success: false,
@@ -1650,7 +1666,7 @@ router.get('/namecheap/domain/redirects/:domain', async (req, res) => {
 
     } catch (error) {
         console.error(`Error fetching redirects for ${domain}:`, error);
-        
+
         if (error.message.includes('Domain name not found')) {
             return res.status(404).json({
                 success: false,
@@ -1767,8 +1783,8 @@ router.get('/namecheap/domain/:domain/status', async (req, res) => {
                 },
                 dns: {
                     isUsingOurDNS: dnsDetails.$.IsUsingOurDNS === 'true',
-                    nameservers: Array.isArray(dnsDetails.Nameserver) 
-                        ? dnsDetails.Nameserver 
+                    nameservers: Array.isArray(dnsDetails.Nameserver)
+                        ? dnsDetails.Nameserver
                         : [dnsDetails.Nameserver]
                 },
                 dates: {
@@ -1874,7 +1890,7 @@ router.put('/namecheap/domain/:domain/auto-renew', async (req, res) => {
  */
 router.get('/namecheap/domain/:domain/dns-status', async (req, res) => {
     const { domain } = req.params;
-    
+
     if (!domain) {
         return res.status(400).json({
             success: false,
@@ -1886,11 +1902,11 @@ router.get('/namecheap/domain/:domain/dns-status', async (req, res) => {
         // Use DNS lookup to verify propagation
         const dns = require('dns').promises;
         const mxRecords = await dns.resolveMx(domain);
-        
-        const isPropagated = mxRecords.some(record => 
+
+        const isPropagated = mxRecords.some(record =>
             record.exchange.includes('privateemail.com')
         );
-        
+
         res.json({
             success: true,
             data: {
@@ -1952,7 +1968,12 @@ router.post('/namecheap/domain/:domain/createemail', validateUserId, asyncHandle
     }
 
     try {
-        const userDomain = await NamecheapDomain.findOne({ userId, domain: domain.toLowerCase() });
+        // 1. Verify domain ownership through database
+        const userDomain = await NamecheapDomain.findOne({
+            userId,
+            domain: domain.toLowerCase()
+        });
+
         if (!userDomain) {
             return res.status(404).json({
                 success: false,
@@ -1961,35 +1982,50 @@ router.post('/namecheap/domain/:domain/createemail', validateUserId, asyncHandle
             });
         }
 
-        const domainInfo = await namecheapRequest('namecheap.domains.getInfo', { DomainName: domain });
-        const domainResult = domainInfo.ApiResponse.CommandResponse.DomainGetInfoResult;
-        const isOurDNS = domainResult.DnsDetails.$.IsUsingOurDNS === 'true';
+        // 2. Verify DNS is using cPanel nameservers
+        const domainInfo = await namecheapRequest('namecheap.domains.getInfo', {
+            DomainName: domain
+        });
 
-        if (!isOurDNS) {
+        const domainResult = domainInfo.ApiResponse.CommandResponse.DomainGetInfoResult;
+        const isOurDNS = domainResult.DnsDetails.$.IsUsingOurDNS === 'false'; // false because we're using cPanel NS
+        const currentNameservers = Array.isArray(domainResult.DnsDetails.Nameserver)
+            ? domainResult.DnsDetails.Nameserver
+            : [domainResult.DnsDetails.Nameserver];
+
+        if (isOurDNS || !currentNameservers.includes(process.env.CPANEL_NS1) || !currentNameservers.includes(process.env.CPANEL_NS2)) {
             return res.status(400).json({
                 success: false,
-                error: 'Domain must use Namecheap DNS servers for email setup',
+                error: 'Domain DNS is not properly configured',
                 details: {
-                    currentNameservers: domainResult.DnsDetails.Nameserver,
-                    requiredNameservers: ['dns1.registrar-servers.com', 'dns2.registrar-servers.com']
+                    message: 'Domain must be using cPanel nameservers for email setup',
+                    currentNameservers,
+                    requiredNameservers: [process.env.CPANEL_NS1, process.env.CPANEL_NS2],
+                    nextStep: {
+                        checkEndpoint: `/namecheap/domain/${domain}/dns-status?userId=${userId}`,
+                        estimatedTime: '5-30 minutes'
+                    }
                 }
             });
         }
 
+        // 3. Configure email DNS records
+        console.log(`[Email API] Configuring email DNS for ${domain}`);
         const emailSetup = await configureEmailDns(domain);
         if (!emailSetup.dnsConfigured) {
             return res.status(400).json({
                 success: false,
-                error: 'Email DNS configuration failed',
+                error: 'Failed to configure email DNS records',
                 details: emailSetup
             });
         }
 
-        const emailAddress = `${username}@${domain}`;
+        // 4. Create email account in cPanel
+        console.log(`[Email API] Creating email account ${username}@${domain}`);
         const cpanelResponse = await cpanelRequest('Email/add_pop', {
-            email: username,
             domain: domain,
-            password,
+            email: username,
+            password: password,
             quota: quota.toString()
         });
 
@@ -1997,6 +2033,8 @@ router.post('/namecheap/domain/:domain/createemail', validateUserId, asyncHandle
             throw new Error(cpanelResponse.errors?.[0] || 'Failed to create email account');
         }
 
+        // 5. Save email account to database
+        const emailAddress = `${username}@${domain}`;
         const emailAccountData = {
             username,
             email: emailAddress,
@@ -2008,19 +2046,38 @@ router.post('/namecheap/domain/:domain/createemail', validateUserId, asyncHandle
         await updateDomainInDatabase(userId, domain, {
             $push: { emailAccounts: emailAccountData },
             'dnsConfiguration.emailDNSConfigured': true,
-            'dnsConfiguration.emailDNSConfiguredAt': emailSetup.dnsConfigured ? new Date() : userDomain.dnsConfiguration.emailDNSConfiguredAt
+            'dnsConfiguration.emailDNSConfiguredAt': new Date()
         });
 
+        // 6. Return success response
         res.json({
             success: true,
             userId,
+            domain,
             data: {
-                email: emailAddress,
-                quota,
-                status: 'active',
-                dnsStatus: emailSetup,
-                timestamp: new Date().toISOString(),
-                message: 'Email account created with default quota (recommended 500MB–2GB for shared plans)'
+                email: {
+                    address: emailAddress,
+                    username,
+                    quota,
+                    status: 'active'
+                },
+                dns: {
+                    configured: true,
+                    records: emailSetup.recordsApplied,
+                    propagationStatus: 'pending',
+                    estimatedTime: '5-30 minutes'
+                }
+            },
+            nextSteps: {
+                dnsPropagation: {
+                    status: 'pending',
+                    checkEndpoint: `/namecheap/domain/${domain}/dns-status?userId=${userId}`,
+                    estimatedTime: '5-30 minutes'
+                },
+                emailSetup: {
+                    status: 'complete',
+                    instructions: 'Email account created successfully. Wait for DNS propagation before sending/receiving emails.'
+                }
             }
         });
 
@@ -2032,10 +2089,10 @@ router.post('/namecheap/domain/:domain/createemail', validateUserId, asyncHandle
             stack: error.stack
         });
 
+        // Handle specific error cases
         if (error.message.includes('already exists')) {
             return res.status(409).json({
                 success: false,
-                userId,
                 error: 'Email account already exists',
                 details: 'Please choose a different username'
             });
@@ -2044,16 +2101,27 @@ router.post('/namecheap/domain/:domain/createemail', validateUserId, asyncHandle
         if (error.message.includes('Invalid domain')) {
             return res.status(400).json({
                 success: false,
-                userId,
                 error: 'Invalid domain for email creation',
                 details: 'The domain must be properly configured on the server'
             });
         }
 
-        throw error;
+        if (error.message.includes('ENOTFOUND') || error.code === 'ENOTFOUND') {
+            return res.status(500).json({
+                success: false,
+                error: 'Email server configuration error',
+                details: error.message,
+                systemError: 'Invalid cPanel host configuration'
+            });
+        }
+
+        res.status(500).json({
+            success: false,
+            error: 'Failed to create email account',
+            details: error.message
+        });
     }
 }));
-
 
 /**
  * List email accounts for a domain
@@ -2198,93 +2266,94 @@ router.get('/namecheap/domain/:domain/emails', validateUserId, asyncHandler(asyn
 /**
  * Configure email DNS records with WHM integration
  */
-router.post('/dns/configure-email-dns', async (req, res) => {
-  const { domain, dmarcEmail = `dmarc@${domain}` } = req.body;
+// router.post('/dns/configure-email-dns', async (req, res) => {
+//     const { domain, dmarcEmail = `dmarc@${domain}` } = req.body;
 
-  if (!domain) {
-    return res.status(400).json({ success: false, error: 'Missing domain' });
-  }
+//     if (!domain) {
+//         return res.status(400).json({ success: false, error: 'Missing domain' });
+//     }
 
-  try {
-    // Get server IP
-    const ipResponse = await axios.get('https://api.ipify.org?format=json');
-    const ip = ipResponse.data.ip;
+//     try {
+//         // Get server IP
+//         const ipResponse = await axios.get('https://api.ipify.org?format=json');
+//         const ip = ipResponse.data.ip;
 
-    // Get DKIM public key from WHM
-    const dkimPublicKey = await getDkimPublicKey(domain);
+//         // Get DKIM public key from WHM
+//         const dkimPublicKey = await getDkimPublicKey(domain);
 
-    if (!dkimPublicKey) {
-      return res.status(500).json({ success: false, error: 'Failed to fetch DKIM public key from WHM' });
-    }
+//         if (!dkimPublicKey) {
+//             return res.status(500).json({ success: false, error: 'Failed to fetch DKIM public key from WHM' });
+//         }
 
-    // DNS records
-    const records = [
-      { HostName: '@', RecordType: 'A', Address: ip, TTL: '1800' },
-      { HostName: '@', RecordType: 'MX', Address: `mail.${domain}`, MXPref: '10', TTL: '1800' },
-      { HostName: '@', RecordType: 'TXT', Address: `v=spf1 a mx ip4:${ip} ~all`, TTL: '1800' },
-      {
-        HostName: 'default._domainkey',
-        RecordType: 'TXT',
-        Address: `v=DKIM1; k=rsa; p=${dkimPublicKey}`,
-        TTL: '1800'
-      },
-      {
-        HostName: '_dmarc',
-        RecordType: 'TXT',
-        Address: `v=DMARC1; p=none; rua=mailto:${dmarcEmail}`,
-        TTL: '1800'
-      }
-    ];
+//         // DNS records
+//         const records = [
+//             { HostName: '@', RecordType: 'A', Address: ip, TTL: '1800' },
+//             { HostName: '@', RecordType: 'MX', Address: `mail.${domain}`, MXPref: '10', TTL: '1800' },
+//             { HostName: '@', RecordType: 'TXT', Address: `v=spf1 a mx ip4:${ip} ~all`, TTL: '1800' },
+//             {
+//                 HostName: 'default._domainkey',
+//                 RecordType: 'TXT',
+//                 Address: `v=DKIM1; k=rsa; p=${dkimPublicKey}`,
+//                 TTL: '1800'
+//             },
+//             {
+//                 HostName: '_dmarc',
+//                 RecordType: 'TXT',
+//                 Address: `v=DMARC1; p=none; rua=mailto:${dmarcEmail}`,
+//                 TTL: '1800'
+//             }
+//         ];
 
-    const [sld, ...tldParts] = domain.split('.');
-    const tld = tldParts.join('.');
+//         const [sld, ...tldParts] = domain.split('.');
+//         const tld = tldParts.join('.');
 
-    const formattedParams = {
-      SLD: sld,
-      TLD: tld
-    };
+//         const formattedParams = {
+//             SLD: sld,
+//             TLD: tld
+//         };
 
-    records.forEach((record, i) => {
-      formattedParams[`HostName${i + 1}`] = record.HostName;
-      formattedParams[`RecordType${i + 1}`] = record.RecordType;
-      formattedParams[`Address${i + 1}`] = record.Address;
-      formattedParams[`TTL${i + 1}`] = record.TTL;
-      if (record.RecordType === 'MX') {
-        formattedParams[`MXPref${i + 1}`] = record.MXPref;
-      }
-    });
+//         records.forEach((record, i) => {
+//             formattedParams[`HostName${i + 1}`] = record.HostName;
+//             formattedParams[`RecordType${i + 1}`] = record.RecordType;
+//             formattedParams[`Address${i + 1}`] = record.Address;
+//             formattedParams[`TTL${i + 1}`] = record.TTL;
+//             if (record.RecordType === 'MX') {
+//                 formattedParams[`MXPref${i + 1}`] = record.MXPref;
+//             }
+//         });
 
-    const result = await namecheapRequest('namecheap.domains.dns.setHosts', {
-      DomainName: domain,
-      ...formattedParams
-    });
+//         const result = await namecheapRequest('namecheap.domains.dns.setHosts', {
+//             DomainName: domain,
+//             ...formattedParams
+//         });
 
-    const success =
-      result?.ApiResponse?.CommandResponse?.DomainDNSSetHostsResult?.$?.IsSuccess === 'true';
+//         const success =
+//             result?.ApiResponse?.CommandResponse?.DomainDNSSetHostsResult?.$?.IsSuccess === 'true';
 
-    if (!success) {
-      return res.status(500).json({ success: false, error: 'Failed to set DNS records', response: result });
-    }
+//         if (!success) {
+//             return res.status(500).json({ success: false, error: 'Failed to set DNS records', response: result });
+//         }
 
-    return res.json({
-      success: true,
-      domain,
-      ip,
-      dkimPublicKey,
-      records
-    });
-  } catch (err) {
-    console.error('[DNS CONFIG ERROR]', err.message);
-    return res.status(500).json({ success: false, error: err.message });
-  }
-});
+//         return res.json({
+//             success: true,
+//             domain,
+//             ip,
+//             dkimPublicKey,
+//             records
+//         });
+//     } catch (err) {
+//         console.error('[DNS CONFIG ERROR]', err.message);
+//         return res.status(500).json({ success: false, error: err.message });
+//     }
+// });
+
 
 // Helper function to get DKIM public key from WHM
 async function getDkimPublicKey(domain) {
-    const WHM_HOST = process.env.WHM_URL.startsWith('http') ? 
-        process.env.WHM_URL : 
+    const WHM_HOST = process.env.WHM_URL.startsWith('http') ?
+        process.env.WHM_URL :
         `https://${process.env.WHM_URL}`;
-    
+
     const url = `${WHM_HOST}/json-api/get_email_dkim?api.version=1&domain=${domain}`;
 
     try {
@@ -2309,7 +2378,6 @@ async function getDkimPublicKey(domain) {
         throw error;
     }
 }
-
 /**
  * Get user domain statistics and overview
  */
@@ -2333,7 +2401,7 @@ router.get('/namecheap/user/:userId/stats', validateUserId, async (req, res) => 
             emailConfigured: userDomains.filter(d => d.dnsConfiguration.emailDNSConfigured).length,
             totalEmailAccounts: userDomains.reduce((sum, d) => sum + (d.emailAccounts?.length || 0), 0),
             totalRedirects: userDomains.reduce((sum, d) => sum + (d.redirects?.length || 0), 0),
-            
+
             // Pricing summary
             totalSpent: userDomains.reduce((sum, d) => sum + (d.registrationData.chargedAmount || 0), 0),
             upcomingRenewals: userDomains.filter(d => {
@@ -2344,7 +2412,7 @@ router.get('/namecheap/user/:userId/stats', validateUserId, async (req, res) => 
 
             // Domain distribution by TLD
             tldDistribution: {},
-            
+
             // Registration timeline (last 6 months)
             registrationTimeline: {}
         };
@@ -2510,5 +2578,81 @@ router.get('/namecheap/domain/:domain/listemails', async (req, res) => {
         });
     }
 });
+
+//______________________Transfer Domain Endpoint_______________________
+// POST /namecheap/domain/transfer
+router.post('/namecheap/domain/transfer', validateUserId, asyncHandler(async (req, res) => {
+    const { domain, authCode, years = 1 } = req.body;
+    const userId = req.userId;
+
+    if (!domain || !authCode) {
+        return res.status(400).json({
+            success: false,
+            error: 'Domain and authCode are required'
+        });
+    }
+
+    const [sld, tld] = domain.split('.');
+
+    try {
+        const response = await namecheapRequest('namecheap.domains.transfer.create', {
+            SLD: sld,
+            TLD: tld,
+            AuthCode: authCode,
+            Years: years
+        });
+
+        res.json({
+            success: true,
+            userId,
+            data: response.ApiResponse.CommandResponse.DomainTransferCreateResult.$,
+            timestamp: new Date().toISOString()
+        });
+    } catch (error) {
+        console.error(`[Transfer API] Transfer failed: ${domain}`, error.message);
+        res.status(500).json({
+            success: false,
+            userId,
+            error: error.message,
+            timestamp: new Date().toISOString()
+        });
+    }
+}));
+
+
+//______________________Transfer Domain Status Endpoint_______________________
+// GET /namecheap/domain/transfer/status/:domain
+router.get('/namecheap/domain/transfer/status/:domain', validateUserId, asyncHandler(async (req, res) => {
+    const { domain } = req.params;
+    const userId = req.userId;
+
+    const [sld, tld] = domain.split('.');
+
+    try {
+        const response = await namecheapRequest('namecheap.domains.transfer.getStatus', {
+            SLD: sld,
+            TLD: tld
+        });
+
+        res.json({
+            success: true,
+            userId,
+            domain,
+            status: response.ApiResponse.CommandResponse.DomainTransferGetStatusResult,
+            timestamp: new Date().toISOString()
+        });
+    } catch (error) {
+        console.error(`[Transfer Status API] Error checking status for ${domain}:`, error.message);
+        res.status(500).json({
+            success: false,
+            userId,
+            error: error.message,
+            domain,
+            timestamp: new Date().toISOString()
+        });
+    }
+}));
+
+
 
 module.exports = router;
