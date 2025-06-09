@@ -9,8 +9,6 @@ const cors = require('cors');
 const { router: slackRouter } = require('./webhooks/slackEvents');
 
 // Domain Management API
-const dynadotDomainApi = require('./domainManagementAPI/dynadotDomainApi.js');
-const zohoMailAPI = require('./domainManagementAPI/zohoMailAPI.js');
 const googleDomainAPI = require('./domainManagementAPI/googleDomainApi.js');
 const nameCheapDomainApi = require('./domainManagementAPI/nameCheapDomainApi.js');
 
@@ -160,8 +158,7 @@ app.use(
 app.use(express.json());
 
 // Mount domain management routes
-app.use(dynadotDomainApi);
-app.use(zohoMailAPI);
+
 app.use(googleDomainAPI);
 app.use(nameCheapDomainApi);
 

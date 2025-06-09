@@ -1122,7 +1122,7 @@ router.post('/namecheap/domain/register', validateUserId, async (req, res) => {
                 dnsPropagation: {
                     status: 'pending',
                     checkEndpoint: `/namecheap/domain/${domain}/dns-status?userId=${userId}`,
-                    estimatedTime: '5-30 minutes'
+                    estimatedTime: '24-48 hours'
                 },
                 emailSetup: {
                     status: 'pending_dns',
