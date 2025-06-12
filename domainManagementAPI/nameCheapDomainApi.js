@@ -638,6 +638,92 @@ function extractOneYearPrice(xml) {
     }
 }
 
+// Helper: Extract pricing for specific duration from getPricing XML response
+function extractPriceForDuration(xml, years) {
+    try {
+        const result = xml.ApiResponse.CommandResponse.UserGetPricingResult;
+        const productType = result.ProductType;
+
+        // Find all categories
+        const categories = Array.isArray(productType.ProductCategory)
+            ? productType.ProductCategory
+            : [productType.ProductCategory];
+
+        const pricing = {
+            years: parseInt(years),
+            register: null,
+            renew: null,
+            transfer: null,
+            icannFee: 0.18 * parseInt(years), // ICANN fee per year
+            currency: 'USD',
+            totalCost: null,
+            perYearCost: null,
+            savings: null // compared to 1-year pricing
+        };
+
+        let oneYearRegisterPrice = null;
+
+        // Extract prices from each category
+        categories.forEach(category => {
+            const product = category.Product;
+            if (!product) return;
+
+            const prices = Array.isArray(product.Price)
+                ? product.Price
+                : [product.Price];
+
+            // Find pricing for requested duration
+            const requestedYearPrice = prices.find(p => p.$.Duration === years.toString());
+            
+            // Also get 1-year price for comparison
+            const oneYearPrice = prices.find(p => p.$.Duration === '1');
+
+            if (requestedYearPrice) {
+                const price = parseFloat(requestedYearPrice.$.YourPrice);
+                const additionalCost = parseFloat(requestedYearPrice.$.YourAdditonalCost || '0');
+                const totalPrice = price + additionalCost;
+
+                switch (category.$.Name.toLowerCase()) {
+                    case 'register':
+                        pricing.register = totalPrice;
+                        pricing.totalCost = totalPrice + pricing.icannFee;
+                        pricing.perYearCost = (totalPrice + pricing.icannFee) / parseInt(years);
+                        break;
+                    case 'renew':
+                        pricing.renew = totalPrice;
+                        break;
+                    case 'transfer':
+                        pricing.transfer = totalPrice;
+                        break;
+                }
+            }
+
+            // Calculate savings compared to 1-year pricing
+            if (oneYearPrice && category.$.Name.toLowerCase() === 'register') {
+                const oneYearTotal = parseFloat(oneYearPrice.$.YourPrice) + parseFloat(oneYearPrice.$.YourAdditonalCost || '0') + 0.18;
+                oneYearRegisterPrice = oneYearTotal;
+                const multiYearEquivalent = oneYearTotal * parseInt(years);
+                if (pricing.totalCost) {
+                    pricing.savings = {
+                        amount: multiYearEquivalent - pricing.totalCost,
+                        percentage: ((multiYearEquivalent - pricing.totalCost) / multiYearEquivalent * 100).toFixed(2),
+                        comparedToYearly: {
+                            multiYear: pricing.totalCost,
+                            yearly: multiYearEquivalent,
+                            yearsCompared: parseInt(years)
+                        }
+                    };
+                }
+            }
+        });
+
+        return pricing;
+    } catch (err) {
+        console.error('[Domain API] Error extracting multi-year price:', err.message);
+        return null;
+    }
+}
+
 /**
  * Configure DNS records for email service (MX, SPF, DKIM, DMARC, A)
  * This now pulls the server's public IP and DKIM key from WHM,
@@ -1123,6 +1209,305 @@ router.get('/namecheap/domain/pricing', async (req, res) => {
     }
 });
 
+//  _________________________Get multi-year pricing for a specific domain______________
+
+router.get('/namecheap/domain/pricing/:domain/:years', async (req, res) => {
+    const { domain, years } = req.params;
+    
+    console.log(`[Domain Pricing API] 💰 Getting ${years}-year pricing for domain: ${domain}`);
+
+    // Validate domain
+    if (!isValidDomain(domain)) {
+        console.error(`[Domain Pricing API] Invalid domain format: ${domain}`);
+        return res.status(400).json({
+            success: false,
+            error: "Invalid domain format",
+            data: null,
+            apiMode: NAMECHEAP_SANDBOX === 'true' ? 'sandbox' : 'production'
+        });
+    }
+
+    // Validate years (1-10 years supported)
+    const yearsInt = parseInt(years);
+    if (isNaN(yearsInt) || yearsInt < 1 || yearsInt > 10) {
+        return res.status(400).json({
+            success: false,
+            error: "Years must be between 1 and 10",
+            data: null,
+            apiMode: NAMECHEAP_SANDBOX === 'true' ? 'sandbox' : 'production'
+        });
+    }
+
+    try {
+        // 1. Check if domain is available
+        console.log(`[Domain Pricing API] Step 1: Checking availability for ${domain}`);
+        const checkResult = await namecheapRequest('namecheap.domains.check', {
+            DomainList: domain
+        });
+
+        const domainResult = checkResult.ApiResponse.CommandResponse.DomainCheckResult;
+        const available = domainResult.$.Available === 'true';
+        const isPremium = domainResult.$.IsPremiumName === 'true';
+        const price = domainResult.$.Price ? parseFloat(domainResult.$.Price) : null;
+
+        if (!available) {
+            return res.status(400).json({
+                success: false,
+                error: "Domain is not available for registration",
+                data: {
+                    domain,
+                    available: false,
+                    isPremium,
+                    price
+                },
+                apiMode: NAMECHEAP_SANDBOX === 'true' ? 'sandbox' : 'production'
+            });
+        }
+
+        // 2. Get TLD and fetch multi-year pricing
+        const tld = domain.split('.').pop().toUpperCase();
+        console.log(`[Domain Pricing API] Step 2: Fetching ${years}-year pricing for TLD ${tld}`);
+        
+        const priceXml = await namecheapRequest('namecheap.users.getPricing', {
+            ProductType: 'DOMAIN',
+            ProductCategory: 'REGISTER',
+            ProductName: tld
+        });
+
+        const multiYearPricing = extractPriceForDuration(priceXml, years);
+
+        if (!multiYearPricing || multiYearPricing.register === null) {
+            return res.status(400).json({
+                success: false,
+                error: `${years}-year pricing not available for this TLD`,
+                data: {
+                    domain,
+                    years: yearsInt,
+                    available: true,
+                    tld,
+                    message: `This TLD may not support ${years}-year registration`
+                },
+                apiMode: NAMECHEAP_SANDBOX === 'true' ? 'sandbox' : 'production'
+            });
+        }
+
+        // 3. For premium domains, add premium pricing if available
+        if (isPremium && price) {
+            multiYearPricing.premiumNote = "This is a premium domain with special pricing";
+            multiYearPricing.premiumPrice = price;
+            multiYearPricing.isPremium = true;
+        }
+
+        // 4. Return comprehensive pricing information
+        res.json({
+            success: true,
+            data: {
+                domain,
+                available: true,
+                isPremium,
+                years: yearsInt,
+                pricing: multiYearPricing,
+                comparison: {
+                    oneYearTotal: multiYearPricing.perYearCost ? multiYearPricing.perYearCost : null,
+                    multiYearTotal: multiYearPricing.totalCost,
+                    savingsInfo: multiYearPricing.savings ? {
+                        youSave: `$${multiYearPricing.savings.amount.toFixed(2)}`,
+                        percentageSaved: `${multiYearPricing.savings.percentage}%`,
+                        explanation: `Registering for ${years} years saves you $${multiYearPricing.savings.amount.toFixed(2)} compared to renewing annually`
+                    } : null
+                },
+                breakdown: {
+                    registrationFee: multiYearPricing.register,
+                    icannFee: multiYearPricing.icannFee,
+                    subtotal: multiYearPricing.register + multiYearPricing.icannFee,
+                    total: multiYearPricing.totalCost,
+                    currency: multiYearPricing.currency
+                },
+                nextSteps: {
+                    registerEndpoint: `/namecheap/domain/register`,
+                    requiredParams: {
+                        domain,
+                        years: yearsInt,
+                        expectedCost: multiYearPricing.totalCost,
+                        userId: "required",
+                        contactInfo: "required"
+                    }
+                }
+            },
+            apiMode: NAMECHEAP_SANDBOX === 'true' ? 'sandbox' : 'production',
+            timestamp: new Date().toISOString()
+        });
+
+    } catch (err) {
+        console.error('[Domain Pricing API] ❌ Error in multi-year pricing process:', {
+            error: err.message,
+            domain,
+            years,
+            status: err.response?.status,
+            responseData: err.response?.data,
+            stack: err.stack,
+            timestamp: new Date().toISOString()
+        });
+
+        res.status(500).json({
+            success: false,
+            error: err.message,
+            data: null,
+            apiMode: NAMECHEAP_SANDBOX === 'true' ? 'sandbox' : 'production'
+        });
+    }
+});
+
+//  _________________________Alternative: Get multi-year pricing with query parameter______________
+
+router.get('/namecheap/domain/:domain/pricing', async (req, res) => {
+    const { domain } = req.params;
+    const { years = '1' } = req.query;
+    
+    console.log(`[Domain Pricing API] 💰 Getting ${years}-year pricing for domain: ${domain} (query param version)`);
+
+    // Validate domain
+    if (!isValidDomain(domain)) {
+        console.error(`[Domain Pricing API] Invalid domain format: ${domain}`);
+        return res.status(400).json({
+            success: false,
+            error: "Invalid domain format",
+            data: null,
+            apiMode: NAMECHEAP_SANDBOX === 'true' ? 'sandbox' : 'production'
+        });
+    }
+
+    // Validate years (1-10 years supported)
+    const yearsInt = parseInt(years);
+    if (isNaN(yearsInt) || yearsInt < 1 || yearsInt > 10) {
+        return res.status(400).json({
+            success: false,
+            error: "Years must be between 1 and 10",
+            data: null,
+            apiMode: NAMECHEAP_SANDBOX === 'true' ? 'sandbox' : 'production'
+        });
+    }
+
+    try {
+        // 1. Check if domain is available
+        console.log(`[Domain Pricing API] Step 1: Checking availability for ${domain}`);
+        const checkResult = await namecheapRequest('namecheap.domains.check', {
+            DomainList: domain
+        });
+
+        const domainResult = checkResult.ApiResponse.CommandResponse.DomainCheckResult;
+        const available = domainResult.$.Available === 'true';
+        const isPremium = domainResult.$.IsPremiumName === 'true';
+        const price = domainResult.$.Price ? parseFloat(domainResult.$.Price) : null;
+
+        if (!available) {
+            return res.status(400).json({
+                success: false,
+                error: "Domain is not available for registration",
+                data: {
+                    domain,
+                    available: false,
+                    isPremium,
+                    price
+                },
+                apiMode: NAMECHEAP_SANDBOX === 'true' ? 'sandbox' : 'production'
+            });
+        }
+
+        // 2. Get TLD and fetch multi-year pricing
+        const tld = domain.split('.').pop().toUpperCase();
+        console.log(`[Domain Pricing API] Step 2: Fetching ${years}-year pricing for TLD ${tld}`);
+        
+        const priceXml = await namecheapRequest('namecheap.users.getPricing', {
+            ProductType: 'DOMAIN',
+            ProductCategory: 'REGISTER',
+            ProductName: tld
+        });
+
+        // Use appropriate extraction function based on years
+        const pricing = yearsInt === 1 
+            ? extractOneYearPrice(priceXml)
+            : extractPriceForDuration(priceXml, years);
+
+        if (!pricing || pricing.register === null) {
+            return res.status(400).json({
+                success: false,
+                error: `${years}-year pricing not available for this TLD`,
+                data: {
+                    domain,
+                    years: yearsInt,
+                    available: true,
+                    tld,
+                    message: `This TLD may not support ${years}-year registration`
+                },
+                apiMode: NAMECHEAP_SANDBOX === 'true' ? 'sandbox' : 'production'
+            });
+        }
+
+        // 3. For premium domains, add premium pricing if available
+        if (isPremium && price) {
+            pricing.premiumNote = "This is a premium domain with special pricing";
+            pricing.premiumPrice = price;
+            pricing.isPremium = true;
+        }
+
+        // 4. Format response based on whether it's 1-year or multi-year
+        const responseData = {
+            domain,
+            available: true,
+            isPremium,
+            years: yearsInt,
+            pricing: pricing
+        };
+
+        // Add multi-year specific data if applicable
+        if (yearsInt > 1 && pricing.savings) {
+            responseData.comparison = {
+                oneYearTotal: pricing.perYearCost,
+                multiYearTotal: pricing.totalCost,
+                savingsInfo: {
+                    youSave: `$${pricing.savings.amount.toFixed(2)}`,
+                    percentageSaved: `${pricing.savings.percentage}%`,
+                    explanation: `Registering for ${years} years saves you $${pricing.savings.amount.toFixed(2)} compared to renewing annually`
+                }
+            };
+            
+            responseData.breakdown = {
+                registrationFee: pricing.register,
+                icannFee: pricing.icannFee,
+                subtotal: pricing.register + pricing.icannFee,
+                total: pricing.totalCost,
+                currency: pricing.currency
+            };
+        }
+
+        res.json({
+            success: true,
+            data: responseData,
+            apiMode: NAMECHEAP_SANDBOX === 'true' ? 'sandbox' : 'production',
+            timestamp: new Date().toISOString()
+        });
+
+    } catch (err) {
+        console.error('[Domain Pricing API] ❌ Error in pricing process:', {
+            error: err.message,
+            domain,
+            years,
+            status: err.response?.status,
+            responseData: err.response?.data,
+            stack: err.stack,
+            timestamp: new Date().toISOString()
+        });
+
+        res.status(500).json({
+            success: false,
+            error: err.message,
+            data: null,
+            apiMode: NAMECHEAP_SANDBOX === 'true' ? 'sandbox' : 'production'
+        });
+    }
+});
+
 
 //  _________________________Suggest similar domains (simple suffix-based)______________
 
@@ -1150,9 +1535,9 @@ router.get('/namecheap/domain/suggestions', async (req, res) => {
     }
 });
 
-/**
- * Register a domain
- */
+ 
+ //__________Register a domain__________
+ 
 router.post('/namecheap/domain/register', validateUserId, async (req, res) => {
     const {
         domain,
