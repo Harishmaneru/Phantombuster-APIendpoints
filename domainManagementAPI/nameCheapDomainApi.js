@@ -760,9 +760,206 @@ router.get('/namecheap/health', async (req, res) => {
     }
 });
 
-/**
- * Check domain availability and get detailed information
- */
+
+//_________________Get Wallet Balance and Credits Information______________
+
+router.get('/namecheap/wallet/balance', async (req, res) => {
+    try {
+        console.log('[Wallet API] Fetching account balance and credits...');
+
+        const response = await namecheapRequest('namecheap.users.getBalances');
+        const balanceResult = response.ApiResponse.CommandResponse.UserGetBalancesResult;
+
+        // Extract detailed balance information from XML attributes
+        const accountBalance = parseFloat(balanceResult.$.AccountBalance) || 0;
+        const availableBalance = parseFloat(balanceResult.$.AvailableBalance) || accountBalance;
+        const fundsOnHold = parseFloat(balanceResult.$.FundsRequiredForAutoRenew) || 0;
+
+        // Calculate additional metrics
+        const totalFunds = accountBalance;
+        const usableFunds = availableBalance;
+        const reservedFunds = totalFunds - usableFunds;
+
+        // Determine balance status
+        let balanceStatus = 'healthy';
+        let balanceMessage = 'Account balance is sufficient';
+
+        if (accountBalance < 10) {
+            balanceStatus = 'low';
+            balanceMessage = 'Account balance is low - consider adding funds';
+        } else if (accountBalance < 50) {
+            balanceStatus = 'moderate';
+            balanceMessage = 'Account balance is moderate';
+        }
+
+        if (accountBalance <= 0) {
+            balanceStatus = 'insufficient';
+            balanceMessage = 'Insufficient funds - please add money to your account';
+        }
+
+        res.json({
+            success: true,
+            data: {
+                balance: {
+                    total: accountBalance,
+                    available: usableFunds,
+                    reserved: reservedFunds,
+                    onHold: fundsOnHold,
+                    currency: 'USD'
+                },
+                status: {
+                    level: balanceStatus,
+                    message: balanceMessage,
+                    canRegisterDomains: accountBalance > 0,
+                    recommendAddFunds: accountBalance < 50
+                },
+                account: {
+                    username: NAMECHEAP_API_USER,
+                    apiMode: NAMECHEAP_SANDBOX === 'true' ? 'sandbox' : 'production',
+                    sandboxMode: NAMECHEAP_SANDBOX === 'true'
+                },
+                recommendations: {
+                    minimumBalance: 50,
+                    suggestedTopUp: accountBalance < 50 ? Math.ceil((100 - accountBalance) / 10) * 10 : 0,
+                    autoRenewBuffer: fundsOnHold > 0 ? 'Funds reserved for auto-renewal' : 'No auto-renewal reservations'
+                }
+            },
+            timestamp: new Date().toISOString(),
+            lastChecked: new Date().toISOString()
+        });
+
+    } catch (err) {
+        console.error('[Wallet API] ❌ Error fetching balance:', {
+            error: err.message,
+            stack: err.stack,
+            timestamp: new Date().toISOString()
+        });
+
+        // Handle specific error cases
+        if (err.message.includes('Authentication failed') || err.message.includes('Invalid API key')) {
+            return res.status(401).json({
+                success: false,
+                error: 'Authentication failed',
+                details: 'Please check your Namecheap API credentials',
+                errorCode: 'AUTH_FAILED',
+                apiMode: NAMECHEAP_SANDBOX === 'true' ? 'sandbox' : 'production'
+            });
+        }
+
+        if (err.message.includes('Invalid request IP')) {
+            return res.status(403).json({
+                success: false,
+                error: 'IP not whitelisted',
+                details: 'Your server IP is not whitelisted in Namecheap API settings',
+                errorCode: 'IP_NOT_WHITELISTED',
+                apiMode: NAMECHEAP_SANDBOX === 'true' ? 'sandbox' : 'production'
+            });
+        }
+
+        res.status(500).json({
+            success: false,
+            error: err.message,
+            details: 'Failed to fetch wallet balance from Namecheap API',
+            errorCode: 'API_ERROR',
+            apiMode: NAMECHEAP_SANDBOX === 'true' ? 'sandbox' : 'production',
+            timestamp: new Date().toISOString()
+        });
+    }
+});
+
+
+//_________________Get Account Information and Usage Statistics______________
+
+router.get('/namecheap/wallet/account-info', async (req, res) => {
+    try {
+        console.log('[Account API] 📊 Fetching account information...');
+
+        // Get balance information
+        const balanceResponse = await namecheapRequest('namecheap.users.getBalances');
+        const balanceResult = balanceResponse.ApiResponse.CommandResponse.UserGetBalancesResult;
+
+        // Try to get pricing information for common TLDs to show spending estimates
+        let pricingInfo = {};
+        try {
+            const pricingResponse = await namecheapRequest('namecheap.users.getPricing', {
+                ProductType: 'DOMAIN',
+                ProductCategory: 'REGISTER'
+            });
+
+            // Extract pricing for common TLDs
+            const productType = pricingResponse.ApiResponse.CommandResponse.UserGetPricingResult.ProductType;
+            const categories = Array.isArray(productType.ProductCategory)
+                ? productType.ProductCategory
+                : [productType.ProductCategory];
+
+            categories.forEach(category => {
+                if (category.$.Name.toLowerCase() === 'register') {
+                    const products = Array.isArray(category.Product) ? category.Product : [category.Product];
+                    products.slice(0, 5).forEach(product => { // Get first 5 TLD prices
+                        const prices = Array.isArray(product.Price) ? product.Price : [product.Price];
+                        const oneYearPrice = prices.find(p => p.$.Duration === '1');
+                        if (oneYearPrice && product.$.Name) {
+                            pricingInfo[product.$.Name.toLowerCase()] = {
+                                register: parseFloat(oneYearPrice.$.YourPrice) + parseFloat(oneYearPrice.$.YourAdditonalCost || '0'),
+                                currency: 'USD'
+                            };
+                        }
+                    });
+                }
+            });
+        } catch (pricingError) {
+            console.warn('[Account API] Could not fetch pricing info:', pricingError.message);
+        }
+
+        const accountBalance = parseFloat(balanceResult.$.AccountBalance) || 0;
+
+        // Calculate how many domains can be registered with current balance
+        const estimatedDomains = {
+            com: pricingInfo.com ? Math.floor(accountBalance / pricingInfo.com.register) : 0,
+            net: pricingInfo.net ? Math.floor(accountBalance / pricingInfo.net.register) : 0,
+            org: pricingInfo.org ? Math.floor(accountBalance / pricingInfo.org.register) : 0
+        };
+
+        res.json({
+            success: true,
+            data: {
+                account: {
+                    username: NAMECHEAP_API_USER,
+                    balance: accountBalance,
+                    currency: 'USD',
+                    apiMode: NAMECHEAP_SANDBOX === 'true' ? 'sandbox' : 'production'
+                },
+                capabilities: {
+                    estimatedDomains,
+                    canRegister: accountBalance > 0,
+                    minimumForRegistration: Math.min(...Object.values(pricingInfo).map(p => p.register).filter(Boolean)) || 10
+                },
+                pricing: pricingInfo,
+                usage: {
+                    balanceStatus: accountBalance > 50 ? 'healthy' : accountBalance > 10 ? 'moderate' : 'low',
+                    recommendedTopUp: accountBalance < 100 ? 100 - accountBalance : 0,
+                    lastChecked: new Date().toISOString()
+                }
+            },
+            timestamp: new Date().toISOString()
+        });
+
+    } catch (err) {
+        console.error('[Account API] ❌ Error fetching account info:', {
+            error: err.message,
+            stack: err.stack
+        });
+
+        res.status(500).json({
+            success: false,
+            error: err.message,
+            details: 'Failed to fetch account information',
+            apiMode: NAMECHEAP_SANDBOX === 'true' ? 'sandbox' : 'production'
+        });
+    }
+});
+
+// _________________________Check domain availability and get detailed information______________
 router.get('/namecheap/domain/check/:domain', async (req, res) => {
     const domain = req.params.domain;
     console.log(`[Domain API] 🔍 Starting domain check process for: ${domain}`);
@@ -912,9 +1109,9 @@ router.get('/namecheap/domain/check/:domain', async (req, res) => {
     }
 });
 
-/**
- * Get pricing for all TLDs and actions
- */
+
+//  _________________________Get pricing for all TLDs and actions______________
+
 router.get('/namecheap/domain/pricing', async (req, res) => {
     try {
         const xml = await namecheapRequest('namecheap.users.getPricing', {
@@ -926,9 +1123,9 @@ router.get('/namecheap/domain/pricing', async (req, res) => {
     }
 });
 
-/**
- * Suggest similar domains (simple suffix-based)
- */
+
+//  _________________________Suggest similar domains (simple suffix-based)______________
+
 router.get('/namecheap/domain/suggestions', async (req, res) => {
     const keyword = req.query.keyword;
     if (!keyword) return res.status(400).json({ success: false, error: 'Missing keyword query param' });
@@ -2620,92 +2817,7 @@ router.get('/namecheap/domain/:domain/nameservers', validateUserId, asyncHandler
     }
 }));
 
-/**
- * Configure email DNS records with WHM integration
- */
-// router.post('/dns/configure-email-dns', async (req, res) => {
-//     const { domain, dmarcEmail = `dmarc@${domain}` } = req.body;
-
-//     if (!domain) {
-//         return res.status(400).json({ success: false, error: 'Missing domain' });
-//     }
-
-//     try {
-//         // Get server IP
-//         const ipResponse = await axios.get('https://api.ipify.org?format=json');
-//         const ip = ipResponse.data.ip;
-
-//         // Get DKIM public key from WHM
-//         const dkimPublicKey = await getDkimPublicKey(domain);
-
-//         if (!dkimPublicKey) {
-//             return res.status(500).json({ success: false, error: 'Failed to fetch DKIM public key from WHM' });
-//         }
-
-//         // DNS records
-//         const records = [
-//             { HostName: '@', RecordType: 'A', Address: ip, TTL: '1800' },
-//             { HostName: '@', RecordType: 'MX', Address: `mail.${domain}`, MXPref: '10', TTL: '1800' },
-//             { HostName: '@', RecordType: 'TXT', Address: `v=spf1 a mx ip4:${ip} ~all`, TTL: '1800' },
-//             {
-//                 HostName: 'default._domainkey',
-//                 RecordType: 'TXT',
-//                 Address: `v=DKIM1; k=rsa; p=${dkimPublicKey}`,
-//                 TTL: '1800'
-//             },
-//             {
-//                 HostName: '_dmarc',
-//                 RecordType: 'TXT',
-//                 Address: `v=DMARC1; p=none; rua=mailto:${dmarcEmail}`,
-//                 TTL: '1800'
-//             }
-//         ];
-
-//         const [sld, ...tldParts] = domain.split('.');
-//         const tld = tldParts.join('.');
-
-//         const formattedParams = {
-//             SLD: sld,
-//             TLD: tld
-//         };
-
-//         records.forEach((record, i) => {
-//             formattedParams[`HostName${i + 1}`] = record.HostName;
-//             formattedParams[`RecordType${i + 1}`] = record.RecordType;
-//             formattedParams[`Address${i + 1}`] = record.Address;
-//             formattedParams[`TTL${i + 1}`] = record.TTL;
-//             if (record.RecordType === 'MX') {
-//                 formattedParams[`MXPref${i + 1}`] = record.MXPref;
-//             }
-//         });
-
-//         const result = await namecheapRequest('namecheap.domains.dns.setHosts', {
-//             DomainName: domain,
-//             ...formattedParams
-//         });
-
-//         const success =
-//             result?.ApiResponse?.CommandResponse?.DomainDNSSetHostsResult?.$?.IsSuccess === 'true';
-
-//         if (!success) {
-//             return res.status(500).json({ success: false, error: 'Failed to set DNS records', response: result });
-//         }
-
-//         return res.json({
-//             success: true,
-//             domain,
-//             ip,
-//             dkimPublicKey,
-//             records
-//         });
-//     } catch (err) {
-//         console.error('[DNS CONFIG ERROR]', err.message);
-//         return res.status(500).json({ success: false, error: err.message });
-//     }
-// });
-
-
-// Helper function to get DKIM public key from WHM
+//__________Helper function to get DKIM public key from WHM__________
 async function getDkimPublicKey(domain) {
     const WHM_HOST = process.env.WHM_URL.startsWith('http') ?
         process.env.WHM_URL :
@@ -2735,9 +2847,9 @@ async function getDkimPublicKey(domain) {
         throw error;
     }
 }
-/**
- * Get user domain statistics and overview
- */
+
+//______________________Get user domain statistics and overview_______________________
+
 router.get('/namecheap/user/:userId/stats', validateUserId, async (req, res) => {
     const userId = req.userId;
 
@@ -2850,9 +2962,9 @@ router.get('/namecheap/user/:userId/stats', validateUserId, async (req, res) => 
     }
 });
 
-/**
- * List email accounts for a domain (Simple cPanel API endpoint)
- */
+
+//__________List email accounts for a domain ( cPanel API endpoint)__________
+
 router.get('/namecheap/domain/:domain/listemails', async (req, res) => {
     const { domain } = req.params;
 
@@ -2936,8 +3048,8 @@ router.get('/namecheap/domain/:domain/listemails', async (req, res) => {
     }
 });
 
-//______________________Transfer Domain Endpoint_______________________
-// POST /namecheap/domain/transfer
+//__________Transfer Domain Endpoint__________
+
 router.post('/namecheap/domain/transfer', validateUserId, asyncHandler(async (req, res) => {
     const { domain, authCode, years = 1 } = req.body;
     const userId = req.userId;
@@ -2977,8 +3089,8 @@ router.post('/namecheap/domain/transfer', validateUserId, asyncHandler(async (re
 }));
 
 
-//______________________Transfer Domain Status Endpoint_______________________
-// GET /namecheap/domain/transfer/status/:domain
+//__________Transfer Domain Status Endpoint__________
+
 router.get('/namecheap/domain/transfer/status/:domain', validateUserId, asyncHandler(async (req, res) => {
     const { domain } = req.params;
     const userId = req.userId;
@@ -3010,6 +3122,107 @@ router.get('/namecheap/domain/transfer/status/:domain', validateUserId, asyncHan
     }
 }));
 
+//________________Api for fetching contact information of domain registration_______________________
+
+
+router.get('/namecheap/user/:userId/contact-info', validateUserId, asyncHandler(async (req, res) => {
+    const userId = req.userId;
+
+    try {
+        console.log(`[Contact API] 📋 Fetching latest contact information for user: ${userId}`);
+
+        // Get all user domains from database, sorted by most recent
+        const userDomains = await getUserDomainsFromDatabase(userId);
+
+        if (userDomains.length === 0) {
+            return res.json({
+                success: true,
+                userId,
+                data: {
+                    latestContactInfo: null,
+                    totalDomains: 0,
+                    message: 'No domains found for this user',
+                    apiMode: NAMECHEAP_SANDBOX === 'true' ? 'sandbox' : 'production'
+                }
+            });
+        }
+
+        // Find the most recently updated domain with contact info
+        const latestDomain = userDomains
+            .filter(domain => domain.contactInfo && domain.contactInfo.firstName)
+            .sort((a, b) => new Date(b.updatedAt) - new Date(a.updatedAt))[0];
+
+        if (!latestDomain) {
+            return res.json({
+                success: true,
+                userId,
+                data: {
+                    latestContactInfo: null,
+                    totalDomains: userDomains.length,
+                    message: 'No contact information found in domains',
+                    apiMode: NAMECHEAP_SANDBOX === 'true' ? 'sandbox' : 'production'
+                }
+            });
+        }
+
+        // Extract and format the latest contact information
+        const latestContactInfo = {
+            firstName: latestDomain.contactInfo.firstName,
+            lastName: latestDomain.contactInfo.lastName,
+            email: latestDomain.contactInfo.email,
+            phone: latestDomain.contactInfo.phone,
+            address1: latestDomain.contactInfo.address1,
+            address2: latestDomain.contactInfo.address2 || '',
+            city: latestDomain.contactInfo.city,
+            stateProvince: latestDomain.contactInfo.stateProvince,
+            country: latestDomain.contactInfo.country,
+            postalCode: latestDomain.contactInfo.postalCode
+        };
+
+        // Get all domains using this contact info
+        const domainsWithSameContact = userDomains.filter(domain => {
+            return domain.contactInfo &&
+                domain.contactInfo.email === latestContactInfo.email &&
+                domain.contactInfo.firstName === latestContactInfo.firstName &&
+                domain.contactInfo.lastName === latestContactInfo.lastName;
+        }).map(domain => ({
+            domain: domain.domain,
+            registrationDate: domain.registrationData.registrationDate,
+            expirationDate: domain.registrationData.expirationDate,
+            isActive: domain.domainStatus.isActive,
+            lastUpdated: domain.updatedAt
+        }));
+
+        res.json({
+            success: true,
+            userId,
+            data: {
+                latestContactInfo,
+                sourceDomain: latestDomain.domain,
+                lastUpdated: latestDomain.updatedAt,
+                domainsUsingThisContact: domainsWithSameContact,
+                totalDomainsWithContact: domainsWithSameContact.length,
+                totalDomains: userDomains.length,
+                apiMode: NAMECHEAP_SANDBOX === 'true' ? 'sandbox' : 'production'
+            },
+            timestamp: new Date().toISOString()
+        });
+
+    } catch (error) {
+        console.error(`[Contact API] ❌ Error fetching latest contact info for user ${userId}:`, {
+            error: error.message,
+            stack: error.stack
+        });
+
+        res.status(500).json({
+            success: false,
+            userId,
+            error: error.message,
+            details: 'Failed to fetch latest contact information from database',
+            apiMode: NAMECHEAP_SANDBOX === 'true' ? 'sandbox' : 'production'
+        });
+    }
+}));
 
 
 module.exports = router;
