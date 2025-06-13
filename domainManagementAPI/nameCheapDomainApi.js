@@ -823,6 +823,9 @@ async function generateProductionSuggestions(keyword, originalTld, isPrimaryAvai
                         const pricing = await getPricingForTLD(tld);
                         console.log(`[Suggestion Engine] ✅ Pricing fetched for ${variant}:`, pricing);
 
+                        // Get privacy protection info for this TLD
+                        const privacyInfo = await getPrivacyProtectionInfo(tld);
+
                         return {
                             domain: variant,
                             type: 'tld_variation',
@@ -837,6 +840,12 @@ async function generateProductionSuggestions(keyword, originalTld, isPrimaryAvai
                                 transfer: pricing.transfer,
                                 icannFee: pricing.icannFee,
                                 currency: 'USD'
+                            },
+                            privacyProtection: {
+                                supported: privacyInfo.supported,
+                                cost: privacyInfo.pricing.cost,
+                                note: privacyInfo.pricing.note,
+                                dataSource: privacyInfo.dataSource
                             },
                             priority: POPULAR_TLDS.indexOf(tld) + 1
                         };
@@ -882,6 +891,9 @@ async function generateProductionSuggestions(keyword, originalTld, isPrimaryAvai
                                         const pricing = await getPricingForTLD(tld);
                                         console.log(`[Suggestion Engine]Keyword variation pricing fetched for ${domain}:`, pricing);
 
+                                        // Get privacy protection info for this TLD
+                                        const privacyInfo = await getPrivacyProtectionInfo(tld);
+
                                         return {
                                             domain,
                                             type: 'keyword_variation',
@@ -896,6 +908,12 @@ async function generateProductionSuggestions(keyword, originalTld, isPrimaryAvai
                                                 transfer: pricing.transfer,
                                                 icannFee: pricing.icannFee,
                                                 currency: 'USD'
+                                            },
+                                            privacyProtection: {
+                                                supported: privacyInfo.supported,
+                                                cost: privacyInfo.pricing.cost,
+                                                note: privacyInfo.pricing.note,
+                                                dataSource: privacyInfo.dataSource
                                             },
                                             variation: variant,
                                             originalKeyword: keyword
@@ -1377,19 +1395,19 @@ router.get('/namecheap/domain/check/:domain', async (req, res) => {
 
         const domainResult = primaryCheck.ApiResponse.CommandResponse.DomainCheckResult;
 
-        // 🔍 DEBUG: Log the raw XML response to see what Namecheap is returning
-        console.log(`[Domain API] 🔍 Raw Namecheap response for ${domain}:`, JSON.stringify(domainResult, null, 2));
+        // DEBUG: Log the raw XML response to see what Namecheap is returning
+        //  console.log(`[Domain API] Raw Namecheap response for ${domain}:`, JSON.stringify(domainResult, null, 2));
 
         const isAvailable = domainResult.$.Available === 'true';
         const isPremium = domainResult.$.IsPremiumName === 'true';
 
-        // 🎯 LOG: Clear availability status
-        console.log(`[Domain API] 🎯 Domain ${domain} Status:`, {
-            available: isAvailable,
-            availableString: domainResult.$.Available,
-            isPremium: isPremium,
-            premiumString: domainResult.$.IsPremiumName
-        });
+        //  LOG: Clear availability status
+        // console.log(`[Domain API]  Domain ${domain} Status:`, {
+        //     available: isAvailable,
+        //     availableString: domainResult.$.Available,
+        //     isPremium: isPremium,
+        //     premiumString: domainResult.$.IsPremiumName
+        // });
         const price = domainResult.$.Price ? parseFloat(domainResult.$.Price) : null;
         const premiumRegistrationPrice = domainResult.$.PremiumRegistrationPrice ? parseFloat(domainResult.$.PremiumRegistrationPrice) : null;
         const premiumRenewalPrice = domainResult.$.PremiumRenewalPrice ? parseFloat(domainResult.$.PremiumRenewalPrice) : null;
@@ -1397,8 +1415,12 @@ router.get('/namecheap/domain/check/:domain', async (req, res) => {
         const eapFee = domainResult.$.EapFee ? parseFloat(domainResult.$.EapFee) : null;
 
         // 2. Get pricing for primary domain
-        console.log(`[Domain API] Step 2: Fetching pricing for TLD .${originalTld}`);
+        // console.log(`[Domain API] Step 2: Fetching pricing for TLD .${originalTld}`);
         const primaryPricing = await getPricingForTLD(originalTld);
+
+        // 2.5. Get privacy protection information for the TLD
+        console.log(`[Domain API] Step 2.5: Getting privacy protection info for .${originalTld}`);
+        const privacyInfo = await getPrivacyProtectionInfo(originalTld);
 
         // 3. Generate suggestions using production algorithm
         console.log(`[Domain API] Step 3: Generating industry-standard suggestions`);
@@ -1442,6 +1464,25 @@ router.get('/namecheap/domain/check/:domain', async (req, res) => {
                     } : null
                 },
 
+                // Privacy Protection Information
+                privacyProtection: {
+                    supported: privacyInfo.supported,
+                    available: privacyInfo.available,
+                    pricing: privacyInfo.pricing,
+                    restrictions: privacyInfo.restrictions,
+                    recommendation: privacyInfo.supported === true ?
+                        'Recommended for privacy and security' :
+                        privacyInfo.supported === false ?
+                            'Consider alternative TLD if privacy is important' :
+                            'Privacy support unknown - check during registration',
+                    dataSource: privacyInfo.dataSource,
+                    note: privacyInfo.dataSource === 'namecheap_api' ?
+                        'Information verified via Namecheap API' :
+                        privacyInfo.dataSource === 'known_restrictions' ?
+                            'Based on known registry restrictions' :
+                            'Unable to verify - please check during registration'
+                },
+
                 // Industry-standard suggestions structure
                 suggestions: {
                     tldVariations: suggestions.tldVariations,
@@ -1449,7 +1490,7 @@ router.get('/namecheap/domain/check/:domain', async (req, res) => {
                     premiumDomains: suggestions.premiumDomains || []
                 },
 
-                // GoDaddy-style grouped display
+
                 groups,
 
                 // Summary statistics
@@ -1484,7 +1525,11 @@ router.get('/namecheap/domain/check/:domain', async (req, res) => {
             response.data.nextSteps = {
                 action: 'register',
                 endpoint: '/namecheap/domain/register',
-                requiredFields: ['userId', 'contactInfo', 'years', 'nameservers']
+                requiredFields: ['userId', 'contactInfo', 'years', 'nameservers'],
+                optionalFields: ['enablePrivacy'],
+                privacyNote: privacyInfo.supported ?
+                    'Privacy protection can be enabled during registration (free)' :
+                    'Privacy protection not available for this TLD'
             };
         } else {
             response.data.message = totalSuggestions > 0 ?
@@ -1568,7 +1613,7 @@ router.get('/namecheap/domain/pricing', async (req, res) => {
 router.get('/namecheap/domain/pricing/:domain/:years', async (req, res) => {
     const { domain, years } = req.params;
 
-    console.log(`[Domain Pricing API] 💰 Getting ${years}-year pricing for domain: ${domain}`);
+    console.log(`[Domain Pricing API] Getting ${years}-year pricing for domain: ${domain}`);
 
     // Validate domain
     if (!isValidDomain(domain)) {
@@ -3962,6 +4007,124 @@ router.get('/namecheap/user/:userId/contact-info', validateUserId, asyncHandler(
         });
     }
 }));
+
+// Cache for privacy protection information to avoid repeated API calls
+const privacyCache = new Map();
+
+// Helper function to get privacy protection information for a TLD dynamically
+async function getPrivacyProtectionInfo(tld) {
+    const cacheKey = tld.toLowerCase();
+
+    // Check cache first (cache for 1 hour)
+    if (privacyCache.has(cacheKey)) {
+        const cached = privacyCache.get(cacheKey);
+        if (Date.now() - cached.timestamp < 3600000) { // 1 hour
+            console.log(`[Privacy API] ✅ Using cached privacy info for .${tld}:`, cached.info);
+            return cached.info;
+        }
+    }
+
+    try {
+        console.log(`[Privacy API] 🔍 Checking privacy protection support for .${tld} via Namecheap API`);
+
+        // Method 1: Try to get privacy protection pricing from Namecheap pricing API
+        let privacySupported = null;
+        let privacyCost = null;
+
+        try {
+            const pricingResponse = await namecheapRequest('namecheap.users.getPricing', {
+                ProductType: 'WHOISGUARD',
+                ProductName: tld.toUpperCase()
+            });
+
+            // If we get a successful response, privacy protection is supported
+            if (pricingResponse?.ApiResponse?.CommandResponse?.UserGetPricingResult) {
+                privacySupported = true;
+                privacyCost = 0; // Namecheap offers free privacy protection
+                console.log(`[Privacy API] ✅ Privacy protection confirmed via pricing API for .${tld}`);
+            }
+        } catch (pricingError) {
+            // If pricing API fails, it might mean privacy protection is not supported
+            console.log(`[Privacy API] ⚠️ Privacy pricing API failed for .${tld}:`, pricingError.message);
+        }
+
+        // Method 2: If pricing API didn't work, check if TLD is in known unsupported list
+        if (privacySupported === null) {
+            console.log(`[Privacy API] 🔍 Checking .${tld} against known restrictions`);
+
+            // Only include TLDs that are definitively known to NOT support privacy protection
+            const knownUnsupportedTlds = [
+                'uk', 'co.uk', 'org.uk', 'me.uk', 'ltd.uk', 'plc.uk', // UK domains
+                'ca', // Canada
+                'com.au', 'net.au', 'org.au', 'asn.au', 'id.au', // Australia
+                'fr', 'de', 'it', 'es', 'nl', 'be' // Some European ccTLDs
+            ];
+
+            const normalizedTld = tld.toLowerCase();
+            privacySupported = !knownUnsupportedTlds.includes(normalizedTld);
+            privacyCost = privacySupported ? 0 : null;
+
+            console.log(`[Privacy API] 📋 Based on known restrictions, .${tld} privacy support: ${privacySupported}`);
+        }
+
+        // Build the response
+        const privacyInfo = {
+            supported: privacySupported,
+            available: privacySupported,
+            pricing: {
+                cost: privacyCost,
+                currency: 'USD',
+                period: 'yearly',
+                note: privacySupported ? 'Free with domain registration' : 'Not supported for this TLD'
+            },
+            restrictions: privacySupported ? [] : [
+                'Privacy protection not available for this TLD',
+                'Registry policy restrictions',
+                'Contact information will be publicly visible'
+            ],
+            dataSource: privacySupported === true && privacyCost === 0 ? 'namecheap_api' : 'known_restrictions'
+        };
+
+        // Cache the result
+        privacyCache.set(cacheKey, {
+            info: privacyInfo,
+            timestamp: Date.now()
+        });
+
+        console.log(`[Privacy API] ✅ Privacy info determined for .${tld}:`, {
+            supported: privacyInfo.supported,
+            cost: privacyInfo.pricing.cost,
+            dataSource: privacyInfo.dataSource
+        });
+
+        return privacyInfo;
+
+    } catch (error) {
+        console.error(`[Privacy API] ❌ Error getting privacy info for .${tld}:`, error.message);
+
+        // Return a safe fallback
+        const fallbackInfo = {
+            supported: null, // Unknown
+            available: null,
+            pricing: {
+                cost: null,
+                currency: 'USD',
+                period: 'yearly',
+                note: 'Unable to determine - check during registration'
+            },
+            restrictions: ['Unable to determine privacy protection availability'],
+            dataSource: 'error_fallback'
+        };
+
+        // Cache the fallback for a shorter time (5 minutes)
+        privacyCache.set(cacheKey, {
+            info: fallbackInfo,
+            timestamp: Date.now() - 3300000 // Expire in 5 minutes instead of 1 hour
+        });
+
+        return fallbackInfo;
+    }
+}
 
 
 

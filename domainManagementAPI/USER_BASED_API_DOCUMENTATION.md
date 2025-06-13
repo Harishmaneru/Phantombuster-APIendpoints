@@ -424,4 +424,140 @@ The system provides comprehensive logging:
 Set `NODE_ENV=development` for detailed debug logging.
 
 ### Health Check
-Use `/namecheap/health` endpoint to verify API connectivity and account balance. 
+Use `/namecheap/health` endpoint to verify API connectivity and account balance.
+
+## Domain Check API - Privacy Protection Information
+
+### Updated Response Structure
+
+The domain check API now includes comprehensive privacy protection information for each domain and suggestion.
+
+#### New Privacy Protection Section
+
+```json
+{
+  "status": "1",
+  "message": "Success",
+  "data": {
+    "domain": "example.com",
+    "available": true,
+    "isPremium": false,
+    
+    // NEW: Privacy Protection Information
+    "privacyProtection": {
+      "supported": true,
+      "available": true,
+      "pricing": {
+        "cost": 0,
+        "currency": "USD",
+        "period": "yearly",
+        "note": "Free with domain registration"
+      },
+      "features": [
+        "Hides personal contact information",
+        "Protects against spam and identity theft", 
+        "Maintains domain ownership rights",
+        "Easy to enable/disable",
+        "Included free with registration"
+      ],
+      "restrictions": [],
+      "recommendation": "Recommended for privacy and security"
+    },
+    
+    // Updated suggestions now include privacy info
+    "suggestions": {
+      "tldVariations": [
+        {
+          "domain": "example.net",
+          "available": true,
+          "pricing": { /* pricing info */ },
+          "privacyProtection": {
+            "supported": true,
+            "cost": 0,
+            "note": "Free with domain registration"
+          }
+        }
+      ]
+    },
+    
+    // Updated next steps include privacy information
+    "nextSteps": {
+      "action": "register",
+      "endpoint": "/namecheap/domain/register",
+      "requiredFields": ["userId", "contactInfo", "years", "nameservers"],
+      "optionalFields": ["enablePrivacy"],
+      "privacyNote": "Privacy protection can be enabled during registration (free)"
+    }
+  }
+}
+```
+
+#### Privacy Protection Support by TLD
+
+**Supported TLDs (Free Privacy Protection):**
+- .com, .net, .org, .info, .biz
+- .io, .co, .me, .tv, .cc
+- .name, .mobi, .pro, .travel
+- Most new gTLDs (.app, .dev, .tech, etc.)
+
+**Unsupported TLDs:**
+- .uk and UK variants (.co.uk, .org.uk, etc.)
+- .ca (Canada)
+- .au and AU variants (.com.au, .net.au, etc.)
+- European ccTLDs (.fr, .de, .it, .es, etc.)
+- .in and IN variants
+- .br and BR variants
+- .mx and MX variants
+
+#### Usage Examples
+
+**Check domain with privacy protection info:**
+```bash
+GET /namecheap/domain/check/example.com
+```
+
+**Response includes privacy protection details:**
+```json
+{
+  "data": {
+    "domain": "example.com",
+    "available": true,
+    "privacyProtection": {
+      "supported": true,
+      "available": true,
+      "pricing": {
+        "cost": 0,
+        "note": "Free with domain registration"
+      },
+      "recommendation": "Recommended for privacy and security"
+    }
+  }
+}
+```
+
+**Register domain with privacy protection:**
+```bash
+POST /namecheap/domain/register
+{
+  "userId": "user123",
+  "domain": "example.com",
+  "enablePrivacy": true,
+  // ... other required fields
+}
+```
+
+#### Benefits of Privacy Protection
+
+1. **Personal Information Protection**: Hides your personal contact details from public WHOIS databases
+2. **Spam Prevention**: Reduces spam emails and unwanted solicitations
+3. **Identity Theft Protection**: Prevents misuse of personal information
+4. **Professional Appearance**: Shows generic registrar information instead of personal details
+5. **Easy Management**: Can be enabled/disabled at any time through the API
+
+#### Important Notes
+
+- Privacy protection is **FREE** with Namecheap for supported TLDs
+- Not all TLDs support privacy protection due to registry policies
+- Some TLDs require contact information to be publicly visible by law
+- Privacy protection can be enabled during registration or added later
+- Domain ownership rights are always maintained regardless of privacy settings 
