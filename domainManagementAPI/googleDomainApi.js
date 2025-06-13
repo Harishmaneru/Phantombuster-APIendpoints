@@ -158,7 +158,7 @@ router.get('/domains/debug', async (req, res) => {
 });
 
 // Domain Check
-router.post('/domains/check', async (req, res) => {
+router.post('/google/domains/check', async (req, res) => {
   console.log('[DomainManagementAPI] Received request to /domains/check', { body: req.body });
 
   try {
@@ -237,7 +237,7 @@ router.post('/domains/check', async (req, res) => {
 });
 
 // Domain Info
-router.post('/domains/info', async (req, res) => {
+router.post('/google/domains/info', async (req, res) => {
   try {
     const { domain } = req.body;
     if (!domain) return res.status(400).json({ success: false, error: 'domain is required' });
@@ -277,7 +277,7 @@ router.post('/domains/info', async (req, res) => {
 });
 
 // Domain Register
-router.post('/domains/register', async (req, res) => {
+router.post('/google/domains/register', async (req, res) => {
   try {
     const { domain, contacts } = req.body;
     if (!domain || !contacts) {
@@ -344,7 +344,7 @@ router.post('/domains/register', async (req, res) => {
 });
 
 // Health Check
-router.get('/domains/health', async (req, res) => {
+router.get('/google/domains/health', async (req, res) => {
   try {
     console.log('[DomainManagementAPI] Attempting to generate access token for health check...');
     const tokenResponse = await authClient.getAccessToken();

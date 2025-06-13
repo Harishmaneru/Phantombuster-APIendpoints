@@ -275,8 +275,29 @@ router.use((err, req, res, next) => {
     });
 });
 
-// Common TLDs for domain suggestions and pricing
-const COMMON_TLDS = ['com', 'net', 'org', 'io', 'ai', 'co', 'app', 'dev', 'tech', 'cloud'];
+// Industry-standard TLD priorities (ordered by commercial value)
+const POPULAR_TLDS = ['com', 'net', 'org', 'io', 'co', 'ai', 'app', 'dev', 'tech', 'cloud', 'online', 'site', 'shop', 'store'];
+
+// Common keyword variations for suggestions
+const COMMON_VARIATIONS = [
+    'app', 'hq', 'online', 'shop', 'site', 'store', 'hub', 'lab', 'pro', 'plus',
+    'get', 'my', 'the', 'new', 'best', 'top', 'go', 'try', 'use', 'find'
+];
+
+// Variation patterns for keyword modifications
+const VARIATION_PATTERNS = [
+    (keyword) => `${keyword}app`,
+    (keyword) => `${keyword}hq`,
+    (keyword) => `${keyword}online`,
+    (keyword) => `${keyword}shop`,
+    (keyword) => `${keyword}site`,
+    (keyword) => `get${keyword}`,
+    (keyword) => `my${keyword}`,
+    (keyword) => `the${keyword}`,
+    (keyword) => `${keyword}-app`,
+    (keyword) => `${keyword}-online`,
+    (keyword) => `${keyword}-shop`
+];
 
 // Namecheap API Configuration
 const {
@@ -524,7 +545,7 @@ async function namecheapRequest(command, params = {}, retryCount = 0, maxRetries
             await new Promise(resolve => setTimeout(resolve, 1000 * retryCount));
         }
 
-        console.log('[Namecheap API] Raw response:', response.data);
+        // console.log('[Namecheap API] Raw response:', response.data);
 
         // Validate response is valid XML
         if (typeof response.data !== 'string' || !response.data.trim().startsWith('<?xml')) {
@@ -584,7 +605,7 @@ async function namecheapRequest(command, params = {}, retryCount = 0, maxRetries
     }
 }
 
-// Helper: Extract 1-year price from getPricing XML response
+// Helper: Extract 1-year price from getPricing XML response with detailed pricing data
 function extractOneYearPrice(xml) {
     try {
         const result = xml.ApiResponse.CommandResponse.UserGetPricingResult;
@@ -600,7 +621,8 @@ function extractOneYearPrice(xml) {
             renew: null,
             transfer: null,
             icannFee: 0.18, // Standard ICANN fee
-            currency: 'USD'
+            currency: 'USD',
+            detailed: {} // Store all detailed pricing data
         };
 
         // Extract prices from each category
@@ -617,8 +639,10 @@ function extractOneYearPrice(xml) {
 
             const price = parseFloat(oneYearPrice.$.YourPrice);
             const additionalCost = parseFloat(oneYearPrice.$.YourAdditonalCost || '0');
+            const categoryName = category.$.Name.toLowerCase();
 
-            switch (category.$.Name.toLowerCase()) {
+            // Store simplified pricing
+            switch (categoryName) {
                 case 'register':
                     pricing.register = price + additionalCost;
                     break;
@@ -629,7 +653,39 @@ function extractOneYearPrice(xml) {
                     pricing.transfer = price + additionalCost;
                     break;
             }
+
+            // Store detailed pricing data (all XML attributes)
+            pricing.detailed[categoryName] = {
+                duration: oneYearPrice.$.Duration,
+                durationType: oneYearPrice.$.DurationType,
+                price: parseFloat(oneYearPrice.$.Price),
+                pricingType: oneYearPrice.$.PricingType,
+                additionalCost: parseFloat(oneYearPrice.$.AdditionalCost || '0'),
+                regularPrice: parseFloat(oneYearPrice.$.RegularPrice || oneYearPrice.$.Price),
+                regularPriceType: oneYearPrice.$.RegularPriceType,
+                regularAdditionalCost: parseFloat(oneYearPrice.$.RegularAdditionalCost || '0'),
+                regularAdditionalCostType: oneYearPrice.$.RegularAdditionalCostType,
+                yourPrice: parseFloat(oneYearPrice.$.YourPrice),
+                yourPriceType: oneYearPrice.$.YourPriceType,
+                yourAdditionalCost: parseFloat(oneYearPrice.$.YourAdditonalCost || '0'),
+                yourAdditionalCostType: oneYearPrice.$.YourAdditonalCostType,
+                promotionPrice: parseFloat(oneYearPrice.$.PromotionPrice || '0'),
+                currency: oneYearPrice.$.Currency || 'USD',
+                // Total cost
+                totalCost: price + additionalCost,
+                // Raw XML attributes for complete data
+                rawAttributes: oneYearPrice.$
+            };
         });
+
+        // console.log(`[Pricing API] 📊 Detailed pricing extracted:`, {
+        //     simplified: {
+        //         register: pricing.register,
+        //         renew: pricing.renew,
+        //         transfer: pricing.transfer
+        //     },
+        //     detailed: pricing.detailed
+        // });
 
         return pricing;
     } catch (err) {
@@ -674,7 +730,7 @@ function extractPriceForDuration(xml, years) {
 
             // Find pricing for requested duration
             const requestedYearPrice = prices.find(p => p.$.Duration === years.toString());
-            
+
             // Also get 1-year price for comparison
             const oneYearPrice = prices.find(p => p.$.Duration === '1');
 
@@ -722,6 +778,272 @@ function extractPriceForDuration(xml, years) {
         console.error('[Domain API] Error extracting multi-year price:', err.message);
         return null;
     }
+}
+
+// Industry-standard suggestion generator 
+async function generateProductionSuggestions(keyword, originalTld, isPrimaryAvailable) {
+    console.log(`[Suggestion Engine] Generating suggestions for "${keyword}.${originalTld}" (Available: ${isPrimaryAvailable})`);
+
+    const results = {
+        tldVariations: [],
+        keywordVariations: [],
+        premiumDomains: []
+    };
+
+    const checkedDomains = new Set(); // Prevent duplicates
+    const maxSuggestions = {
+        tldVariations: 8,
+        keywordVariations: 6
+    };
+
+    try {
+        // A. TLD Variations (highest priority - check popular TLDs first)
+        console.log(`[Suggestion Engine] Checking TLD variations for "${keyword}"`);
+        const tldPromises = POPULAR_TLDS
+            .filter(tld => tld !== originalTld.toLowerCase())
+            .slice(0, 12) // Check top 12 TLDs
+            .map(async (tld) => {
+                const variant = `${keyword}.${tld}`;
+                if (checkedDomains.has(variant)) return null;
+                checkedDomains.add(variant);
+
+                try {
+                    const check = await namecheapRequest('namecheap.domains.check', {
+                        DomainList: variant
+                    });
+
+                    const domainResult = check.ApiResponse.CommandResponse.DomainCheckResult;
+                    const isAvailable = domainResult.$.Available === 'true';
+                    const isPremium = domainResult.$.IsPremiumName === 'true';
+                    const price = domainResult.$.Price ? parseFloat(domainResult.$.Price) : null;
+
+                    if (isAvailable) {
+                        // Get pricing for this TLD
+                        console.log(`[Suggestion Engine] 💰 Getting pricing for available domain ${variant} (.${tld})`);
+                        const pricing = await getPricingForTLD(tld);
+                        console.log(`[Suggestion Engine] ✅ Pricing fetched for ${variant}:`, pricing);
+
+                        return {
+                            domain: variant,
+                            type: 'tld_variation',
+                            tld: tld,
+                            available: isAvailable,
+                            availableString: domainResult.$.Available, // Raw Namecheap response
+                            isPremium,
+                            price: isPremium ? price : null,
+                            pricing: {
+                                register: isPremium ? price : pricing.register,
+                                renew: pricing.renew,
+                                transfer: pricing.transfer,
+                                icannFee: pricing.icannFee,
+                                currency: 'USD'
+                            },
+                            priority: POPULAR_TLDS.indexOf(tld) + 1
+                        };
+                    }
+                } catch (error) {
+                    console.warn(`[Suggestion Engine] Error checking ${variant}:`, error.message);
+                }
+                return null;
+            });
+
+        const tldResults = await Promise.all(tldPromises);
+        results.tldVariations = tldResults
+            .filter(result => result !== null)
+            .sort((a, b) => a.priority - b.priority) // Sort by TLD priority
+            .slice(0, maxSuggestions.tldVariations);
+
+        // B. Keyword Variations (if primary unavailable or need more suggestions)
+        if (!isPrimaryAvailable || results.tldVariations.length < 4) {
+            console.log(`[Suggestion Engine] Generating keyword variations for "${keyword}"`);
+
+            const keywordPromises = [];
+
+            // Generate variations using patterns
+            VARIATION_PATTERNS.forEach(pattern => {
+                const variant = pattern(keyword);
+                const testTlds = [originalTld.toLowerCase(), 'com'].filter((tld, index, arr) => arr.indexOf(tld) === index);
+
+                testTlds.forEach(tld => {
+                    const domain = `${variant}.${tld}`;
+                    if (!checkedDomains.has(domain) && keywordPromises.length < 20) {
+                        checkedDomains.add(domain);
+
+                        keywordPromises.push(
+                            namecheapRequest('namecheap.domains.check', { DomainList: domain })
+                                .then(async (check) => {
+                                    const domainResult = check.ApiResponse.CommandResponse.DomainCheckResult;
+                                    const isAvailable = domainResult.$.Available === 'true';
+                                    const isPremium = domainResult.$.IsPremiumName === 'true';
+                                    const price = domainResult.$.Price ? parseFloat(domainResult.$.Price) : null;
+
+                                    if (isAvailable) {
+                                        console.log(`[Suggestion Engine] Getting pricing for keyword variation ${domain} (.${tld})`);
+                                        const pricing = await getPricingForTLD(tld);
+                                        console.log(`[Suggestion Engine]Keyword variation pricing fetched for ${domain}:`, pricing);
+
+                                        return {
+                                            domain,
+                                            type: 'keyword_variation',
+                                            tld: tld,
+                                            available: isAvailable,
+                                            availableString: domainResult.$.Available, // Raw Namecheap response
+                                            isPremium,
+                                            price: isPremium ? price : null,
+                                            pricing: {
+                                                register: isPremium ? price : pricing.register,
+                                                renew: pricing.renew,
+                                                transfer: pricing.transfer,
+                                                icannFee: pricing.icannFee,
+                                                currency: 'USD'
+                                            },
+                                            variation: variant,
+                                            originalKeyword: keyword
+                                        };
+                                    }
+                                    return null;
+                                })
+                                .catch(error => {
+                                    console.warn(`[Suggestion Engine] Error checking keyword variation ${domain}:`, error.message);
+                                    return null;
+                                })
+                        );
+                    }
+                });
+            });
+
+            const keywordResults = await Promise.all(keywordPromises);
+            results.keywordVariations = keywordResults
+                .filter(result => result !== null)
+                .slice(0, maxSuggestions.keywordVariations);
+        }
+
+        // C. Premium domains (if enabled and budget allows)
+        // Note: Namecheap requires separate premium search which is complex
+        // For now, we'll identify premium domains from regular checks
+
+        console.log(`[Suggestion Engine] Generated ${results.tldVariations.length} TLD variations and ${results.keywordVariations.length} keyword variations`);
+
+        return results;
+
+    } catch (error) {
+        console.error('[Suggestion Engine] Error generating suggestions:', error.message);
+        return results; // Return partial results
+    }
+}
+
+// Get pricing for a specific TLD (cached approach for performance)
+const pricingCache = new Map();
+async function getPricingForTLD(tld) {
+    const cacheKey = tld.toLowerCase();
+
+    console.log(`[Pricing API] 💰 Fetching pricing for TLD: .${tld}`);
+
+    // Check cache first (cache for 1 hour)
+    if (pricingCache.has(cacheKey)) {
+        const cached = pricingCache.get(cacheKey);
+        if (Date.now() - cached.timestamp < 3600000) { // 1 hour
+            console.log(`[Pricing API] ✅ Using cached pricing for .${tld}:`, cached.pricing);
+            return cached.pricing;
+        } else {
+            console.log(`[Pricing API] ⏰ Cache expired for .${tld}, fetching fresh pricing`);
+        }
+    }
+
+    try {
+        console.log(`[Pricing API] 🌐 Making Namecheap pricing API call for .${tld.toUpperCase()}`);
+
+        const priceXml = await namecheapRequest('namecheap.users.getPricing', {
+            ProductType: 'DOMAIN',
+            ProductCategory: 'REGISTER',
+            ProductName: tld.toUpperCase()
+        });
+
+        console.log(`[Pricing API] 📊 Raw pricing XML received for .${tld}`);
+
+        const pricing = extractOneYearPrice(priceXml) || {
+            register: null,
+            renew: null,
+            transfer: null,
+            currency: 'USD'
+        };
+
+        console.log(`[Pricing API] ✅ Extracted pricing for .${tld}:`, {
+            register: pricing.register,
+            renew: pricing.renew,
+            transfer: pricing.transfer,
+            currency: pricing.currency
+        });
+
+        // Cache the result
+        pricingCache.set(cacheKey, {
+            pricing,
+            timestamp: Date.now()
+        });
+
+        console.log(`[Pricing API] 💾 Cached pricing for .${tld} (expires in 1 hour)`);
+        return pricing;
+
+    } catch (error) {
+        console.error(`[Pricing API] ❌ Failed to get pricing for TLD .${tld}:`, {
+            error: error.message,
+            tld,
+            stack: error.stack
+        });
+
+        const fallbackPricing = {
+            register: null,
+            renew: null,
+            transfer: null,
+            currency: 'USD'
+        };
+
+        console.log(`[Pricing API] 🔄 Using fallback pricing for .${tld}:`, fallbackPricing);
+        return fallbackPricing;
+    }
+}
+
+// Generate domain groups for organized display (GoDaddy-style)
+function generateDomainGroups(suggestions, originalTld) {
+    const groups = [];
+
+    // Group 1: Other extensions (TLD variations)
+    if (suggestions.tldVariations.length > 0) {
+        groups.push({
+            name: "Other extensions",
+            description: `Popular alternatives to .${originalTld}`,
+            type: "tld_variations",
+            domains: suggestions.tldVariations,
+            count: suggestions.tldVariations.length
+        });
+    }
+
+    // Group 2: Similar names (keyword variations)
+    if (suggestions.keywordVariations.length > 0) {
+        groups.push({
+            name: "Similar names",
+            description: "Creative variations of your search",
+            type: "keyword_variations",
+            domains: suggestions.keywordVariations,
+            count: suggestions.keywordVariations.length
+        });
+    }
+
+    // Group 3: Premium domains (if any found)
+    const premiumDomains = [...suggestions.tldVariations, ...suggestions.keywordVariations]
+        .filter(domain => domain.isPremium);
+
+    if (premiumDomains.length > 0) {
+        groups.push({
+            name: "Premium domains",
+            description: "High-value domains with special pricing",
+            type: "premium_domains",
+            domains: premiumDomains,
+            count: premiumDomains.length
+        });
+    }
+
+    return groups;
 }
 
 /**
@@ -822,30 +1144,6 @@ async function configureEmailDns(domain) {
         };
     }
 }
-
-/**
- * Health Check
- */
-router.get('/namecheap/health', async (req, res) => {
-    try {
-        const response = await namecheapRequest('namecheap.users.getBalances');
-        const balance = response.ApiResponse.CommandResponse.UserGetBalancesResult.AccountBalance;
-
-        res.json({
-            success: true,
-            sandboxMode: NAMECHEAP_SANDBOX === 'true',
-            accountBalance: balance,
-            apiMode: NAMECHEAP_SANDBOX === 'true' ? 'sandbox' : 'production'
-        });
-    } catch (err) {
-        res.status(500).json({
-            success: false,
-            error: err.message,
-            apiMode: NAMECHEAP_SANDBOX === 'true' ? 'sandbox' : 'production'
-        });
-    }
-});
-
 
 //_________________Get Wallet Balance and Credits Information______________
 
@@ -1045,155 +1343,211 @@ router.get('/namecheap/wallet/account-info', async (req, res) => {
     }
 });
 
-// _________________________Check domain availability and get detailed information______________
+// _________________________Domain Availability Checker______________
 router.get('/namecheap/domain/check/:domain', async (req, res) => {
     const domain = req.params.domain;
-    console.log(`[Domain API] 🔍 Starting domain check process for: ${domain}`);
+    const startTime = Date.now();
 
-    // Validate domain
+
+    // Enhanced domain validation
     if (!isValidDomain(domain)) {
         console.error(`[Domain API] Invalid domain format: ${domain}`);
         return res.status(400).json({
             status: "0",
             message: "Invalid domain format",
             data: null,
-            apiMode: NAMECHEAP_SANDBOX === 'true' ? 'sandbox' : 'production'
+            apiMode: NAMECHEAP_SANDBOX === 'true' ? 'sandbox' : 'production',
+            processingTime: Date.now() - startTime
         });
     }
 
     try {
-        // 1. Check availability
-        console.log(`[Domain API] Step 1: Checking availability for ${domain}`);
-        const checkResult = await namecheapRequest('namecheap.domains.check', {
+        // Parse domain into keyword and TLD
+        const domainParts = domain.split('.');
+        const keyword = domainParts.slice(0, -1).join('.');
+        const originalTld = domainParts[domainParts.length - 1];
+
+        console.log(`[Domain API] Checking "${keyword}.${originalTld}"`);
+
+        // 1. Primary domain availability check
+        console.log(`[Domain API] Step 1: Primary availability check for ${domain}`);
+        const primaryCheck = await namecheapRequest('namecheap.domains.check', {
             DomainList: domain
         });
 
-        const domainResult = checkResult.ApiResponse.CommandResponse.DomainCheckResult;
-        const available = domainResult.$.Available === 'true';
+        const domainResult = primaryCheck.ApiResponse.CommandResponse.DomainCheckResult;
+
+        // 🔍 DEBUG: Log the raw XML response to see what Namecheap is returning
+        console.log(`[Domain API] 🔍 Raw Namecheap response for ${domain}:`, JSON.stringify(domainResult, null, 2));
+
+        const isAvailable = domainResult.$.Available === 'true';
         const isPremium = domainResult.$.IsPremiumName === 'true';
+
+        // 🎯 LOG: Clear availability status
+        console.log(`[Domain API] 🎯 Domain ${domain} Status:`, {
+            available: isAvailable,
+            availableString: domainResult.$.Available,
+            isPremium: isPremium,
+            premiumString: domainResult.$.IsPremiumName
+        });
         const price = domainResult.$.Price ? parseFloat(domainResult.$.Price) : null;
         const premiumRegistrationPrice = domainResult.$.PremiumRegistrationPrice ? parseFloat(domainResult.$.PremiumRegistrationPrice) : null;
         const premiumRenewalPrice = domainResult.$.PremiumRenewalPrice ? parseFloat(domainResult.$.PremiumRenewalPrice) : null;
-        const premiumTransferPrice = domainResult.$.PremiumTransferPrice ? parseFloat(domainResult.$.PremiumTransferPrice) : null;
-        const icannFee = domainResult.$.IcannFee ? parseFloat(domainResult.$.IcannFee) : null;
+        const icannFee = domainResult.$.IcannFee ? parseFloat(domainResult.$.IcannFee) : 0.18;
         const eapFee = domainResult.$.EapFee ? parseFloat(domainResult.$.EapFee) : null;
 
-        // pull the TLD (uppercase for API)
-        const tld = domain.split('.').pop().toUpperCase();
+        // 2. Get pricing for primary domain
+        console.log(`[Domain API] Step 2: Fetching pricing for TLD .${originalTld}`);
+        const primaryPricing = await getPricingForTLD(originalTld);
 
-        if (available) {
-            // 2. If available → fetch pricing for that TLD
-            console.log(`[Domain API] Step 2: Fetching pricing for TLD ${tld}`);
-            const priceXml = await namecheapRequest('namecheap.users.getPricing', {
-                ProductType: 'DOMAIN',
-                ProductCategory: 'REGISTER',
-                ProductName: tld
-            });
-            const pricing = extractOneYearPrice(priceXml);
+        // 3. Generate suggestions using production algorithm
+        console.log(`[Domain API] Step 3: Generating industry-standard suggestions`);
+        const suggestions = await generateProductionSuggestions(keyword, originalTld, isAvailable);
 
-            return res.json({
-                status: "1",
-                message: "Success",
-                data: {
-                    domain,
-                    available: true,
-                    isPremium,
-                    status: "success",
-                    pricing: pricing || {
-                        register: null,
-                        renew: null,
-                        transfer: null,
-                        icannFee: 0.18,
-                        currency: 'USD'
-                    },
-                    apiMode: NAMECHEAP_SANDBOX === 'true' ? 'sandbox' : 'production'
+        // 4. Create domain groups (GoDaddy-style organization)
+        const groups = generateDomainGroups(suggestions, originalTld);
+
+        // 5. Calculate summary statistics
+        const totalSuggestions = suggestions.tldVariations.length + suggestions.keywordVariations.length;
+        const premiumCount = [...suggestions.tldVariations, ...suggestions.keywordVariations]
+            .filter(d => d.isPremium).length;
+
+        // 6. Build production-grade response
+        const response = {
+            status: "1",
+            message: "Success",
+            data: {
+                // Primary domain information
+                domain,
+                keyword,
+                tld: originalTld,
+                available: isAvailable,
+                availabilityStatus: isAvailable ? "AVAILABLE" : "UNAVAILABLE",
+                namecheapAvailable: domainResult.$.Available, // Raw string from Namecheap
+                isPremium,
+
+                // Primary domain pricing
+                pricing: {
+                    register: isPremium ? (price || premiumRegistrationPrice) : primaryPricing.register,
+                    renew: isPremium ? premiumRenewalPrice : primaryPricing.renew,
+                    transfer: primaryPricing.transfer,
+                    icannFee,
+                    currency: 'USD',
+                    isPremiumPricing: isPremium,
+                    totalFirstYear: isPremium ?
+                        (price || premiumRegistrationPrice || 0) + icannFee :
+                        (primaryPricing.register || 0) + icannFee,
+                    premiumDetails: isPremium ? {
+                        registrationPrice: price || premiumRegistrationPrice
+                    } : null
+                },
+
+                // Industry-standard suggestions structure
+                suggestions: {
+                    tldVariations: suggestions.tldVariations,
+                    keywordVariations: suggestions.keywordVariations,
+                    premiumDomains: suggestions.premiumDomains || []
+                },
+
+                // GoDaddy-style grouped display
+                groups,
+
+                // Summary statistics
+                summary: {
+                    totalSuggestions,
+                    tldVariationCount: suggestions.tldVariations.length,
+                    keywordVariationCount: suggestions.keywordVariations.length,
+                    premiumCount,
+                    recommendedAction: isAvailable ? 'register' : 'consider_alternatives',
+                    bestAlternative: totalSuggestions > 0 ?
+                        (suggestions.tldVariations[0] || suggestions.keywordVariations[0]) : null
+                },
+
+                // Metadata
+                metadata: {
+                    searchKeyword: keyword,
+                    originalTld,
+                    processingTime: Date.now() - startTime,
+                    apiMode: NAMECHEAP_SANDBOX === 'true' ? 'sandbox' : 'production',
+                    timestamp: new Date().toISOString(),
+                    cacheHits: pricingCache.size,
+                    suggestionAlgorithm: 'production_v2'
                 }
-            });
+            }
+        };
+
+        // 7. Add availability-specific messaging
+        if (isAvailable) {
+            response.data.message = isPremium ?
+                'Premium domain available for registration' :
+                'Domain available for registration';
+            response.data.nextSteps = {
+                action: 'register',
+                endpoint: '/namecheap/domain/register',
+                requiredFields: ['userId', 'contactInfo', 'years', 'nameservers']
+            };
         } else {
-            // 3. If not available → build suggestions and fetch each price
-            const keyword = domain.split('.')[0];
-            console.log(`[Domain API] Step 3: Generating suggestions for keyword "${keyword}"`);
-            const suggestions = [];
-
-            // Check base keyword with different TLDs
-            await Promise.all(COMMON_TLDS.map(async (tld) => {
-                const suggestionDomain = `${keyword}.${tld}`;
-                if (suggestionDomain === domain) return;
-
-                try {
-                    const suggestionResult = await namecheapRequest('namecheap.domains.check', {
-                        DomainList: suggestionDomain
-                    });
-
-                    const suggestionData = suggestionResult.ApiResponse.CommandResponse.DomainCheckResult;
-                    const isAvailable = suggestionData.$.Available === 'true';
-                    const isPremiumName = suggestionData.$.IsPremiumName === 'true';
-                    const suggestionPrice = suggestionData.$.Price ? parseFloat(suggestionData.$.Price) : null;
-
-                    if (isAvailable) {
-                        // Only fetch pricing for available suggestions
-                        const priceXml = await namecheapRequest('namecheap.users.getPricing', {
-                            ProductType: 'DOMAIN',
-                            ProductCategory: 'REGISTER',
-                            ProductName: tld.toUpperCase()
-                        });
-                        const registerPrice = extractOneYearPrice(priceXml);
-
-                        suggestions.push({
-                            domain: suggestionDomain,
-                            available: true,
-                            isPremium: isPremiumName,
-                            status: 'success',
-                            pricing: {
-                                register: suggestionPrice || premiumRegistrationPrice || registerPrice || null,
-                                currency: 'USD'
-                            }
-                        });
-                    }
-                } catch (error) {
-                    console.error(`[Domain API] Error checking suggestion ${suggestionDomain}:`, error.message);
-                }
-            }));
-
-            return res.json({
-                status: "1",
-                message: "Success",
-                data: {
-                    domain,
-                    available: false,
-                    isPremium,
-                    status: "success",
-                    pricing: {
-                        register: price || premiumRegistrationPrice || null,
-                        renew: premiumRenewalPrice,
-                        transfer: premiumTransferPrice,
-                        icannFee,
-                        eapFee,
-                        currency: 'USD'
-                    },
-                    suggestedDomains: suggestions,
-                    apiMode: NAMECHEAP_SANDBOX === 'true' ? 'sandbox' : 'production'
-                }
-            });
+            response.data.message = totalSuggestions > 0 ?
+                `Domain unavailable. Found ${totalSuggestions} alternative${totalSuggestions === 1 ? '' : 's'}` :
+                'Domain unavailable. Consider trying different keywords or extensions.';
+            response.data.nextSteps = {
+                action: 'select_alternative',
+                suggestions: totalSuggestions,
+                recommendedGroup: groups.length > 0 ? groups[0].name : null
+            };
         }
+
+        // 8. Add sandbox mode warnings
+        if (NAMECHEAP_SANDBOX === 'true') {
+            response.data.sandboxWarning = {
+                mode: 'sandbox',
+                note: 'Running in sandbox mode - availability and pricing may not reflect real-world data',
+                limitations: [
+                    'Some domains are reserved in sandbox',
+                    'Pricing may be simulated',
+                    'Suggestions may be limited'
+                ]
+            };
+        }
+
+        console.log(`[Domain API] ✅ Check completed for ${domain} in ${Date.now() - startTime}ms`);
+        console.log(`[Domain API] Results: Available=${isAvailable}, Premium=${isPremium}, Suggestions=${totalSuggestions}`);
+
+        res.json(response);
+
     } catch (err) {
-        console.error('[Domain API] ❌ Error in domain check process:', {
+        console.error('[Domain API] ❌ Error in production domain check:', {
             error: err.message,
             domain,
             status: err.response?.status,
             responseData: err.response?.data,
             stack: err.stack,
+            processingTime: Date.now() - startTime,
             timestamp: new Date().toISOString()
         });
 
+        // Enhanced error response
         res.status(500).json({
             status: "0",
             message: err.message,
             data: null,
+            error: {
+                type: 'api_error',
+                details: err.response?.data || 'Unknown error occurred',
+                domain,
+                timestamp: new Date().toISOString(),
+                processingTime: Date.now() - startTime,
+                recoveryOptions: [
+                    'Try again in a few moments',
+                    'Check domain spelling',
+                    'Contact support if problem persists'
+                ]
+            },
             apiMode: NAMECHEAP_SANDBOX === 'true' ? 'sandbox' : 'production'
         });
     }
 });
+
 
 
 //  _________________________Get pricing for all TLDs and actions______________
@@ -1213,7 +1567,7 @@ router.get('/namecheap/domain/pricing', async (req, res) => {
 
 router.get('/namecheap/domain/pricing/:domain/:years', async (req, res) => {
     const { domain, years } = req.params;
-    
+
     console.log(`[Domain Pricing API] 💰 Getting ${years}-year pricing for domain: ${domain}`);
 
     // Validate domain
@@ -1267,7 +1621,7 @@ router.get('/namecheap/domain/pricing/:domain/:years', async (req, res) => {
         // 2. Get TLD and fetch multi-year pricing
         const tld = domain.split('.').pop().toUpperCase();
         console.log(`[Domain Pricing API] Step 2: Fetching ${years}-year pricing for TLD ${tld}`);
-        
+
         const priceXml = await namecheapRequest('namecheap.users.getPricing', {
             ProductType: 'DOMAIN',
             ProductCategory: 'REGISTER',
@@ -1363,7 +1717,7 @@ router.get('/namecheap/domain/pricing/:domain/:years', async (req, res) => {
 router.get('/namecheap/domain/:domain/pricing', async (req, res) => {
     const { domain } = req.params;
     const { years = '1' } = req.query;
-    
+
     console.log(`[Domain Pricing API] 💰 Getting ${years}-year pricing for domain: ${domain} (query param version)`);
 
     // Validate domain
@@ -1417,7 +1771,7 @@ router.get('/namecheap/domain/:domain/pricing', async (req, res) => {
         // 2. Get TLD and fetch multi-year pricing
         const tld = domain.split('.').pop().toUpperCase();
         console.log(`[Domain Pricing API] Step 2: Fetching ${years}-year pricing for TLD ${tld}`);
-        
+
         const priceXml = await namecheapRequest('namecheap.users.getPricing', {
             ProductType: 'DOMAIN',
             ProductCategory: 'REGISTER',
@@ -1425,7 +1779,7 @@ router.get('/namecheap/domain/:domain/pricing', async (req, res) => {
         });
 
         // Use appropriate extraction function based on years
-        const pricing = yearsInt === 1 
+        const pricing = yearsInt === 1
             ? extractOneYearPrice(priceXml)
             : extractPriceForDuration(priceXml, years);
 
@@ -1471,7 +1825,7 @@ router.get('/namecheap/domain/:domain/pricing', async (req, res) => {
                     explanation: `Registering for ${years} years saves you $${pricing.savings.amount.toFixed(2)} compared to renewing annually`
                 }
             };
-            
+
             responseData.breakdown = {
                 registrationFee: pricing.register,
                 icannFee: pricing.icannFee,
@@ -1529,15 +1883,15 @@ router.get('/namecheap/domain/suggestions', async (req, res) => {
                 return { domain, available: false };
             }
         }));
-        res.json({ success: true, suggestions: results });
+        res.json({ success: true, suggestions: results, deprecated: true, newEndpoint: '/namecheap/domain/suggestions/{keyword}' });
     } catch (err) {
         res.status(500).json({ success: false, error: err.message });
     }
 });
 
- 
- //__________Register a domain__________
- 
+
+//__________Register a domain__________
+
 router.post('/namecheap/domain/register', validateUserId, async (req, res) => {
     const {
         domain,
@@ -3608,6 +3962,9 @@ router.get('/namecheap/user/:userId/contact-info', validateUserId, asyncHandler(
         });
     }
 }));
+
+
+
 
 
 module.exports = router;
