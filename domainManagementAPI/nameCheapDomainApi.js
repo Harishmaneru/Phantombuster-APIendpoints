@@ -1722,16 +1722,6 @@ router.get('/namecheap/domain/pricing/:domain/:years', async (req, res) => {
                     total: multiYearPricing.totalCost,
                     currency: multiYearPricing.currency
                 },
-                nextSteps: {
-                    registerEndpoint: `/namecheap/domain/register`,
-                    requiredParams: {
-                        domain,
-                        years: yearsInt,
-                        expectedCost: multiYearPricing.totalCost,
-                        userId: "required",
-                        contactInfo: "required"
-                    }
-                }
             },
             apiMode: NAMECHEAP_SANDBOX === 'true' ? 'sandbox' : 'production',
             timestamp: new Date().toISOString()
