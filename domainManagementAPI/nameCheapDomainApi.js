@@ -831,9 +831,9 @@ async function generateProductionSuggestions(keyword, originalTld, isPrimaryAvai
 
                     if (isAvailable) {
                         // Get pricing for this TLD
-                        console.log(`[Suggestion Engine] 💰 Getting pricing for available domain ${variant} (.${tld})`);
+                        // console.log(`[Suggestion Engine]  Getting pricing for available domain ${variant} (.${tld})`);
                         const pricing = await getPricingForTLD(tld);
-                        console.log(`[Suggestion Engine] ✅ Pricing fetched for ${variant}:`, pricing);
+                        // console.log(`[Suggestion Engine]  Pricing fetched for ${variant}:`, pricing);
 
                         // Get privacy protection info for this TLD
                         const privacyInfo = await getPrivacyProtectionInfo(tld);
@@ -899,9 +899,9 @@ async function generateProductionSuggestions(keyword, originalTld, isPrimaryAvai
                                     const price = domainResult.$.Price ? parseFloat(domainResult.$.Price) : null;
 
                                     if (isAvailable) {
-                                        console.log(`[Suggestion Engine] Getting pricing for keyword variation ${domain} (.${tld})`);
+                                        // console.log(`[Suggestion Engine] Getting pricing for keyword variation ${domain} (.${tld})`);
                                         const pricing = await getPricingForTLD(tld);
-                                        console.log(`[Suggestion Engine]Keyword variation pricing fetched for ${domain}:`, pricing);
+                                        // console.log(`[Suggestion Engine]Keyword variation pricing fetched for ${domain}:`, pricing);
 
                                         // Get privacy protection info for this TLD
                                         const privacyInfo = await getPrivacyProtectionInfo(tld);
@@ -967,16 +967,16 @@ const pricingCache = new Map();
 async function getPricingForTLD(tld) {
     const cacheKey = tld.toLowerCase();
 
-    console.log(`[Pricing API] 💰 Fetching pricing for TLD: .${tld}`);
+    // console.log(`[Pricing API] 💰 Fetching pricing for TLD: .${tld}`);
 
     // Check cache first (cache for 1 hour)
     if (pricingCache.has(cacheKey)) {
         const cached = pricingCache.get(cacheKey);
         if (Date.now() - cached.timestamp < 3600000) { // 1 hour
-            console.log(`[Pricing API] ✅ Using cached pricing for .${tld}:`, cached.pricing);
+            // console.log(`[Pricing API] ✅ Using cached pricing for .${tld}:`, cached.pricing);
             return cached.pricing;
         } else {
-            console.log(`[Pricing API] ⏰ Cache expired for .${tld}, fetching fresh pricing`);
+            // console.log(`[Pricing API] ⏰ Cache expired for .${tld}, fetching fresh pricing`);
         }
     }
 
@@ -1619,6 +1619,237 @@ router.get('/namecheap/domain/pricing', async (req, res) => {
         res.status(500).json({ success: false, error: err.message });
     }
 });
+
+//  _________________________Bulk Domain Pricing Check______________
+
+router.post('/namecheap/domain/bulk-pricing', async (req, res) => {
+    const { domains, years = 1 } = req.body;
+    const startTime = Date.now();
+
+    // Validate input
+    if (!domains || !Array.isArray(domains) || domains.length === 0) {
+        return res.status(400).json({
+            success: false,
+            error: 'Domains array is required',
+            details: 'Please provide an array of domains to check',
+            example: {
+                domains: ['example.com', 'test.net', 'mydomain.org'],
+                years: 1
+            }
+        });
+    }
+
+    // Limit the number of domains to prevent API abuse
+    if (domains.length > 50) {
+        return res.status(400).json({
+            success: false,
+            error: 'Too many domains requested',
+            details: 'Maximum 50 domains allowed per request',
+            provided: domains.length,
+            limit: 50
+        });
+    }
+
+    // Validate each domain format
+    const invalidDomains = domains.filter(domain => !isValidDomain(domain));
+    if (invalidDomains.length > 0) {
+        return res.status(400).json({
+            success: false,
+            error: 'Invalid domain format(s) detected',
+            invalidDomains,
+            details: 'Please check the format of the provided domains'
+        });
+    }
+
+    // Validate years
+    const yearsInt = parseInt(years);
+    if (isNaN(yearsInt) || yearsInt < 1 || yearsInt > 10) {
+        return res.status(400).json({
+            success: false,
+            error: 'Invalid years parameter',
+            details: 'Years must be between 1 and 10',
+            provided: years
+        });
+    }
+
+    try {
+        console.log(`[Bulk Pricing API] Checking ${domains.length} domains for ${years} year(s)`);
+
+        // Step 1: Bulk availability check
+        const domainList = domains.join(',');
+        console.log(`[Bulk Pricing API] Making bulk availability check for: ${domainList}`);
+
+        const bulkCheck = await namecheapRequest('namecheap.domains.check', {
+            DomainList: domainList
+        });
+
+        // Parse the bulk check results
+        const checkResults = bulkCheck.ApiResponse.CommandResponse.DomainCheckResult;
+        const resultsArray = Array.isArray(checkResults) ? checkResults : [checkResults];
+
+        // Step 2: Get unique TLDs for pricing lookup
+        const uniqueTlds = [...new Set(domains.map(domain => {
+            return domain.split('.').pop().toUpperCase();
+        }))];
+
+        console.log(`[Bulk Pricing API] Getting pricing for ${uniqueTlds.length} unique TLDs: ${uniqueTlds.join(', ')}`);
+
+        // Step 3: Fetch pricing for all unique TLDs
+        const tldPricingPromises = uniqueTlds.map(async (tld) => {
+            try {
+                if (yearsInt === 1) {
+                    return { tld, pricing: await getPricingForTLD(tld) };
+                } else {
+                    // Get multi-year pricing
+                    const priceXml = await namecheapRequest('namecheap.users.getPricing', {
+                        ProductType: 'DOMAIN',
+                        ProductCategory: 'REGISTER',
+                        ProductName: tld
+                    });
+                    const pricing = extractPriceForDuration(priceXml, years);
+                    return { tld, pricing };
+                }
+            } catch (error) {
+                console.warn(`[Bulk Pricing API] Failed to get pricing for .${tld}:`, error.message);
+                return {
+                    tld,
+                    pricing: {
+                        register: null,
+                        renew: null,
+                        transfer: null,
+                        currency: 'USD',
+                        error: error.message
+                    }
+                };
+            }
+        });
+
+        const tldPricingResults = await Promise.all(tldPricingPromises);
+        const tldPricingMap = {};
+        tldPricingResults.forEach(result => {
+            tldPricingMap[result.tld] = result.pricing;
+        });
+
+        // Step 4: Combine availability and pricing data
+        const results = resultsArray.map(domainResult => {
+            const domain = domainResult.$.Domain;
+            const isAvailable = domainResult.$.Available === 'true';
+            const isPremium = domainResult.$.IsPremiumName === 'true';
+            const price = domainResult.$.Price ? parseFloat(domainResult.$.Price) : null;
+            const icannFee = domainResult.$.IcannFee ? parseFloat(domainResult.$.IcannFee) : 0.18;
+
+            const tld = domain.split('.').pop().toUpperCase();
+            const tldPricing = tldPricingMap[tld] || { register: null, renew: null, transfer: null };
+
+            return {
+                domain,
+                tld: tld.toLowerCase(),
+                available: isAvailable,
+                isPremium,
+                years: yearsInt,
+                pricing: {
+                    register: isPremium ? price : tldPricing.register,
+                    renew: tldPricing.renew,
+                    transfer: tldPricing.transfer,
+                    icannFee: yearsInt === 1 ? icannFee : icannFee * yearsInt,
+                    currency: 'USD',
+                    totalFirstYear: isPremium ?
+                        (price || 0) + icannFee :
+                        (tldPricing.register || 0) + icannFee,
+                    totalForYears: yearsInt === 1 ?
+                        (isPremium ? (price || 0) : (tldPricing.register || 0)) + icannFee :
+                        tldPricing.totalCost || null,
+                    perYearCost: yearsInt === 1 ?
+                        (isPremium ? (price || 0) : (tldPricing.register || 0)) + icannFee :
+                        tldPricing.perYearCost || null,
+                    savings: yearsInt > 1 ? tldPricing.savings : null,
+                    isPremiumPricing: isPremium,
+                    pricingError: tldPricing.error || null
+                },
+                status: isAvailable ? 'available' : 'unavailable',
+                checkTimestamp: new Date().toISOString()
+            };
+        });
+
+        // Step 5: Calculate summary statistics
+        const summary = {
+            totalDomains: domains.length,
+            availableDomains: results.filter(r => r.available).length,
+            unavailableDomains: results.filter(r => !r.available).length,
+            premiumDomains: results.filter(r => r.isPremium).length,
+            totalEstimatedCost: results
+                .filter(r => r.available && r.pricing.totalFirstYear)
+                .reduce((sum, r) => sum + r.pricing.totalFirstYear, 0),
+            uniqueTlds: uniqueTlds.length,
+            years: yearsInt,
+            processingTime: Date.now() - startTime
+        };
+
+        // Step 6: Group results by availability and TLD
+        const groupedResults = {
+            available: results.filter(r => r.available),
+            unavailable: results.filter(r => !r.available),
+            premium: results.filter(r => r.isPremium),
+            byTld: {}
+        };
+
+        // Group by TLD
+        results.forEach(result => {
+            const tld = result.tld;
+            if (!groupedResults.byTld[tld]) {
+                groupedResults.byTld[tld] = [];
+            }
+            groupedResults.byTld[tld].push(result);
+        });
+
+        console.log(`[Bulk Pricing API] ✅ Processed ${domains.length} domains in ${Date.now() - startTime}ms`);
+
+        res.json({
+            success: true,
+            data: {
+                summary,
+                results,
+                grouped: groupedResults,
+                metadata: {
+                    requestedDomains: domains.length,
+                    processedDomains: results.length,
+                    years: yearsInt,
+                    processingTime: Date.now() - startTime,
+                    timestamp: new Date().toISOString(),
+                    pricingCacheHits: pricingCache.size
+                }
+            },
+            timestamp: new Date().toISOString()
+        });
+
+    } catch (err) {
+        console.error('[Bulk Pricing API] ❌ Error in bulk pricing check:', {
+            error: err.message,
+            domainsCount: domains.length,
+            years,
+            processingTime: Date.now() - startTime
+        });
+
+        res.status(500).json({
+            success: false,
+            error: err.message,
+            data: {
+                requestedDomains: domains.length,
+                years: yearsInt,
+                processingTime: Date.now() - startTime
+            },
+            recoveryOptions: [
+                'Try with fewer domains (max 50 per request)',
+                'Check if all domains have valid format',
+                'Retry the request after a moment',
+                'Contact support if the issue persists'
+            ],
+            timestamp: new Date().toISOString()
+        });
+    }
+});
+
+
 
 //  _________________________Get multi-year pricing for a specific domain______________
 
