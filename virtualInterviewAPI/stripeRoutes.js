@@ -338,6 +338,57 @@ router.post('/create-checkout-session', async (req, res) => {
 });
 
 
+router.post('/domain/create-checkout-session', async (req, res) => {
+    try {
+        const { userId, domainName, unitPrice, currency } = req.body;
+        console.log('Domain checkout request received:', {
+            userId: userId,
+            domainName: domainName,
+            unitPrice: unitPrice,
+            currency: currency,
+            timestamp: new Date().toISOString()
+        });
+        // Validate inputs
+        if (!userId || !domainName || !unitPrice) {
+            return res.status(400).json({ error: 'userId, domainName, and unitPrice are required' });
+        }
+
+        const price = Number(unitPrice);
+        if (isNaN(price) || price <= 0) {
+            return res.status(400).json({ error: 'Invalid price amount' });
+        }
+
+        // Create a dynamic product for this domain
+        const product = await stripe.products.create({
+            name: `Domain: ${domainName}`,
+            description: `Registration for ${domainName}`,
+            metadata: { type: 'domain', userId, domainName }
+        });
+
+        // Stripe Checkout Session
+        const session = await stripe.checkout.sessions.create({
+            payment_method_types: ['card'],
+            mode: 'payment', // One-time payment (not subscription)
+            line_items: [{
+                price_data: {
+                    currency: currency || 'usd',
+                    product: product.id,
+                    unit_amount: Math.round(price * 100), // Convert to cents
+                },
+                quantity: 1,
+            }],
+            success_url: 'http://localhost:4200/success?session_id={CHECKOUT_SESSION_ID}',
+            cancel_url: 'http://localhost:4200/cancel',
+            metadata: { userId, domainName, purchaseType: 'domain' }
+        });
+
+        res.json({ url: session.url, sessionId: session.id });
+
+    } catch (err) {
+        console.error("Stripe error:", err);
+        res.status(500).json({ error: "Payment failed. Please try again." });
+    }
+});
 // Get Subscription Details from Checkout Session ID
 router.post('/get-subscription-from-session', async (req, res) => {
     const { sessionId } = req.body;
@@ -798,6 +849,147 @@ router.post('/check-refund-status', async (req, res) => {
     } catch (error) {
         console.error('Error checking refund status:', error);
         res.status(500).json({ error: error.message });
+    }
+});
+
+// Get domain purchase details from session
+router.post('/get-domain-purchase', async (req, res) => {
+    const { sessionId } = req.body;
+
+    if (!sessionId) {
+        return res.status(400).json({ error: 'sessionId is required' });
+    }
+
+    try {
+        const session = await stripe.checkout.sessions.retrieve(sessionId, {
+            expand: ['line_items', 'customer']
+        });
+
+        if (!session) {
+            return res.status(404).json({ error: 'Session not found' });
+        }
+
+        // Check if this is a domain purchase
+        const isDomainPurchase = session.metadata?.purchaseType === 'domain_registration' ||
+                                session.metadata?.purchaseType === 'domain';
+
+        if (!isDomainPurchase) {
+            return res.status(400).json({ error: 'This session is not a domain purchase' });
+        }
+
+        // Get line item details
+        const lineItem = session.line_items?.data?.[0];
+        let productDetails = null;
+
+        if (lineItem?.price?.product) {
+            try {
+                productDetails = await stripe.products.retrieve(lineItem.price.product);
+            } catch (error) {
+                console.warn('Could not retrieve product details:', error.message);
+            }
+        }
+
+        res.json({
+            purchase: {
+                sessionId: session.id,
+                status: session.status,
+                paymentStatus: session.payment_status,
+                domainName: session.metadata.domainName,
+                purchaseType: session.metadata.purchaseType,
+                amount: session.amount_total / 100,
+                currency: session.currency,
+                unitPrice: parseFloat(session.metadata.unitPrice) || null,
+                customer: {
+                    id: session.customer,
+                    email: session.customer_details?.email || null,
+                    name: session.customer_details?.name || null
+                },
+                product: productDetails ? {
+                    id: productDetails.id,
+                    name: productDetails.name,
+                    description: productDetails.description,
+                    metadata: productDetails.metadata
+                } : null,
+                lineItem: lineItem ? {
+                    description: lineItem.description,
+                    amount: lineItem.amount_total / 100,
+                    currency: lineItem.currency
+                } : null,
+                createdAt: new Date(session.created * 1000).toISOString(),
+                userId: session.metadata.userId
+            }
+        });
+
+    } catch (error) {
+        console.error('Error retrieving domain purchase:', error);
+        if (error.type === 'StripeInvalidRequestError') {
+            return res.status(404).json({ error: 'Session not found' });
+        }
+        res.status(500).json({ error: error.message });
+    }
+});
+
+// Get all domain purchases for a user
+router.get('/users/:userId/domain-purchases', async (req, res) => {
+    const { userId } = req.params;
+
+    if (!userId) {
+        return res.status(400).json({ error: 'userId is required' });
+    }
+
+    try {
+        // Search for checkout sessions with domain purchase metadata
+        const sessions = await stripe.checkout.sessions.list({
+            limit: 100,
+            expand: ['data.line_items', 'data.customer']
+        });
+
+        // Filter sessions for this user and domain purchases
+        const userDomainPurchases = sessions.data.filter(session => 
+            session.metadata?.userId === userId && 
+            (session.metadata?.purchaseType === 'domain_registration' || 
+             session.metadata?.purchaseType === 'domain')
+        );
+
+        // Get detailed information for each purchase
+        const purchaseDetails = await Promise.all(userDomainPurchases.map(async (session) => {
+            let productDetails = null;
+            const lineItem = session.line_items?.data?.[0];
+
+            if (lineItem?.price?.product) {
+                try {
+                    productDetails = await stripe.products.retrieve(lineItem.price.product);
+                } catch (error) {
+                    console.warn('Could not retrieve product details:', error.message);
+                }
+            }
+
+            return {
+                sessionId: session.id,
+                status: session.status,
+                paymentStatus: session.payment_status,
+                domainName: session.metadata.domainName,
+                amount: session.amount_total / 100,
+                currency: session.currency,
+                unitPrice: parseFloat(session.metadata.unitPrice) || null,
+                product: productDetails ? {
+                    id: productDetails.id,
+                    name: productDetails.name,
+                    metadata: productDetails.metadata
+                } : null,
+                createdAt: new Date(session.created * 1000).toISOString()
+            };
+        }));
+
+        res.json({
+            userId,
+            totalPurchases: purchaseDetails.length,
+            purchases: purchaseDetails
+        });
+
+    } catch (error) {
+        console.error('Error retrieving user domain purchases:', error);
+        res.status(500).json({ error: 'Failed to retrieve domain purchases' });
     }
 });
 
