@@ -1634,7 +1634,7 @@ router.post('/namecheap/domain/bulk-pricing', async (req, res) => {
             details: 'Please provide an array of domains to check',
             example: {
                 domains: ['example.com', 'test.net', 'mydomain.org'],
-                years: 1
+                years: 2
             }
         });
     }
