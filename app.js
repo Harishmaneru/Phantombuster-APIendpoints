@@ -160,7 +160,7 @@ app.use(express.json());
 // Mount domain management routes
 
 app.use(googleDomainAPI);
-app.use(nameCheapDomainApi);
+app.use(nameCheapDomainApi.router);
 
 app.use(accountScraper);
 app.use(likesCommentsScraper);

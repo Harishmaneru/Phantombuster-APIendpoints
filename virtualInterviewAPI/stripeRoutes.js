@@ -3,6 +3,9 @@ const router = express.Router();
 const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
 const mongoose = require('mongoose');
 
+// Import domain registration function from Namecheap API
+const { registerDomainWithNamecheap } = require('../domainManagementAPI/nameCheapDomainApi');
+
 // Middleware to parse JSON for all routes except /webhook
 router.use((req, res, next) => {
     if (req.originalUrl === '/api/stripe/webhook') {
@@ -389,6 +392,7 @@ router.post('/domain/create-checkout-session', async (req, res) => {
         res.status(500).json({ error: "Payment failed. Please try again." });
     }
 });
+
 // Get Subscription Details from Checkout Session ID
 router.post('/get-subscription-from-session', async (req, res) => {
     const { sessionId } = req.body;
@@ -1060,5 +1064,306 @@ router.get('/webhook-status', async (req, res) => {
         });
     }
 });
+
+// Simple domain checkout with contact info in metadata
+router.post('/domain/create-checkout-session-simple', async (req, res) => {
+    try {
+        const { 
+            userId, 
+            domainName, 
+            unitPrice, 
+            currency,
+            // Contact information for registration
+            firstName,
+            lastName,
+            email,
+            phone,
+            address1,
+            address2 = '',
+            city,
+            stateProvince,
+            country,
+            postalCode,
+            years = '1',
+            enablePrivacy = false
+        } = req.body;
+
+        console.log('Simple domain checkout request received:', {
+            userId,
+            domainName,
+            unitPrice,
+            currency,
+            hasContactInfo: !!(firstName && lastName && email),
+            timestamp: new Date().toISOString()
+        });
+
+        // Validate inputs
+        if (!userId || !domainName || !unitPrice) {
+            return res.status(400).json({ 
+                error: 'userId, domainName, and unitPrice are required' 
+            });
+        }
+
+        // Validate contact information
+        if (!firstName || !lastName || !email || !phone || !address1 || !city || !stateProvince || !country || !postalCode) {
+            return res.status(400).json({
+                error: 'Complete contact information is required for domain registration',
+                required: ['firstName', 'lastName', 'email', 'phone', 'address1', 'city', 'stateProvince', 'country', 'postalCode']
+            });
+        }
+
+        const price = Number(unitPrice);
+        if (isNaN(price) || price <= 0) {
+            return res.status(400).json({ error: 'Invalid price amount' });
+        }
+
+        // Create a dynamic product for this domain
+        const product = await stripe.products.create({
+            name: `Domain: ${domainName}`,
+            description: `Registration for ${domainName}`,
+            metadata: { 
+                type: 'domain', 
+                userId, 
+                domainName
+            }
+        });
+
+        // Store contact information in metadata
+        const metadata = { 
+            userId, 
+            domainName, 
+            purchaseType: 'domain',
+            years: years.toString(),
+            enablePrivacy: enablePrivacy.toString(),
+            // Contact information
+            firstName,
+            lastName,
+            email,
+            phone,
+            address1,
+            address2,
+            city,
+            stateProvince,
+            country,
+            postalCode
+        };
+
+        // Create Stripe Checkout Session with success URL that will handle registration
+        const session = await stripe.checkout.sessions.create({
+            payment_method_types: ['card'],
+            mode: 'payment',
+            line_items: [{
+                price_data: {
+                    currency: currency || 'usd',
+                    product: product.id,
+                    unit_amount: Math.round(price * 100),
+                },
+                quantity: 1,
+            }],
+            success_url: `http://localhost:4200/domain-success?session_id={CHECKOUT_SESSION_ID}&domain=${encodeURIComponent(domainName)}`,
+            cancel_url: 'http://localhost:4200/cancel',
+            metadata: metadata,
+            customer_creation: 'always'
+        });
+
+        res.json({ 
+            url: session.url, 
+            sessionId: session.id,
+            message: 'Checkout session created. Call /domain/process-success-payment after successful payment to register domain.'
+        });
+
+    } catch (err) {
+        console.error("Simple domain checkout error:", err);
+        res.status(500).json({ error: "Payment setup failed. Please try again." });
+    }
+});
+
+// Process successful payment and register domain
+router.post('/domain/process-success-payment', async (req, res) => {
+    try {
+        const { sessionId, userId } = req.body;
+
+        console.log('Processing successful domain payment:', {
+            sessionId,
+            userId,
+            timestamp: new Date().toISOString()
+        });
+
+        // Validate required fields
+        if (!sessionId || !userId) {
+            return res.status(400).json({ 
+                success: false,
+                error: 'sessionId and userId are required' 
+            });
+        }
+
+        // Step 1: Verify payment was successful
+        console.log('Step 1: Verifying payment status...');
+        const session = await stripe.checkout.sessions.retrieve(sessionId, {
+            expand: ['line_items', 'customer']
+        });
+
+        if (!session) {
+            return res.status(404).json({ 
+                success: false,
+                error: 'Payment session not found' 
+            });
+        }
+
+        // Check if payment was successful
+        if (session.payment_status !== 'paid') {
+            return res.status(400).json({
+                success: false,
+                error: 'Payment not completed',
+                paymentStatus: session.payment_status,
+                sessionStatus: session.status
+            });
+        }
+
+        // Verify this is a domain purchase
+        const isDomainPurchase = session.metadata?.purchaseType === 'domain';
+        
+        if (!isDomainPurchase) {
+            return res.status(400).json({
+                success: false,
+                error: 'This session is not a domain purchase'
+            });
+        }
+
+        // Verify user matches
+        if (session.metadata?.userId !== userId) {
+            return res.status(400).json({
+                success: false,
+                error: 'User ID mismatch'
+            });
+        }
+
+        console.log('Step 1 Complete: Payment verified successfully');
+
+        // Step 2: Extract contact information from session metadata
+        const domainName = session.metadata.domainName;
+        const contactInfo = {
+            firstName: session.metadata.firstName,
+            lastName: session.metadata.lastName,
+            email: session.metadata.email,
+            phone: session.metadata.phone,
+            address1: session.metadata.address1,
+            address2: session.metadata.address2 || '',
+            city: session.metadata.city,
+            stateProvince: session.metadata.stateProvince,
+            country: session.metadata.country,
+            postalCode: session.metadata.postalCode
+        };
+
+        // Step 3: Register domain with Namecheap
+        console.log('Step 2: Registering domain with Namecheap...');
+        
+        try {
+            // Prepare Stripe payment information for database storage
+            const stripePaymentInfo = {
+                sessionId: session.id,
+                paymentIntentId: session.payment_intent,
+                customerId: session.customer,
+                paymentStatus: session.payment_status,
+                amountPaid: session.amount_total / 100,
+                currency: session.currency,
+                paymentMethod: session.payment_method_types?.[0] || 'card',
+                paymentDate: new Date(session.created * 1000),
+                receiptUrl: session.receipt_email ? `Receipt sent to ${session.receipt_email}` : null,
+                invoiceId: session.invoice
+            };
+
+            // Call the domain registration function
+            const registrationResult = await registerDomainWithNamecheap({
+                userId,
+                domain: domainName,
+                firstName: contactInfo.firstName,
+                lastName: contactInfo.lastName,
+                email: contactInfo.email,
+                phone: contactInfo.phone,
+                address1: contactInfo.address1,
+                address2: contactInfo.address2,
+                city: contactInfo.city,
+                stateProvince: contactInfo.stateProvince,
+                country: contactInfo.country,
+                postalCode: contactInfo.postalCode,
+                years: session.metadata.years || '1',
+                enablePrivacy: session.metadata.enablePrivacy === 'true',
+                customNameservers: null,
+                useNamecheapDNS: false,
+                acceptPremiumPricing: true,
+                stripePaymentInfo
+            });
+
+            console.log('Step 2 Complete: Domain registered successfully');
+
+            // Step 4: Prepare comprehensive response
+            const paymentDetails = {
+                sessionId: session.id,
+                status: session.status,
+                paymentStatus: session.payment_status,
+                amount: session.amount_total / 100,
+                currency: session.currency,
+                customer: {
+                    id: session.customer,
+                    email: session.customer_details?.email || null,
+                    name: session.customer_details?.name || null
+                },
+                createdAt: new Date(session.created * 1000).toISOString(),
+                paymentMethod: session.payment_method_types?.[0] || 'card'
+            };
+
+            // Return combined response
+            res.json({
+                success: true,
+                message: 'Domain purchased and registered successfully',
+                data: {
+                    payment: paymentDetails,
+                    registration: registrationResult,
+                    domain: domainName,
+                    userId: userId,
+                    combinedRecord: {
+                        stripePaymentStored: true,
+                        domainRegistered: true,
+                        databaseRecordId: registrationResult.data?.databaseRecord?._id
+                    }
+                },
+                timestamp: new Date().toISOString()
+            });
+
+        } catch (namecheapError) {
+            console.error('Namecheap registration failed:', namecheapError.message);
+            
+            return res.status(500).json({
+                success: false,
+                error: 'Domain registration failed after successful payment',
+                paymentDetails: {
+                    sessionId: session.id,
+                    status: session.status,
+                    paymentStatus: session.payment_status,
+                    amount: session.amount_total / 100,
+                    currency: session.currency
+                },
+                registrationError: {
+                    message: namecheapError.message
+                },
+                nextSteps: [
+                    'Contact support for manual domain registration',
+                    'Payment was successful and recorded in Stripe'
+                ]
+            });
+        }
+
+    } catch (error) {
+        console.error('Domain success processing error:', error);
+        res.status(500).json({
+            success: false,
+            error: 'Failed to process successful domain payment',
+            details: error.message
+        });
+    }
+});
+
+
 
 module.exports = router;

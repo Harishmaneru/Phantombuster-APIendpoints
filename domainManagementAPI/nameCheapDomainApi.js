@@ -106,6 +106,18 @@ const domainSchema = new mongoose.Schema({
         icannFee: Number,
         currency: { type: String, default: 'USD' }
     },
+    stripePayment: {
+        sessionId: String,
+        paymentIntentId: String,
+        customerId: String,
+        paymentStatus: String,
+        amountPaid: Number,
+        currency: String,
+        paymentMethod: String,
+        paymentDate: Date,
+        receiptUrl: String,
+        invoiceId: String
+    },
     apiMode: {
         type: String,
         enum: ['sandbox', 'production'],
@@ -1943,312 +1955,49 @@ router.post('/namecheap/domain/register', validateUserId, async (req, res) => {
         years = '1',
         enablePrivacy = false,
         customNameservers = null,
-        useNamecheapDNS = false
+        useNamecheapDNS = false,
+        acceptPremiumPricing = false
     } = req.body;
 
     const userId = req.userId;
 
-    // Validate required fields
-    if (!domain || !firstName || !lastName || !email || !phone || !address1 || !city || !stateProvince || !country || !postalCode) {
-        return res.status(400).json({
-            success: false,
-            error: 'Missing required registration fields',
-            required: ['userId', 'domain', 'firstName', 'lastName', 'email', 'phone', 'address1', 'city', 'stateProvince', 'country', 'postalCode'],
-            optional: ['years', 'enablePrivacy', 'acceptPremiumPricing', 'customNameservers', 'useNamecheapDNS']
-        });
-    }
-
-    // Validate nameserver configuration
-    let nameserverConfig;
     try {
-        nameserverConfig = getNameserverConfig(customNameservers, useNamecheapDNS);
-    } catch (error) {
-        return res.status(400).json({
-            success: false,
-            error: 'Invalid nameserver configuration',
-            details: error.message,
-            examples: {
-                useNamecheapDNS: 'Set useNamecheapDNS: true to use Namecheap DNS servers',
-                customNameservers: 'Provide customNameservers: ["ns1.example.com", "ns2.example.com"]'
-            }
-        });
-    }
-
-    if (!isValidDomain(domain)) {
-        return res.status(400).json({
-            success: false,
-            error: 'Invalid domain format',
-            details: 'Domain must be a valid format and support modern TLDs'
-        });
-    }
-
-    try {
-        // Check if domain already exists for this user
-        const existingDomain = await NamecheapDomain.findOne({
-            userId,
-            domain: domain.toLowerCase()
-        });
-
-        if (existingDomain) {
-            return res.status(400).json({
-                success: false,
-                error: 'Domain already registered for this user',
-                details: {
-                    domain,
-                    registrationDate: existingDomain.registrationData.registrationDate,
-                    expirationDate: existingDomain.registrationData.expirationDate
-                }
-            });
-        }
-
-        // Check domain availability
-        console.log(`[Domain API] Checking availability for domain: ${domain} (User: ${userId})`);
-        const checkResult = await namecheapRequest('namecheap.domains.check', {
-            DomainList: domain
-        });
-
-        const domainResult = checkResult.ApiResponse.CommandResponse.DomainCheckResult;
-        const isAvailable = domainResult.$.Available === 'true';
-        const isPremium = domainResult.$.IsPremiumName === 'true';
-        const price = domainResult.$.Price ? parseFloat(domainResult.$.Price) : null;
-
-        if (!isAvailable) {
-            return res.status(400).json({
-                success: false,
-                error: 'Domain is not available for registration',
-                details: {
-                    domain,
-                    isPremium,
-                    price
-                }
-            });
-        }
-
-        // For premium domains, require explicit acceptance
-        if (isPremium && !req.body.acceptPremiumPricing) {
-            return res.status(400).json({
-                success: false,
-                error: 'Premium domain requires explicit acceptance',
-                details: {
-                    domain,
-                    isPremium: true,
-                    premiumPrice: price,
-                    eapFee: domainResult.$.EapFee ? parseFloat(domainResult.$.EapFee) : 0,
-                    totalCost: (price || 0) + (domainResult.$.EapFee ? parseFloat(domainResult.$.EapFee) : 0),
-                    message: 'To register this premium domain, include "acceptPremiumPricing": true in your request',
-                    currency: 'USD'
-                }
-            });
-        }
-
-        // Register domain with Namecheap
-        console.log(`[Domain API] Registering domain: ${domain} (User: ${userId}), Premium: ${isPremium}`);
-        const registrationParams = {
-            DomainName: domain,
-            Years: years,
-            RegistrantFirstName: firstName,
-            RegistrantLastName: lastName,
-            RegistrantEmailAddress: email,
-            RegistrantPhone: phone,
-            RegistrantAddress1: address1,
-            RegistrantAddress2: address2,
-            RegistrantCity: city,
-            RegistrantStateProvince: stateProvince,
-            RegistrantCountry: country,
-            RegistrantPostalCode: postalCode,
-            TechFirstName: firstName,
-            TechLastName: lastName,
-            TechEmailAddress: email,
-            TechPhone: phone,
-            TechAddress1: address1,
-            TechAddress2: address2,
-            TechCity: city,
-            TechStateProvince: stateProvince,
-            TechCountry: country,
-            TechPostalCode: postalCode,
-            AdminFirstName: firstName,
-            AdminLastName: lastName,
-            AdminEmailAddress: email,
-            AdminPhone: phone,
-            AdminAddress1: address1,
-            AdminAddress2: address2,
-            AdminCity: city,
-            AdminStateProvince: stateProvince,
-            AdminCountry: country,
-            AdminPostalCode: postalCode,
-            AuxBillingFirstName: firstName,
-            AuxBillingLastName: lastName,
-            AuxBillingEmailAddress: email,
-            AuxBillingPhone: phone,
-            AuxBillingAddress1: address1,
-            AuxBillingAddress2: address2,
-            AuxBillingCity: city,
-            AuxBillingStateProvince: stateProvince,
-            AuxBillingCountry: country,
-            AuxBillingPostalCode: postalCode,
-            EnableWhoisGuard: enablePrivacy ? 'true' : 'false'
-        };
-
-        // Add premium pricing parameters if it's a premium domain
-        if (isPremium) {
-            console.log(`[Domain API] Adding premium pricing - Price: ${price}, EAP Fee: ${domainResult.$.EapFee || 0}`);
-
-            // Include premium registration price
-            if (price) {
-                registrationParams.PremiumPrice = price.toString();
-            }
-
-            // Include EAP fee if present
-            const eapFee = domainResult.$.EapFee ? parseFloat(domainResult.$.EapFee) : 0;
-            if (eapFee > 0) {
-                registrationParams.EapFee = eapFee.toString();
-            }
-
-            // Set accept premium flag
-            registrationParams.AcceptPremiumPricing = 'true';
-        }
-
-        const registrationResult = await namecheapRequest('namecheap.domains.create', registrationParams);
-
-        // Get domain info to see what nameservers Namecheap assigned by default
-        console.log(`[Domain API] Checking default nameservers assigned by Namecheap for ${domain}`);
-        const domainInfo = await namecheapRequest('namecheap.domains.getInfo', {
-            DomainName: domain
-        });
-
-        const registeredDomainResult = domainInfo.ApiResponse.CommandResponse.DomainGetInfoResult;
-        const defaultNameservers = Array.isArray(registeredDomainResult.DnsDetails.Nameserver)
-            ? registeredDomainResult.DnsDetails.Nameserver
-            : [registeredDomainResult.DnsDetails.Nameserver];
-        const isUsingNamecheapDNS = registeredDomainResult.DnsDetails.$.IsUsingOurDNS === 'true';
-
-        // Only set custom nameservers if user specifically requested them
-        let nameserverResult;
-        let finalNameservers = defaultNameservers;
-        let finalIsNamecheapDNS = isUsingNamecheapDNS;
-        let finalIsCustom = false;
-
-        if (!nameserverConfig.useDefaults) {
-            // User wants specific nameservers different from Namecheap defaults
-            console.log(`[Domain API] Setting custom nameservers for ${domain}:`, nameserverConfig);
-            nameserverResult = await setDomainNameservers(domain, nameserverConfig);
-            finalNameservers = nameserverConfig.nameservers;
-            finalIsNamecheapDNS = nameserverConfig.isNamecheapDNS;
-            finalIsCustom = nameserverConfig.isCustom;
-        } else {
-            // Use Namecheap's default nameservers
-            console.log(`[Domain API] Using Namecheap default nameservers for ${domain}:`, defaultNameservers);
-            nameserverResult = {
-                success: true,
-                nameservers: defaultNameservers,
-                type: 'namecheap_provided_default'
-            };
-        }
-
-        // Save domain data to database
-        const domainData = {
-            domain: domain.toLowerCase(),
-            registrationData: {
-                domainId: registrationResult.ApiResponse.CommandResponse.DomainCreateResult.$.DomainID,
-                orderId: registrationResult.ApiResponse.CommandResponse.DomainCreateResult.$.OrderID,
-                transactionId: registrationResult.ApiResponse.CommandResponse.DomainCreateResult.$.TransactionID,
-                chargedAmount: parseFloat(registrationResult.ApiResponse.CommandResponse.DomainCreateResult.$.ChargedAmount),
-                registrationDate: new Date(),
-                expirationDate: new Date(Date.now() + (parseInt(years) * 365 * 24 * 60 * 60 * 1000)),
-                years: parseInt(years)
-            },
-            contactInfo: {
-                firstName,
-                lastName,
-                email,
-                phone,
-                address1,
-                address2,
-                city,
-                stateProvince,
-                country,
-                postalCode
-            },
-            domainStatus: {
-                isActive: true,
-                isLocked: false,
-                autoRenew: false,
-                whoisGuardEnabled: enablePrivacy,
-                isPremium,
-                status: 'active'
-            },
-            dnsConfiguration: {
-                isUsingNamecheapDNS: finalIsNamecheapDNS,
-                nameservers: finalNameservers,
-                customNameservers: finalIsCustom,
-                emailDNSConfigured: false,
-                emailDNSConfiguredAt: null,
-                lastDNSUpdate: new Date()
-            },
-            pricing: {
-                registrationPrice: price,
-                currency: 'USD'
-            },
-            apiMode: NAMECHEAP_SANDBOX === 'true' ? 'sandbox' : 'production'
-        };
-
-        const savedDomain = await saveDomainToDatabase(userId, domainData);
-
-        // Return success response
-        res.json({
-            success: true,
+        // Use the extracted registration function
+        const result = await registerDomainWithNamecheap({
             userId,
             domain,
-            data: {
-                registration: {
-                    chargedAmount: domainData.registrationData.chargedAmount,
-                    domainId: domainData.registrationData.domainId,
-                    orderId: domainData.registrationData.orderId,
-                    transactionId: domainData.registrationData.transactionId,
-                    expirationDate: domainData.registrationData.expirationDate
-                },
-                dns: {
-                    nameservers: domainData.dnsConfiguration.nameservers,
-                    nameserverType: nameserverResult.type,
-                    customNameservers: domainData.dnsConfiguration.customNameservers,
-                    isUsingNamecheapDNS: domainData.dnsConfiguration.isUsingNamecheapDNS,
-                    emailConfigured: false
-                },
-                databaseRecord: {
-                    _id: savedDomain._id,
-                    createdAt: savedDomain.createdAt
-                }
-            },
-            nextSteps: {
-                dnsPropagation: {
-                    status: 'pending',
-                    checkEndpoint: `/namecheap/domain/${domain}/dns-status?userId=${userId}`,
-                    estimatedTime: '24-48 hours'
-                },
-                emailSetup: {
-                    status: 'pending_dns',
-                    instructions: 'Please wait for DNS propagation before creating email accounts',
-                    createEmailEndpoint: `/namecheap/domain/${domain}/createemail`
-                }
-            },
-            apiMode: NAMECHEAP_SANDBOX === 'true' ? 'sandbox' : 'production',
-            sandboxWarning: NAMECHEAP_SANDBOX === 'true' ?
-                'Running in sandbox mode - Domain registration is simulated' : null
+            firstName,
+            lastName,
+            email,
+            phone,
+            address1,
+            address2,
+            city,
+            stateProvince,
+            country,
+            postalCode,
+            years,
+            enablePrivacy,
+            customNameservers,
+            useNamecheapDNS,
+            acceptPremiumPricing
         });
+
+        // Return the result directly
+        res.json(result);
 
     } catch (error) {
         console.error('[Domain API] Registration error:', {
             error: error.message,
             domain,
-            status: error.response?.status,
-            responseData: error.response?.data,
+            userId,
             stack: error.stack
         });
 
         // Handle specific error cases
         if (error.message.includes('Invalid request IP')) {
             const errorMatch = error.message.match(/Invalid request IP: (\d+\.\d+\.\d+\.\d+)/);
-            const ipAddress = errorMatch ? errorMatch[1] : NAMECHEAP_CLIENT_IP;
+            const ipAddress = errorMatch ? errorMatch[1] : process.env.NAMECHEAP_CLIENT_IP;
             return res.status(403).json({
                 success: false,
                 error: 'API IP validation failed',
@@ -2290,8 +2039,8 @@ router.post('/namecheap/domain/register', validateUserId, async (req, res) => {
         res.status(500).json({
             success: false,
             error: error.message,
-            details: error.response?.data?.error || null,
-            apiMode: NAMECHEAP_SANDBOX === 'true' ? 'sandbox' : 'production'
+            details: error.message,
+            apiMode: process.env.NAMECHEAP_SANDBOX === 'true' ? 'sandbox' : 'production'
         });
     }
 });
@@ -4116,8 +3865,309 @@ async function getPrivacyProtectionInfo(tld) {
     }
 }
 
+// Extracted domain registration function for reuse in other modules
+async function registerDomainWithNamecheap(registrationData) {
+    const {
+        userId,
+        domain,
+        firstName,
+        lastName,
+        email,
+        phone,
+        address1,
+        address2 = '',
+        city,
+        stateProvince,
+        country,
+        postalCode,
+        years = '1',
+        enablePrivacy = false,
+        customNameservers = null,
+        useNamecheapDNS = false,
+        acceptPremiumPricing = false,
+        // Optional Stripe payment information
+        stripePaymentInfo = null
+    } = registrationData;
+
+    // Validate required fields
+    if (!domain || !firstName || !lastName || !email || !phone || !address1 || !city || !stateProvince || !country || !postalCode) {
+        throw new Error('Missing required registration fields: domain, firstName, lastName, email, phone, address1, city, stateProvince, country, postalCode are required');
+    }
+
+    // Validate nameserver configuration
+    let nameserverConfig;
+    try {
+        nameserverConfig = getNameserverConfig(customNameservers, useNamecheapDNS);
+    } catch (error) {
+        throw new Error(`Invalid nameserver configuration: ${error.message}`);
+    }
+
+    if (!isValidDomain(domain)) {
+        throw new Error('Invalid domain format - Domain must be a valid format and support modern TLDs');
+    }
+
+    // Ensure database connection
+    await connectToMongoDB();
+
+    // Check if domain already exists for this user
+    const existingDomain = await NamecheapDomain.findOne({
+        userId,
+        domain: domain.toLowerCase()
+    });
+
+    if (existingDomain) {
+        throw new Error(`Domain already registered for this user. Registration date: ${existingDomain.registrationData.registrationDate}, Expiration: ${existingDomain.registrationData.expirationDate}`);
+    }
+
+    // Check domain availability
+    console.log(`[Domain Registration] Checking availability for domain: ${domain} (User: ${userId})`);
+    const checkResult = await namecheapRequest('namecheap.domains.check', {
+        DomainList: domain
+    });
+
+    const domainResult = checkResult.ApiResponse.CommandResponse.DomainCheckResult;
+    const isAvailable = domainResult.$.Available === 'true';
+    const isPremium = domainResult.$.IsPremiumName === 'true';
+    const price = domainResult.$.Price ? parseFloat(domainResult.$.Price) : null;
+
+    if (!isAvailable) {
+        throw new Error(`Domain is not available for registration. Domain: ${domain}, isPremium: ${isPremium}, price: ${price}`);
+    }
+
+    // For premium domains, require explicit acceptance
+    if (isPremium && !acceptPremiumPricing) {
+        const eapFee = domainResult.$.EapFee ? parseFloat(domainResult.$.EapFee) : 0;
+        const totalCost = (price || 0) + eapFee;
+        throw new Error(`Premium domain requires explicit acceptance. Domain: ${domain}, Premium Price: ${price}, EAP Fee: ${eapFee}, Total Cost: ${totalCost} USD. Set acceptPremiumPricing: true to proceed.`);
+    }
+
+    // Register domain with Namecheap
+    console.log(`[Domain Registration] Registering domain: ${domain} (User: ${userId}), Premium: ${isPremium}`);
+    const registrationParams = {
+        DomainName: domain,
+        Years: years,
+        RegistrantFirstName: firstName,
+        RegistrantLastName: lastName,
+        RegistrantEmailAddress: email,
+        RegistrantPhone: phone,
+        RegistrantAddress1: address1,
+        RegistrantAddress2: address2,
+        RegistrantCity: city,
+        RegistrantStateProvince: stateProvince,
+        RegistrantCountry: country,
+        RegistrantPostalCode: postalCode,
+        TechFirstName: firstName,
+        TechLastName: lastName,
+        TechEmailAddress: email,
+        TechPhone: phone,
+        TechAddress1: address1,
+        TechAddress2: address2,
+        TechCity: city,
+        TechStateProvince: stateProvince,
+        TechCountry: country,
+        TechPostalCode: postalCode,
+        AdminFirstName: firstName,
+        AdminLastName: lastName,
+        AdminEmailAddress: email,
+        AdminPhone: phone,
+        AdminAddress1: address1,
+        AdminAddress2: address2,
+        AdminCity: city,
+        AdminStateProvince: stateProvince,
+        AdminCountry: country,
+        AdminPostalCode: postalCode,
+        AuxBillingFirstName: firstName,
+        AuxBillingLastName: lastName,
+        AuxBillingEmailAddress: email,
+        AuxBillingPhone: phone,
+        AuxBillingAddress1: address1,
+        AuxBillingAddress2: address2,
+        AuxBillingCity: city,
+        AuxBillingStateProvince: stateProvince,
+        AuxBillingCountry: country,
+        AuxBillingPostalCode: postalCode,
+        EnableWhoisGuard: enablePrivacy ? 'true' : 'false'
+    };
+
+    // Add premium pricing parameters if it's a premium domain
+    if (isPremium) {
+        console.log(`[Domain Registration] Adding premium pricing - Price: ${price}, EAP Fee: ${domainResult.$.EapFee || 0}`);
+
+        if (price) {
+            registrationParams.PremiumPrice = price.toString();
+        }
+
+        const eapFee = domainResult.$.EapFee ? parseFloat(domainResult.$.EapFee) : 0;
+        if (eapFee > 0) {
+            registrationParams.EapFee = eapFee.toString();
+        }
+
+        registrationParams.AcceptPremiumPricing = 'true';
+    }
+
+    const registrationResult = await namecheapRequest('namecheap.domains.create', registrationParams);
+
+    // Get domain info to see what nameservers Namecheap assigned by default
+    console.log(`[Domain Registration] Checking default nameservers assigned by Namecheap for ${domain}`);
+    const domainInfo = await namecheapRequest('namecheap.domains.getInfo', {
+        DomainName: domain
+    });
+
+    const registeredDomainResult = domainInfo.ApiResponse.CommandResponse.DomainGetInfoResult;
+    const defaultNameservers = Array.isArray(registeredDomainResult.DnsDetails.Nameserver)
+        ? registeredDomainResult.DnsDetails.Nameserver
+        : [registeredDomainResult.DnsDetails.Nameserver];
+    const isUsingNamecheapDNS = registeredDomainResult.DnsDetails.$.IsUsingOurDNS === 'true';
+
+    // Only set custom nameservers if user specifically requested them
+    let nameserverResult;
+    let finalNameservers = defaultNameservers;
+    let finalIsNamecheapDNS = isUsingNamecheapDNS;
+    let finalIsCustom = false;
+
+    if (!nameserverConfig.useDefaults) {
+        console.log(`[Domain Registration] Setting custom nameservers for ${domain}:`, nameserverConfig);
+        nameserverResult = await setDomainNameservers(domain, nameserverConfig);
+        finalNameservers = nameserverConfig.nameservers;
+        finalIsNamecheapDNS = nameserverConfig.isNamecheapDNS;
+        finalIsCustom = nameserverConfig.isCustom;
+    } else {
+        console.log(`[Domain Registration] Using Namecheap default nameservers for ${domain}:`, defaultNameservers);
+        nameserverResult = {
+            success: true,
+            nameservers: defaultNameservers,
+            type: 'namecheap_provided_default'
+        };
+    }
+
+    // Prepare domain data for database
+    const domainData = {
+        domain: domain.toLowerCase(),
+        registrationData: {
+            domainId: registrationResult.ApiResponse.CommandResponse.DomainCreateResult.$.DomainID,
+            orderId: registrationResult.ApiResponse.CommandResponse.DomainCreateResult.$.OrderID,
+            transactionId: registrationResult.ApiResponse.CommandResponse.DomainCreateResult.$.TransactionID,
+            chargedAmount: parseFloat(registrationResult.ApiResponse.CommandResponse.DomainCreateResult.$.ChargedAmount),
+            registrationDate: new Date(),
+            expirationDate: new Date(Date.now() + (parseInt(years) * 365 * 24 * 60 * 60 * 1000)),
+            years: parseInt(years)
+        },
+        contactInfo: {
+            firstName,
+            lastName,
+            email,
+            phone,
+            address1,
+            address2,
+            city,
+            stateProvince,
+            country,
+            postalCode
+        },
+        domainStatus: {
+            isActive: true,
+            isLocked: false,
+            autoRenew: false,
+            whoisGuardEnabled: enablePrivacy,
+            isPremium,
+            status: 'active'
+        },
+        dnsConfiguration: {
+            isUsingNamecheapDNS: finalIsNamecheapDNS,
+            nameservers: finalNameservers,
+            customNameservers: finalIsCustom,
+            emailDNSConfigured: false,
+            emailDNSConfiguredAt: null,
+            lastDNSUpdate: new Date()
+        },
+        pricing: {
+            registrationPrice: price,
+            currency: 'USD'
+        },
+        apiMode: process.env.NAMECHEAP_SANDBOX === 'true' ? 'sandbox' : 'production'
+    };
+
+    // Add Stripe payment information if provided
+    if (stripePaymentInfo) {
+        domainData.stripePayment = {
+            sessionId: stripePaymentInfo.sessionId,
+            paymentIntentId: stripePaymentInfo.paymentIntentId,
+            customerId: stripePaymentInfo.customerId,
+            paymentStatus: stripePaymentInfo.paymentStatus,
+            amountPaid: stripePaymentInfo.amountPaid,
+            currency: stripePaymentInfo.currency,
+            paymentMethod: stripePaymentInfo.paymentMethod,
+            paymentDate: stripePaymentInfo.paymentDate || new Date(),
+            receiptUrl: stripePaymentInfo.receiptUrl,
+            invoiceId: stripePaymentInfo.invoiceId
+        };
+        console.log(`[Domain Registration] Added Stripe payment info for ${domain}:`, {
+            sessionId: stripePaymentInfo.sessionId,
+            amountPaid: stripePaymentInfo.amountPaid,
+            paymentStatus: stripePaymentInfo.paymentStatus
+        });
+    }
+
+    // Save domain to database
+    const savedDomain = await saveDomainToDatabase(userId, domainData);
+
+    // Return comprehensive registration result
+    const result = {
+        success: true,
+        userId,
+        domain,
+        data: {
+            registration: {
+                chargedAmount: domainData.registrationData.chargedAmount,
+                domainId: domainData.registrationData.domainId,
+                orderId: domainData.registrationData.orderId,
+                transactionId: domainData.registrationData.transactionId,
+                expirationDate: domainData.registrationData.expirationDate
+            },
+            dns: {
+                nameservers: domainData.dnsConfiguration.nameservers,
+                nameserverType: nameserverResult.type,
+                customNameservers: domainData.dnsConfiguration.customNameservers,
+                isUsingNamecheapDNS: domainData.dnsConfiguration.isUsingNamecheapDNS,
+                emailConfigured: false
+            },
+            databaseRecord: {
+                _id: savedDomain._id,
+                createdAt: savedDomain.createdAt
+            },
+            stripePayment: stripePaymentInfo ? {
+                sessionId: stripePaymentInfo.sessionId,
+                amountPaid: stripePaymentInfo.amountPaid,
+                paymentStatus: stripePaymentInfo.paymentStatus,
+                paymentDate: stripePaymentInfo.paymentDate
+            } : null
+        },
+        nextSteps: {
+            dnsPropagation: {
+                status: 'pending',
+                checkEndpoint: `/namecheap/domain/${domain}/dns-status?userId=${userId}`,
+                estimatedTime: '24-48 hours'
+            },
+            emailSetup: {
+                status: 'pending_dns',
+                instructions: 'Please wait for DNS propagation before creating email accounts',
+                createEmailEndpoint: `/namecheap/domain/${domain}/createemail`
+            }
+        },
+        apiMode: process.env.NAMECHEAP_SANDBOX === 'true' ? 'sandbox' : 'production',
+        sandboxWarning: process.env.NAMECHEAP_SANDBOX === 'true' ?
+            'Running in sandbox mode - Domain registration is simulated' : null
+    };
+
+    console.log(`[Domain Registration] ✅ Successfully registered ${domain} for user ${userId}`);
+    return result;
+}
 
 
 
 
-module.exports = router;
+
+module.exports = {
+    router,
+    registerDomainWithNamecheap
+};
