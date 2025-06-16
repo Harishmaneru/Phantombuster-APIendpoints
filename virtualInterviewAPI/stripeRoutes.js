@@ -1263,7 +1263,7 @@ router.post('/domain/process-success-payment', async (req, res) => {
             const stripePaymentInfo = {
                 sessionId: session.id,
                 paymentIntentId: session.payment_intent,
-                customerId: session.customer,
+                customerId: typeof session.customer === 'object' ? session.customer.id : session.customer,
                 paymentStatus: session.payment_status,
                 amountPaid: session.amount_total / 100,
                 currency: session.currency,
@@ -1305,9 +1305,9 @@ router.post('/domain/process-success-payment', async (req, res) => {
                 amount: session.amount_total / 100,
                 currency: session.currency,
                 customer: {
-                    id: session.customer,
-                    email: session.customer_details?.email || null,
-                    name: session.customer_details?.name || null
+                    id: typeof session.customer === 'object' ? session.customer.id : session.customer,
+                    email: typeof session.customer === 'object' ? session.customer.email : session.customer_details?.email || null,
+                    name: typeof session.customer === 'object' ? session.customer.name : session.customer_details?.name || null
                 },
                 createdAt: new Date(session.created * 1000).toISOString(),
                 paymentMethod: session.payment_method_types?.[0] || 'card'
