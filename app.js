@@ -135,8 +135,8 @@ app.use(
       "https://getprospectsignals.com",
       "https://record.onepgr.com/",
       "https://record.onepgr.com",
-      "https://virtual-interview-qgvo2.vercel.app",
-      "https://virtual-interview-dev.vercel.app"
+      "https://kampaign.onepgr.com",
+      "https://kampaign.onepgr.com/"
     ],
     methods: ["GET", "PUT", "POST", "DELETE", "OPTIONS"],
     allowedHeaders: ["Content-Type", "Authorization", "X-Requested-With", "stripe-signature"],

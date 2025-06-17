@@ -561,7 +561,7 @@ async function namecheapRequest(command, params = {}, retryCount = 0, maxRetries
 
         // Validate response is valid XML
         if (typeof response.data !== 'string' || !response.data.trim().startsWith('<?xml')) {
-            console.error('Raw response from Namecheap:', response.data); 
+            console.error('Raw response from Namecheap:', response.data);
             throw new Error('Invalid XML response from API');
         }
 

@@ -1334,6 +1334,21 @@ router.post('/domain/process-success-payment', async (req, res) => {
         } catch (namecheapError) {
             console.error('Namecheap registration failed:', namecheapError.message);
             
+            if (namecheapError.isHtmlResponse) {
+                return res.status(502).json({
+                    success: false,
+                    error: 'Namecheap API returned an unexpected HTML response',
+                    details: namecheapError.message,
+                    recoveryOptions: [
+                        'Check Namecheap API status page for outages',
+                        'Retry after a few minutes',
+                        'Check your API credentials and IP whitelist',
+                        'Contact support if the issue persists'
+                    ],
+                    timestamp: new Date().toISOString()
+                });
+            }
+            
             return res.status(500).json({
                 success: false,
                 error: 'Domain registration failed after successful payment',
@@ -1364,6 +1379,13 @@ router.post('/domain/process-success-payment', async (req, res) => {
     }
 });
 
-
+function extractHtmlErrorMessage(html) {
+    // Try to extract <title> or <body> content for a user-friendly error
+    const titleMatch = html.match(/<title>(.*?)<\/title>/i);
+    if (titleMatch) return titleMatch[1];
+    const bodyMatch = html.match(/<body[^>]*>([\s\S]*?)<\/body>/i);
+    if (bodyMatch) return bodyMatch[1].replace(/<[^>]+>/g, '').trim();
+    return html.slice(0, 200); // fallback: first 200 chars
+}
 
 module.exports = router;
