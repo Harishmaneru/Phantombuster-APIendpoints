@@ -6,6 +6,8 @@ const rateLimit = require('express-rate-limit');
 const helmet = require('helmet');
 const mongoose = require('mongoose');
 const router = express.Router();
+const NodeCache = require('node-cache');
+const CircuitBreaker = require('opossum');
 
 // MongoDB Connection
 const mongoURI = process.env.ONEPGR_MONGO_URI;
@@ -829,8 +831,14 @@ async function generateProductionSuggestions(keyword, originalTld, isPrimaryAvai
                     const isAvailable = domainResult.$.Available === 'true';
                     const isPremium = domainResult.$.IsPremiumName === 'true';
                     const price = domainResult.$.Price ? parseFloat(domainResult.$.Price) : null;
+                    const eapFee = domainResult.$.EapFee ? parseFloat(domainResult.$.EapFee) : 0;
 
-                    if (isAvailable) {
+                    // More strict availability check
+                    const isValid = isAvailable &&
+                        (!isPremium || (isPremium && price && acceptPremiumPricing)) &&
+                        domainResult.$.ErrorNo === '0';
+
+                    if (isValid) {
                         // Get pricing for this TLD
                         // console.log(`[Suggestion Engine]  Getting pricing for available domain ${variant} (.${tld})`);
                         const pricing = await getPricingForTLD(tld);
@@ -898,8 +906,14 @@ async function generateProductionSuggestions(keyword, originalTld, isPrimaryAvai
                                     const isAvailable = domainResult.$.Available === 'true';
                                     const isPremium = domainResult.$.IsPremiumName === 'true';
                                     const price = domainResult.$.Price ? parseFloat(domainResult.$.Price) : null;
+                                    const eapFee = domainResult.$.EapFee ? parseFloat(domainResult.$.EapFee) : 0;
 
-                                    if (isAvailable) {
+                                    // More strict availability check
+                                    const isValid = isAvailable &&
+                                        (!isPremium || (isPremium && price && acceptPremiumPricing)) &&
+                                        domainResult.$.ErrorNo === '0';
+
+                                    if (isValid) {
                                         // console.log(`[Suggestion Engine] Getting pricing for keyword variation ${domain} (.${tld})`);
                                         const pricing = await getPricingForTLD(tld);
                                         // console.log(`[Suggestion Engine]Keyword variation pricing fetched for ${domain}:`, pricing);
@@ -1077,16 +1091,6 @@ function generateDomainGroups(suggestions, originalTld) {
     return groups;
 }
 
-/**
- * Configure DNS records for email service (MX, SPF, DKIM, DMARC, A)
- * This now pulls the server's public IP and DKIM key from WHM,
- * then writes:
- *   • an A record for "@" → <server IP>
- *   • MX record "@" → mail.<domain>
- *   • SPF TXT "@" → v=spf1 a mx ip4:<server IP> ~all
- *   • DKIM TXT "default._domainkey" → "v=DKIM1; k=rsa; p=<public_key>"
- *   • DMARC TXT "_dmarc" → "v=DMARC1; p=none; rua=mailto:dmarc@<domain>"
- */
 async function configureEmailDns(domain) {
     // 1. Fetch your server's public IP
     let ip;
@@ -1407,20 +1411,8 @@ router.get('/namecheap/domain/check/:domain', async (req, res) => {
         });
 
         const domainResult = primaryCheck.ApiResponse.CommandResponse.DomainCheckResult;
-
-        // DEBUG: Log the raw XML response to see what Namecheap is returning
-        //  console.log(`[Domain API] Raw Namecheap response for ${domain}:`, JSON.stringify(domainResult, null, 2));
-
         const isAvailable = domainResult.$.Available === 'true';
         const isPremium = domainResult.$.IsPremiumName === 'true';
-
-        //  LOG: Clear availability status
-        // console.log(`[Domain API]  Domain ${domain} Status:`, {
-        //     available: isAvailable,
-        //     availableString: domainResult.$.Available,
-        //     isPremium: isPremium,
-        //     premiumString: domainResult.$.IsPremiumName
-        // });
         const price = domainResult.$.Price ? parseFloat(domainResult.$.Price) : null;
         const premiumRegistrationPrice = domainResult.$.PremiumRegistrationPrice ? parseFloat(domainResult.$.PremiumRegistrationPrice) : null;
         const premiumRenewalPrice = domainResult.$.PremiumRenewalPrice ? parseFloat(domainResult.$.PremiumRenewalPrice) : null;
@@ -1428,7 +1420,6 @@ router.get('/namecheap/domain/check/:domain', async (req, res) => {
         const eapFee = domainResult.$.EapFee ? parseFloat(domainResult.$.EapFee) : null;
 
         // 2. Get pricing for primary domain
-        // console.log(`[Domain API] Step 2: Fetching pricing for TLD .${originalTld}`);
         const primaryPricing = await getPricingForTLD(originalTld);
 
         // 2.5. Get privacy protection information for the TLD
@@ -1438,6 +1429,53 @@ router.get('/namecheap/domain/check/:domain', async (req, res) => {
         // 3. Generate suggestions using production algorithm
         console.log(`[Domain API] Step 3: Generating industry-standard suggestions`);
         const suggestions = await generateProductionSuggestions(keyword, originalTld, isAvailable);
+
+        // ---- NEW: Bulk check all suggested domains for live info ----
+        // Helper to extract all suggested domains
+        function extractAllSuggestedDomains(suggestions) {
+            const all = [];
+            if (suggestions.tldVariations) all.push(...suggestions.tldVariations.map(d => d.domain));
+            if (suggestions.keywordVariations) all.push(...suggestions.keywordVariations.map(d => d.domain));
+            if (suggestions.premiumDomains) all.push(...suggestions.premiumDomains.map(d => d.domain));
+            return Array.from(new Set(all));
+        }
+        const allSuggestedDomains = extractAllSuggestedDomains(suggestions);
+        let bulkResultsMap = {};
+        if (allSuggestedDomains.length > 0) {
+            try {
+                const bulkCheck = await namecheapRequest('namecheap.domains.check', {
+                    DomainList: allSuggestedDomains.join(',')
+                });
+                const checkResults = bulkCheck.ApiResponse.CommandResponse.DomainCheckResult;
+                const resultsArray = Array.isArray(checkResults) ? checkResults : [checkResults];
+                // Map: domain -> result
+                resultsArray.forEach(r => {
+                    bulkResultsMap[r.$.Domain.toLowerCase()] = r.$;
+                });
+            } catch (err) {
+                console.warn('[Domain API] Bulk check for suggestions failed:', err.message);
+            }
+        }
+        // Helper to enrich a suggestion with live info
+        function enrichSuggestion(suggestion) {
+            const live = bulkResultsMap[suggestion.domain.toLowerCase()];
+            if (!live) return suggestion;
+            return {
+                ...suggestion,
+                available: live.Available === 'true',
+                isPremium: live.IsPremiumName === 'true',
+                price: live.Price ? parseFloat(live.Price) : suggestion.price || null,
+                icannFee: live.IcannFee ? parseFloat(live.IcannFee) : 0.18,
+                premium: live.IsPremiumName === 'true',
+                namecheapAvailable: live.Available,
+                // Optionally add more fields as needed
+            };
+        }
+        // Enrich all suggestions
+        if (suggestions.tldVariations) suggestions.tldVariations = suggestions.tldVariations.map(enrichSuggestion);
+        if (suggestions.keywordVariations) suggestions.keywordVariations = suggestions.keywordVariations.map(enrichSuggestion);
+        if (suggestions.premiumDomains) suggestions.premiumDomains = suggestions.premiumDomains.map(enrichSuggestion);
+        // ---- END NEW ----
 
         // 4. Create domain groups (GoDaddy-style organization)
         const groups = generateDomainGroups(suggestions, originalTld);
@@ -1496,13 +1534,12 @@ router.get('/namecheap/domain/check/:domain', async (req, res) => {
                             'Unable to verify - please check during registration'
                 },
 
-                // Industry-standard suggestions structure
+                // Industry-standard suggestions structure (now enriched)
                 suggestions: {
                     tldVariations: suggestions.tldVariations,
                     keywordVariations: suggestions.keywordVariations,
                     premiumDomains: suggestions.premiumDomains || []
                 },
-
 
                 groups,
 
@@ -1525,7 +1562,7 @@ router.get('/namecheap/domain/check/:domain', async (req, res) => {
                     apiMode: NAMECHEAP_SANDBOX === 'true' ? 'sandbox' : 'production',
                     timestamp: new Date().toISOString(),
                     cacheHits: pricingCache.size,
-                    suggestionAlgorithm: 'production_v2'
+                    suggestionAlgorithm: 'production_v2_bulk_enriched'
                 }
             }
         };
@@ -1852,144 +1889,7 @@ router.post('/namecheap/domain/bulk-pricing', async (req, res) => {
 
 
 
-//  _________________________Get multi-year pricing for a specific domain______________
 
-router.get('/namecheap/domain/pricing/:domain/:years', async (req, res) => {
-    const { domain, years } = req.params;
-
-    console.log(`[Domain Pricing API] Getting ${years}-year pricing for domain: ${domain}`);
-
-    // Validate domain
-    if (!isValidDomain(domain)) {
-        console.error(`[Domain Pricing API] Invalid domain format: ${domain}`);
-        return res.status(400).json({
-            success: false,
-            error: "Invalid domain format",
-            data: null,
-            apiMode: NAMECHEAP_SANDBOX === 'true' ? 'sandbox' : 'production'
-        });
-    }
-
-    // Validate years (1-10 years supported)
-    const yearsInt = parseInt(years);
-    if (isNaN(yearsInt) || yearsInt < 1 || yearsInt > 10) {
-        return res.status(400).json({
-            success: false,
-            error: "Years must be between 1 and 10",
-            data: null,
-            apiMode: NAMECHEAP_SANDBOX === 'true' ? 'sandbox' : 'production'
-        });
-    }
-
-    try {
-        // 1. Check if domain is available
-        console.log(`[Domain Pricing API] Step 1: Checking availability for ${domain}`);
-        const checkResult = await namecheapRequest('namecheap.domains.check', {
-            DomainList: domain
-        });
-
-        const domainResult = checkResult.ApiResponse.CommandResponse.DomainCheckResult;
-        const available = domainResult.$.Available === 'true';
-        const isPremium = domainResult.$.IsPremiumName === 'true';
-        const price = domainResult.$.Price ? parseFloat(domainResult.$.Price) : null;
-
-        if (!available) {
-            return res.status(400).json({
-                success: false,
-                error: "Domain is not available for registration",
-                data: {
-                    domain,
-                    available: false,
-                    isPremium,
-                    price
-                },
-                apiMode: NAMECHEAP_SANDBOX === 'true' ? 'sandbox' : 'production'
-            });
-        }
-
-        // 2. Get TLD and fetch multi-year pricing
-        const tld = domain.split('.').pop().toUpperCase();
-        console.log(`[Domain Pricing API] Step 2: Fetching ${years}-year pricing for TLD ${tld}`);
-
-        const priceXml = await namecheapRequest('namecheap.users.getPricing', {
-            ProductType: 'DOMAIN',
-            ProductCategory: 'REGISTER',
-            ProductName: tld
-        });
-
-        const multiYearPricing = extractPriceForDuration(priceXml, years);
-
-        if (!multiYearPricing || multiYearPricing.register === null) {
-            return res.status(400).json({
-                success: false,
-                error: `${years}-year pricing not available for this TLD`,
-                data: {
-                    domain,
-                    years: yearsInt,
-                    available: true,
-                    tld,
-                    message: `This TLD may not support ${years}-year registration`
-                },
-                apiMode: NAMECHEAP_SANDBOX === 'true' ? 'sandbox' : 'production'
-            });
-        }
-
-        // 3. For premium domains, add premium pricing if available
-        if (isPremium && price) {
-            multiYearPricing.premiumNote = "This is a premium domain with special pricing";
-            multiYearPricing.premiumPrice = price;
-            multiYearPricing.isPremium = true;
-        }
-
-        // 4. Return comprehensive pricing information
-        res.json({
-            success: true,
-            data: {
-                domain,
-                available: true,
-                isPremium,
-                years: yearsInt,
-                pricing: multiYearPricing,
-                comparison: {
-                    oneYearTotal: multiYearPricing.perYearCost ? multiYearPricing.perYearCost : null,
-                    multiYearTotal: multiYearPricing.totalCost,
-                    savingsInfo: multiYearPricing.savings ? {
-                        youSave: `$${multiYearPricing.savings.amount.toFixed(2)}`,
-                        percentageSaved: `${multiYearPricing.savings.percentage}%`,
-                        explanation: `Registering for ${years} years saves you $${multiYearPricing.savings.amount.toFixed(2)} compared to renewing annually`
-                    } : null
-                },
-                breakdown: {
-                    registrationFee: multiYearPricing.register,
-                    icannFee: multiYearPricing.icannFee,
-                    subtotal: multiYearPricing.register + multiYearPricing.icannFee,
-                    total: multiYearPricing.totalCost,
-                    currency: multiYearPricing.currency
-                },
-            },
-            apiMode: NAMECHEAP_SANDBOX === 'true' ? 'sandbox' : 'production',
-            timestamp: new Date().toISOString()
-        });
-
-    } catch (err) {
-        console.error('[Domain Pricing API] ❌ Error in multi-year pricing process:', {
-            error: err.message,
-            domain,
-            years,
-            status: err.response?.status,
-            responseData: err.response?.data,
-            stack: err.stack,
-            timestamp: new Date().toISOString()
-        });
-
-        res.status(500).json({
-            success: false,
-            error: err.message,
-            data: null,
-            apiMode: NAMECHEAP_SANDBOX === 'true' ? 'sandbox' : 'production'
-        });
-    }
-});
 
 //  _________________________Alternative: Get multi-year pricing with query parameter______________
 
@@ -2142,31 +2042,7 @@ router.get('/namecheap/domain/:domain/pricing', async (req, res) => {
 });
 
 
-//  _________________________Suggest similar domains (simple suffix-based)______________
 
-router.get('/namecheap/domain/suggestions', async (req, res) => {
-    const keyword = req.query.keyword;
-    if (!keyword) return res.status(400).json({ success: false, error: 'Missing keyword query param' });
-
-    const suffixes = ['', 'online', 'app', 'hq', 'site'];
-    const tld = 'com';
-    const candidates = suffixes.map(s => `${keyword}${s}.${tld}`);
-
-    try {
-        const results = await Promise.all(candidates.map(async domain => {
-            try {
-                const xml = await namecheapRequest('namecheap.domains.check', { DomainList: domain });
-                const result = xml.ApiResponse.CommandResponse.DomainCheckResult;
-                return { domain, available: result.$.Available === 'true' };
-            } catch {
-                return { domain, available: false };
-            }
-        }));
-        res.json({ success: true, suggestions: results, deprecated: true, newEndpoint: '/namecheap/domain/suggestions/{keyword}' });
-    } catch (err) {
-        res.status(500).json({ success: false, error: err.message });
-    }
-});
 
 
 //__________Register a domain__________
@@ -4097,6 +3973,65 @@ async function getPrivacyProtectionInfo(tld) {
     }
 }
 
+// Revalidate domain availability before registration
+async function revalidateDomainAvailability(domain, acceptPremiumPricing = false) {
+    console.log(`[Domain Validation] Revalidating availability for domain: ${domain}`);
+
+    try {
+        const checkResult = await namecheapRequest('namecheap.domains.check', {
+            DomainList: domain
+        });
+
+        const domainResult = checkResult.ApiResponse.CommandResponse.DomainCheckResult;
+        const isAvailable = domainResult.$.Available === 'true';
+        const isPremium = domainResult.$.IsPremiumName === 'true';
+        const price = domainResult.$.Price ? parseFloat(domainResult.$.Price) : null;
+        const eapFee = domainResult.$.EapFee ? parseFloat(domainResult.$.EapFee) : 0;
+        const errorNo = domainResult.$.ErrorNo;
+
+        // Strict validation
+        const isValid = isAvailable &&
+            (!isPremium || (isPremium && price && acceptPremiumPricing)) &&
+            errorNo === '0';
+
+        if (!isValid) {
+            const error = {
+                success: false,
+                message: "Domain is no longer available or has changed status",
+                details: {
+                    domain,
+                    isAvailable,
+                    isPremium,
+                    price,
+                    eapFee,
+                    errorNo,
+                    acceptPremiumPricing
+                },
+                nextSteps: ["recheck availability", "select alternative"]
+            };
+
+            if (isPremium && !acceptPremiumPricing) {
+                error.message = "Premium domain requires explicit acceptance";
+                error.details.totalCost = (price || 0) + eapFee;
+            }
+
+            throw error;
+        }
+
+        return {
+            success: true,
+            domain,
+            isPremium,
+            price,
+            eapFee,
+            totalCost: (price || 0) + eapFee
+        };
+    } catch (error) {
+        console.error(`[Domain Validation] Error revalidating domain ${domain}:`, error);
+        throw error;
+    }
+}
+
 // Extracted domain registration function for reuse in other modules
 async function registerDomainWithNamecheap(registrationData) {
     const {
@@ -4151,27 +4086,11 @@ async function registerDomainWithNamecheap(registrationData) {
         throw new Error(`Domain already registered for this user. Registration date: ${existingDomain.registrationData.registrationDate}, Expiration: ${existingDomain.registrationData.expirationDate}`);
     }
 
-    // Check domain availability
-    console.log(`[Domain Registration] Checking availability for domain: ${domain} (User: ${userId})`);
-    const checkResult = await namecheapRequest('namecheap.domains.check', {
-        DomainList: domain
-    });
+    // Revalidate domain availability before proceeding with registration
+    const validationResult = await revalidateDomainAvailability(domain, acceptPremiumPricing);
 
-    const domainResult = checkResult.ApiResponse.CommandResponse.DomainCheckResult;
-    const isAvailable = domainResult.$.Available === 'true';
-    const isPremium = domainResult.$.IsPremiumName === 'true';
-    const price = domainResult.$.Price ? parseFloat(domainResult.$.Price) : null;
-
-    if (!isAvailable) {
-        throw new Error(`Domain is not available for registration. Domain: ${domain}, isPremium: ${isPremium}, price: ${price}`);
-    }
-
-    // For premium domains, require explicit acceptance
-    if (isPremium && !acceptPremiumPricing) {
-        const eapFee = domainResult.$.EapFee ? parseFloat(domainResult.$.EapFee) : 0;
-        const totalCost = (price || 0) + eapFee;
-        throw new Error(`Premium domain requires explicit acceptance. Domain: ${domain}, Premium Price: ${price}, EAP Fee: ${eapFee}, Total Cost: ${totalCost} USD. Set acceptPremiumPricing: true to proceed.`);
-    }
+    // If we get here, the domain is available and valid for registration
+    const { isPremium, price, eapFee } = validationResult;
 
     // Register domain with Namecheap
     console.log(`[Domain Registration] Registering domain: ${domain} (User: ${userId}), Premium: ${isPremium}`);
@@ -4395,9 +4314,667 @@ async function registerDomainWithNamecheap(registrationData) {
     return result;
 }
 
+// Cache instance with 5 minute TTL by default
+const cache = new NodeCache({ stdTTL: 300 });
+
+// Circuit breaker configuration
+const breakerOptions = {
+    timeout: 10000, // 10 seconds
+    errorThresholdPercentage: 50,
+    resetTimeout: 30000 // 30 seconds
+};
+
+// Create circuit breakers for different API operations
+const namecheapBreaker = new CircuitBreaker(async (command, params) => {
+    return await namecheapRequest(command, params);
+}, breakerOptions);
+
+const cpanelBreaker = new CircuitBreaker(async (endpoint, params) => {
+    return await cpanelRequest(endpoint, params);
+}, breakerOptions);
+
+const whmBreaker = new CircuitBreaker(async (endpoint, params) => {
+    return await whmRequest(endpoint, params);
+}, breakerOptions);
 
 
 
+
+
+// Health check endpoint
+router.get('/health', async (req, res) => {
+    const health = {
+        uptime: process.uptime(),
+        timestamp: new Date().toISOString(),
+        services: {}
+    };
+
+    try {
+        await namecheapBreaker.fire('namecheap.domains.getTldList', {});
+        health.services.namecheap = { status: 'up' };
+    } catch (error) {
+        health.services.namecheap = { status: 'down', error: error.message };
+    }
+
+    const overallStatus = Object.values(health.services)
+        .every(service => service.status === 'up') ? 200 : 503;
+
+    res.status(overallStatus).json(health);
+});
+
+// Domain registration endpoint with robust error handling
+router.post('/register', apiLimiter, asyncHandler(async (req, res) => {
+    const operation = 'DOMAIN_REGISTRATION';
+    try {
+        // Validate user and ensure DB connection
+        await ensureDbConnection(req, res);
+        validateUserId(req, res);
+
+        const registrationData = {
+            ...req.body,
+            userId: req.user.id
+        };
+
+        // Check cache for recent registration attempts
+        const cacheKey = `domain_reg_${registrationData.domain}_${registrationData.userId}`;
+        const cachedResult = cache.get(cacheKey);
+        if (cachedResult) {
+            return res.json({
+                ...cachedResult,
+                source: 'cache'
+            });
+        }
+
+        // Validate domain availability with retries
+        const availabilityCheck = await retryWithBackoff(async () => {
+            return await namecheapBreaker.fire('revalidateDomainAvailability', 
+                registrationData.domain, 
+                registrationData.acceptPremiumPricing
+            );
+        });
+
+        if (!availabilityCheck.success) {
+            throw new Error('Domain is not available for registration');
+        }
+
+        // Attempt registration with circuit breaker and retries
+        const result = await retryWithBackoff(async () => {
+            return await namecheapBreaker.fire('registerDomainWithNamecheap', registrationData);
+        });
+
+        // Cache successful result
+        cache.set(cacheKey, result, 300); // Cache for 5 minutes
+
+        // Save to database
+        await saveDomainToDatabase(registrationData.userId, {
+            ...result,
+            registrationData
+        });
+
+        res.json({
+            success: true,
+            operation,
+            data: result
+        });
+
+    } catch (error) {
+        const errorResponse = createErrorResponse(error, operation);
+        res.status(error.status || 500).json(errorResponse);
+    }
+}));
+
+// Bulk domain check endpoint with partial success handling
+router.post('/check-bulk', apiLimiter, asyncHandler(async (req, res) => {
+    const operation = 'BULK_DOMAIN_CHECK';
+    try {
+        const { domains } = req.body;
+        if (!Array.isArray(domains) || domains.length === 0) {
+            throw new Error('Invalid domains array');
+        }
+
+        const results = [];
+        const errors = [];
+
+        // Process domains in parallel with individual timeouts
+        const checkPromises = domains.map(async (domain) => {
+            try {
+                const cacheKey = `domain_check_${domain}`;
+                const cached = cache.get(cacheKey);
+                if (cached) {
+                    return { domain, ...cached, source: 'cache' };
+                }
+
+                const result = await retryWithBackoff(async () => {
+                    return await namecheapBreaker.fire('namecheap.domains.check', {
+                        DomainList: domain
+                    });
+                });
+
+                const processedResult = {
+                    domain,
+                    available: result.ApiResponse.CommandResponse.DomainCheckResult.$.Available === 'true',
+                    price: extractOneYearPrice(result),
+                    timestamp: new Date().toISOString()
+                };
+
+                cache.set(cacheKey, processedResult, 300); // Cache for 5 minutes
+                return processedResult;
+
+            } catch (error) {
+                return {
+                    domain,
+                    error: error.message,
+                    success: false
+                };
+            }
+        });
+
+        const checkResults = await Promise.all(checkPromises);
+        
+        res.json({
+            success: true,
+            operation,
+            results: checkResults,
+            summary: {
+                total: domains.length,
+                succeeded: checkResults.filter(r => !r.error).length,
+                failed: checkResults.filter(r => r.error).length
+            }
+        });
+
+    } catch (error) {
+        const errorResponse = createErrorResponse(error, operation);
+        res.status(error.status || 500).json(errorResponse);
+    }
+}));
+
+// Contact info endpoint with caching and retries
+router.get('/contact-info/:domain', apiLimiter, asyncHandler(async (req, res) => {
+    const operation = 'GET_CONTACT_INFO';
+    try {
+        const { domain } = req.params;
+        
+        // Check cache
+        const cacheKey = `contact_info_${domain}`;
+        const cached = cache.get(cacheKey);
+        if (cached) {
+            return res.json({
+                success: true,
+                operation,
+                data: cached,
+                source: 'cache'
+            });
+        }
+
+        const result = await retryWithBackoff(async () => {
+            return await namecheapBreaker.fire('namecheap.domains.getContacts', {
+                DomainName: domain
+            });
+        });
+
+        const contactInfo = result.ApiResponse.CommandResponse.DomainContactsResult;
+        
+        // Cache the result
+        cache.set(cacheKey, contactInfo, 300);
+
+        res.json({
+            success: true,
+            operation,
+            data: contactInfo
+        });
+
+    } catch (error) {
+        const errorResponse = createErrorResponse(error, operation);
+        res.status(error.status || 500).json(errorResponse);
+    }
+}));
+
+// Nameserver configuration endpoint with robust error handling
+router.post('/nameservers/:domain', apiLimiter, asyncHandler(async (req, res) => {
+    const operation = 'SET_NAMESERVERS';
+    try {
+        const { domain } = req.params;
+        const { customNameservers, useNamecheapDNS } = req.body;
+
+        // Validate domain format
+        if (!isValidDomain(domain)) {
+            throw new Error('Invalid domain format');
+        }
+
+        // Check cache for recent nameserver changes
+        const cacheKey = `ns_config_${domain}`;
+        const cachedResult = cache.get(cacheKey);
+        if (cachedResult) {
+            return res.json({
+                ...cachedResult,
+                source: 'cache'
+            });
+        }
+
+        // Get nameserver configuration
+        const nameserverConfig = getNameserverConfig(customNameservers, useNamecheapDNS);
+
+        // Set nameservers with retries and circuit breaker
+        const result = await retryWithBackoff(async () => {
+            return await namecheapBreaker.fire('setDomainNameservers', domain, nameserverConfig);
+        });
+
+        // Cache successful result
+        cache.set(cacheKey, result, 300); // Cache for 5 minutes
+
+        res.json({
+            success: true,
+            operation,
+            data: result
+        });
+
+    } catch (error) {
+        const errorResponse = createErrorResponse(error, operation);
+        res.status(error.status || 500).json(errorResponse);
+    }
+}));
+
+// Get nameserver info endpoint
+router.get('/nameservers/:domain', apiLimiter, asyncHandler(async (req, res) => {
+    const operation = 'GET_NAMESERVERS';
+    try {
+        const { domain } = req.params;
+
+        // Validate domain format
+        if (!isValidDomain(domain)) {
+            throw new Error('Invalid domain format');
+        }
+
+        // Check cache
+        const cacheKey = `ns_info_${domain}`;
+        const cached = cache.get(cacheKey);
+        if (cached) {
+            return res.json({
+                ...cached,
+                source: 'cache'
+            });
+        }
+
+        // Get domain info with retries and circuit breaker
+        const result = await retryWithBackoff(async () => {
+            return await namecheapBreaker.fire('namecheap.domains.dns.getList', {
+                DomainName: domain
+            });
+        });
+
+        const nameservers = result.ApiResponse.CommandResponse.DomainDNSGetListResult.Nameserver;
+        const processedResult = {
+            success: true,
+            domain,
+            nameservers: Array.isArray(nameservers) ? nameservers : [nameservers],
+            timestamp: new Date().toISOString()
+        };
+
+        // Cache the result
+        cache.set(cacheKey, processedResult, 300);
+
+        res.json(processedResult);
+
+    } catch (error) {
+        const errorResponse = createErrorResponse(error, operation);
+        res.status(error.status || 500).json(errorResponse);
+    }
+}));
+
+// Domain renewal endpoint with robust error handling
+router.post('/renew/:domain', apiLimiter, asyncHandler(async (req, res) => {
+    const operation = 'RENEW_DOMAIN';
+    try {
+        const { domain } = req.params;
+        const { years = 1, promotionCode = '' } = req.body;
+
+        // Validate domain format
+        if (!isValidDomain(domain)) {
+            throw new Error('Invalid domain format');
+        }
+
+        // Check cache for recent renewal
+        const cacheKey = `renewal_${domain}`;
+        const cachedResult = cache.get(cacheKey);
+        if (cachedResult) {
+            return res.json({
+                ...cachedResult,
+                source: 'cache'
+            });
+        }
+
+        // Get current expiration date with retries
+        const domainInfo = await retryWithBackoff(async () => {
+            return await namecheapBreaker.fire('namecheap.domains.getInfo', {
+                DomainName: domain
+            });
+        });
+
+        const currentExpiry = domainInfo.ApiResponse.CommandResponse.DomainGetInfoResult.DomainDetails.ExpiredDate;
+        
+        // Attempt renewal with circuit breaker and retries
+        const result = await retryWithBackoff(async () => {
+            return await namecheapBreaker.fire('namecheap.domains.renew', {
+                DomainName: domain,
+                Years: years,
+                PromotionCode: promotionCode
+            });
+        });
+
+        const renewalResult = {
+            success: true,
+            domain,
+            previousExpiry: currentExpiry,
+            newExpiry: result.ApiResponse.CommandResponse.DomainRenewResult.DomainDetails.ExpiredDate,
+            orderId: result.ApiResponse.CommandResponse.DomainRenewResult.OrderId,
+            transactionId: result.ApiResponse.CommandResponse.DomainRenewResult.TransactionId,
+            years,
+            timestamp: new Date().toISOString()
+        };
+
+        // Cache successful result
+        cache.set(cacheKey, renewalResult, 300); // Cache for 5 minutes
+
+        // Update domain in database
+        await updateDomainInDatabase(req.user.id, domain, {
+            'registrationData.expirationDate': renewalResult.newExpiry,
+            lastRenewalDate: new Date(),
+            lastRenewalYears: years
+        });
+
+        res.json({
+            success: true,
+            operation,
+            data: renewalResult
+        });
+
+    } catch (error) {
+        const errorResponse = createErrorResponse(error, operation);
+        res.status(error.status || 500).json(errorResponse);
+    }
+}));
+
+// Bulk domain renewal endpoint
+router.post('/renew-bulk', apiLimiter, asyncHandler(async (req, res) => {
+    const operation = 'BULK_DOMAIN_RENEWAL';
+    try {
+        const { domains } = req.body;
+        if (!Array.isArray(domains)) {
+            throw new Error('Invalid domains array');
+        }
+
+        const results = [];
+        const errors = [];
+
+        // Process domains sequentially to avoid overwhelming the API
+        for (const domainData of domains) {
+            try {
+                const { domain, years = 1, promotionCode = '' } = domainData;
+
+                // Validate domain format
+                if (!isValidDomain(domain)) {
+                    throw new Error('Invalid domain format');
+                }
+
+                // Check cache
+                const cacheKey = `renewal_${domain}`;
+                const cached = cache.get(cacheKey);
+                if (cached) {
+                    results.push({ ...cached, source: 'cache' });
+                    continue;
+                }
+
+                // Get current expiration
+                const domainInfo = await retryWithBackoff(async () => {
+                    return await namecheapBreaker.fire('namecheap.domains.getInfo', {
+                        DomainName: domain
+                    });
+                });
+
+                const currentExpiry = domainInfo.ApiResponse.CommandResponse.DomainGetInfoResult.DomainDetails.ExpiredDate;
+
+                // Attempt renewal
+                const result = await retryWithBackoff(async () => {
+                    return await namecheapBreaker.fire('namecheap.domains.renew', {
+                        DomainName: domain,
+                        Years: years,
+                        PromotionCode: promotionCode
+                    });
+                });
+
+                const renewalResult = {
+                    success: true,
+                    domain,
+                    previousExpiry: currentExpiry,
+                    newExpiry: result.ApiResponse.CommandResponse.DomainRenewResult.DomainDetails.ExpiredDate,
+                    orderId: result.ApiResponse.CommandResponse.DomainRenewResult.OrderId,
+                    years,
+                    timestamp: new Date().toISOString()
+                };
+
+                // Cache successful result
+                cache.set(cacheKey, renewalResult, 300);
+
+                // Update domain in database
+                await updateDomainInDatabase(req.user.id, domain, {
+                    'registrationData.expirationDate': renewalResult.newExpiry,
+                    lastRenewalDate: new Date(),
+                    lastRenewalYears: years
+                });
+
+                results.push(renewalResult);
+
+            } catch (error) {
+                errors.push({
+                    domain: domainData.domain,
+                    error: error.message
+                });
+            }
+        }
+
+        res.json({
+            success: true,
+            operation,
+            results,
+            errors,
+            summary: {
+                total: domains.length,
+                succeeded: results.length,
+                failed: errors.length
+            }
+        });
+
+    } catch (error) {
+        const errorResponse = createErrorResponse(error, operation);
+        res.status(error.status || 500).json(errorResponse);
+    }
+}));
+
+// Domain transfer initiation endpoint with robust error handling
+router.post('/transfer/:domain', apiLimiter, asyncHandler(async (req, res) => {
+    const operation = 'INITIATE_TRANSFER';
+    try {
+        const { domain } = req.params;
+        const { authCode, years = 1, promotionCode = '' } = req.body;
+
+        if (!isValidDomain(domain)) {
+            throw new Error('Invalid domain format');
+        }
+
+        if (!authCode) {
+            throw new Error('Auth code is required for domain transfer');
+        }
+
+        // Check cache for recent transfer attempts
+        const cacheKey = `transfer_${domain}`;
+        const cachedResult = cache.get(cacheKey);
+        if (cachedResult) {
+            return res.json({
+                ...cachedResult,
+                source: 'cache'
+            });
+        }
+
+        // Validate transfer eligibility with retries
+        const eligibilityCheck = await retryWithBackoff(async () => {
+            return await namecheapBreaker.fire('namecheap.domains.transfer.getStatus', {
+                DomainName: domain
+            });
+        });
+
+        if (!eligibilityCheck.ApiResponse.CommandResponse.TransferGetStatusResult.Transferable) {
+            throw new Error('Domain is not eligible for transfer');
+        }
+
+        // Initiate transfer with circuit breaker and retries
+        const result = await retryWithBackoff(async () => {
+            return await namecheapBreaker.fire('namecheap.domains.transfer.create', {
+                DomainName: domain,
+                Years: years,
+                EPPCode: authCode,
+                PromotionCode: promotionCode
+            });
+        });
+
+        const transferResult = {
+            success: true,
+            domain,
+            transferId: result.ApiResponse.CommandResponse.DomainTransferCreateResult.TransferID,
+            status: result.ApiResponse.CommandResponse.DomainTransferCreateResult.Status,
+            timestamp: new Date().toISOString()
+        };
+
+        // Cache successful result
+        cache.set(cacheKey, transferResult, 300); // Cache for 5 minutes
+
+        res.json({
+            success: true,
+            operation,
+            data: transferResult
+        });
+
+    } catch (error) {
+        const errorResponse = createErrorResponse(error, operation);
+        res.status(error.status || 500).json(errorResponse);
+    }
+}));
+
+// Get transfer status endpoint
+router.get('/transfer/:domain/status', apiLimiter, asyncHandler(async (req, res) => {
+    const operation = 'GET_TRANSFER_STATUS';
+    try {
+        const { domain } = req.params;
+
+        if (!isValidDomain(domain)) {
+            throw new Error('Invalid domain format');
+        }
+
+        // Check cache
+        const cacheKey = `transfer_status_${domain}`;
+        const cached = cache.get(cacheKey);
+        if (cached) {
+            return res.json({
+                ...cached,
+                source: 'cache'
+            });
+        }
+
+        // Get transfer status with retries and circuit breaker
+        const result = await retryWithBackoff(async () => {
+            return await namecheapBreaker.fire('namecheap.domains.transfer.getStatus', {
+                DomainName: domain
+            });
+        });
+
+        const statusResult = {
+            success: true,
+            domain,
+            status: result.ApiResponse.CommandResponse.TransferGetStatusResult.Status,
+            transferable: result.ApiResponse.CommandResponse.TransferGetStatusResult.Transferable === 'true',
+            authCodeRequired: result.ApiResponse.CommandResponse.TransferGetStatusResult.AuthCodeRequired === 'true',
+            timestamp: new Date().toISOString()
+        };
+
+        // Cache the result for a shorter period since transfer status can change
+        cache.set(cacheKey, statusResult, 60); // Cache for 1 minute
+
+        res.json(statusResult);
+
+    } catch (error) {
+        const errorResponse = createErrorResponse(error, operation);
+        res.status(error.status || 500).json(errorResponse);
+    }
+}));
+
+// Bulk transfer status check endpoint
+router.post('/transfer/status-bulk', apiLimiter, asyncHandler(async (req, res) => {
+    const operation = 'BULK_TRANSFER_STATUS';
+    try {
+        const { domains } = req.body;
+        if (!Array.isArray(domains)) {
+            throw new Error('Invalid domains array');
+        }
+
+        const results = [];
+        const errors = [];
+
+        // Process domains in parallel with individual timeouts
+        const statusPromises = domains.map(async (domain) => {
+            try {
+                // Check cache
+                const cacheKey = `transfer_status_${domain}`;
+                const cached = cache.get(cacheKey);
+                if (cached) {
+                    return { ...cached, source: 'cache' };
+                }
+
+                const result = await retryWithBackoff(async () => {
+                    return await namecheapBreaker.fire('namecheap.domains.transfer.getStatus', {
+                        DomainName: domain
+                    });
+                });
+
+                const statusResult = {
+                    success: true,
+                    domain,
+                    status: result.ApiResponse.CommandResponse.TransferGetStatusResult.Status,
+                    transferable: result.ApiResponse.CommandResponse.TransferGetStatusResult.Transferable === 'true',
+                    authCodeRequired: result.ApiResponse.CommandResponse.TransferGetStatusResult.AuthCodeRequired === 'true',
+                    timestamp: new Date().toISOString()
+                };
+
+                // Cache the result
+                cache.set(cacheKey, statusResult, 60);
+                return statusResult;
+
+            } catch (error) {
+                return {
+                    domain,
+                    success: false,
+                    error: error.message
+                };
+            }
+        });
+
+        const statusResults = await Promise.all(statusPromises);
+        
+        res.json({
+            success: true,
+            operation,
+            results: statusResults.filter(r => r.success),
+            errors: statusResults.filter(r => !r.success),
+            summary: {
+                total: domains.length,
+                succeeded: statusResults.filter(r => r.success).length,
+                failed: statusResults.filter(r => !r.success).length
+            }
+        });
+
+    } catch (error) {
+        const errorResponse = createErrorResponse(error, operation);
+        res.status(error.status || 500).json(errorResponse);
+    }
+}));
 
 module.exports = {
     router,
