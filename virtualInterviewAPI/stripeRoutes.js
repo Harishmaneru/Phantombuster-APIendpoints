@@ -1388,4 +1388,50 @@ function extractHtmlErrorMessage(html) {
     return html.slice(0, 200); // fallback: first 200 chars
 }
 
+// Updated endpoint for app-specific success/cancel URLs (no custom URLs, new app names)
+router.post('/create-checkout-session-by-app', async (req, res) => {
+    try {
+        const { userId, priceId, app } = req.body;
+
+        // Map app names to their base URLs
+        const appUrlMap = {
+            kampaignai: 'http://localhost:4200',
+            gps: 'https://gps.onepgr.com',
+            getsalesgpt: 'https://sales.onepgr.com',
+        };
+
+        // Determine URLs
+        let successUrl, cancelUrl;
+        if (app && appUrlMap[app]) {
+            successUrl = `${appUrlMap[app]}/success?session_id={CHECKOUT_SESSION_ID}`;
+            cancelUrl = `${appUrlMap[app]}/cancel`;
+        } else {
+            if (!app || !appUrlMap[app]) {
+                return res.status(400).json({ error: 'Invalid or missing app parameter' });
+            }
+        }
+
+        const session = await stripe.checkout.sessions.create({
+            mode: 'subscription',
+            payment_method_types: ['card'],
+            line_items: [{ price: priceId, quantity: 1 }],
+            success_url: successUrl,
+            cancel_url: cancelUrl,
+            metadata: { userId, app }
+        });
+
+        res.json({ url: session.url });
+    } catch (err) {
+        console.error("Stripe error (by-app):", {
+            statusCode: err.statusCode,
+            code: err.code,
+            message: err.message,
+            request_log_url: err.request_log_url
+        });
+        return res
+            .status(err.statusCode || 500)
+            .json({ error: err.message });
+    }
+});
+
 module.exports = router;

@@ -524,7 +524,13 @@ async function parseXmlResponse(xml) {
 
 // Send Namecheap XML request
 async function namecheapRequest(command, params = {}, retryCount = 0, maxRetries = 3) {
-    const body = new URLSearchParams({
+    // Validate required environment variables
+    if (!NAMECHEAP_API_USER || !NAMECHEAP_API_KEY || !NAMECHEAP_CLIENT_IP) {
+        throw new Error('Missing required Namecheap API configuration');
+    }
+
+    // Build query parameters
+    const queryParams = new URLSearchParams({
         ApiUser: NAMECHEAP_API_USER,
         ApiKey: NAMECHEAP_API_KEY,
         UserName: NAMECHEAP_API_USER,
@@ -533,38 +539,50 @@ async function namecheapRequest(command, params = {}, retryCount = 0, maxRetries
         ...params
     });
 
+    // Construct the full URL with query parameters
+    const url = `${BASE_URL}?${queryParams.toString()}`;
+
     try {
         console.log('[Namecheap API] Making request:', {
             command,
-            params: { ...params, password: '***' },
-            url: BASE_URL,
-            retryCount
+            params: { ...params, ApiKey: '***' },
+            retryCount,
+            url: url.replace(NAMECHEAP_API_KEY, '***')
         });
 
-        const response = await axios.post(BASE_URL, body.toString(), {
-            headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        // Use GET method instead of POST
+        const response = await axios.get(url, {
+            headers: {
+                'Accept': 'application/xml',
+                'Content-Type': 'application/xml'
+            },
             maxRedirects: 5,
-            timeout: 10000, // 10 second timeout
+            timeout: 30000, // Increased timeout to 30 seconds
             validateStatus: function (status) {
                 return status >= 200 && status < 500;
             }
         });
 
+        // Add delay between retries
+        if (retryCount > 0) {
+            const delay = Math.min(1000 * Math.pow(2, retryCount), 10000); // Exponential backoff with 10s max
+            await new Promise(resolve => setTimeout(resolve, delay));
+        }
+
+        // Validate response
         if (!response.data) {
             throw new Error('Empty response from Namecheap API');
         }
 
-        // Add delay between retries
-        if (retryCount > 0) {
-            await new Promise(resolve => setTimeout(resolve, 1000 * retryCount));
-        }
-
-        // console.log('[Namecheap API] Raw response:', response.data);
-
-        // Validate response is valid XML
-        if (typeof response.data !== 'string' || !response.data.trim().startsWith('<?xml')) {
-            console.error('Raw response from Namecheap:', response.data);
-            throw new Error('Invalid XML response from API');
+        // Handle non-XML responses
+        if (typeof response.data === 'string') {
+            if (response.data.includes('405 - HTTP verb used to access this page is not allowed')) {
+                throw new Error('HTTP method not allowed. The API endpoint requires a different HTTP method.');
+            }
+            if (!response.data.trim().startsWith('<?xml')) {
+                console.error('[Namecheap API] Unexpected response format:', response.data);
+                throw new Error('Invalid response format from API');
+            }
         }
 
         const parsed = await parseXmlResponse(response.data);
@@ -575,14 +593,21 @@ async function namecheapRequest(command, params = {}, retryCount = 0, maxRetries
         }
 
         if (!parsed.ApiResponse) {
+            console.error('[Namecheap API] Invalid response structure:', parsed);
             throw new Error('Missing ApiResponse in parsed data');
         }
 
         // Check for API errors
-        if (parsed.ApiResponse.Errors) {
-            const error = parsed.ApiResponse.Errors.Error;
-            const errorMessage = typeof error === 'string' ? error : error._ || 'Unknown API error';
-            throw new Error(`Namecheap API error: ${errorMessage}`);
+        if (parsed.ApiResponse.Errors && parsed.ApiResponse.Errors.Error) {
+            const errors = Array.isArray(parsed.ApiResponse.Errors.Error)
+                ? parsed.ApiResponse.Errors.Error
+                : [parsed.ApiResponse.Errors.Error];
+
+            const errorMessages = errors.map(error =>
+                typeof error === 'string' ? error : error._ || error.toString()
+            ).join('; ');
+
+            throw new Error(`Namecheap API error: ${errorMessages}`);
         }
 
         // Check API response status
@@ -591,6 +616,7 @@ async function namecheapRequest(command, params = {}, retryCount = 0, maxRetries
         }
 
         return parsed;
+
     } catch (err) {
         console.error('[Namecheap API] Request failed:', {
             command,
@@ -601,22 +627,51 @@ async function namecheapRequest(command, params = {}, retryCount = 0, maxRetries
             stack: err.stack
         });
 
-        // Retry logic for specific error cases
+        // Enhanced retry logic
         if (retryCount < maxRetries) {
             const shouldRetry =
                 !err.response || // Network error
                 err.response.status >= 500 || // Server error
+                err.response.status === 405 || // Method not allowed (try alternative method)
                 err.message.includes('Invalid XML response') || // XML parsing error
-                err.message.includes('Failed to parse API response'); // Parsing error
+                err.message.includes('Failed to parse API response') || // Parsing error
+                err.message.includes('ECONNRESET') || // Connection reset
+                err.message.includes('timeout'); // Timeout error
 
             if (shouldRetry) {
                 console.log(`[Namecheap API] Retrying request (attempt ${retryCount + 1}/${maxRetries})...`);
+
+                // If we got a 405, try POST method on retry
+                if (err.response?.status === 405) {
+                    console.log('[Namecheap API] Switching to POST method for retry');
+                    try {
+                        const postResponse = await axios.post(BASE_URL, queryParams.toString(), {
+                            headers: {
+                                'Content-Type': 'application/x-www-form-urlencoded',
+                                'Accept': 'application/xml'
+                            },
+                            timeout: 30000
+                        });
+                        if (postResponse.data) {
+                            return await parseXmlResponse(postResponse.data);
+                        }
+                    } catch (postError) {
+                        console.error('[Namecheap API] POST retry failed:', postError.message);
+                    }
+                }
+
                 return namecheapRequest(command, params, retryCount + 1, maxRetries);
             }
         }
 
-        // If we've exhausted retries or it's not a retryable error, throw
-        throw err;
+        // If we've exhausted retries or it's not a retryable error, throw with enhanced error info
+        const error = new Error(`Namecheap API request failed: ${err.message}`);
+        error.code = 'NAMECHEAP_API_ERROR';
+        error.status = err.response?.status;
+        error.command = command;
+        error.params = { ...params, ApiKey: '***' };
+        error.retryCount = retryCount;
+        throw error;
     }
 }
 
@@ -1658,9 +1713,11 @@ router.get('/namecheap/domain/pricing', async (req, res) => {
     }
 });
 
+
 //  _________________________Bulk Domain Pricing Check______________
 
-router.post('/namecheap/domain/bulk-pricing', async (req, res) => {
+router.post('/namecheap/domain/bulk-pricing', apiLimiter, asyncHandler(async (req, res) => {
+    const operation = 'BULK_PRICING_CHECK';
     const { domains, years = 1 } = req.body;
     const startTime = Date.now();
 
@@ -1868,24 +1925,21 @@ router.post('/namecheap/domain/bulk-pricing', async (req, res) => {
             processingTime: Date.now() - startTime
         });
 
-        res.status(500).json({
-            success: false,
-            error: err.message,
-            data: {
-                requestedDomains: domains.length,
-                years: yearsInt,
-                processingTime: Date.now() - startTime
-            },
+        const errorResponse = createErrorResponse(err, operation);
+        errorResponse.details = {
+            requestedDomains: domains.length,
+            years: yearsInt,
+            processingTime: Date.now() - startTime,
             recoveryOptions: [
                 'Try with fewer domains (max 50 per request)',
                 'Check if all domains have valid format',
                 'Retry the request after a moment',
                 'Contact support if the issue persists'
-            ],
-            timestamp: new Date().toISOString()
-        });
+            ]
+        };
+        res.status(500).json(errorResponse);
     }
-});
+}));
 
 
 
@@ -1893,7 +1947,8 @@ router.post('/namecheap/domain/bulk-pricing', async (req, res) => {
 
 //  _________________________Alternative: Get multi-year pricing with query parameter______________
 
-router.get('/namecheap/domain/:domain/pricing', async (req, res) => {
+router.get('/namecheap/domain/:domain/pricing', apiLimiter, asyncHandler(async (req, res) => {
+    const operation = 'GET_DOMAIN_PRICING';
     const { domain } = req.params;
     const { years = '1' } = req.query;
 
@@ -2032,14 +2087,15 @@ router.get('/namecheap/domain/:domain/pricing', async (req, res) => {
             timestamp: new Date().toISOString()
         });
 
-        res.status(500).json({
-            success: false,
-            error: err.message,
-            data: null,
+        const errorResponse = createErrorResponse(err, operation);
+        errorResponse.details = {
+            domain,
+            years: yearsInt,
             apiMode: NAMECHEAP_SANDBOX === 'true' ? 'sandbox' : 'production'
-        });
+        };
+        res.status(500).json(errorResponse);
     }
-});
+}));
 
 
 
@@ -4387,8 +4443,8 @@ router.post('/register', apiLimiter, asyncHandler(async (req, res) => {
 
         // Validate domain availability with retries
         const availabilityCheck = await retryWithBackoff(async () => {
-            return await namecheapBreaker.fire('revalidateDomainAvailability', 
-                registrationData.domain, 
+            return await namecheapBreaker.fire('revalidateDomainAvailability',
+                registrationData.domain,
                 registrationData.acceptPremiumPricing
             );
         });
@@ -4470,7 +4526,7 @@ router.post('/check-bulk', apiLimiter, asyncHandler(async (req, res) => {
         });
 
         const checkResults = await Promise.all(checkPromises);
-        
+
         res.json({
             success: true,
             operation,
@@ -4493,7 +4549,7 @@ router.get('/contact-info/:domain', apiLimiter, asyncHandler(async (req, res) =>
     const operation = 'GET_CONTACT_INFO';
     try {
         const { domain } = req.params;
-        
+
         // Check cache
         const cacheKey = `contact_info_${domain}`;
         const cached = cache.get(cacheKey);
@@ -4513,7 +4569,7 @@ router.get('/contact-info/:domain', apiLimiter, asyncHandler(async (req, res) =>
         });
 
         const contactInfo = result.ApiResponse.CommandResponse.DomainContactsResult;
-        
+
         // Cache the result
         cache.set(cacheKey, contactInfo, 300);
 
@@ -4651,7 +4707,7 @@ router.post('/renew/:domain', apiLimiter, asyncHandler(async (req, res) => {
         });
 
         const currentExpiry = domainInfo.ApiResponse.CommandResponse.DomainGetInfoResult.DomainDetails.ExpiredDate;
-        
+
         // Attempt renewal with circuit breaker and retries
         const result = await retryWithBackoff(async () => {
             return await namecheapBreaker.fire('namecheap.domains.renew', {
@@ -4957,7 +5013,7 @@ router.post('/transfer/status-bulk', apiLimiter, asyncHandler(async (req, res) =
         });
 
         const statusResults = await Promise.all(statusPromises);
-        
+
         res.json({
             success: true,
             operation,
