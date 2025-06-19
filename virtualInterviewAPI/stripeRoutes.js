@@ -1262,6 +1262,9 @@ router.post('/domain/process-success-payment', async (req, res) => {
             // Prepare Stripe payment information for database storage
             const stripePaymentInfo = {
                 sessionId: session.id,
+                subscriptionId: session.subscription,
+                hostedInvoiceUrl: session.hosted_invoice_url,
+                invoicePdf: session.invoice_pdf,
                 paymentIntentId: session.payment_intent,
                 customerId: typeof session.customer === 'object' ? session.customer.id : session.customer,
                 paymentStatus: session.payment_status,
