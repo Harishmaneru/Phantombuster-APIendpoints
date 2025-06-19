@@ -875,7 +875,7 @@ router.post('/get-domain-purchase', async (req, res) => {
 
         // Check if this is a domain purchase
         const isDomainPurchase = session.metadata?.purchaseType === 'domain_registration' ||
-                                session.metadata?.purchaseType === 'domain';
+            session.metadata?.purchaseType === 'domain';
 
         if (!isDomainPurchase) {
             return res.status(400).json({ error: 'This session is not a domain purchase' });
@@ -949,10 +949,10 @@ router.get('/users/:userId/domain-purchases', async (req, res) => {
         });
 
         // Filter sessions for this user and domain purchases
-        const userDomainPurchases = sessions.data.filter(session => 
-            session.metadata?.userId === userId && 
-            (session.metadata?.purchaseType === 'domain_registration' || 
-             session.metadata?.purchaseType === 'domain')
+        const userDomainPurchases = sessions.data.filter(session =>
+            session.metadata?.userId === userId &&
+            (session.metadata?.purchaseType === 'domain_registration' ||
+                session.metadata?.purchaseType === 'domain')
         );
 
         // Get detailed information for each purchase
@@ -1003,9 +1003,9 @@ router.get('/webhook-status', async (req, res) => {
         // First check if we can access the webhook endpoints
         try {
             const webhooks = await stripe.webhookEndpoints.list();
-            
+
             // Find our webhook endpoint
-            const ourWebhook = webhooks.data.find(webhook => 
+            const ourWebhook = webhooks.data.find(webhook =>
                 webhook.url.includes('/api/stripe/webhook')
             );
 
@@ -1066,12 +1066,12 @@ router.get('/webhook-status', async (req, res) => {
 });
 
 // Simple domain checkout with contact info in metadata
-router.post('/domain/create-checkout-session-simple', async (req, res) => {
+router.post('/domain/create-checkout-session', async (req, res) => {
     try {
-        const { 
-            userId, 
-            domainName, 
-            unitPrice, 
+        const {
+            userId,
+            domainName,
+            unitPrice,
             currency,
             // Contact information for registration
             firstName,
@@ -1099,8 +1099,8 @@ router.post('/domain/create-checkout-session-simple', async (req, res) => {
 
         // Validate inputs
         if (!userId || !domainName || !unitPrice) {
-            return res.status(400).json({ 
-                error: 'userId, domainName, and unitPrice are required' 
+            return res.status(400).json({
+                error: 'userId, domainName, and unitPrice are required'
             });
         }
 
@@ -1121,17 +1121,17 @@ router.post('/domain/create-checkout-session-simple', async (req, res) => {
         const product = await stripe.products.create({
             name: `Domain: ${domainName}`,
             description: `Registration for ${domainName}`,
-            metadata: { 
-                type: 'domain', 
-                userId, 
+            metadata: {
+                type: 'domain',
+                userId,
                 domainName
             }
         });
 
         // Store contact information in metadata
-        const metadata = { 
-            userId, 
-            domainName, 
+        const metadata = {
+            userId,
+            domainName,
             purchaseType: 'domain',
             years: years.toString(),
             enablePrivacy: enablePrivacy.toString(),
@@ -1166,8 +1166,8 @@ router.post('/domain/create-checkout-session-simple', async (req, res) => {
             customer_creation: 'always'
         });
 
-        res.json({ 
-            url: session.url, 
+        res.json({
+            url: session.url,
             sessionId: session.id,
             message: 'Checkout session created. Call /domain/process-success-payment after successful payment to register domain.'
         });
@@ -1191,9 +1191,9 @@ router.post('/domain/process-success-payment', async (req, res) => {
 
         // Validate required fields
         if (!sessionId || !userId) {
-            return res.status(400).json({ 
+            return res.status(400).json({
                 success: false,
-                error: 'sessionId and userId are required' 
+                error: 'sessionId and userId are required'
             });
         }
 
@@ -1204,9 +1204,9 @@ router.post('/domain/process-success-payment', async (req, res) => {
         });
 
         if (!session) {
-            return res.status(404).json({ 
+            return res.status(404).json({
                 success: false,
-                error: 'Payment session not found' 
+                error: 'Payment session not found'
             });
         }
 
@@ -1222,7 +1222,7 @@ router.post('/domain/process-success-payment', async (req, res) => {
 
         // Verify this is a domain purchase
         const isDomainPurchase = session.metadata?.purchaseType === 'domain';
-        
+
         if (!isDomainPurchase) {
             return res.status(400).json({
                 success: false,
@@ -1257,7 +1257,7 @@ router.post('/domain/process-success-payment', async (req, res) => {
 
         // Step 3: Register domain with Namecheap
         console.log('Step 2: Registering domain with Namecheap...');
-        
+
         try {
             // Prepare Stripe payment information for database storage
             const stripePaymentInfo = {
@@ -1336,7 +1336,7 @@ router.post('/domain/process-success-payment', async (req, res) => {
 
         } catch (namecheapError) {
             console.error('Namecheap registration failed:', namecheapError.message);
-            
+
             if (namecheapError.isHtmlResponse) {
                 return res.status(502).json({
                     success: false,
@@ -1351,7 +1351,7 @@ router.post('/domain/process-success-payment', async (req, res) => {
                     timestamp: new Date().toISOString()
                 });
             }
-            
+
             return res.status(500).json({
                 success: false,
                 error: 'Domain registration failed after successful payment',

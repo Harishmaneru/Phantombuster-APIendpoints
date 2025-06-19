@@ -4400,23 +4400,24 @@ const whmBreaker = new CircuitBreaker(async (endpoint, params) => {
 // Health check endpoint
 router.get('/health', async (req, res) => {
     const health = {
-        uptime: process.uptime(),
-        timestamp: new Date().toISOString(),
-        services: {}
+      uptime: process.uptime(),
+      timestamp: new Date().toISOString(),
+      services: {}
     };
-
+  
+    // Use a lighter API call for health check
     try {
-        await namecheapBreaker.fire('namecheap.domains.getTldList', {});
-        health.services.namecheap = { status: 'up' };
+      await namecheapBreaker.fire('namecheap.users.getBalances', {});
+      health.services.namecheap = { status: 'up' };
     } catch (error) {
-        health.services.namecheap = { status: 'down', error: error.message };
+      health.services.namecheap = { 
+        status: error.message.includes('Rate limit exceeded') ? 'rate_limited' : 'down',
+        error: error.message 
+      };
     }
-
-    const overallStatus = Object.values(health.services)
-        .every(service => service.status === 'up') ? 200 : 503;
-
-    res.status(overallStatus).json(health);
-});
+  
+    res.status(200).json(health);  
+  });
 
 // Domain registration endpoint with robust error handling
 router.post('/register', apiLimiter, asyncHandler(async (req, res) => {
