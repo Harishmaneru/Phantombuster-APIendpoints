@@ -239,6 +239,21 @@ async function sendSubmissionEmails(submission, sendSummary) {
       return "Our Team";
     })();
 
+    // Generate share link for the submission
+    let shareLink = null;
+    try {
+      const token = crypto.randomBytes(16).toString('hex');
+      await SharedLink.create({
+        submissionId: submission._id,
+        token
+      });
+      shareLink = `https://record.onepgr.com/candidate_response/${token}?id=${submission._id}`;
+      console.log(`Generated share link for submission ${submission._id}: ${shareLink}`);
+    } catch (shareError) {
+      console.error('Error generating share link:', shareError);
+      // Continue without share link if generation fails
+    }
+
     console.log(`Sending emails for submission from ${applicantName} to ${hiringManagerEmail}`);
 
     // Email to Hiring Manager
@@ -247,7 +262,7 @@ async function sendSubmissionEmails(submission, sendSummary) {
         <h4 style="color: #2d3748;">New Application Submission Received</h4>
         <p style="color: #4a5568;"><strong>Applicant Name:</strong> ${applicantName}</p>
         <p style="color: #4a5568;"><strong>Applicant Email:</strong> ${email}</p>
-        <p style="color: #4a5568;"><strong>LinkedIn URL:</strong> <a href="${linkedInUrl}">${linkedInUrl}</a></p>
+        <p style="color: #4a5568;"><strong>LinkedIn URL:</strong> <a href="${linkedInUrl}">${linkedInUrl ? linkedInUrl : 'View Profile'}</a></p>
         <p style="color: #4a5568;">
         <strong>Application Link:</strong> 
         <a href="https://record.onepgr.com/InterviewPage/${applicationLink}" 
@@ -255,6 +270,15 @@ async function sendSubmissionEmails(submission, sendSummary) {
         https://record.onepgr.com/InterviewPage/${applicationLink}
         </a>
         </p> 
+        ${shareLink ? `
+        <p style="color: #4a5568;">
+        <strong>View Candidate Response:</strong> 
+        <a href="${shareLink}" 
+        style="word-break: break-all; color: #3182ce; text-decoration: underline;">
+        ${shareLink}
+        </a>
+        </p>
+        ` : ''}
         <p style="color: #4a5568;"><strong>Submitted At:</strong> ${submittedAt.toLocaleString()}</p>
         <p style="margin-top: 20px; color: #718096;">Best regards,<br/>${companyName} Hiring Team</p>
       </div>
@@ -277,7 +301,7 @@ async function sendSubmissionEmails(submission, sendSummary) {
       return { success: false, error: `Failed to send hiring manager email: ${error.message}` };
     }
 
-    // Email to Applicant (if they opted in)
+    // Email to Applicant  
     if (sendSummary) {
       const applicantEmailBody = `
         <div style="font-family: Arial, sans-serif; max-width: 600px; text-align: left;">
@@ -562,7 +586,7 @@ router.post('/submit', ensureDbConnection, handleUpload, async (req, res) => {
       try {
         // Ensure database connection is ready for background processing
         await connectDB();
-        
+
         logSubmissionActivity('Background Processing Started', {
           submissionId: savedId,
           applicantName,
@@ -1208,46 +1232,6 @@ Transcription: "${transcription}"
 }
 
 
-
-// async function evaluateTranscription(transcription, question) {
-//   const scorePrompt = `Based on the provided transcription, please evaluate the candidate on the following criteria and return the evaluation in plain text using the format specified below.
-
-//   Criteria:
-//   1. Articulation and Clarity – Provide a score out of 5 and a brief insight.
-//   2. Technical Knowledge – Provide a score out of 5 and a brief insight.
-//   3. Depth and Detail – Provide a score out of 5 and a brief insight.
-//   4. Conversational Effectiveness – Provide a score out of 5 and a brief insight.
-
-//   Return the output exactly in this format:
-
-//   Articulation and Clarity: [score]/5
-//   Insight: [insight for articulation and clarity]
-
-//   Technical Knowledge: [score]/5
-//   Insight: [insight for technical knowledge]
-
-//   Depth and Detail: [score]/5
-//   Insight: [insight for depth and detail]
-
-//   Conversational Effectiveness: [score]/5
-//   Insight: [insight for conversational effectiveness]
-
-//   Text: ${transcription}`;
-
-//   const payload = {
-//     prompt: scorePrompt,
-//     subject: 0
-//   };
-
-
-//   const response = await axios.post('https://app.onepgr.com/session/generateAiResponse', payload, {
-//     headers: {
-//       'Authorization': `Bearer ${process.env.OPENAI_API_KEY}`//     }
-
-//   });//   console.log(response.data.message)
-//   return response.data;
-
-// }
 
 // New GET endpoint to fetch the evaluation/score for a submission
 router.get('/score/:submissionId', ensureDbConnection, async (req, res) => {
