@@ -420,6 +420,7 @@ router.post('/get-subscription-from-session', async (req, res) => {
 
         // Check for credit notes (refunds)
         let refundInfo = null;
+        let invoiceInfo = null;
         try {
             const invoices = await stripe.invoices.list({
                 subscription: subscription.id,
@@ -427,8 +428,18 @@ router.post('/get-subscription-from-session', async (req, res) => {
             });
 
             if (invoices.data.length > 0) {
+                const latestInvoice = invoices.data[0];
+                invoiceInfo = {
+                    id: latestInvoice.id,
+                    hosted_invoice_url: latestInvoice.hosted_invoice_url,
+                    invoice_pdf: latestInvoice.invoice_pdf,
+                    status: latestInvoice.status,
+                    amount_paid: latestInvoice.amount_paid ? latestInvoice.amount_paid / 100 : null,
+                    currency: latestInvoice.currency
+                };
+
                 const creditNotes = await stripe.creditNotes.list({
-                    invoice: invoices.data[0].id
+                    invoice: latestInvoice.id
                 });
 
                 if (creditNotes.data.length > 0) {
@@ -610,7 +621,8 @@ router.post('/get-subscription-from-session', async (req, res) => {
                     currentPeriodStart: currentPeriodStart?.iso || null,
                     currentPeriodEnd: currentPeriodEnd?.iso || null,
                     cancelAtPeriodEnd: subscription.cancel_at_period_end || false,
-                    trialEnd: trialEnd?.iso || null
+                    trialEnd: trialEnd?.iso || null,
+                    invoice: invoiceInfo
                 },
                 customer: subscription.customer ? {
                     id: typeof subscription.customer === 'object' ?
@@ -622,6 +634,7 @@ router.post('/get-subscription-from-session', async (req, res) => {
                 } : null,
                 payment: paymentInfo,
                 refund: refundInfo,
+                invoice: invoiceInfo,
                 createdAt: createdAt?.iso || null
             }
         });
