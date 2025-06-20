@@ -483,10 +483,106 @@ router.post('/get-subscription-from-session', async (req, res) => {
             amountTotal: session.amount_total ? session.amount_total / 100 : null
         };
 
-        // Safe date formatting
-        const nextBillingDate = safeFormatDate(subscription.current_period_end);
-        const currentPeriodStart = safeFormatDate(subscription.current_period_start);
-        const currentPeriodEnd = safeFormatDate(subscription.current_period_end);
+        // Enhanced debugging for subscription dates
+        console.log('[stripeRoutes.js] Subscription date fields:', {
+            current_period_start: subscription.current_period_start,
+            current_period_end: subscription.current_period_end,
+            trial_end: subscription.trial_end,
+            created: subscription.created,
+            billing_cycle_anchor: subscription.billing_cycle_anchor,
+            start_date: subscription.start_date,
+            status: subscription.status
+        });
+
+        // Safe date formatting with enhanced fallbacks
+        let nextBillingDate = safeFormatDate(subscription.current_period_end);
+        let currentPeriodStart = safeFormatDate(subscription.current_period_start);
+        let currentPeriodEnd = safeFormatDate(subscription.current_period_end);
+        
+        // Enhanced fallback logic for current_period_start
+        if (!currentPeriodStart) {
+            if (subscription.billing_cycle_anchor) {
+                currentPeriodStart = safeFormatDate(subscription.billing_cycle_anchor);
+                console.log('[stripeRoutes.js] Using billing_cycle_anchor for current_period_start');
+            } else if (subscription.start_date) {
+                currentPeriodStart = safeFormatDate(subscription.start_date);
+                console.log('[stripeRoutes.js] Using start_date for current_period_start');
+            } else if (subscription.created) {
+                currentPeriodStart = safeFormatDate(subscription.created);
+                console.log('[stripeRoutes.js] Using created date for current_period_start');
+            }
+        }
+        
+        // Enhanced fallback logic for current_period_end and nextBillingDate
+        if (!currentPeriodEnd && currentPeriodStart && priceData.recurring) {
+            try {
+                const startDate = new Date(currentPeriodStart.iso);
+                const interval = priceData.recurring.interval;
+                const intervalCount = priceData.recurring.interval_count || 1;
+                
+                let endDate = new Date(startDate);
+                if (interval === 'year') {
+                    endDate.setFullYear(endDate.getFullYear() + intervalCount);
+                } else if (interval === 'month') {
+                    endDate.setMonth(endDate.getMonth() + intervalCount);
+                } else if (interval === 'week') {
+                    endDate.setDate(endDate.getDate() + 7 * intervalCount);
+                } else if (interval === 'day') {
+                    endDate.setDate(endDate.getDate() + intervalCount);
+                }
+                
+                currentPeriodEnd = {
+                    iso: endDate.toISOString(),
+                    formatted: endDate.toDateString()
+                };
+                nextBillingDate = currentPeriodEnd;
+                console.log('[stripeRoutes.js] Calculated period end date:', currentPeriodEnd);
+            } catch (e) {
+                console.warn('Could not calculate period end date:', e);
+            }
+        }
+        
+        // Final fallback: if still no dates, use session creation date
+        if (!currentPeriodStart && session.created) {
+            currentPeriodStart = safeFormatDate(session.created);
+            console.log('[stripeRoutes.js] Using session created date as fallback');
+        }
+        
+        // Additional fallback for pending subscriptions
+        if (subscription.status === 'incomplete' || subscription.status === 'incomplete_expired') {
+            console.log('[stripeRoutes.js] Subscription is in incomplete state, using session dates');
+            if (!currentPeriodStart && session.created) {
+                currentPeriodStart = safeFormatDate(session.created);
+            }
+            if (!currentPeriodEnd && currentPeriodStart && priceData.recurring) {
+                // Calculate end date based on interval
+                try {
+                    const startDate = new Date(currentPeriodStart.iso);
+                    const interval = priceData.recurring.interval;
+                    const intervalCount = priceData.recurring.interval_count || 1;
+                    
+                    let endDate = new Date(startDate);
+                    if (interval === 'year') {
+                        endDate.setFullYear(endDate.getFullYear() + intervalCount);
+                    } else if (interval === 'month') {
+                        endDate.setMonth(endDate.getMonth() + intervalCount);
+                    } else if (interval === 'week') {
+                        endDate.setDate(endDate.getDate() + 7 * intervalCount);
+                    } else if (interval === 'day') {
+                        endDate.setDate(endDate.getDate() + intervalCount);
+                    }
+                    
+                    currentPeriodEnd = {
+                        iso: endDate.toISOString(),
+                        formatted: endDate.toDateString()
+                    };
+                    nextBillingDate = currentPeriodEnd;
+                } catch (e) {
+                    console.warn('Could not calculate period end date for incomplete subscription:', e);
+                }
+            }
+        }
+        
         const trialEnd = safeFormatDate(subscription.trial_end);
         const createdAt = safeFormatDate(subscription.created);
 
@@ -537,6 +633,7 @@ router.post('/get-subscription-from-session', async (req, res) => {
         res.status(500).json({ error: error.message || "Failed to fetch subscription" });
     }
 });
+
 
 
 // Get all subscriptions for a user
@@ -1436,5 +1533,7 @@ router.post('/create-checkout-session-by-app', async (req, res) => {
             .json({ error: err.message });
     }
 });
+
+
 
 module.exports = router;
