@@ -380,8 +380,8 @@ router.post('/domain/create-checkout-session', async (req, res) => {
                 },
                 quantity: 1,
             }],
-            success_url: 'http://localhost:4200/success?session_id={CHECKOUT_SESSION_ID}',
-            cancel_url: 'http://localhost:4200/cancel',
+            success_url: 'https://kampaign.onepgr.com:4200/success?session_id={CHECKOUT_SESSION_ID}',
+            cancel_url: 'https://kampaign.onepgr.com:4200/cancel',
             metadata: { userId, domainName, purchaseType: 'domain' }
         });
 
@@ -509,7 +509,7 @@ router.post('/get-subscription-from-session', async (req, res) => {
         let nextBillingDate = safeFormatDate(subscription.current_period_end);
         let currentPeriodStart = safeFormatDate(subscription.current_period_start);
         let currentPeriodEnd = safeFormatDate(subscription.current_period_end);
-        
+
         // Enhanced fallback logic for current_period_start
         if (!currentPeriodStart) {
             if (subscription.billing_cycle_anchor) {
@@ -523,14 +523,14 @@ router.post('/get-subscription-from-session', async (req, res) => {
                 console.log('[stripeRoutes.js] Using created date for current_period_start');
             }
         }
-        
+
         // Enhanced fallback logic for current_period_end and nextBillingDate
         if (!currentPeriodEnd && currentPeriodStart && priceData.recurring) {
             try {
                 const startDate = new Date(currentPeriodStart.iso);
                 const interval = priceData.recurring.interval;
                 const intervalCount = priceData.recurring.interval_count || 1;
-                
+
                 let endDate = new Date(startDate);
                 if (interval === 'year') {
                     endDate.setFullYear(endDate.getFullYear() + intervalCount);
@@ -541,7 +541,7 @@ router.post('/get-subscription-from-session', async (req, res) => {
                 } else if (interval === 'day') {
                     endDate.setDate(endDate.getDate() + intervalCount);
                 }
-                
+
                 currentPeriodEnd = {
                     iso: endDate.toISOString(),
                     formatted: endDate.toDateString()
@@ -552,13 +552,13 @@ router.post('/get-subscription-from-session', async (req, res) => {
                 console.warn('Could not calculate period end date:', e);
             }
         }
-        
+
         // Final fallback: if still no dates, use session creation date
         if (!currentPeriodStart && session.created) {
             currentPeriodStart = safeFormatDate(session.created);
             console.log('[stripeRoutes.js] Using session created date as fallback');
         }
-        
+
         // Additional fallback for pending subscriptions
         if (subscription.status === 'incomplete' || subscription.status === 'incomplete_expired') {
             console.log('[stripeRoutes.js] Subscription is in incomplete state, using session dates');
@@ -571,7 +571,7 @@ router.post('/get-subscription-from-session', async (req, res) => {
                     const startDate = new Date(currentPeriodStart.iso);
                     const interval = priceData.recurring.interval;
                     const intervalCount = priceData.recurring.interval_count || 1;
-                    
+
                     let endDate = new Date(startDate);
                     if (interval === 'year') {
                         endDate.setFullYear(endDate.getFullYear() + intervalCount);
@@ -582,7 +582,7 @@ router.post('/get-subscription-from-session', async (req, res) => {
                     } else if (interval === 'day') {
                         endDate.setDate(endDate.getDate() + intervalCount);
                     }
-                    
+
                     currentPeriodEnd = {
                         iso: endDate.toISOString(),
                         formatted: endDate.toDateString()
@@ -593,7 +593,7 @@ router.post('/get-subscription-from-session', async (req, res) => {
                 }
             }
         }
-        
+
         const trialEnd = safeFormatDate(subscription.trial_end);
         const createdAt = safeFormatDate(subscription.created);
 
