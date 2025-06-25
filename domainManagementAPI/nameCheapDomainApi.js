@@ -335,8 +335,8 @@ console.log(`[Namecheap API] Mode: ${NAMECHEAP_SANDBOX === 'true' ? 'SANDBOX' : 
 console.log(`[Namecheap API] User: ${NAMECHEAP_API_USER}`);
 
 
-// const BASE_URL = 'https://api.namecheap.com/xml.response';
-const BASE_URL = 'https://api.sandbox.namecheap.com/xml.response';
+const BASE_URL = 'https://api.namecheap.com/xml.response';
+// const BASE_URL = 'https://api.sandbox.namecheap.com/xml.response';
 
 // cPanel/WHM API Configuration
 const {
