@@ -105,9 +105,35 @@ router.post(
 
                     await connectToMongoDB();
 
+                    // Check if this is a subscription payment or one-time payment
+                    if (!subscriptionId) {
+                        // This is a one-time payment (e.g., domain purchase)
+                        console.log('[checkout.session.completed] One-time payment detected, skipping subscription processing');
+                        
+                        // You might want to store one-time payment records in a different collection
+                        // For now, we'll just log it and continue
+                        console.log('[checkout.session.completed] One-time payment details:', {
+                            sessionId,
+                            userId,
+                            amount: amount_total / 100,
+                            currency,
+                            paymentStatus: payment_status,
+                            purchaseType: metadata?.purchaseType || 'unknown'
+                        });
+                        break;
+                    }
+
                     // Retrieve the complete subscription object from Stripe
-                    const stripeSubscription = await stripe.subscriptions.retrieve(subscriptionId);
-                    console.log('checkout.session.completed event data:', stripeSubscription);
+                    let stripeSubscription;
+                    try {
+                        stripeSubscription = await stripe.subscriptions.retrieve(subscriptionId);
+                        console.log('checkout.session.completed event data:', stripeSubscription);
+                    } catch (subscriptionError) {
+                        console.error(`[stripeRoutes.js] Failed to retrieve subscription ${subscriptionId}:`, subscriptionError.message);
+                        // Log the error but don't fail the webhook - this could be a temporary Stripe issue
+                        console.log('[stripeRoutes.js] Webhook will continue processing other events');
+                        break;
+                    }
 
                     // Compute current period dates
                     let startUnix =
@@ -683,6 +709,12 @@ router.get('/users/:userId/subscriptions', async (req, res) => {
         // For each subscription record stored in Mongo, retrieve the up-to-date details from Stripe
         const stripeSubscriptions = await Promise.all(userSubscriptions.map(async (record) => {
             try {
+                // Add safety check for null subscriptionId
+                if (!record.subscriptionId) {
+                    console.warn(`Skipping subscription record with null subscriptionId for user ${record.userId}`);
+                    return null;
+                }
+
                 const stripeSub = await stripe.subscriptions.retrieve(record.subscriptionId, {
                     expand: ['items.data.price.product', 'customer', 'latest_invoice']
                 });
