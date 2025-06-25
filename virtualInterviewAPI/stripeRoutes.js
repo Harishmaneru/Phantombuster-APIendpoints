@@ -1414,23 +1414,161 @@ router.post('/domain/process-success-payment', async (req, res) => {
         console.log('Step 2: Registering domain with Namecheap...');
 
         try {
+            // Debug: Log all available session fields
+            console.log('🔍 Stripe Session Debug Info:', {
+                sessionId: session.id,
+                mode: session.mode,
+                paymentStatus: session.payment_status,
+                hasInvoice: !!session.invoice,
+                hasPaymentIntent: !!session.payment_intent,
+                hasCustomer: !!session.customer,
+                availableFields: Object.keys(session).filter(key => 
+                    ['id', 'mode', 'payment_status', 'invoice', 'payment_intent', 'customer', 
+                     'amount_total', 'currency', 'created', 'metadata'].includes(key)
+                )
+            });
+
             // Prepare Stripe payment information for database storage
-            let hostedInvoiceUrl = session.hosted_invoice_url || null;
-            let invoicePdf = session.invoice_pdf || null;
+            let hostedInvoiceUrl = null;
+            let invoicePdf = null;
+            let invoiceId = null;
             
-            // If we have an invoice ID but no hosted invoice URL, fetch it from the invoice
-            if (session.invoice && !hostedInvoiceUrl) {
+            // Method 1: Try to get invoice ID from session
+            if (session.invoice) {
+                invoiceId = session.invoice;
+                console.log('📄 Found invoice ID in session:', invoiceId);
+            }
+            
+            // Method 2: Try to get invoice from payment intent
+            if (!invoiceId && session.payment_intent) {
                 try {
-                    const invoice = await stripe.invoices.retrieve(session.invoice);
-                    hostedInvoiceUrl = invoice.hosted_invoice_url || null;
-                    invoicePdf = invoice.invoice_pdf || null;
-                    console.log('Fetched invoice details:', {
-                        invoiceId: session.invoice,
+                    const paymentIntent = await stripe.paymentIntents.retrieve(session.payment_intent);
+                    if (paymentIntent.invoice) {
+                        invoiceId = paymentIntent.invoice;
+                        console.log('📄 Found invoice ID from payment intent:', invoiceId);
+                    }
+                } catch (piError) {
+                    console.warn('Could not retrieve payment intent:', piError.message);
+                }
+            }
+            
+            // Method 3: Try to find invoice by customer and amount
+            if (!invoiceId && session.customer) {
+                try {
+                    const customerId = typeof session.customer === 'object' ? session.customer.id : session.customer;
+                    const amount = session.amount_total;
+                    
+                    const invoices = await stripe.invoices.list({
+                        customer: customerId,
+                        limit: 5
+                    });
+                    
+                    // Find matching invoice by amount and recent date
+                    const matchingInvoice = invoices.data.find(inv => 
+                        inv.amount_paid === amount && 
+                        inv.status === 'paid' &&
+                        Math.abs(inv.created - session.created) < 300 // Within 5 minutes
+                    );
+                    
+                    if (matchingInvoice) {
+                        invoiceId = matchingInvoice.id;
+                        console.log('📄 Found matching invoice by customer and amount:', invoiceId);
+                    }
+                } catch (invError) {
+                    console.warn('Could not search invoices by customer:', invError.message);
+                }
+            }
+            
+            // Method 4: Create an invoice if none exists (for one-time payments)
+            if (!invoiceId && session.customer && session.amount_total) {
+                try {
+                    const customerId = typeof session.customer === 'object' ? session.customer.id : session.customer;
+                    
+                    // Create a simple invoice for the payment
+                    const invoice = await stripe.invoices.create({
+                        customer: customerId,
+                        description: `Domain registration: ${domainName}`,
+                        metadata: {
+                            sessionId: session.id,
+                            domainName: domainName,
+                            purchaseType: 'domain_registration'
+                        }
+                    });
+                    
+                    // Add an invoice item for the payment
+                    await stripe.invoiceItems.create({
+                        customer: customerId,
+                        invoice: invoice.id,
+                        amount: session.amount_total,
+                        currency: session.currency,
+                        description: `Domain registration for ${domainName}`
+                    });
+                    
+                    // Finalize and pay the invoice
+                    const finalizedInvoice = await stripe.invoices.finalizeInvoice(invoice.id);
+                    const paidInvoice = await stripe.invoices.pay(finalizedInvoice.id);
+                    
+                    invoiceId = paidInvoice.id;
+                    hostedInvoiceUrl = paidInvoice.hosted_invoice_url || null;
+                    invoicePdf = paidInvoice.invoice_pdf || null;
+                    
+                    console.log('📄 Created and paid invoice for one-time payment:', {
+                        invoiceId: invoiceId,
                         hostedInvoiceUrl: hostedInvoiceUrl ? 'Available' : 'Not available',
                         invoicePdf: invoicePdf ? 'Available' : 'Not available'
                     });
+                } catch (createError) {
+                    console.warn('Could not create invoice for one-time payment:', createError.message);
+                }
+            }
+            
+            // Method 5: Try to get invoice from payment intent's charges
+            if (!invoiceId && session.payment_intent) {
+                try {
+                    const paymentIntent = await stripe.paymentIntents.retrieve(session.payment_intent, {
+                        expand: ['charges']
+                    });
+                    
+                    if (paymentIntent.charges && paymentIntent.charges.data.length > 0) {
+                        const latestCharge = paymentIntent.charges.data[0];
+                        if (latestCharge.invoice) {
+                            invoiceId = latestCharge.invoice;
+                            console.log('📄 Found invoice ID from payment intent charge:', invoiceId);
+                        }
+                    }
+                } catch (chargeError) {
+                    console.warn('Could not retrieve payment intent charges:', chargeError.message);
+                }
+            }
+            
+            // Now fetch invoice details if we have an invoice ID
+            if (invoiceId) {
+                try {
+                    const invoice = await stripe.invoices.retrieve(invoiceId);
+                    hostedInvoiceUrl = invoice.hosted_invoice_url || null;
+                    invoicePdf = invoice.invoice_pdf || null;
+                    console.log('✅ Fetched invoice details:', {
+                        invoiceId: invoiceId,
+                        hostedInvoiceUrl: hostedInvoiceUrl ? 'Available' : 'Not available',
+                        invoicePdf: invoicePdf ? 'Available' : 'Not available',
+                        invoiceStatus: invoice.status,
+                        invoiceAmount: invoice.amount_paid
+                    });
                 } catch (invoiceError) {
-                    console.warn('Could not fetch invoice details:', invoiceError.message);
+                    console.warn('❌ Could not fetch invoice details:', invoiceError.message);
+                }
+            } else {
+                console.warn('⚠️ No invoice ID found in session or related data');
+            }
+            
+            // Fallback: Create a simple receipt URL if no hosted invoice URL is available
+            if (!hostedInvoiceUrl && session.payment_intent) {
+                try {
+                    // Create a simple receipt URL using the payment intent
+                    hostedInvoiceUrl = `https://dashboard.stripe.com/payments/${session.payment_intent}`;
+                    console.log('📄 Created fallback receipt URL:', hostedInvoiceUrl);
+                } catch (fallbackError) {
+                    console.warn('Could not create fallback receipt URL:', fallbackError.message);
                 }
             }
 
@@ -1447,7 +1585,7 @@ router.post('/domain/process-success-payment', async (req, res) => {
                 paymentMethod: session.payment_method_types?.[0] || 'card',
                 paymentDate: new Date(session.created * 1000),
                 receiptUrl: session.receipt_email ? `Receipt sent to ${session.receipt_email}` : null,
-                invoiceId: session.invoice || null
+                invoiceId: invoiceId
             };
 
             console.log('Step 3: Prepared Stripe payment info:', {
@@ -1457,7 +1595,19 @@ router.post('/domain/process-success-payment', async (req, res) => {
                 paymentStatus: stripePaymentInfo.paymentStatus,
                 hostedInvoiceUrl: stripePaymentInfo.hostedInvoiceUrl ? 'Available' : 'Not available',
                 invoicePdf: stripePaymentInfo.invoicePdf ? 'Available' : 'Not available',
-                invoiceId: stripePaymentInfo.invoiceId
+                invoiceId: stripePaymentInfo.invoiceId,
+                paymentIntentId: stripePaymentInfo.paymentIntentId,
+                receiptUrl: stripePaymentInfo.receiptUrl
+            });
+            
+            // Additional debug info
+            console.log('📊 Final Payment Info Summary:', {
+                invoiceId: invoiceId,
+                hostedInvoiceUrl: hostedInvoiceUrl,
+                invoicePdf: invoicePdf,
+                hasInvoice: !!invoiceId,
+                hasHostedUrl: !!hostedInvoiceUrl,
+                hasPdf: !!invoicePdf
             });
 
             // Validate required contact information before calling Namecheap API
