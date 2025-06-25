@@ -369,17 +369,46 @@ router.post('/create-checkout-session', async (req, res) => {
 
 router.post('/domain/create-checkout-session', async (req, res) => {
     try {
-        const { userId, domainName, unitPrice, currency } = req.body;
+        const { 
+            userId, 
+            domainName, 
+            unitPrice, 
+            currency,
+            // Contact information for registration
+            firstName,
+            lastName,
+            email,
+            phone,
+            address1,
+            address2 = '',
+            city,
+            stateProvince,
+            country,
+            postalCode,
+            years = '1',
+            enablePrivacy = false
+        } = req.body;
+        
         console.log('Domain checkout request received:', {
             userId: userId,
             domainName: domainName,
             unitPrice: unitPrice,
             currency: currency,
+            hasContactInfo: !!(firstName && lastName && email),
             timestamp: new Date().toISOString()
         });
+        
         // Validate inputs
         if (!userId || !domainName || !unitPrice) {
             return res.status(400).json({ error: 'userId, domainName, and unitPrice are required' });
+        }
+
+        // Validate contact information
+        if (!firstName || !lastName || !email || !phone || !address1 || !city || !stateProvince || !country || !postalCode) {
+            return res.status(400).json({
+                error: 'Complete contact information is required for domain registration',
+                required: ['firstName', 'lastName', 'email', 'phone', 'address1', 'city', 'stateProvince', 'country', 'postalCode']
+            });
         }
 
         const price = Number(unitPrice);
@@ -393,6 +422,26 @@ router.post('/domain/create-checkout-session', async (req, res) => {
             description: `Registration for ${domainName}`,
             metadata: { type: 'domain', userId, domainName }
         });
+
+        // Store contact information in metadata
+        const metadata = {
+            userId,
+            domainName,
+            purchaseType: 'domain',
+            years: years.toString(),
+            enablePrivacy: enablePrivacy.toString(),
+            // Contact information
+            firstName,
+            lastName,
+            email,
+            phone,
+            address1,
+            address2,
+            city,
+            stateProvince,
+            country,
+            postalCode
+        };
 
         // Stripe Checkout Session
         const session = await stripe.checkout.sessions.create({
@@ -408,7 +457,8 @@ router.post('/domain/create-checkout-session', async (req, res) => {
             }],
             success_url: 'http://localhost:4200/domain-success?session_id={CHECKOUT_SESSION_ID}',
             cancel_url: 'http://localhost:4200/cancel',
-            metadata: { userId, domainName, purchaseType: 'domain' }
+            metadata: metadata,
+            customer_creation: 'always'
         });
 
         res.json({ url: session.url, sessionId: session.id });
@@ -1269,119 +1319,6 @@ router.get('/webhook-status', async (req, res) => {
             status: 'error',
             message: error.message
         });
-    }
-});
-
-// Simple domain checkout with contact info in metadata
-router.post('/domain/create-checkout-session', async (req, res) => {
-    try {
-        const {
-            userId,
-            domainName,
-            unitPrice,
-            currency,
-            // Contact information for registration
-            firstName,
-            lastName,
-            email,
-            phone,
-            address1,
-            address2 = '',
-            city,
-            stateProvince,
-            country,
-            postalCode,
-            years = '1',
-            enablePrivacy = false
-        } = req.body;
-
-        console.log('Simple domain checkout request received:', {
-            userId,
-            domainName,
-            unitPrice,
-            currency,
-            hasContactInfo: !!(firstName && lastName && email),
-            timestamp: new Date().toISOString()
-        });
-
-        // Validate inputs
-        if (!userId || !domainName || !unitPrice) {
-            return res.status(400).json({
-                error: 'userId, domainName, and unitPrice are required'
-            });
-        }
-
-        // Validate contact information
-        if (!firstName || !lastName || !email || !phone || !address1 || !city || !stateProvince || !country || !postalCode) {
-            return res.status(400).json({
-                error: 'Complete contact information is required for domain registration',
-                required: ['firstName', 'lastName', 'email', 'phone', 'address1', 'city', 'stateProvince', 'country', 'postalCode']
-            });
-        }
-
-        const price = Number(unitPrice);
-        if (isNaN(price) || price <= 0) {
-            return res.status(400).json({ error: 'Invalid price amount' });
-        }
-
-        // Create a dynamic product for this domain
-        const product = await stripe.products.create({
-            name: `Domain: ${domainName}`,
-            description: `Registration for ${domainName}`,
-            metadata: {
-                type: 'domain',
-                userId,
-                domainName
-            }
-        });
-
-        // Store contact information in metadata
-        const metadata = {
-            userId,
-            domainName,
-            purchaseType: 'domain',
-            years: years.toString(),
-            enablePrivacy: enablePrivacy.toString(),
-            // Contact information
-            firstName,
-            lastName,
-            email,
-            phone,
-            address1,
-            address2,
-            city,
-            stateProvince,
-            country,
-            postalCode
-        };
-
-        // Create Stripe Checkout Session with success URL that will handle registration
-        const session = await stripe.checkout.sessions.create({
-            payment_method_types: ['card'],
-            mode: 'payment',
-            line_items: [{
-                price_data: {
-                    currency: currency || 'usd',
-                    product: product.id,
-                    unit_amount: Math.round(price * 100),
-                },
-                quantity: 1,
-            }],
-            success_url: `http://localhost:4200/domain-success?session_id={CHECKOUT_SESSION_ID}&domain=${encodeURIComponent(domainName)}`,
-            cancel_url: 'http://localhost:4200/cancel',
-            metadata: metadata,
-            customer_creation: 'always'
-        });
-
-        res.json({
-            url: session.url,
-            sessionId: session.id,
-            message: 'Checkout session created. Call /domain/process-success-payment after successful payment to register domain.'
-        });
-
-    } catch (err) {
-        console.error("Simple domain checkout error:", err);
-        res.status(500).json({ error: "Payment setup failed. Please try again." });
     }
 });
 
