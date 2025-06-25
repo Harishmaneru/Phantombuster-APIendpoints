@@ -369,10 +369,10 @@ router.post('/create-checkout-session', async (req, res) => {
 
 router.post('/domain/create-checkout-session', async (req, res) => {
     try {
-        const { 
-            userId, 
-            domainName, 
-            unitPrice, 
+        const {
+            userId,
+            domainName,
+            unitPrice,
             currency,
             // Contact information for registration
             firstName,
@@ -388,7 +388,7 @@ router.post('/domain/create-checkout-session', async (req, res) => {
             years = '1',
             enablePrivacy = false
         } = req.body;
-        
+
         console.log('Domain checkout request received:', {
             userId: userId,
             domainName: domainName,
@@ -397,7 +397,7 @@ router.post('/domain/create-checkout-session', async (req, res) => {
             hasContactInfo: !!(firstName && lastName && email),
             timestamp: new Date().toISOString()
         });
-        
+
         // Validate inputs
         if (!userId || !domainName || !unitPrice) {
             return res.status(400).json({ error: 'userId, domainName, and unitPrice are required' });
@@ -451,7 +451,7 @@ router.post('/domain/create-checkout-session', async (req, res) => {
                 price_data: {
                     currency: currency || 'usd',
                     product: product.id,
-                    unit_amount: Math.round(price * 100), // Convert to cents
+                    unit_amount: Math.round(price * 100),
                 },
                 quantity: 1,
             }],
@@ -1173,7 +1173,7 @@ router.post('/check-refund-status', async (req, res) => {
     }
 });
 
- 
+
 
 // Get all domain purchases for a user
 router.get('/users/:userId/domain-purchases', async (req, res) => {
@@ -1371,7 +1371,7 @@ router.post('/domain/process-success-payment', async (req, res) => {
 
         // Step 2: Extract contact information from session metadata
         const domainName = session.metadata?.domainName;
-        
+
         if (!domainName) {
             console.error('Domain name not found in session metadata:', session.metadata);
             return res.status(400).json({
@@ -1415,11 +1415,30 @@ router.post('/domain/process-success-payment', async (req, res) => {
 
         try {
             // Prepare Stripe payment information for database storage
+            let hostedInvoiceUrl = session.hosted_invoice_url || null;
+            let invoicePdf = session.invoice_pdf || null;
+            
+            // If we have an invoice ID but no hosted invoice URL, fetch it from the invoice
+            if (session.invoice && !hostedInvoiceUrl) {
+                try {
+                    const invoice = await stripe.invoices.retrieve(session.invoice);
+                    hostedInvoiceUrl = invoice.hosted_invoice_url || null;
+                    invoicePdf = invoice.invoice_pdf || null;
+                    console.log('Fetched invoice details:', {
+                        invoiceId: session.invoice,
+                        hostedInvoiceUrl: hostedInvoiceUrl ? 'Available' : 'Not available',
+                        invoicePdf: invoicePdf ? 'Available' : 'Not available'
+                    });
+                } catch (invoiceError) {
+                    console.warn('Could not fetch invoice details:', invoiceError.message);
+                }
+            }
+
             const stripePaymentInfo = {
                 sessionId: session.id,
                 subscriptionId: session.subscription || null,
-                hostedInvoiceUrl: session.hosted_invoice_url || null,
-                invoicePdf: session.invoice_pdf || null,
+                hostedInvoiceUrl: hostedInvoiceUrl,
+                invoicePdf: invoicePdf,
                 paymentIntentId: session.payment_intent || null,
                 customerId: session.customer ? (typeof session.customer === 'object' ? session.customer.id : session.customer) : null,
                 paymentStatus: session.payment_status || 'unknown',
@@ -1435,13 +1454,16 @@ router.post('/domain/process-success-payment', async (req, res) => {
                 sessionId: stripePaymentInfo.sessionId,
                 customerId: stripePaymentInfo.customerId,
                 amountPaid: stripePaymentInfo.amountPaid,
-                paymentStatus: stripePaymentInfo.paymentStatus
+                paymentStatus: stripePaymentInfo.paymentStatus,
+                hostedInvoiceUrl: stripePaymentInfo.hostedInvoiceUrl ? 'Available' : 'Not available',
+                invoicePdf: stripePaymentInfo.invoicePdf ? 'Available' : 'Not available',
+                invoiceId: stripePaymentInfo.invoiceId
             });
 
             // Validate required contact information before calling Namecheap API
             const requiredFields = ['firstName', 'lastName', 'email', 'phone', 'address1', 'city', 'stateProvince', 'country', 'postalCode'];
             const missingFields = requiredFields.filter(field => !contactInfo[field]);
-            
+
             if (missingFields.length > 0) {
                 console.error('Missing required contact information:', missingFields);
                 return res.status(400).json({
@@ -1593,7 +1615,7 @@ function extractHtmlErrorMessage(html) {
 //______________________________API's for All Applications________________________
 
 
-// Updated endpoint for app-specific success/cancel URLs (no custom URLs, new app names)
+
 router.post('/create-checkout-session-by-app', async (req, res) => {
     try {
         const { userId, priceId, app } = req.body;

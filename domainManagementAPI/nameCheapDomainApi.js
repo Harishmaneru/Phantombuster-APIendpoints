@@ -118,7 +118,9 @@ const domainSchema = new mongoose.Schema({
         paymentMethod: String,
         paymentDate: Date,
         receiptUrl: String,
-        invoiceId: String
+        invoiceId: String,
+        hostedInvoiceUrl: String,
+        invoicePdf: String
     },
     apiMode: {
         type: String,
@@ -2245,6 +2247,7 @@ router.get('/namecheap/domains/list', validateUserId, async (req, res) => {
                 redirects: dbDomain.redirects || [],
                 emailAccounts: dbDomain.emailAccounts || [],
                 pricing: dbDomain.pricing,
+                stripePayment: dbDomain.stripePayment || null,
                 createdAt: dbDomain.createdAt,
                 updatedAt: dbDomain.updatedAt,
 
@@ -3535,6 +3538,37 @@ async function getDkimPublicKey(domain) {
     }
 }
 
+// Helper: Fetch Stripe invoice details including hosted_invoice_url
+async function fetchStripeInvoiceDetails(invoiceId) {
+    if (!invoiceId) {
+        return null;
+    }
+
+    try {
+        // Import stripe dynamically to avoid circular dependencies
+        const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
+        
+        const invoice = await stripe.invoices.retrieve(invoiceId);
+        
+        return {
+            id: invoice.id,
+            hosted_invoice_url: invoice.hosted_invoice_url,
+            invoice_pdf: invoice.invoice_pdf,
+            status: invoice.status,
+            amount_paid: invoice.amount_paid ? invoice.amount_paid / 100 : null,
+            currency: invoice.currency,
+            created: new Date(invoice.created * 1000).toISOString()
+        };
+    } catch (error) {
+        console.error('[Stripe Invoice API] Error fetching invoice details:', {
+            error: error.message,
+            invoiceId,
+            stack: error.stack
+        });
+        return null;
+    }
+}
+
 //______________________Get user domain statistics and overview_______________________
 
 router.get('/namecheap/user/:userId/stats', validateUserId, async (req, res) => {
@@ -4306,12 +4340,17 @@ async function registerDomainWithNamecheap(registrationData) {
             paymentMethod: stripePaymentInfo.paymentMethod,
             paymentDate: stripePaymentInfo.paymentDate || new Date(),
             receiptUrl: stripePaymentInfo.receiptUrl,
-            invoiceId: stripePaymentInfo.invoiceId
+            invoiceId: stripePaymentInfo.invoiceId,
+            hostedInvoiceUrl: stripePaymentInfo.hostedInvoiceUrl,
+            invoicePdf: stripePaymentInfo.invoicePdf
         };
         console.log(`[Domain Registration] Added Stripe payment info for ${domain}:`, {
             sessionId: stripePaymentInfo.sessionId,
             amountPaid: stripePaymentInfo.amountPaid,
-            paymentStatus: stripePaymentInfo.paymentStatus
+            paymentStatus: stripePaymentInfo.paymentStatus,
+            hostedInvoiceUrl: stripePaymentInfo.hostedInvoiceUrl,
+            invoicePdf: stripePaymentInfo.invoicePdf,
+            invoiceId: stripePaymentInfo.invoiceId
         });
     }
 
@@ -4346,7 +4385,10 @@ async function registerDomainWithNamecheap(registrationData) {
                 sessionId: stripePaymentInfo.sessionId,
                 amountPaid: stripePaymentInfo.amountPaid,
                 paymentStatus: stripePaymentInfo.paymentStatus,
-                paymentDate: stripePaymentInfo.paymentDate
+                paymentDate: stripePaymentInfo.paymentDate,
+                hostedInvoiceUrl: stripePaymentInfo.hostedInvoiceUrl,
+                invoicePdf: stripePaymentInfo.invoicePdf,
+                invoiceId: stripePaymentInfo.invoiceId
             } : null
         },
         nextSteps: {
@@ -4751,101 +4793,7 @@ router.post('/renew/:domain', apiLimiter, asyncHandler(async (req, res) => {
     }
 }));
 
-// Bulk domain renewal endpoint
-router.post('/renew-bulk', apiLimiter, asyncHandler(async (req, res) => {
-    const operation = 'BULK_DOMAIN_RENEWAL';
-    try {
-        const { domains } = req.body;
-        if (!Array.isArray(domains)) {
-            throw new Error('Invalid domains array');
-        }
 
-        const results = [];
-        const errors = [];
-
-        // Process domains sequentially to avoid overwhelming the API
-        for (const domainData of domains) {
-            try {
-                const { domain, years = 1, promotionCode = '' } = domainData;
-
-                // Validate domain format
-                if (!isValidDomain(domain)) {
-                    throw new Error('Invalid domain format');
-                }
-
-                // Check cache
-                const cacheKey = `renewal_${domain}`;
-                const cached = cache.get(cacheKey);
-                if (cached) {
-                    results.push({ ...cached, source: 'cache' });
-                    continue;
-                }
-
-                // Get current expiration
-                const domainInfo = await retryWithBackoff(async () => {
-                    return await namecheapBreaker.fire('namecheap.domains.getInfo', {
-                        DomainName: domain
-                    });
-                });
-
-                const currentExpiry = domainInfo.ApiResponse.CommandResponse.DomainGetInfoResult.DomainDetails.ExpiredDate;
-
-                // Attempt renewal
-                const result = await retryWithBackoff(async () => {
-                    return await namecheapBreaker.fire('namecheap.domains.renew', {
-                        DomainName: domain,
-                        Years: years,
-                        PromotionCode: promotionCode
-                    });
-                });
-
-                const renewalResult = {
-                    success: true,
-                    domain,
-                    previousExpiry: currentExpiry,
-                    newExpiry: result.ApiResponse.CommandResponse.DomainRenewResult.DomainDetails.ExpiredDate,
-                    orderId: result.ApiResponse.CommandResponse.DomainRenewResult.OrderId,
-                    years,
-                    timestamp: new Date().toISOString()
-                };
-
-                // Cache successful result
-                cache.set(cacheKey, renewalResult, 300);
-
-                // Update domain in database
-                await updateDomainInDatabase(req.user.id, domain, {
-                    'registrationData.expirationDate': renewalResult.newExpiry,
-                    lastRenewalDate: new Date(),
-                    lastRenewalYears: years
-                });
-
-                results.push(renewalResult);
-
-            } catch (error) {
-                errors.push({
-                    domain: domainData.domain,
-                    error: error.message
-                });
-            }
-        }
-
-        res.json({
-            success: true,
-            operation,
-            results,
-            errors,
-            summary: {
-                total: domains.length,
-                succeeded: results.length,
-                failed: errors.length
-            }
-        });
-
-    } catch (error) {
-        const errorResponse = createErrorResponse(error, operation);
-        res.status(error.status || 500).json(errorResponse);
-    }
-}));
 
 // Domain transfer initiation endpoint with robust error handling
 router.post('/transfer/:domain', apiLimiter, asyncHandler(async (req, res) => {
@@ -5032,6 +4980,9 @@ router.post('/transfer/status-bulk', apiLimiter, asyncHandler(async (req, res) =
         res.status(error.status || 500).json(errorResponse);
     }
 }));
+//_______________domain and paymnet details____
+
+
 
 module.exports = {
     router,
