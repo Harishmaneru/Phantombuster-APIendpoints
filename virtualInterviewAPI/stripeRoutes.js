@@ -1448,19 +1448,45 @@ router.post('/domain/process-success-payment', async (req, res) => {
         console.log('Step 1 Complete: Payment verified successfully');
 
         // Step 2: Extract contact information from session metadata
-        const domainName = session.metadata.domainName;
+        const domainName = session.metadata?.domainName;
+        
+        if (!domainName) {
+            console.error('Domain name not found in session metadata:', session.metadata);
+            return res.status(400).json({
+                success: false,
+                error: 'Domain name not found in session metadata',
+                sessionMetadata: session.metadata
+            });
+        }
+
         const contactInfo = {
-            firstName: session.metadata.firstName,
-            lastName: session.metadata.lastName,
-            email: session.metadata.email,
-            phone: session.metadata.phone,
-            address1: session.metadata.address1,
-            address2: session.metadata.address2 || '',
-            city: session.metadata.city,
-            stateProvince: session.metadata.stateProvince,
-            country: session.metadata.country,
-            postalCode: session.metadata.postalCode
+            firstName: session.metadata?.firstName || null,
+            lastName: session.metadata?.lastName || null,
+            email: session.metadata?.email || null,
+            phone: session.metadata?.phone || null,
+            address1: session.metadata?.address1 || null,
+            address2: session.metadata?.address2 || '',
+            city: session.metadata?.city || null,
+            stateProvince: session.metadata?.stateProvince || null,
+            country: session.metadata?.country || null,
+            postalCode: session.metadata?.postalCode || null
         };
+
+        console.log('Step 2: Extracted contact information:', {
+            domainName,
+            hasContactInfo: !!(contactInfo.firstName && contactInfo.lastName && contactInfo.email),
+            contactFields: {
+                firstName: !!contactInfo.firstName,
+                lastName: !!contactInfo.lastName,
+                email: !!contactInfo.email,
+                phone: !!contactInfo.phone,
+                address1: !!contactInfo.address1,
+                city: !!contactInfo.city,
+                stateProvince: !!contactInfo.stateProvince,
+                country: !!contactInfo.country,
+                postalCode: !!contactInfo.postalCode
+            }
+        });
 
         // Step 3: Register domain with Namecheap
         console.log('Step 2: Registering domain with Namecheap...');
@@ -1469,19 +1495,46 @@ router.post('/domain/process-success-payment', async (req, res) => {
             // Prepare Stripe payment information for database storage
             const stripePaymentInfo = {
                 sessionId: session.id,
-                subscriptionId: session.subscription,
-                hostedInvoiceUrl: session.hosted_invoice_url,
-                invoicePdf: session.invoice_pdf,
-                paymentIntentId: session.payment_intent,
-                customerId: typeof session.customer === 'object' ? session.customer.id : session.customer,
-                paymentStatus: session.payment_status,
-                amountPaid: session.amount_total / 100,
-                currency: session.currency,
+                subscriptionId: session.subscription || null,
+                hostedInvoiceUrl: session.hosted_invoice_url || null,
+                invoicePdf: session.invoice_pdf || null,
+                paymentIntentId: session.payment_intent || null,
+                customerId: session.customer ? (typeof session.customer === 'object' ? session.customer.id : session.customer) : null,
+                paymentStatus: session.payment_status || 'unknown',
+                amountPaid: session.amount_total ? session.amount_total / 100 : 0,
+                currency: session.currency || 'usd',
                 paymentMethod: session.payment_method_types?.[0] || 'card',
                 paymentDate: new Date(session.created * 1000),
                 receiptUrl: session.receipt_email ? `Receipt sent to ${session.receipt_email}` : null,
-                invoiceId: session.invoice
+                invoiceId: session.invoice || null
             };
+
+            console.log('Step 3: Prepared Stripe payment info:', {
+                sessionId: stripePaymentInfo.sessionId,
+                customerId: stripePaymentInfo.customerId,
+                amountPaid: stripePaymentInfo.amountPaid,
+                paymentStatus: stripePaymentInfo.paymentStatus
+            });
+
+            // Validate required contact information before calling Namecheap API
+            const requiredFields = ['firstName', 'lastName', 'email', 'phone', 'address1', 'city', 'stateProvince', 'country', 'postalCode'];
+            const missingFields = requiredFields.filter(field => !contactInfo[field]);
+            
+            if (missingFields.length > 0) {
+                console.error('Missing required contact information:', missingFields);
+                return res.status(400).json({
+                    success: false,
+                    error: 'Missing required contact information for domain registration',
+                    missingFields,
+                    contactInfo: {
+                        firstName: contactInfo.firstName || null,
+                        lastName: contactInfo.lastName || null,
+                        email: contactInfo.email || null,
+                        phone: contactInfo.phone || null,
+                        hasAddress: !!(contactInfo.address1 && contactInfo.city && contactInfo.stateProvince && contactInfo.country && contactInfo.postalCode)
+                    }
+                });
+            }
 
             // Call the domain registration function
             const registrationResult = await registerDomainWithNamecheap({
@@ -1515,9 +1568,9 @@ router.post('/domain/process-success-payment', async (req, res) => {
                 amount: session.amount_total / 100,
                 currency: session.currency,
                 customer: {
-                    id: typeof session.customer === 'object' ? session.customer.id : session.customer,
-                    email: typeof session.customer === 'object' ? session.customer.email : session.customer_details?.email || null,
-                    name: typeof session.customer === 'object' ? session.customer.name : session.customer_details?.name || null
+                    id: session.customer ? (typeof session.customer === 'object' ? session.customer.id : session.customer) : null,
+                    email: session.customer ? (typeof session.customer === 'object' ? session.customer.email : null) : session.customer_details?.email || null,
+                    name: session.customer ? (typeof session.customer === 'object' ? session.customer.name : null) : session.customer_details?.name || null
                 },
                 createdAt: new Date(session.created * 1000).toISOString(),
                 paymentMethod: session.payment_method_types?.[0] || 'card'
@@ -1543,6 +1596,12 @@ router.post('/domain/process-success-payment', async (req, res) => {
 
         } catch (namecheapError) {
             console.error('Namecheap registration failed:', namecheapError.message);
+            console.error('Full error details:', {
+                message: namecheapError.message,
+                stack: namecheapError.stack,
+                name: namecheapError.name,
+                code: namecheapError.code
+            });
 
             if (namecheapError.isHtmlResponse) {
                 return res.status(502).json({
@@ -1570,7 +1629,9 @@ router.post('/domain/process-success-payment', async (req, res) => {
                     currency: session.currency
                 },
                 registrationError: {
-                    message: namecheapError.message
+                    message: namecheapError.message,
+                    type: namecheapError.name,
+                    code: namecheapError.code
                 },
                 nextSteps: [
                     'Contact support for manual domain registration',
