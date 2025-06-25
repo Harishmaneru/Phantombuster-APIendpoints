@@ -109,7 +109,7 @@ router.post(
                     if (!subscriptionId) {
                         // This is a one-time payment (e.g., domain purchase)
                         console.log('[checkout.session.completed] One-time payment detected, skipping subscription processing');
-                        
+
                         // You might want to store one-time payment records in a different collection
                         // For now, we'll just log it and continue
                         console.log('[checkout.session.completed] One-time payment details:', {
@@ -428,21 +428,111 @@ router.post('/get-subscription-from-session', async (req, res) => {
     }
 
     try {
+        console.log('[get-subscription-from-session] Retrieving session:', sessionId);
+
         // Retrieve the session with expanded subscription data
         const session = await stripe.checkout.sessions.retrieve(sessionId, {
-            expand: ['subscription', 'customer']
+            expand: ['subscription', 'customer', 'line_items']
         });
 
-        if (!session || !session.subscription) {
-            return res.status(404).json({ error: 'No subscription found in this session' });
+        console.log('[get-subscription-from-session] Session retrieved:', {
+            id: session.id,
+            status: session.status,
+            payment_status: session.payment_status,
+            mode: session.mode,
+            hasSubscription: !!session.subscription,
+            subscriptionId: session.subscription?.id || null,
+            metadata: session.metadata
+        });
+
+        // Check if this is a subscription or one-time payment
+        if (session.mode === 'payment') {
+            // This is a one-time payment (like domain purchase)
+            console.log('[get-subscription-from-session] One-time payment detected');
+
+            // Check if this is a domain purchase
+            const isDomainPurchase = session.metadata?.purchaseType === 'domain' ||
+                session.metadata?.purchaseType === 'domain_registration';
+
+            if (isDomainPurchase) {
+                // Return structured domain purchase information
+                return res.status(200).json({
+                    sessionType: 'domain-purchase',
+                    session: {
+                        id: session.id,
+                        status: session.status,
+                        paymentStatus: session.payment_status,
+                        amount: session.amount_total ? session.amount_total / 100 : null,
+                        currency: session.currency,
+                        createdAt: new Date(session.created * 1000).toISOString()
+                    },
+                    domain: {
+                        name: session.metadata.domainName,
+                        purchaseType: session.metadata.purchaseType,
+                        years: session.metadata.years,
+                        enablePrivacy: session.metadata.enablePrivacy === 'true',
+                        unitPrice: parseFloat(session.metadata.unitPrice) || null
+                    },
+                    customer: {
+                        firstName: session.metadata.firstName,
+                        lastName: session.metadata.lastName,
+                        email: session.metadata.email,
+                        phone: session.metadata.phone,
+                        address: {
+                            address1: session.metadata.address1,
+                            address2: session.metadata.address2 || '',
+                            city: session.metadata.city,
+                            stateProvince: session.metadata.stateProvince,
+                            country: session.metadata.country,
+                            postalCode: session.metadata.postalCode
+                        }
+                    },
+                    userId: session.metadata.userId,
+                    message: 'This is a domain purchase.'
+                });
+            } else {
+                // Generic one-time payment
+                return res.status(400).json({
+                    error: 'This session is for a one-time payment, not a subscription',
+                    sessionType: 'one-time-payment',
+                    sessionData: {
+                        id: session.id,
+                        status: session.status,
+                        paymentStatus: session.payment_status,
+                        amount: session.amount_total ? session.amount_total / 100 : null,
+                        currency: session.currency,
+                        metadata: session.metadata
+                    }
+                });
+            }
         }
+
+        if (!session.subscription) {
+            console.log('[get-subscription-from-session] No subscription found in session');
+            return res.status(404).json({
+                error: 'No subscription found in this session',
+                sessionData: {
+                    id: session.id,
+                    status: session.status,
+                    paymentStatus: session.payment_status,
+                    mode: session.mode,
+                    metadata: session.metadata
+                }
+            });
+        }
+
+        console.log('[get-subscription-from-session] Retrieving subscription:', session.subscription.id);
 
         // Retrieve the subscription with expanded price and product data
         const subscription = await stripe.subscriptions.retrieve(session.subscription.id, {
             expand: ['items.data.price.product', 'customer']
         });
 
-        console.log('[stripeRoutes.js] subscription', JSON.stringify(subscription, null, 2));
+        console.log('[get-subscription-from-session] Subscription retrieved:', {
+            id: subscription.id,
+            status: subscription.status,
+            hasItems: subscription.items?.data?.length > 0
+        });
 
         // Check for credit notes (refunds)
         let refundInfo = null;
@@ -500,6 +590,7 @@ router.post('/get-subscription-from-session', async (req, res) => {
         // Get price and product details
         const priceData = subscription.items.data[0]?.price;
         if (!priceData) {
+            console.error('[get-subscription-from-session] No price data found in subscription items');
             return res.status(404).json({ error: 'No price data found in subscription' });
         }
 
@@ -521,7 +612,7 @@ router.post('/get-subscription-from-session', async (req, res) => {
         };
 
         // Enhanced debugging for subscription dates
-        console.log('[stripeRoutes.js] Subscription date fields:', {
+        console.log('[get-subscription-from-session] Subscription date fields:', {
             current_period_start: subscription.current_period_start,
             current_period_end: subscription.current_period_end,
             trial_end: subscription.trial_end,
@@ -535,28 +626,28 @@ router.post('/get-subscription-from-session', async (req, res) => {
         let nextBillingDate = safeFormatDate(subscription.current_period_end);
         let currentPeriodStart = safeFormatDate(subscription.current_period_start);
         let currentPeriodEnd = safeFormatDate(subscription.current_period_end);
-        
+
         // Enhanced fallback logic for current_period_start
         if (!currentPeriodStart) {
             if (subscription.billing_cycle_anchor) {
                 currentPeriodStart = safeFormatDate(subscription.billing_cycle_anchor);
-                console.log('[stripeRoutes.js] Using billing_cycle_anchor for current_period_start');
+                console.log('[get-subscription-from-session] Using billing_cycle_anchor for current_period_start');
             } else if (subscription.start_date) {
                 currentPeriodStart = safeFormatDate(subscription.start_date);
-                console.log('[stripeRoutes.js] Using start_date for current_period_start');
+                console.log('[get-subscription-from-session] Using start_date for current_period_start');
             } else if (subscription.created) {
                 currentPeriodStart = safeFormatDate(subscription.created);
-                console.log('[stripeRoutes.js] Using created date for current_period_start');
+                console.log('[get-subscription-from-session] Using created date for current_period_start');
             }
         }
-        
+
         // Enhanced fallback logic for current_period_end and nextBillingDate
         if (!currentPeriodEnd && currentPeriodStart && priceData.recurring) {
             try {
                 const startDate = new Date(currentPeriodStart.iso);
                 const interval = priceData.recurring.interval;
                 const intervalCount = priceData.recurring.interval_count || 1;
-                
+
                 let endDate = new Date(startDate);
                 if (interval === 'year') {
                     endDate.setFullYear(endDate.getFullYear() + intervalCount);
@@ -567,27 +658,27 @@ router.post('/get-subscription-from-session', async (req, res) => {
                 } else if (interval === 'day') {
                     endDate.setDate(endDate.getDate() + intervalCount);
                 }
-                
+
                 currentPeriodEnd = {
                     iso: endDate.toISOString(),
                     formatted: endDate.toDateString()
                 };
                 nextBillingDate = currentPeriodEnd;
-                console.log('[stripeRoutes.js] Calculated period end date:', currentPeriodEnd);
+                console.log('[get-subscription-from-session] Calculated period end date:', currentPeriodEnd);
             } catch (e) {
                 console.warn('Could not calculate period end date:', e);
             }
         }
-        
+
         // Final fallback: if still no dates, use session creation date
         if (!currentPeriodStart && session.created) {
             currentPeriodStart = safeFormatDate(session.created);
-            console.log('[stripeRoutes.js] Using session created date as fallback');
+            console.log('[get-subscription-from-session] Using session created date as fallback');
         }
-        
+
         // Additional fallback for pending subscriptions
         if (subscription.status === 'incomplete' || subscription.status === 'incomplete_expired') {
-            console.log('[stripeRoutes.js] Subscription is in incomplete state, using session dates');
+            console.log('[get-subscription-from-session] Subscription is in incomplete state, using session dates');
             if (!currentPeriodStart && session.created) {
                 currentPeriodStart = safeFormatDate(session.created);
             }
@@ -597,7 +688,7 @@ router.post('/get-subscription-from-session', async (req, res) => {
                     const startDate = new Date(currentPeriodStart.iso);
                     const interval = priceData.recurring.interval;
                     const intervalCount = priceData.recurring.interval_count || 1;
-                    
+
                     let endDate = new Date(startDate);
                     if (interval === 'year') {
                         endDate.setFullYear(endDate.getFullYear() + intervalCount);
@@ -608,7 +699,7 @@ router.post('/get-subscription-from-session', async (req, res) => {
                     } else if (interval === 'day') {
                         endDate.setDate(endDate.getDate() + intervalCount);
                     }
-                    
+
                     currentPeriodEnd = {
                         iso: endDate.toISOString(),
                         formatted: endDate.toDateString()
@@ -619,12 +710,14 @@ router.post('/get-subscription-from-session', async (req, res) => {
                 }
             }
         }
-        
+
         const trialEnd = safeFormatDate(subscription.trial_end);
         const createdAt = safeFormatDate(subscription.created);
 
+        console.log('[get-subscription-from-session] Building response for subscription:', subscription.id);
+
         // Build comprehensive response with safe null checks
-        res.json({
+        const response = {
             checkout: {
                 id: session.id,
                 status: session.status || 'unknown',
@@ -663,17 +756,64 @@ router.post('/get-subscription-from-session', async (req, res) => {
                 invoice: invoiceInfo,
                 createdAt: createdAt?.iso || null
             }
-        });
+        };
+
+        console.log('[get-subscription-from-session] Successfully returning subscription data');
+        res.json(response);
+
     } catch (error) {
         console.error("Error in get-subscription-from-session:", error);
+
+        // Provide more specific error messages
         if (error.type === 'StripeInvalidRequestError') {
-            return res.status(404).json({ error: 'Session or subscription not found' });
+            if (error.message.includes('No such checkout.session')) {
+                return res.status(404).json({
+                    error: 'Session not found',
+                    details: 'The provided session ID does not exist in Stripe'
+                });
+            }
+            if (error.message.includes('No such subscription')) {
+                return res.status(404).json({
+                    error: 'Subscription not found',
+                    details: 'The subscription associated with this session no longer exists'
+                });
+            }
+            return res.status(404).json({
+                error: 'Session or subscription not found',
+                details: error.message
+            });
         }
-        res.status(500).json({ error: error.message || "Failed to fetch subscription" });
+
+        res.status(500).json({
+            error: error.message || "Failed to fetch subscription",
+            details: process.env.NODE_ENV === 'development' ? error.stack : undefined
+        });
     }
 });
 
 
+
+function getSessionRecommendations(session) {
+    const recommendations = [];
+
+    if (session.mode === 'payment') {
+        recommendations.push('This is a one-time payment session, not a subscription. Use /get-domain-purchase endpoint instead.');
+    }
+
+    if (!session.subscription && session.mode === 'subscription') {
+        recommendations.push('Session is in subscription mode but has no subscription. Payment may have failed or subscription creation is pending.');
+    }
+
+    if (session.status === 'expired') {
+        recommendations.push('Session has expired. Create a new checkout session.');
+    }
+
+    if (session.payment_status === 'unpaid') {
+        recommendations.push('Payment was not completed. User may have cancelled or payment failed.');
+    }
+
+    return recommendations;
+}
 
 // Get all subscriptions for a user
 router.get('/users/:userId/subscriptions', async (req, res) => {
@@ -998,82 +1138,7 @@ router.post('/check-refund-status', async (req, res) => {
     }
 });
 
-// Get domain purchase details from session
-router.post('/get-domain-purchase', async (req, res) => {
-    const { sessionId } = req.body;
-
-    if (!sessionId) {
-        return res.status(400).json({ error: 'sessionId is required' });
-    }
-
-    try {
-        const session = await stripe.checkout.sessions.retrieve(sessionId, {
-            expand: ['line_items', 'customer']
-        });
-
-        if (!session) {
-            return res.status(404).json({ error: 'Session not found' });
-        }
-
-        // Check if this is a domain purchase
-        const isDomainPurchase = session.metadata?.purchaseType === 'domain_registration' ||
-            session.metadata?.purchaseType === 'domain';
-
-        if (!isDomainPurchase) {
-            return res.status(400).json({ error: 'This session is not a domain purchase' });
-        }
-
-        // Get line item details
-        const lineItem = session.line_items?.data?.[0];
-        let productDetails = null;
-
-        if (lineItem?.price?.product) {
-            try {
-                productDetails = await stripe.products.retrieve(lineItem.price.product);
-            } catch (error) {
-                console.warn('Could not retrieve product details:', error.message);
-            }
-        }
-
-        res.json({
-            purchase: {
-                sessionId: session.id,
-                status: session.status,
-                paymentStatus: session.payment_status,
-                domainName: session.metadata.domainName,
-                purchaseType: session.metadata.purchaseType,
-                amount: session.amount_total / 100,
-                currency: session.currency,
-                unitPrice: parseFloat(session.metadata.unitPrice) || null,
-                customer: {
-                    id: session.customer,
-                    email: session.customer_details?.email || null,
-                    name: session.customer_details?.name || null
-                },
-                product: productDetails ? {
-                    id: productDetails.id,
-                    name: productDetails.name,
-                    description: productDetails.description,
-                    metadata: productDetails.metadata
-                } : null,
-                lineItem: lineItem ? {
-                    description: lineItem.description,
-                    amount: lineItem.amount_total / 100,
-                    currency: lineItem.currency
-                } : null,
-                createdAt: new Date(session.created * 1000).toISOString(),
-                userId: session.metadata.userId
-            }
-        });
-
-    } catch (error) {
-        console.error('Error retrieving domain purchase:', error);
-        if (error.type === 'StripeInvalidRequestError') {
-            return res.status(404).json({ error: 'Session not found' });
-        }
-        res.status(500).json({ error: error.message });
-    }
-});
+ 
 
 // Get all domain purchases for a user
 router.get('/users/:userId/domain-purchases', async (req, res) => {
@@ -1541,7 +1606,7 @@ router.post('/create-checkout-session-by-app', async (req, res) => {
         // Map app names to their base URLs
         const appUrlMap = {
             kampaignai: 'http://localhost:4200',
-            gps: 'https://gps.onepgr.com',    
+            gps: 'https://gps.onepgr.com',
             getsalesgpt: 'https://sales.onepgr.com',
         };
 
