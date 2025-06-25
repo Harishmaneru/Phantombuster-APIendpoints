@@ -406,7 +406,7 @@ router.post('/domain/create-checkout-session', async (req, res) => {
                 },
                 quantity: 1,
             }],
-            success_url: 'http://localhost:4200/success?session_id={CHECKOUT_SESSION_ID}',
+            success_url: 'http://localhost:4200/domain-success?session_id={CHECKOUT_SESSION_ID}',
             cancel_url: 'http://localhost:4200/cancel',
             metadata: { userId, domainName, purchaseType: 'domain' }
         });
