@@ -1521,6 +1521,7 @@ router.post('/domain/process-success-payment', async (req, res) => {
                     payment: paymentDetails,
                     registration: registrationResult,
                     domain: domainName,
+                    registrationYears: session.metadata.years,
                     userId: userId,
                     combinedRecord: {
                         stripePaymentStored: true,
