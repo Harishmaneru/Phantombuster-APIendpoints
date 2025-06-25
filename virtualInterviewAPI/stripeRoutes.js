@@ -1015,8 +1015,8 @@ router.get('/users/:userId/subscriptions', async (req, res) => {
 
 // Create a Billing Portal session to manage subscription
 router.post('/create-billing-portal-session', async (req, res) => {
-    // Extract customerId and subscriptionId (if available) from the body
-    const { customerId, subscriptionId, userId } = req.body;
+    // Extract customerId and userId from the body
+    const { customerId, userId } = req.body;
 
     try {
         // Ensure MongoDB connection is established
@@ -1034,24 +1034,9 @@ router.post('/create-billing-portal-session', async (req, res) => {
             return_url: 'https://record.onepgr.com/profile',
         });
 
-        // Retrieve upcoming invoice details to show additional proration/credit info
-        // Note: subscriptionId is helpful here; if not provided, you may try to retrieve it from your subscriptionRecord.
-        let upcomingInvoice = null;
-        if (subscriptionId) {
-            upcomingInvoice = await stripe.invoices.retrieveUpcoming({
-                customer: customerId,
-                subscription: subscriptionId,
-            });
-        } else {
-            // Optional: If subscriptionId is not provided, you could retrieve the latest subscription record 
-            // and use its subscriptionId field (if available)
-            console.warn('Subscription ID not provided; skipping upcoming invoice retrieval');
-        }
-
-        // Respond with both the portal session URL and the upcoming invoice details.
+        // Respond with the portal session URL
         res.json({
-            url: portalSession.url,
-            upcomingInvoice  // This object contains line items, amount_due, credits, etc.
+            url: portalSession.url
         });
     } catch (error) {
         console.error('Error creating billing portal session:', error.message);
@@ -1596,6 +1581,17 @@ function extractHtmlErrorMessage(html) {
     if (bodyMatch) return bodyMatch[1].replace(/<[^>]+>/g, '').trim();
     return html.slice(0, 200); // fallback: first 200 chars
 }
+//______________________________________________________________________________________
+
+
+
+
+
+
+
+
+//______________________________API's for All Applications________________________
+
 
 // Updated endpoint for app-specific success/cancel URLs (no custom URLs, new app names)
 router.post('/create-checkout-session-by-app', async (req, res) => {
@@ -1643,6 +1639,51 @@ router.post('/create-checkout-session-by-app', async (req, res) => {
     }
 });
 
+// Create a Billing Portal session to manage subscription
+router.post('/create-billing-portal-session-by-app', async (req, res) => {
+    // Extract customerId, userId, and app from the body
+    const { customerId, userId, app } = req.body;
+
+    try {
+        // Ensure MongoDB connection is established
+        await connectToMongoDB();
+
+        // Optionally verify that the customer exists in your database
+        const subscriptionRecord = await Subscription.findOne({ customerId });
+        if (!subscriptionRecord && userId) {
+            console.log(`Warning: Creating portal for customer ${customerId} not in our database`);
+        }
+
+        // Map app names to their base URLs
+        const appUrlMap = {
+            kampaignai: 'http://localhost:4200',
+            gps: 'https://gps.onepgr.com',
+            getsalesgpt: 'https://sales.onepgr.com',
+        };
+
+        // Determine return URL based on app type
+        let returnUrl;
+        if (app && appUrlMap[app]) {
+            returnUrl = `${appUrlMap[app]}/profile`;
+        }
+
+        // Create a Billing Portal session to manage subscription
+        const portalSession = await stripe.billingPortal.sessions.create({
+            customer: customerId,
+            return_url: returnUrl,
+        });
+
+        // Respond with the portal session URL
+        res.json({
+            url: portalSession.url,
+            app: app || 'default',
+            returnUrl: returnUrl
+        });
+    } catch (error) {
+        console.error('Error creating billing portal session:', error.message);
+        res.status(500).json({ error: error.message });
+    }
+});
 //________________fetcing billing history API________________________
 
 
