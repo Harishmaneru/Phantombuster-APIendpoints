@@ -1,45 +1,31 @@
-require('dotenv').config();
-const axios = require('axios');
 const express = require('express');
+const router = express.Router();
+const axios = require('axios');
 const https = require('https');
 const NamecheapDomain = require('../domainManagementAPI/nameCheapDomainApi.js');
 
-const router = express.Router();
 const WHM_HOST = process.env.WHM_HOST;
 const MASTER_USER = process.env.CPANEL_MASTER_USER;
 const MASTER_TOKEN = process.env.CPANEL_TOKEN;
-const AUTH_HEADER = `cpanel ${MASTER_USER}:${MASTER_TOKEN}`;
 const agent = new https.Agent({ rejectUnauthorized: false });
 
-// Helper: Create a cPanel user session URL via WHM API
-async function createUserSession() {
-  const resp = await axios.post(
-    `https://${WHM_HOST}:2087/json-api/create_user_session`,
-    null,
-    {
-      params: { user: MASTER_USER, service: 'cpaneld' },
-      auth: { username: 'root', password: process.env.WHM_ROOT_PASS },
-      httpsAgent: agent
-    }
-  );
-  return resp.data.data.cpanel_result.url;
-}
-
-// Helper: Call a UAPI endpoint given a session URL
-async function cpanelUapiRequest(sessionUrl, module, func, params) {
-  const url = sessionUrl.replace(/\/3\//, '/execute/') + `${module}/${func}`;
-  const response = await axios.get(url, { params, httpsAgent: agent });
-  return response.data;
+// Helper: Directly call a cPanel UAPI endpoint using API Token
+async function cpanelUapiRequest(module, func, params) {
+  const url = `https://${WHM_HOST}:2083/execute/${module}/${func}`;
+  const resp = await axios.get(url, {
+    params,
+    httpsAgent: agent,
+    headers: { Authorization: `cpanel ${MASTER_USER}:${MASTER_TOKEN}` }
+  });
+  return resp.data;
 }
 
 /**
  * Create an email account
- * Expected req.body: { domain, username, password, storage }
- * storage: mailbox quota in MB, e.g. 500
+ * Expected req.body: { userId, domain, username, password, storage }
  */
 router.post('/cpanel/create-email', async (req, res) => {
-  const { domain, username, password, storage = 1024 } = req.body;
-  const userId = req.userId; // assume auth middleware sets this
+  const { userId, domain, username, password, storage = 1024 } = req.body;
 
   // Validate inputs
   if (!userId || !domain || !username || !password) {
@@ -53,8 +39,7 @@ router.post('/cpanel/create-email', async (req, res) => {
   }
 
   try {
-    const sessionUrl = await createUserSession();
-    const result = await cpanelUapiRequest(sessionUrl, 'Email', 'add_pop', {
+    const result = await cpanelUapiRequest('Email', 'add_pop', {
       domain,
       email: username,
       password,
@@ -65,17 +50,7 @@ router.post('/cpanel/create-email', async (req, res) => {
     // Save to database
     await NamecheapDomain.findOneAndUpdate(
       { userId, domain: domain.toLowerCase() },
-      {
-        $push: {
-          emailAccounts: {
-            username,
-            email: `${username}@${domain}`,
-            quota: storage,
-            createdAt: new Date(),
-            suspended: false
-          }
-        }
-      },
+      { $push: { emailAccounts: { username, email: `${username}@${domain}`, quota: storage, createdAt: new Date(), suspended: false } } },
       { new: true }
     );
 
@@ -88,16 +63,14 @@ router.post('/cpanel/create-email', async (req, res) => {
 
 // Delete an email account
 router.delete('/cpanel/delete-email', async (req, res) => {
-  const { domain, username } = req.body;
-  const userId = req.userId;
+  const { userId, domain, username } = req.body;
 
   if (!userId || !domain || !username) {
     return res.status(400).json({ success: false, error: 'userId, domain, and username are required.' });
   }
 
   try {
-    const sessionUrl = await createUserSession();
-    const result = await cpanelUapiRequest(sessionUrl, 'Email', 'delete_pop', { domain, email: username });
+    const result = await cpanelUapiRequest('Email', 'delete_pop', { domain, email: username });
     if (result.status !== 1) throw new Error(result.errors?.[0] || 'Failed to delete email');
 
     // Remove from database
@@ -116,19 +89,16 @@ router.delete('/cpanel/delete-email', async (req, res) => {
 
 // List email accounts for a domain
 router.get('/cpanel/list-emails', async (req, res) => {
-  const { domain } = req.query;
-  const userId = req.userId;
+  const { userId, domain } = req.query;
 
   if (!userId || !domain) {
     return res.status(400).json({ success: false, error: 'userId and domain are required.' });
   }
 
   try {
-    const sessionUrl = await createUserSession();
-    const result = await cpanelUapiRequest(sessionUrl, 'Email', 'list_pops', { domain });
+    const result = await cpanelUapiRequest('Email', 'list_pops', { domain });
     if (result.status !== 1) throw new Error(result.errors?.[0] || 'Failed to list emails');
 
-    // Map live cPanel data
     const emails = result.data.pops.map(acc => ({
       username: acc.user,
       email: acc.email,
