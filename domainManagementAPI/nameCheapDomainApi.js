@@ -340,27 +340,7 @@ console.log(`[Namecheap API] User: ${NAMECHEAP_API_USER}`);
 const BASE_URL = 'https://api.namecheap.com/xml.response';
 // const BASE_URL = 'https://api.sandbox.namecheap.com/xml.response';
 
-// cPanel/WHM API Configuration
-const {
-    CPANEL_HOST,
-    CPANEL_USERNAME,
-    CPANEL_TOKEN,
-    WHM_HOST,
-    WHM_USERNAME,
-    WHM_TOKEN
-} = process.env;
 
-// Validate cPanel environment variables
-if (!CPANEL_HOST || !CPANEL_USERNAME || !CPANEL_TOKEN || !WHM_HOST || !WHM_USERNAME || !WHM_TOKEN) {
-    console.error('❌ Missing required cPanel/WHM environment variables:');
-    console.error('  - CPANEL_HOST:', CPANEL_HOST ? '✓' : '✗');
-    console.error('  - CPANEL_USERNAME:', CPANEL_USERNAME ? '✓' : '✗');
-    console.error('  - CPANEL_TOKEN:', CPANEL_TOKEN ? '✓' : '✗');
-    console.error('  - WHM_HOST:', WHM_HOST ? '✓' : '✗');
-    console.error('  - WHM_USERNAME:', WHM_USERNAME ? '✓' : '✗');
-    console.error('  - WHM_TOKEN:', WHM_TOKEN ? '✓' : '✗');
-    throw new Error('Server initialization failed: Missing cPanel/WHM environment variables');
-}
 
 // Helper: Make cPanel API request
 async function cpanelRequest(endpoint, params = {}) {
@@ -4623,9 +4603,6 @@ router.get('/contact-info/:domain', apiLimiter, asyncHandler(async (req, res) =>
         res.status(error.status || 500).json(errorResponse);
     }
 }));
-
-
-
 
 
 // Domain renewal endpoint with robust error handling
