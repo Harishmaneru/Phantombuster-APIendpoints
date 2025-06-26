@@ -337,8 +337,8 @@ console.log(`[Namecheap API] Mode: ${NAMECHEAP_SANDBOX === 'true' ? 'SANDBOX' : 
 console.log(`[Namecheap API] User: ${NAMECHEAP_API_USER}`);
 
 
-// const BASE_URL = 'https://api.namecheap.com/xml.response';
-const BASE_URL = 'https://api.sandbox.namecheap.com/xml.response';
+const BASE_URL = 'https://api.namecheap.com/xml.response';
+// const BASE_URL = 'https://api.sandbox.namecheap.com/xml.response';
 
 // cPanel/WHM API Configuration
 const {
@@ -3547,9 +3547,9 @@ async function fetchStripeInvoiceDetails(invoiceId) {
     try {
         // Import stripe dynamically to avoid circular dependencies
         const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
-        
+
         const invoice = await stripe.invoices.retrieve(invoiceId);
-        
+
         return {
             id: invoice.id,
             hosted_invoice_url: invoice.hosted_invoice_url,
@@ -3844,7 +3844,6 @@ router.get('/namecheap/domain/transfer/status/:domain', validateUserId, asyncHan
 }));
 
 //________________Api for fetching contact information of domain registration_______________________
-
 
 router.get('/namecheap/user/:userId/contact-info', validateUserId, asyncHandler(async (req, res) => {
     const userId = req.userId;
@@ -4436,30 +4435,27 @@ const whmBreaker = new CircuitBreaker(async (endpoint, params) => {
 }, breakerOptions);
 
 
-
-
-
 // Health check endpoint
 router.get('/health', async (req, res) => {
     const health = {
-      uptime: process.uptime(),
-      timestamp: new Date().toISOString(),
-      services: {}
+        uptime: process.uptime(),
+        timestamp: new Date().toISOString(),
+        services: {}
     };
-  
+
     // Use a lighter API call for health check
     try {
-      await namecheapBreaker.fire('namecheap.users.getBalances', {});
-      health.services.namecheap = { status: 'up' };
+        await namecheapBreaker.fire('namecheap.users.getBalances', {});
+        health.services.namecheap = { status: 'up' };
     } catch (error) {
-      health.services.namecheap = { 
-        status: error.message.includes('Rate limit exceeded') ? 'rate_limited' : 'down',
-        error: error.message 
-      };
+        health.services.namecheap = {
+            status: error.message.includes('Rate limit exceeded') ? 'rate_limited' : 'down',
+            error: error.message
+        };
     }
-  
-    res.status(200).json(health);  
-  });
+
+    res.status(200).json(health);
+});
 
 // Domain registration endpoint with robust error handling
 router.post('/register', apiLimiter, asyncHandler(async (req, res) => {
@@ -4628,97 +4624,9 @@ router.get('/contact-info/:domain', apiLimiter, asyncHandler(async (req, res) =>
     }
 }));
 
-// Nameserver configuration endpoint with robust error handling
-router.post('/nameservers/:domain', apiLimiter, asyncHandler(async (req, res) => {
-    const operation = 'SET_NAMESERVERS';
-    try {
-        const { domain } = req.params;
-        const { customNameservers, useNamecheapDNS } = req.body;
 
-        // Validate domain format
-        if (!isValidDomain(domain)) {
-            throw new Error('Invalid domain format');
-        }
 
-        // Check cache for recent nameserver changes
-        const cacheKey = `ns_config_${domain}`;
-        const cachedResult = cache.get(cacheKey);
-        if (cachedResult) {
-            return res.json({
-                ...cachedResult,
-                source: 'cache'
-            });
-        }
 
-        // Get nameserver configuration
-        const nameserverConfig = getNameserverConfig(customNameservers, useNamecheapDNS);
-
-        // Set nameservers with retries and circuit breaker
-        const result = await retryWithBackoff(async () => {
-            return await namecheapBreaker.fire('setDomainNameservers', domain, nameserverConfig);
-        });
-
-        // Cache successful result
-        cache.set(cacheKey, result, 300); // Cache for 5 minutes
-
-        res.json({
-            success: true,
-            operation,
-            data: result
-        });
-
-    } catch (error) {
-        const errorResponse = createErrorResponse(error, operation);
-        res.status(error.status || 500).json(errorResponse);
-    }
-}));
-
-// Get nameserver info endpoint
-router.get('/nameservers/:domain', apiLimiter, asyncHandler(async (req, res) => {
-    const operation = 'GET_NAMESERVERS';
-    try {
-        const { domain } = req.params;
-
-        // Validate domain format
-        if (!isValidDomain(domain)) {
-            throw new Error('Invalid domain format');
-        }
-
-        // Check cache
-        const cacheKey = `ns_info_${domain}`;
-        const cached = cache.get(cacheKey);
-        if (cached) {
-            return res.json({
-                ...cached,
-                source: 'cache'
-            });
-        }
-
-        // Get domain info with retries and circuit breaker
-        const result = await retryWithBackoff(async () => {
-            return await namecheapBreaker.fire('namecheap.domains.dns.getList', {
-                DomainName: domain
-            });
-        });
-
-        const nameservers = result.ApiResponse.CommandResponse.DomainDNSGetListResult.Nameserver;
-        const processedResult = {
-            success: true,
-            domain,
-            nameservers: Array.isArray(nameservers) ? nameservers : [nameservers],
-            timestamp: new Date().toISOString()
-        };
-
-        // Cache the result
-        cache.set(cacheKey, processedResult, 300);
-
-        res.json(processedResult);
-
-    } catch (error) {
-        const errorResponse = createErrorResponse(error, operation);
-        res.status(error.status || 500).json(errorResponse);
-    }
-}));
 
 // Domain renewal endpoint with robust error handling
 router.post('/renew/:domain', apiLimiter, asyncHandler(async (req, res) => {
@@ -4795,74 +4703,7 @@ router.post('/renew/:domain', apiLimiter, asyncHandler(async (req, res) => {
 
 
 
-// Domain transfer initiation endpoint with robust error handling
-router.post('/transfer/:domain', apiLimiter, asyncHandler(async (req, res) => {
-    const operation = 'INITIATE_TRANSFER';
-    try {
-        const { domain } = req.params;
-        const { authCode, years = 1, promotionCode = '' } = req.body;
 
-        if (!isValidDomain(domain)) {
-            throw new Error('Invalid domain format');
-        }
-
-        if (!authCode) {
-            throw new Error('Auth code is required for domain transfer');
-        }
-
-        // Check cache for recent transfer attempts
-        const cacheKey = `transfer_${domain}`;
-        const cachedResult = cache.get(cacheKey);
-        if (cachedResult) {
-            return res.json({
-                ...cachedResult,
-                source: 'cache'
-            });
-        }
-
-        // Validate transfer eligibility with retries
-        const eligibilityCheck = await retryWithBackoff(async () => {
-            return await namecheapBreaker.fire('namecheap.domains.transfer.getStatus', {
-                DomainName: domain
-            });
-        });
-
-        if (!eligibilityCheck.ApiResponse.CommandResponse.TransferGetStatusResult.Transferable) {
-            throw new Error('Domain is not eligible for transfer');
-        }
-
-        // Initiate transfer with circuit breaker and retries
-        const result = await retryWithBackoff(async () => {
-            return await namecheapBreaker.fire('namecheap.domains.transfer.create', {
-                DomainName: domain,
-                Years: years,
-                EPPCode: authCode,
-                PromotionCode: promotionCode
-            });
-        });
-
-        const transferResult = {
-            success: true,
-            domain,
-            transferId: result.ApiResponse.CommandResponse.DomainTransferCreateResult.TransferID,
-            status: result.ApiResponse.CommandResponse.DomainTransferCreateResult.Status,
-            timestamp: new Date().toISOString()
-        };
-
-        // Cache successful result
-        cache.set(cacheKey, transferResult, 300); // Cache for 5 minutes
-
-        res.json({
-            success: true,
-            operation,
-            data: transferResult
-        });
-
-    } catch (error) {
-        const errorResponse = createErrorResponse(error, operation);
-        res.status(error.status || 500).json(errorResponse);
-    }
-}));
 
 // Get transfer status endpoint
 router.get('/transfer/:domain/status', apiLimiter, asyncHandler(async (req, res) => {
@@ -4911,77 +4752,8 @@ router.get('/transfer/:domain/status', apiLimiter, asyncHandler(async (req, res)
     }
 }));
 
-// Bulk transfer status check endpoint
-router.post('/transfer/status-bulk', apiLimiter, asyncHandler(async (req, res) => {
-    const operation = 'BULK_TRANSFER_STATUS';
-    try {
-        const { domains } = req.body;
-        if (!Array.isArray(domains)) {
-            throw new Error('Invalid domains array');
-        }
 
-        const results = [];
-        const errors = [];
-
-        // Process domains in parallel with individual timeouts
-        const statusPromises = domains.map(async (domain) => {
-            try {
-                // Check cache
-                const cacheKey = `transfer_status_${domain}`;
-                const cached = cache.get(cacheKey);
-                if (cached) {
-                    return { ...cached, source: 'cache' };
-                }
-
-                const result = await retryWithBackoff(async () => {
-                    return await namecheapBreaker.fire('namecheap.domains.transfer.getStatus', {
-                        DomainName: domain
-                    });
-                });
-
-                const statusResult = {
-                    success: true,
-                    domain,
-                    status: result.ApiResponse.CommandResponse.TransferGetStatusResult.Status,
-                    transferable: result.ApiResponse.CommandResponse.TransferGetStatusResult.Transferable === 'true',
-                    authCodeRequired: result.ApiResponse.CommandResponse.TransferGetStatusResult.AuthCodeRequired === 'true',
-                    timestamp: new Date().toISOString()
-                };
-
-                // Cache the result
-                cache.set(cacheKey, statusResult, 60);
-                return statusResult;
-
-            } catch (error) {
-                return {
-                    domain,
-                    success: false,
-                    error: error.message
-                };
-            }
-        });
-
-        const statusResults = await Promise.all(statusPromises);
-
-        res.json({
-            success: true,
-            operation,
-            results: statusResults.filter(r => r.success),
-            errors: statusResults.filter(r => !r.success),
-            summary: {
-                total: domains.length,
-                succeeded: statusResults.filter(r => r.success).length,
-                failed: statusResults.filter(r => !r.success).length
-            }
-        });
-
-    } catch (error) {
-        const errorResponse = createErrorResponse(error, operation);
-        res.status(error.status || 500).json(errorResponse);
-    }
-}));
-//_______________domain and paymnet details____
-
+//_______________API for delete Domain____
 
 
 module.exports = {

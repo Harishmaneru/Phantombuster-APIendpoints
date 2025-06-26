@@ -1753,6 +1753,36 @@ function extractHtmlErrorMessage(html) {
     if (bodyMatch) return bodyMatch[1].replace(/<[^>]+>/g, '').trim();
     return html.slice(0, 200); // fallback: first 200 chars
 }
+
+
+router.get('/invoice/:paymentIntentId', async (req, res) => {
+    const { paymentIntentId } = req.params;
+  
+    try {
+      // Option A: Retrieve PI and expand invoice
+      const pi = await stripe.paymentIntents.retrieve(paymentIntentId, {
+        expand: ['invoice'],
+      });
+      if (pi.invoice) {
+        return res.json({ invoice: pi.invoice });
+      }
+  
+      // Option B: Fallback to list invoices
+      const invList = await stripe.invoices.list({
+        payment_intent: paymentIntentId,
+        limit: 1,
+      });
+      if (invList.data.length > 0) {
+        return res.json({ invoice: invList.data[0] });
+      }
+  
+      return res.status(404).json({ error: 'Invoice not found for that PaymentIntent.' });
+    } catch (err) {
+      console.error('Error fetching invoice:', err);
+      return res.status(400).json({ error: err.message });
+    }
+  });
+  
 //______________________________________________________________________________________
 
 
