@@ -46,8 +46,8 @@ async function cpanelUapiRequest(module, func, params) {
         timeout: 60000
       }),
       headers: {
-        'Authorization': `cpanel ${MASTER_USER}:${CPANEL_TOKEN}`,
-        'Host': params.domain, // Use the domain, not WHM_HOST
+        'Authorization': `cpanel masteruser:${CPANEL_TOKEN}`, // Changed to use masteruser
+        'Host': params.domain,
         'Accept': 'application/json'
       },
       timeout: 60000
