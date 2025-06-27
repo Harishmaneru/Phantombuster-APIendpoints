@@ -323,6 +323,13 @@ const {
     NAMECHEAP_SANDBOX
 } = process.env;
 
+// cPanel/WHM Configuration
+const CPANEL_HOST = process.env.WHM_HOST;
+const CPANEL_USERNAME = process.env.CPANEL_MASTER_USER;
+const CPANEL_TOKEN = process.env.CPANEL_TOKEN;
+const WHM_USERNAME = process.env.CPANEL_MASTER_USER;
+const WHM_TOKEN = process.env.WHM_TOKEN;
+
 // Validate environment variables
 if (!NAMECHEAP_API_USER || !NAMECHEAP_API_KEY || !NAMECHEAP_CLIENT_IP) {
     console.error('❌ Missing required Namecheap environment variables:');
@@ -335,6 +342,8 @@ if (!NAMECHEAP_API_USER || !NAMECHEAP_API_KEY || !NAMECHEAP_CLIENT_IP) {
 // Log API configuration
 console.log(`[Namecheap API] Mode: ${NAMECHEAP_SANDBOX === 'true' ? 'SANDBOX' : 'PRODUCTION'}`);
 console.log(`[Namecheap API] User: ${NAMECHEAP_API_USER}`);
+console.log(`[cPanel/WHM] Host: ${CPANEL_HOST}`);
+console.log(`[cPanel/WHM] User: ${CPANEL_USERNAME}`);
 
 
 const BASE_URL = 'https://api.namecheap.com/xml.response';
