@@ -84,124 +84,162 @@ async function createCpanelEmail(username, password, domain, quota = 512) {
   }
 }
 
-/**
- * Create an email account
- * Expected req.body: { userId, domain, username, password, storage }
- */
-router.post('/cpanel/create-email', async (req, res) => {
-  const { userId, domain, username, password, storage = 1024 } = req.body;
 
-  // Validate inputs
-  if (!userId || !domain || !username || !password) {
+
+
+// POST /api/emails
+router.post('/create-email', async (req, res) => {
+  const { username, password, domain, quota = 512 } = req.body;
+
+  // Input validation
+  if (!username || !password || !domain) {
     return res.status(400).json({ 
-      success: false, 
-      error: 'userId, domain, username, and password are required.' 
-    });
-  }
-  
-  // Check for reserved username
-  if (username.toLowerCase() === 'cpanel') {
-    return res.status(400).json({ 
-      success: false, 
-      error: 'You cannot use "cpanel" as an email account username.' 
-    });
-  }
-  
-  if (typeof storage !== 'number' || storage < 10 || storage > 10240) {
-    return res.status(400).json({ 
-      success: false, 
-      error: 'Storage must be a number between 240 and 10240 (MB).' 
-    });
-  }
-  
-  if (password.length < 8) {
-    return res.status(400).json({ 
-      success: false, 
-      error: 'Password must be at least 8 characters long.' 
+      error: 'Missing required fields: username, password, domain' 
     });
   }
 
   try {
-    console.log(`Starting email creation for ${username}@${domain}`);
+    const result = await createCpanelEmail(username, password, domain, quota);
     
-    // Parameters for cPanel UAPI Email/add_pop (matching working curl command)
-    const params = {
-      email: username.toLowerCase(), // Just the username, not full email address
-      password,
-      quota: storage, // Storage quota in MB
-      domain: domain.toLowerCase(), // Domain for the email account
-      send_welcome_email: 1, // Send welcome email
-      skip_update_db: 0 // Update the email accounts database cache
-    };
-
-    console.log('Attempting UAPI email creation...');
-    const result = await cpanelUapiRequest('Email', 'add_pop', params);
-    
-    // Check if UAPI response indicates success (matching your curl response format)
-    if (result && result.status === 1) {
-      console.log('UAPI email creation successful');
+    if (result.success) {
+      return res.json({
+        email: `${username}@${domain}`,
+        quota,
+        status: 'created'
+      });
     } else {
-      const errors = result?.errors || ['Unknown error'];
-      throw new Error(errors[0] || 'UAPI returned unsuccessful status');
+      return res.status(500).json({
+        error: 'Email creation failed',
+        details: result.error
+      });
     }
-
-    // Save to database
-    const emailAddress = `${username.toLowerCase()}@${domain.toLowerCase()}`;
-    try {
-      await NamecheapDomain.findOneAndUpdate(
-        { userId, domain: domain.toLowerCase() },
-        { 
-          $push: { 
-            emailAccounts: { 
-              username: username.toLowerCase(), 
-              email: emailAddress, 
-              quota: storage, 
-              createdAt: new Date(), 
-              suspended: false 
-            } 
-          } 
-        },
-        { new: true, upsert: true }
-      );
-      console.log('Email account saved to database');
-    } catch (dbError) {
-      console.error('Database save error:', dbError.message);
-      // Continue even if DB save fails since the email was created
-    }
-
-    res.json({ 
-      success: true, 
-      email: emailAddress, 
-      quota: storage,
-      method: 'UAPI',
-      message: `Email account ${emailAddress} created successfully`,
-      data: result.data // Include the response data like your curl command
-    });
-    
-  } catch (err) {
-    console.error('Email creation failed:', {
-      timestamp: new Date().toISOString(),
-      error: err.message,
-      stack: err.stack,
-      request: {
-        userId,
-        domain,
-        username,
-        storage
-      }
-    });
-    
-    res.status(500).json({ 
-      success: false, 
-      error: err.message,
-      details: {
-        code: err.code,
-        type: err.name,
-        recommendation: 'Check server connectivity, domain existence, and API credentials'
-      }
+  } catch (error) {
+    console.error('Email creation error:', error);
+    return res.status(500).json({
+      error: 'Internal server error',
+      details: error.message
     });
   }
 });
+
+/**
+ * Create an email account
+ * Expected req.body: { userId, domain, username, password, storage }
+ */
+// router.post('/cpanel/create-email', async (req, res) => {
+//   const { userId, domain, username, password, storage = 1024 } = req.body;
+
+//   // Validate inputs
+//   if (!userId || !domain || !username || !password) {
+//     return res.status(400).json({ 
+//       success: false, 
+//       error: 'userId, domain, username, and password are required.' 
+//     });
+//   }
+  
+//   // Check for reserved username
+//   if (username.toLowerCase() === 'cpanel') {
+//     return res.status(400).json({ 
+//       success: false, 
+//       error: 'You cannot use "cpanel" as an email account username.' 
+//     });
+//   }
+  
+//   if (typeof storage !== 'number' || storage < 10 || storage > 10240) {
+//     return res.status(400).json({ 
+//       success: false, 
+//       error: 'Storage must be a number between 240 and 10240 (MB).' 
+//     });
+//   }
+  
+//   if (password.length < 8) {
+//     return res.status(400).json({ 
+//       success: false, 
+//       error: 'Password must be at least 8 characters long.' 
+//     });
+//   }
+
+//   try {
+//     console.log(`Starting email creation for ${username}@${domain}`);
+    
+//     // Parameters for cPanel UAPI Email/add_pop (matching working curl command)
+//     const params = {
+//       email: username.toLowerCase(), // Just the username, not full email address
+//       password,
+//       quota: storage, // Storage quota in MB
+//       domain: domain.toLowerCase(), // Domain for the email account
+//       send_welcome_email: 1, // Send welcome email
+//       skip_update_db: 0 // Update the email accounts database cache
+//     };
+
+//     console.log('Attempting UAPI email creation...');
+//     const result = await cpanelUapiRequest('Email', 'add_pop', params);
+    
+//     // Check if UAPI response indicates success (matching your curl response format)
+//     if (result && result.status === 1) {
+//       console.log('UAPI email creation successful');
+//     } else {
+//       const errors = result?.errors || ['Unknown error'];
+//       throw new Error(errors[0] || 'UAPI returned unsuccessful status');
+//     }
+
+//     // Save to database
+//     const emailAddress = `${username.toLowerCase()}@${domain.toLowerCase()}`;
+//     try {
+//       await NamecheapDomain.findOneAndUpdate(
+//         { userId, domain: domain.toLowerCase() },
+//         { 
+//           $push: { 
+//             emailAccounts: { 
+//               username: username.toLowerCase(), 
+//               email: emailAddress, 
+//               quota: storage, 
+//               createdAt: new Date(), 
+//               suspended: false 
+//             } 
+//           } 
+//         },
+//         { new: true, upsert: true }
+//       );
+//       console.log('Email account saved to database');
+//     } catch (dbError) {
+//       console.error('Database save error:', dbError.message);
+//       // Continue even if DB save fails since the email was created
+//     }
+
+//     res.json({ 
+//       success: true, 
+//       email: emailAddress, 
+//       quota: storage,
+//       method: 'UAPI',
+//       message: `Email account ${emailAddress} created successfully`,
+//       data: result.data // Include the response data like your curl command
+//     });
+    
+//   } catch (err) {
+//     console.error('Email creation failed:', {
+//       timestamp: new Date().toISOString(),
+//       error: err.message,
+//       stack: err.stack,
+//       request: {
+//         userId,
+//         domain,
+//         username,
+//         storage
+//       }
+//     });
+    
+//     res.status(500).json({ 
+//       success: false, 
+//       error: err.message,
+//       details: {
+//         code: err.code,
+//         type: err.name,
+//         recommendation: 'Check server connectivity, domain existence, and API credentials'
+//       }
+//     });
+//   }
+// });
 
 // Test endpoint with improved diagnostics
 router.get('/cpanel/test-connection', async (req, res) => {
