@@ -4,9 +4,12 @@ const axios = require('axios');
 const https = require('https');
 const NamecheapDomain = require('../domainManagementAPI/nameCheapDomainApi.js');
 
-const WHM_HOST = process.env.WHM_HOST;
+// WHM_HOST should be your domain name (e.g., engagegptapp.com), not IP address
+const WHM_HOST = process.env.WHM_HOST || 'engagegptapp.com';
 const MASTER_USER = process.env.CPANEL_MASTER_USER;
-const MASTER_TOKEN = process.env.CPANEL_TOKEN;
+// Use WHM token for server-level operations, cPanel token for account-level operations
+const WHM_TOKEN = process.env.WHM_TOKEN || 'Z1H8K78XO7ACXTRP1P992IUL0E6UPVMU';
+const CPANEL_TOKEN = process.env.CPANEL_TOKEN || '76QS0RQNEK1N5OU4SQEF4A4W6U9M4AT7';
 const agent = new https.Agent({ rejectUnauthorized: false });
 
 // Helper: Call cPanel UAPI endpoint using API Token
@@ -19,7 +22,7 @@ async function cpanelUapiRequest(module, func, params) {
       params,
       httpsAgent: agent,
       headers: { 
-        'Authorization': `cpanel ${MASTER_USER}:${MASTER_TOKEN}`,
+        'Authorization': `cpanel ${MASTER_USER}:${CPANEL_TOKEN}`,
         'Content-Type': 'application/json'
       },
       timeout: 30000 // 30 second timeout
@@ -46,7 +49,7 @@ async function cpanelWhmRequest(func, params) {
       params,
       httpsAgent: agent,
       headers: { 
-        'Authorization': `whm ${MASTER_USER}:${MASTER_TOKEN}`,
+        'Authorization': `whm ${MASTER_USER}:${WHM_TOKEN}`,
         'Content-Type': 'application/json'
       },
       timeout: 30000
@@ -54,6 +57,33 @@ async function cpanelWhmRequest(func, params) {
     return resp.data;
   } catch (error) {
     console.error('WHM API Error:', {
+      status: error.response?.status,
+      statusText: error.response?.statusText,
+      data: error.response?.data,
+      url: url,
+      params: params
+    });
+    throw error;
+  }
+}
+
+// Alternative method using standard cPanel API (port 2083)
+async function cpanelStandardRequest(func, params) {
+  const url = `https://${WHM_HOST}:2083/json-api/${func}`;
+  
+  try {
+    const resp = await axios.get(url, {
+      params,
+      httpsAgent: agent,
+      headers: { 
+        'Authorization': `cpanel ${MASTER_USER}:${CPANEL_TOKEN}`,
+        'Content-Type': 'application/json'
+      },
+      timeout: 15000
+    });
+    return resp.data;
+  } catch (error) {
+    console.error('Standard cPanel API Error:', {
       status: error.response?.status,
       statusText: error.response?.statusText,
       data: error.response?.data,
@@ -212,9 +242,76 @@ router.get('/cpanel/test-connection', async (req, res) => {
     console.log('Testing cPanel API connection...');
     console.log('Host:', WHM_HOST);
     console.log('User:', MASTER_USER);
-    console.log('Token length:', MASTER_TOKEN ? MASTER_TOKEN.length : 0);
+    console.log('WHM Token length:', WHM_TOKEN ? WHM_TOKEN.length : 0);
+    console.log('cPanel Token length:', CPANEL_TOKEN ? CPANEL_TOKEN.length : 0);
     
-    // Test UAPI connection
+    // Test basic connectivity first
+    const connectivityTests = [];
+    
+    // Test 1: Basic HTTP connectivity to port 2083
+    try {
+      const httpTest = await axios.get(`https://${WHM_HOST}:2083`, {
+        httpsAgent: agent,
+        timeout: 10000,
+        validateStatus: () => true // Accept any status code
+      });
+      connectivityTests.push({
+        test: 'HTTP 2083',
+        success: true,
+        status: httpTest.status,
+        statusText: httpTest.statusText
+      });
+    } catch (error) {
+      connectivityTests.push({
+        test: 'HTTP 2083',
+        success: false,
+        error: error.message
+      });
+    }
+    
+    // Test 2: Basic HTTP connectivity to port 2087
+    try {
+      const whmTest = await axios.get(`https://${WHM_HOST}:2087`, {
+        httpsAgent: agent,
+        timeout: 10000,
+        validateStatus: () => true
+      });
+      connectivityTests.push({
+        test: 'HTTP 2087',
+        success: true,
+        status: whmTest.status,
+        statusText: whmTest.statusText
+      });
+    } catch (error) {
+      connectivityTests.push({
+        test: 'HTTP 2087',
+        success: false,
+        error: error.message
+      });
+    }
+    
+    // Test 3: Try with IP address instead of domain
+    try {
+      const ipTest = await axios.get(`https://159.198.76.88:2083`, {
+        httpsAgent: agent,
+        timeout: 10000,
+        validateStatus: () => true
+      });
+      connectivityTests.push({
+        test: 'IP 2083',
+        success: true,
+        status: ipTest.status,
+        statusText: ipTest.statusText
+      });
+    } catch (error) {
+      connectivityTests.push({
+        test: 'IP 2083',
+        success: false,
+        error: error.message
+      });
+    }
+    
+    // Test UAPI connection with shorter timeout
     let uapiResult = null;
     let uapiError = null;
     try {
@@ -225,7 +322,7 @@ router.get('/cpanel/test-connection', async (req, res) => {
       console.log('UAPI test failed:', error.message);
     }
     
-    // Test WHM API connection
+    // Test WHM API connection with shorter timeout
     let whmResult = null;
     let whmError = null;
     try {
@@ -236,14 +333,28 @@ router.get('/cpanel/test-connection', async (req, res) => {
       console.log('WHM API test failed:', error.message);
     }
     
+    // Test Standard cPanel API connection
+    let standardResult = null;
+    let standardError = null;
+    try {
+      standardResult = await cpanelStandardRequest('version', {});
+      console.log('Standard cPanel API test successful:', standardResult);
+    } catch (error) {
+      standardError = error;
+      console.log('Standard cPanel API test failed:', error.message);
+    }
+    
     res.json({
       success: true,
       environment: {
         host: WHM_HOST,
         user: MASTER_USER,
-        tokenConfigured: !!MASTER_TOKEN,
-        tokenLength: MASTER_TOKEN ? MASTER_TOKEN.length : 0
+        whmTokenConfigured: !!WHM_TOKEN,
+        whmTokenLength: WHM_TOKEN ? WHM_TOKEN.length : 0,
+        cpanelTokenConfigured: !!CPANEL_TOKEN,
+        cpanelTokenLength: CPANEL_TOKEN ? CPANEL_TOKEN.length : 0
       },
+      connectivity: connectivityTests,
       uapi: {
         success: !uapiError,
         error: uapiError?.message,
@@ -253,7 +364,19 @@ router.get('/cpanel/test-connection', async (req, res) => {
         success: !whmError,
         error: whmError?.message,
         result: whmResult
-      }
+      },
+      standard: {
+        success: !standardError,
+        error: standardError?.message,
+        result: standardResult
+      },
+      recommendations: [
+        "If connectivity tests fail, check if ports 2083/2087 are open",
+        "Try using IP address instead of domain if DNS is the issue",
+        "Verify cPanel/WHM is running and accessible",
+        "Check firewall settings on the server",
+        "Some hosting providers block direct API access - contact your host"
+      ]
     });
   } catch (err) {
     console.error('Error testing connection:', err);
