@@ -40,13 +40,17 @@ async function cpanelUapiRequest(module, func, params) {
   try {
     const response = await axios.get(url, {
       params,
-      httpsAgent: agent,
-      headers: { 
+      httpsAgent: new https.Agent({
+        rejectUnauthorized: false,
+        family: 4,
+        timeout: 60000
+      }),
+      headers: {
         'Authorization': `cpanel ${MASTER_USER}:${CPANEL_TOKEN}`,
-        'Host': params.domain || WHM_HOST, // Add Host header like curl command
+        'Host': params.domain, // Use the domain, not WHM_HOST
         'Accept': 'application/json'
       },
-      timeout: 30000
+      timeout: 60000
     });
     
     const duration = Date.now() - startTime;
@@ -60,7 +64,8 @@ async function cpanelUapiRequest(module, func, params) {
       code: error.code,
       message: error.message,
       status: error.response?.status,
-      data: error.response?.data
+      data: error.response?.data,
+      headers: error.response?.headers
     });
     throw error;
   }
