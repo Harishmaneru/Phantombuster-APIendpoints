@@ -82,18 +82,20 @@ async function getCpanelSession() {
 // Helper: Call cPanel UAPI endpoint with proper authentication
 async function cpanelUapiRequest(module, func, params) {
   try {
-    // Method 1: Direct API Token Authentication (most reliable)
+    // Method 1: GET request with API Token (matching working curl command)
     const url = `https://${WHM_HOST}:2083/execute/${module}/${func}`;
     
     console.log(`UAPI Request: ${url} with params:`, { ...params, password: '******' });
     
     const startTime = Date.now();
     
-    const response = await axios.post(url, params, {
+    const response = await axios.get(url, {
+      params,
       httpsAgent: agent,
       headers: { 
         'Authorization': `cpanel ${MASTER_USER}:${CPANEL_TOKEN}`,
-        'Content-Type': 'application/x-www-form-urlencoded'
+        'Host': params.domain || WHM_HOST, // Add Host header like curl command
+        'Accept': 'application/json'
       },
       timeout: 30000
     });
@@ -103,58 +105,37 @@ async function cpanelUapiRequest(module, func, params) {
     
     return response.data;
   } catch (tokenError) {
-    console.log('POST method failed, trying GET with API Token...');
+    console.log('GET method failed, trying session-based authentication...');
     
     try {
-      // Method 2: GET request with API Token (your original approach but fixed)
-      const url = `https://${WHM_HOST}:2083/execute/${module}/${func}`;
+      // Method 2: Fallback to session-based authentication
+      const session = await getCpanelSession();
+      const sessionUrl = `https://${WHM_HOST}:2083/${session}/execute/${module}/${func}`;
       
-      const response = await axios.get(url, {
+      console.log(`UAPI Session Request: ${sessionUrl}`);
+      
+      const startTime = Date.now();
+      
+      const response = await axios.get(sessionUrl, {
         params,
         httpsAgent: agent,
-        headers: { 
-          'Authorization': `cpanel ${MASTER_USER}:${CPANEL_TOKEN}`,
-          'Content-Type': 'application/json'
+        headers: {
+          'Host': params.domain || WHM_HOST,
+          'Accept': 'application/json'
         },
         timeout: 30000
       });
       
-      const duration = Date.now() - Date.now();
-      console.log(`UAPI GET Success:`, JSON.stringify(response.data, null, 2));
+      const duration = Date.now() - startTime;
+      console.log(`UAPI Session Success (${duration}ms):`, JSON.stringify(response.data, null, 2));
       
       return response.data;
-    } catch (getError) {
-      console.log('GET method also failed, trying session-based authentication...');
-      
-      try {
-        // Method 3: Fallback to session-based authentication
-        const session = await getCpanelSession();
-        const sessionUrl = `https://${WHM_HOST}:2083/${session}/execute/${module}/${func}`;
-        
-        console.log(`UAPI Session Request: ${sessionUrl}`);
-        
-        const startTime = Date.now();
-        
-        const response = await axios.post(sessionUrl, params, {
-          httpsAgent: agent,
-          headers: {
-            'Content-Type': 'application/x-www-form-urlencoded'
-          },
-          timeout: 30000
-        });
-        
-        const duration = Date.now() - startTime;
-        console.log(`UAPI Session Success (${duration}ms):`, JSON.stringify(response.data, null, 2));
-        
-        return response.data;
-      } catch (sessionError) {
-        console.error('All authentication methods failed:', {
-          postError: tokenError.message,
-          getError: getError.message,
-          sessionError: sessionError.message
-        });
-        throw sessionError;
-      }
+    } catch (sessionError) {
+      console.error('All authentication methods failed:', {
+        getError: tokenError.message,
+        sessionError: sessionError.message
+      });
+      throw sessionError;
     }
   }
 }
@@ -211,10 +192,18 @@ router.post('/cpanel/create-email', async (req, res) => {
     });
   }
   
+  // Check for reserved username
+  if (username.toLowerCase() === 'cpanel') {
+    return res.status(400).json({ 
+      success: false, 
+      error: 'You cannot use "cpanel" as an email account username.' 
+    });
+  }
+  
   if (typeof storage !== 'number' || storage < 10 || storage > 10240) {
     return res.status(400).json({ 
       success: false, 
-      error: 'Storage must be a number between 10 and 10240 (MB).' 
+      error: 'Storage must be a number between 240 and 10240 (MB).' 
     });
   }
   
@@ -228,12 +217,14 @@ router.post('/cpanel/create-email', async (req, res) => {
   try {
     console.log(`Starting email creation for ${username}@${domain}`);
     
-    // Parameters for cPanel UAPI Email/add_pop (matching PHP example)
+    // Parameters for cPanel UAPI Email/add_pop (corrected per documentation)
     const params = {
-      email: `${username.toLowerCase()}@${domain.toLowerCase()}`, // Full email address like PHP example
+      email: username.toLowerCase(), // Just the username, not full email address
       password,
       quota: storage, // Storage quota in MB
-      domain: domain.toLowerCase() // Add domain for context
+      domain: domain.toLowerCase(), // Domain for the email account
+      send_welcome_email: 1, // Don't send welcome email by default
+      skip_update_db: 0 // Update the email accounts database cache
     };
 
     let result;
@@ -262,7 +253,7 @@ router.post('/cpanel/create-email', async (req, res) => {
         const whmParams = {
           ...params,
           user: MASTER_USER, // WHM API might need the user parameter
-          'api.version': 1
+          'api.version': '1' // Fixed: should be string, not number
         };
         
         console.log('Attempting WHM API email creation...');
