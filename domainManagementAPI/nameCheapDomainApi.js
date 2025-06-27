@@ -339,6 +339,16 @@ if (!NAMECHEAP_API_USER || !NAMECHEAP_API_KEY || !NAMECHEAP_CLIENT_IP) {
     throw new Error('Server initialization failed: Missing Namecheap environment variables');
 }
 
+// Validate WHM environment variables
+if (!CPANEL_HOST || !CPANEL_USERNAME || !CPANEL_TOKEN || !WHM_TOKEN) {
+    console.error('❌ Missing required WHM/cPanel environment variables:');
+    console.error('  - WHM_HOST:', CPANEL_HOST ? '✓' : '✗');
+    console.error('  - CPANEL_MASTER_USER:', CPANEL_USERNAME ? '✓' : '✗');
+    console.error('  - CPANEL_TOKEN:', CPANEL_TOKEN ? '✓' : '✗');
+    console.error('  - WHM_TOKEN:', WHM_TOKEN ? '✓' : '✗');
+    console.warn('⚠️  Email functionality will be limited without WHM/cPanel configuration');
+}
+
 // Log API configuration
 console.log(`[Namecheap API] Mode: ${NAMECHEAP_SANDBOX === 'true' ? 'SANDBOX' : 'PRODUCTION'}`);
 console.log(`[Namecheap API] User: ${NAMECHEAP_API_USER}`);
@@ -381,7 +391,7 @@ async function cpanelRequest(endpoint, params = {}) {
 
 // Helper: Make WHM API request
 async function whmRequest(endpoint, params = {}) {
-    const url = `https://${WHM_HOST}:2087/json-api/${endpoint}`;
+    const url = `https://${CPANEL_HOST}:2087/json-api/${endpoint}`;
 
     try {
         const response = await axios.get(url, {
@@ -3003,8 +3013,11 @@ router.get('/namecheap/domain/:domain/dns-status', async (req, res) => {
  */
 router.post('/namecheap/domain/:domain/createemail', validateUserId, asyncHandler(async (req, res) => {
     const { domain } = req.params;
-    const { username, password, quota = 1024 } = req.body;
+    const { username, password, quota, storage } = req.body;
     const userId = req.userId;
+
+    // Handle both 'quota' and 'storage' parameters for backward compatibility
+    const emailQuota = quota || storage || 1024;
 
     // Validate inputs
     if (!username || !password) {
@@ -3023,7 +3036,7 @@ router.post('/namecheap/domain/:domain/createemail', validateUserId, asyncHandle
     }
 
     // Quota check (max 10GB = 10240 MB)
-    if (isNaN(quota) || quota < 50 || quota > 10240) {
+    if (isNaN(emailQuota) || emailQuota < 50 || emailQuota > 10240) {
         return res.status(400).json({
             success: false,
             error: 'Quota must be between 50 MB and 10240 MB (10 GB)'
@@ -3031,6 +3044,29 @@ router.post('/namecheap/domain/:domain/createemail', validateUserId, asyncHandle
     }
 
     try {
+        // Check if WHM environment variables are configured
+        if (!CPANEL_HOST || !CPANEL_USERNAME || !CPANEL_TOKEN || !WHM_TOKEN) {
+            return res.status(500).json({
+                success: false,
+                error: 'Email server configuration is incomplete',
+                details: {
+                    message: 'WHM/cPanel environment variables are not properly configured',
+                    missingVariables: {
+                        WHM_HOST: !CPANEL_HOST,
+                        CPANEL_MASTER_USER: !CPANEL_USERNAME,
+                        CPANEL_TOKEN: !CPANEL_TOKEN,
+                        WHM_TOKEN: !WHM_TOKEN
+                    },
+                    nextSteps: [
+                        'Configure WHM_HOST environment variable',
+                        'Configure CPANEL_MASTER_USER environment variable',
+                        'Configure CPANEL_TOKEN environment variable',
+                        'Configure WHM_TOKEN environment variable'
+                    ]
+                }
+            });
+        }
+
         // 1. Verify domain ownership through database
         const userDomain = await NamecheapDomain.findOne({
             userId,
@@ -3100,7 +3136,7 @@ router.post('/namecheap/domain/:domain/createemail', validateUserId, asyncHandle
             domain: domain,
             email: username,
             password: password,
-            quota: quota.toString()
+            quota: emailQuota.toString()
         });
 
         if (!cpanelResponse.status) {
@@ -3112,7 +3148,7 @@ router.post('/namecheap/domain/:domain/createemail', validateUserId, asyncHandle
         const emailAccountData = {
             username,
             email: emailAddress,
-            quota,
+            quota: emailQuota,
             createdAt: new Date(),
             suspended: false
         };
@@ -3132,7 +3168,7 @@ router.post('/namecheap/domain/:domain/createemail', validateUserId, asyncHandle
                 email: {
                     address: emailAddress,
                     username,
-                    quota,
+                    quota: emailQuota,
                     status: 'active'
                 },
                 dns: {
@@ -3498,11 +3534,9 @@ router.get('/namecheap/domain/:domain/nameservers', validateUserId, asyncHandler
 
 //__________Helper function to get DKIM public key from WHM__________
 async function getDkimPublicKey(domain) {
-    const WHM_HOST = process.env.WHM_URL.startsWith('http') ?
-        process.env.WHM_URL :
-        `https://${process.env.WHM_URL}`;
+    const WHM_HOST = CPANEL_HOST;
 
-    const url = `${WHM_HOST}/json-api/get_email_dkim?api.version=1&domain=${domain}`;
+    const url = `https://${WHM_HOST}/json-api/get_email_dkim?api.version=1&domain=${domain}`;
 
     try {
         const response = await axios.get(url, {
