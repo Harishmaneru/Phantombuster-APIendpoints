@@ -31,41 +31,36 @@ if (!WHM_HOST || !MASTER_USER || !WHM_TOKEN || !CPANEL_TOKEN) {
 
 // Helper: Call cPanel UAPI endpoint with proper authentication
 async function cpanelUapiRequest(module, func, params) {
-  const url = `https://${WHM_HOST}:2083/execute/${module}/${func}`;
+  // Build query string exactly like cURL
+  const queryString = new URLSearchParams();
+  Object.entries(params).forEach(([key, value]) => {
+    queryString.append(key, value);
+  });
+
+  const url = `https://${WHM_HOST}:2083/execute/${module}/${func}?${queryString.toString()}`;
   
-  console.log(`UAPI Request: ${url} with params:`, { ...params, password: '******' });
-  
-  const startTime = Date.now();
-  
+  console.log('Final URL:', url.replace(params.password, '******'));
+
   try {
-    const response = await axios.get(url, {
-      params,
+    const response = await axios.get(url, { // GET with query params in URL
       httpsAgent: new https.Agent({
         rejectUnauthorized: false,
-        family: 4,
-        timeout: 60000
+        family: 4
       }),
       headers: {
-        'Authorization': `cpanel masteruser:${CPANEL_TOKEN}`, // Changed to use masteruser
+        'Authorization': `cpanel masteruser:${CPANEL_TOKEN}`,
         'Host': params.domain,
         'Accept': 'application/json'
       },
-      timeout: 60000
+      timeout: 30000
     });
-    
-    const duration = Date.now() - startTime;
-    console.log(`UAPI Success (${duration}ms):`, JSON.stringify(response.data, null, 2));
-    
+
     return response.data;
   } catch (error) {
-    const duration = Date.now() - startTime;
-    console.error('UAPI Error:', {
-      duration: `${duration}ms`,
-      code: error.code,
-      message: error.message,
+    console.error('API Error:', {
+      url: error.config.url.replace(/(password=)[^&]+/, '$1******'),
       status: error.response?.status,
-      data: error.response?.data,
-      headers: error.response?.headers
+      data: error.response?.data
     });
     throw error;
   }
