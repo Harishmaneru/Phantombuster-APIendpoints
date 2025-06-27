@@ -6,7 +6,7 @@ const dns = require('dns');
 const NamecheapDomain = require('./nameCheapDomainApi.js');
 
 // Configuration - USE IP ADDRESS HERE
-const WHM_HOST = process.env.WHM_HOST ;  
+const WHM_HOST = process.env.WHM_HOST;  
 const MASTER_USER = process.env.CPANEL_MASTER_USER;
 const WHM_TOKEN = process.env.WHM_TOKEN;
 const CPANEL_TOKEN = process.env.CPANEL_TOKEN;
@@ -15,7 +15,7 @@ const CPANEL_TOKEN = process.env.CPANEL_TOKEN;
 const agent = new https.Agent({
   rejectUnauthorized: false,
   family: 4, // Force IPv4
-  timeout: 10000
+  timeout: 30000 // Increased timeout
 });
 
 // Validate environment variables
@@ -29,48 +29,116 @@ if (!WHM_HOST || !MASTER_USER || !WHM_TOKEN || !CPANEL_TOKEN) {
   throw new Error('Missing required environment variables');
 }
 
-// Helper: Call cPanel UAPI endpoint using cPanel token (simplified)
-async function cpanelUapiRequest(module, func, params) {
-  const url = `https://${WHM_HOST}:2083/execute/${module}/${func}`;
-  const queryString = new URLSearchParams(params).toString();
-  
-  console.log(`UAPI Request: ${url}?${queryString.replace(/password=[^&]*/, 'password=******')}`);
-  
-  const startTime = Date.now();
+// Helper: Get cPanel session token
+async function getCpanelSession() {
+  const loginUrl = `https://${WHM_HOST}:2083/login/?login_only=1`;
   
   try {
-    const resp = await axios.get(url, {
+    const response = await axios.post(loginUrl, 
+      new URLSearchParams({
+        user: MASTER_USER,
+        pass: CPANEL_TOKEN // Using token as password
+      }), 
+      {
+        httpsAgent: agent,
+        headers: {
+          'Content-Type': 'application/x-www-form-urlencoded'
+        },
+        timeout: 30000,
+        maxRedirects: 0,
+        validateStatus: function (status) {
+          return status >= 200 && status < 400; // Accept redirects
+        }
+      }
+    );
+
+    // Extract session from Set-Cookie header or redirect location
+    const cookies = response.headers['set-cookie'];
+    if (cookies) {
+      for (const cookie of cookies) {
+        const sessionMatch = cookie.match(/cpsess\d+/);
+        if (sessionMatch) {
+          return sessionMatch[0];
+        }
+      }
+    }
+
+    // Try to extract from Location header if redirected
+    const location = response.headers.location;
+    if (location) {
+      const sessionMatch = location.match(/cpsess(\d+)/);
+      if (sessionMatch) {
+        return `cpsess${sessionMatch[1]}`;
+      }
+    }
+
+    throw new Error('Could not extract cPanel session token');
+  } catch (error) {
+    console.error('Failed to get cPanel session:', error.message);
+    throw error;
+  }
+}
+
+// Helper: Call cPanel UAPI endpoint with proper authentication
+async function cpanelUapiRequest(module, func, params) {
+  try {
+    // Method 1: Try with API Token Authentication (Recommended)
+    const url = `https://${WHM_HOST}:2083/execute/${module}/${func}`;
+    
+    console.log(`UAPI Request: ${url} with params:`, { ...params, password: '******' });
+    
+    const startTime = Date.now();
+    
+    const response = await axios.get(url, {
       params,
       httpsAgent: agent,
       headers: { 
         'Authorization': `cpanel ${MASTER_USER}:${CPANEL_TOKEN}`,
         'Content-Type': 'application/json'
       },
-      timeout: 15000
+      timeout: 30000
     });
     
     const duration = Date.now() - startTime;
-    console.log(`UAPI Success (${duration}ms):`, JSON.stringify({
-      status: resp.status,
-      statusText: resp.statusText,
-      data: resp.data
-    }, null, 2));
+    console.log(`UAPI Success (${duration}ms):`, JSON.stringify(response.data, null, 2));
     
-    return resp.data;
-  } catch (error) {
-    const duration = Date.now() - startTime;
-    console.error('UAPI Error:', {
-      duration: `${duration}ms`,
-      code: error.code,
-      message: error.message,
-      status: error.response?.status,
-      data: error.response?.data
-    });
-    throw error;
+    return response.data;
+  } catch (tokenError) {
+    console.log('API Token method failed, trying session-based authentication...');
+    
+    try {
+      // Method 2: Fallback to session-based authentication
+      const session = await getCpanelSession();
+      const sessionUrl = `https://${WHM_HOST}:2083/${session}/execute/${module}/${func}`;
+      
+      console.log(`UAPI Session Request: ${sessionUrl}`);
+      
+      const startTime = Date.now();
+      
+      const response = await axios.get(sessionUrl, {
+        params,
+        httpsAgent: agent,
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        timeout: 30000
+      });
+      
+      const duration = Date.now() - startTime;
+      console.log(`UAPI Session Success (${duration}ms):`, JSON.stringify(response.data, null, 2));
+      
+      return response.data;
+    } catch (sessionError) {
+      console.error('Both token and session authentication failed:', {
+        tokenError: tokenError.message,
+        sessionError: sessionError.message
+      });
+      throw sessionError;
+    }
   }
 }
 
-// Helper: Call WHM API v1 endpoint using WHM token (fallback)
+// Helper: Call WHM API v1 endpoint using WHM token
 async function cpanelWhmRequest(func, params) {
   const url = `https://${WHM_HOST}:2087/json-api/${func}`;
   const queryString = new URLSearchParams(params).toString();
@@ -87,15 +155,11 @@ async function cpanelWhmRequest(func, params) {
         'Authorization': `whm ${MASTER_USER}:${WHM_TOKEN}`,
         'Content-Type': 'application/json'
       },
-      timeout: 15000
+      timeout: 30000
     });
     
     const duration = Date.now() - startTime;
-    console.log(`WHM API Success (${duration}ms):`, JSON.stringify({
-      status: resp.status,
-      statusText: resp.statusText,
-      data: resp.data
-    }, null, 2));
+    console.log(`WHM API Success (${duration}ms):`, JSON.stringify(resp.data, null, 2));
     
     return resp.data;
   } catch (error) {
@@ -143,68 +207,73 @@ router.post('/cpanel/create-email', async (req, res) => {
   try {
     console.log(`Starting email creation for ${username}@${domain}`);
     
+    // Parameters for cPanel UAPI Email/add_pop
     const params = {
       domain: domain.toLowerCase(),
-      email: username.toLowerCase(),
+      email: username.toLowerCase(), // This should be just the username part
       password,
-      quota: storage.toString(),
-      skip_update_db: 1
+      quota: storage, // Don't convert to string, cPanel accepts number
+      skip_update_db: 0 // Set to 0 to update database
     };
 
     let result;
-    let usedFallback = false;
+    let usedMethod = 'UAPI';
     
     try {
-      // Try UAPI first (simplified approach)
+      // Try UAPI first with proper authentication
       console.log('Attempting UAPI email creation...');
       result = await cpanelUapiRequest('Email', 'add_pop', params);
-    } catch (uapiError) {
-      if (uapiError.code === 'ECONNABORTED' || uapiError.code === 'ETIMEDOUT') {
-        console.log('UAPI timed out, falling back to WHM API');
-        usedFallback = true;
-        
-        try {
-          // Fallback to WHM API (for server-level access)
-          console.log('Attempting WHM API email creation...');
-          result = await cpanelWhmRequest('add_pop', params);
-        } catch (whmError) {
-          console.error('Both UAPI and WHM API failed:', {
-            uapiError: uapiError.message,
-            whmError: whmError.message
-          });
-          
-          if (whmError.code === 'ECONNABORTED' || whmError.code === 'ETIMEDOUT') {
-            return res.status(504).json({ 
-              success: false, 
-              error: 'Both UAPI and WHM API requests timed out. Check server connectivity.',
-              details: {
-                host: WHM_HOST,
-                portsTested: [2083, 2087],
-                recommendation: 'Verify network connectivity to the cPanel server'
-              }
-            });
-          }
-          throw whmError;
-        }
+      
+      // Check if UAPI response indicates success
+      if (result && (result.status === 1 || (result.result && result.result.status === 1))) {
+        console.log('UAPI email creation successful');
       } else {
-        throw uapiError;
+        throw new Error(result?.errors?.[0] || result?.result?.errors?.[0] || 'UAPI returned unsuccessful status');
+      }
+    } catch (uapiError) {
+      console.log('UAPI failed, trying WHM API fallback:', uapiError.message);
+      usedMethod = 'WHM';
+      
+      try {
+        // Fallback to WHM API with different parameters structure
+        const whmParams = {
+          ...params,
+          user: MASTER_USER, // WHM API might need the user parameter
+          'api.version': 1
+        };
+        
+        console.log('Attempting WHM API email creation...');
+        result = await cpanelWhmRequest('add_pop', whmParams);
+        
+        if (!(result?.metadata?.result === 1 || result?.data?.status === 1)) {
+          throw new Error(result?.metadata?.reason || result?.data?.error || 'WHM API returned unsuccessful status');
+        }
+      } catch (whmError) {
+        console.error('Both UAPI and WHM API failed:', {
+          uapiError: uapiError.message,
+          whmError: whmError.message
+        });
+        
+        // Return more specific error information
+        return res.status(500).json({ 
+          success: false, 
+          error: `Email creation failed. UAPI: ${uapiError.message}. WHM: ${whmError.message}`,
+          details: {
+            uapiError: uapiError.message,
+            whmError: whmError.message,
+            suggestions: [
+              'Check if the domain exists in cPanel',
+              'Verify API token permissions include email management',
+              'Ensure the email account doesn\'t already exist',
+              'Check cPanel error logs for more details'
+            ]
+          }
+        });
       }
     }
 
-    // Handle different response formats
-    const isSuccess = result?.status === 1 || result?.result === 1 || result?.success === true || result?.data?.status === 1;
-    if (!isSuccess) {
-      const errorMsg = result?.errors?.[0] || result?.error || result?.data?.error || 'Failed to create email account';
-      console.error('Email creation failed:', errorMsg);
-      return res.status(500).json({ 
-        success: false, 
-        error: errorMsg,
-        apiUsed: usedFallback ? 'WHM API' : 'UAPI',
-        response: result
-      });
-    }
-
     // Save to database
+    const emailAddress = `${username.toLowerCase()}@${domain.toLowerCase()}`;
     try {
       await NamecheapDomain.findOneAndUpdate(
         { userId, domain: domain.toLowerCase() },
@@ -212,7 +281,7 @@ router.post('/cpanel/create-email', async (req, res) => {
           $push: { 
             emailAccounts: { 
               username: username.toLowerCase(), 
-              email: `${username.toLowerCase()}@${domain.toLowerCase()}`, 
+              email: emailAddress, 
               quota: storage, 
               createdAt: new Date(), 
               suspended: false 
@@ -229,10 +298,12 @@ router.post('/cpanel/create-email', async (req, res) => {
 
     res.json({ 
       success: true, 
-      email: `${username.toLowerCase()}@${domain.toLowerCase()}`, 
+      email: emailAddress, 
       quota: storage,
-      apiUsed: usedFallback ? 'WHM API' : 'UAPI'
+      method: usedMethod,
+      message: `Email account ${emailAddress} created successfully`
     });
+    
   } catch (err) {
     console.error('Email creation failed:', {
       timestamp: new Date().toISOString(),
@@ -243,12 +314,6 @@ router.post('/cpanel/create-email', async (req, res) => {
         domain,
         username,
         storage
-      },
-      environment: {
-        WHM_HOST,
-        MASTER_USER,
-        WHM_TOKEN_LENGTH: WHM_TOKEN?.length,
-        CPANEL_TOKEN_LENGTH: CPANEL_TOKEN?.length
       }
     });
     
@@ -258,364 +323,121 @@ router.post('/cpanel/create-email', async (req, res) => {
       details: {
         code: err.code,
         type: err.name,
-        recommendation: 'Check server connectivity and API credentials'
+        recommendation: 'Check server connectivity, domain existence, and API credentials'
       }
     });
   }
 });
 
-// Enhanced test endpoint
+// Test endpoint with improved diagnostics
 router.get('/cpanel/test-connection', async (req, res) => {
   const testResults = {
-    environment: {
-      host: WHM_HOST,
-      user: MASTER_USER,
-      whmTokenConfigured: !!WHM_TOKEN,
-      whmTokenLength: WHM_TOKEN ? WHM_TOKEN.length : 0,
-      cpanelTokenConfigured: !!CPANEL_TOKEN,
-      cpanelTokenLength: CPANEL_TOKEN ? CPANEL_TOKEN.length : 0,
-      nodeVersion: process.version,
-      platform: process.platform
-    },
-    connectivity: [],
-    dnsResolution: null,
-    recommendations: []
-  };
-
-  try {
-    // Test DNS resolution
-    try {
-      const dnsStart = Date.now();
-      const addresses = await new Promise((resolve, reject) => {
-        dns.resolve4(WHM_HOST, (err, addresses) => {
-          if (err) reject(err);
-          resolve(addresses);
-        });
-      });
-      testResults.dnsResolution = {
-        success: true,
-        addresses,
-        duration: `${Date.now() - dnsStart}ms`
-      };
-    } catch (dnsError) {
-      testResults.dnsResolution = {
-        success: false,
-        error: dnsError.message,
-        code: dnsError.code
-      };
-      testResults.recommendations.push('DNS resolution failed - try using IP address instead of hostname');
-    }
-
-    // Port connectivity tests
-    const portsToTest = [
-      { port: 2083, service: 'cPanel' },
-      { port: 2087, service: 'WHM' },
-      { port: 2086, service: 'cPanel SSL' },
-      { port: 2082, service: 'cPanel non-SSL' }
-    ];
-
-    for (const { port, service } of portsToTest) {
-      const testStart = Date.now();
-      try {
-        const net = require('net');
-        const socket = new net.Socket();
-        
-        await new Promise((resolve, reject) => {
-          socket.setTimeout(10000);
-          
-          socket.on('connect', () => {
-            socket.destroy();
-            resolve();
-          });
-          
-          socket.on('timeout', () => {
-            socket.destroy();
-            reject(new Error('Connection timeout'));
-          });
-          
-          socket.on('error', (err) => {
-            socket.destroy();
-            reject(err);
-          });
-          
-          socket.connect(port, WHM_HOST);
-        });
-        
-        testResults.connectivity.push({
-          service,
-          port,
-          success: true,
-          duration: `${Date.now() - testStart}ms`
-        });
-      } catch (portError) {
-        testResults.connectivity.push({
-          service,
-          port,
-          success: false,
-          error: portError.message,
-          code: portError.code,
-          duration: `${Date.now() - testStart}ms`
-        });
-      }
-    }
-
-    // API functional tests
-    testResults.apiTests = {};
-    
-    // Test UAPI connection (simplified)
-    try {
-      const uapiStart = Date.now();
-      const uapiResult = await cpanelUapiRequest('Email', 'list_pops', { domain: 'example.com' });
-      testResults.apiTests.uapi = {
-        success: true,
-        duration: `${Date.now() - uapiStart}ms`,
-        status: 'Functional'
-      };
-    } catch (uapiError) {
-      testResults.apiTests.uapi = {
-        success: false,
-        error: uapiError.message,
-        code: uapiError.code,
-        status: 'Failed'
-      };
-    }
-    
-    // Test WHM API connection
-    try {
-      const whmStart = Date.now();
-      const whmResult = await cpanelWhmRequest('version', {});
-      testResults.apiTests.whm = {
-        success: true,
-        duration: `${Date.now() - whmStart}ms`,
-        version: whmResult?.data?.version,
-        status: 'Functional'
-      };
-    } catch (whmError) {
-      testResults.apiTests.whm = {
-        success: false,
-        error: whmError.message,
-        code: whmError.code,
-        status: 'Failed'
-      };
-    }
-
-    // Generate recommendations
-    if (!testResults.dnsResolution.success) {
-      testResults.recommendations.push('Use IP address instead of hostname for WHM_HOST');
-    }
-    
-    if (testResults.connectivity.some(test => !test.success)) {
-      testResults.recommendations.push('Check firewall settings on both client and server');
-      testResults.recommendations.push('Verify cPanel/WHM services are running on the server');
-    }
-    
-    if (!testResults.apiTests.uapi.success) {
-      testResults.recommendations.push('Verify cPanel API token has email management permissions');
-      testResults.recommendations.push('Check token restrictions in WHM > Manage API Tokens');
-    }
-    
-    if (!testResults.apiTests.whm.success) {
-      testResults.recommendations.push('Verify WHM API token has correct permissions');
-      testResults.recommendations.push('Check WHM > Manage API Tokens for token validity');
-    }
-    
-    testResults.recommendations.push(
-      'Ensure WHM API token restrictions allow your server IP',
-      'Check cPHulk Brute Force Protection for IP blocks',
-      'Contact hosting provider if basic connectivity tests fail'
-    );
-
-    res.json({
-      success: true,
-      ...testResults
-    });
-  } catch (err) {
-    console.error('Connection test failed:', {
-      message: err.message,
-      stack: err.stack
-    });
-    
-    res.status(500).json({
-      success: false,
-      error: err.message,
-      ...testResults
-    });
-  }
-});
-
-// New diagnostic endpoint for troubleshooting
-router.get('/cpanel/diagnose', async (req, res) => {
-  const diagnostics = {
     timestamp: new Date().toISOString(),
     environment: {
       host: WHM_HOST,
       user: MASTER_USER,
       whmTokenConfigured: !!WHM_TOKEN,
-      whmTokenLength: WHM_TOKEN ? WHM_TOKEN.length : 0,
       cpanelTokenConfigured: !!CPANEL_TOKEN,
-      cpanelTokenLength: CPANEL_TOKEN ? CPANEL_TOKEN.length : 0
+      nodeVersion: process.version
     },
-    connectivity: {},
-    authentication: {},
+    tests: {},
     recommendations: []
   };
 
   try {
-    // Test basic connectivity
+    // Test 1: Basic connectivity
     console.log('Testing basic connectivity...');
+    const net = require('net');
     
-    // Test DNS resolution
+    // Test cPanel port
     try {
-      const dnsStart = Date.now();
-      const addresses = await new Promise((resolve, reject) => {
-        dns.resolve4(WHM_HOST, (err, addresses) => {
-          if (err) reject(err);
-          resolve(addresses);
-        });
-      });
-      diagnostics.connectivity.dns = {
-        success: true,
-        addresses,
-        duration: `${Date.now() - dnsStart}ms`
-      };
-    } catch (dnsError) {
-      diagnostics.connectivity.dns = {
-        success: false,
-        error: dnsError.message,
-        code: dnsError.code
-      };
-      diagnostics.recommendations.push('DNS resolution failed - use IP address instead of hostname');
-    }
-
-    // Test port connectivity
-    const portsToTest = [
-      { port: 2083, service: 'cPanel UAPI' },
-      { port: 2087, service: 'WHM API' }
-    ];
-
-    for (const { port, service } of portsToTest) {
-      try {
-        const net = require('net');
+      await new Promise((resolve, reject) => {
         const socket = new net.Socket();
-        
-        await new Promise((resolve, reject) => {
-          socket.setTimeout(5000);
-          
-          socket.on('connect', () => {
-            socket.destroy();
-            resolve();
-          });
-          
-          socket.on('timeout', () => {
-            socket.destroy();
-            reject(new Error('Connection timeout'));
-          });
-          
-          socket.on('error', (err) => {
-            socket.destroy();
-            reject(err);
-          });
-          
-          socket.connect(port, WHM_HOST);
+        socket.setTimeout(10000);
+        socket.on('connect', () => {
+          socket.destroy();
+          resolve();
         });
-        
-        diagnostics.connectivity[`port_${port}`] = {
-          success: true,
-          service,
-          duration: 'Connected'
-        };
-      } catch (portError) {
-        diagnostics.connectivity[`port_${port}`] = {
-          success: false,
-          service,
-          error: portError.message,
-          code: portError.code
-        };
-      }
+        socket.on('timeout', () => {
+          socket.destroy();
+          reject(new Error('Connection timeout'));
+        });
+        socket.on('error', reject);
+        socket.connect(2083, WHM_HOST);
+      });
+      
+      testResults.tests.cpanelPort = { success: true, port: 2083 };
+    } catch (error) {
+      testResults.tests.cpanelPort = { success: false, port: 2083, error: error.message };
     }
 
-    // Test authentication methods
-    console.log('Testing authentication methods...');
-    
-    // Test 1: WHM API version (basic connectivity)
+    // Test 2: UAPI Authentication
     try {
-      const whmStart = Date.now();
-      const whmResult = await cpanelWhmRequest('version', {});
-      diagnostics.authentication.whm = {
-        success: true,
-        duration: `${Date.now() - whmStart}ms`,
-        version: whmResult?.data?.version
+      console.log('Testing UAPI authentication...');
+      const result = await cpanelUapiRequest('Email', 'list_pops', { domain: 'test.com' });
+      testResults.tests.uapiAuth = { 
+        success: true, 
+        message: 'UAPI authentication working',
+        responseType: typeof result
       };
-    } catch (whmError) {
-      diagnostics.authentication.whm = {
-        success: false,
-        error: whmError.message,
-        code: whmError.code
+    } catch (error) {
+      testResults.tests.uapiAuth = { 
+        success: false, 
+        error: error.message,
+        code: error.code
       };
     }
 
-    // Test 2: UAPI with token only
+    // Test 3: Session-based authentication
     try {
-      const uapiStart = Date.now();
-      const uapiResult = await cpanelUapiRequest('Email', 'list_pops', { domain: 'example.com' });
-      diagnostics.authentication.uapiTokenOnly = {
-        success: true,
-        duration: `${Date.now() - uapiStart}ms`,
-        status: 'Working'
+      console.log('Testing session creation...');
+      const session = await getCpanelSession();
+      testResults.tests.sessionAuth = { 
+        success: true, 
+        session: session ? 'Generated' : 'Failed',
+        message: 'Session authentication available'
       };
-    } catch (uapiError) {
-      diagnostics.authentication.uapiTokenOnly = {
-        success: false,
-        error: uapiError.message,
-        code: uapiError.code,
-        status: uapiError.response?.status
+    } catch (error) {
+      testResults.tests.sessionAuth = { 
+        success: false, 
+        error: error.message
       };
     }
 
     // Generate recommendations
-    if (!diagnostics.connectivity.dns.success) {
-      diagnostics.recommendations.push('Use IP address instead of hostname for WHM_HOST');
-    }
-    
-    if (Object.values(diagnostics.connectivity).some(test => !test.success)) {
-      diagnostics.recommendations.push('Check firewall settings on both client and server');
-      diagnostics.recommendations.push('Verify cPanel/WHM services are running');
-    }
-    
-    if (!diagnostics.authentication.whm.success) {
-      diagnostics.recommendations.push('Verify WHM API token has correct permissions');
-      diagnostics.recommendations.push('Check WHM > Manage API Tokens for token validity');
-    }
-    
-    if (!diagnostics.authentication.uapiTokenOnly.success) {
-      diagnostics.recommendations.push('Verify cPanel API token has email management permissions');
-      diagnostics.recommendations.push('Check token restrictions in WHM > Manage API Tokens');
+    if (!testResults.tests.cpanelPort.success) {
+      testResults.recommendations.push('Check firewall settings and ensure cPanel is running on port 2083');
     }
 
-    // Determine best authentication method
-    if (diagnostics.authentication.uapiTokenOnly.success) {
-      diagnostics.recommendations.push('✅ UAPI with token-only authentication is working - use this method');
-    } else if (diagnostics.authentication.whm.success) {
-      diagnostics.recommendations.push('✅ WHM API is working - use WHM API for email operations');
+    if (!testResults.tests.uapiAuth.success) {
+      testResults.recommendations.push('Verify cPanel API token has correct permissions');
+      testResults.recommendations.push('Check token restrictions in cPanel > Security > Manage API Tokens');
+    }
+
+    if (testResults.tests.uapiAuth.success) {
+      testResults.recommendations.push('✅ UAPI authentication is working - email creation should work');
+    } else if (testResults.tests.sessionAuth.success) {
+      testResults.recommendations.push('✅ Session-based authentication available as fallback');
     } else {
-      diagnostics.recommendations.push('❌ All authentication methods failed - check network connectivity and credentials');
+      testResults.recommendations.push('❌ All authentication methods failed - check credentials');
     }
 
     res.json({
       success: true,
-      ...diagnostics
+      ...testResults
     });
+
   } catch (err) {
-    console.error('Diagnostic test failed:', err.message);
+    console.error('Connection test failed:', err.message);
     res.status(500).json({
       success: false,
       error: err.message,
-      ...diagnostics
+      ...testResults
     });
   }
 });
 
-// Simple test endpoint to verify API is working
+// Simple test endpoint
 router.get('/cpanel/test', (req, res) => {
   res.json({
     success: true,
@@ -624,10 +446,10 @@ router.get('/cpanel/test', (req, res) => {
     environment: {
       host: WHM_HOST,
       user: MASTER_USER,
-      whmTokenConfigured: !!WHM_TOKEN,
-      whmTokenLength: WHM_TOKEN ? WHM_TOKEN.length : 0,
-      cpanelTokenConfigured: !!CPANEL_TOKEN,
-      cpanelTokenLength: CPANEL_TOKEN ? CPANEL_TOKEN.length : 0
+      tokensConfigured: {
+        whm: !!WHM_TOKEN,
+        cpanel: !!CPANEL_TOKEN
+      }
     }
   });
 });
