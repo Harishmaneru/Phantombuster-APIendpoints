@@ -4778,5 +4778,6 @@ router.get('/transfer/:domain/status', apiLimiter, asyncHandler(async (req, res)
 
 module.exports = {
     router,
-    registerDomainWithNamecheap
+    registerDomainWithNamecheap,
+    NamecheapDomain
 };
