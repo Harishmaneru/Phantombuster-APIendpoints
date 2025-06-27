@@ -30,39 +30,57 @@ if (!WHM_HOST || !MASTER_USER || !WHM_TOKEN || !CPANEL_TOKEN) {
 }
 
 // Helper: Call cPanel UAPI endpoint with proper authentication
-async function cpanelUapiRequest(module, func, params) {
-  // Build query string exactly like cURL
-  const queryString = new URLSearchParams();
-  Object.entries(params).forEach(([key, value]) => {
-    queryString.append(key, value);
+async function createCpanelEmail(username, password, domain, quota = 512) {
+  // 1. Prepare parameters EXACTLY like cURL
+  const params = new URLSearchParams();
+  params.append('email', username); // Just username without domain
+  params.append('password', password); // Will auto-encode special chars
+  params.append('domain', domain);
+  params.append('quota', quota.toString());
+  params.append('send_welcome_email', '1'); // Must be string '1'
+  params.append('skip_update_db', '0'); // Must be string '0'
+
+  // 2. Configure HTTPS agent to match cURL behavior
+  const agent = new https.Agent({
+    rejectUnauthorized: false, // Allow self-signed certs
+    family: 4, // Force IPv4
+    keepAlive: true,
+    timeout: 10000 // 10 second timeout
   });
 
-  const url = `https://${WHM_HOST}:2083/execute/${module}/${func}?${queryString.toString()}`;
-  
-  console.log('Final URL:', url.replace(params.password, '******'));
-
+  // 3. Make the API request
   try {
-    const response = await axios.get(url, { // GET with query params in URL
-      httpsAgent: new https.Agent({
-        rejectUnauthorized: false,
-        family: 4
-      }),
-      headers: {
-        'Authorization': `cpanel masteruser:${CPANEL_TOKEN}`,
-        'Host': params.domain,
-        'Accept': 'application/json'
-      },
-      timeout: 30000
-    });
+    const response = await axios.get(
+      `https://${WHM_HOST}:2083/execute/Email/add_pop?${params.toString()}`,
+      {
+        httpsAgent: agent,
+        headers: {
+          'Host': domain, // Critical: must match target domain
+          'Authorization': `cpanel ${MASTER_USER}:${CPANEL_TOKEN}`,
+          'Accept': 'application/json',
+          'Connection': 'keep-alive'
+        }
+      }
+    );
 
-    return response.data;
+    return {
+      success: true,
+      data: response.data
+    };
   } catch (error) {
-    console.error('API Error:', {
-      url: error.config.url.replace(/(password=)[^&]+/, '$1******'),
+    // Enhanced error logging
+    console.error('API Request Failed:', {
+      url: error.config?.url.replace(/(password=)[^&]+/, '$1******'),
       status: error.response?.status,
+      headers: error.response?.headers,
       data: error.response?.data
     });
-    throw error;
+
+    return {
+      success: false,
+      error: error.message,
+      details: error.response?.data || {}
+    };
   }
 }
 
