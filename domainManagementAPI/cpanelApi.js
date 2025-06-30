@@ -16,7 +16,7 @@ const CPANEL_TOKEN = process.env.CPANEL_TOKEN;
 const agent = new https.Agent({
   rejectUnauthorized: false,
   family: 4,
-  timeout: 30000
+  timeout: 60000
 });
 
 // Validate environment variables
@@ -474,6 +474,7 @@ router.get('/cpanel/list-emails/:userId/:domain', async (req, res) => {
     });
 
   } catch (err) {
+    console.error('Full error stack:', err.stack);
     console.error('Failed to list emails:', err.message);
     res.status(500).json({
       success: false,
