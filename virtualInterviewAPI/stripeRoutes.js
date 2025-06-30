@@ -782,7 +782,8 @@ router.post('/get-subscription-from-session', async (req, res) => {
                     description: productData?.description || '',
                     amount: priceData.unit_amount ? priceData.unit_amount / 100 : 0,
                     currency: priceData.currency || 'usd',
-                    interval: interval
+                    interval: interval,
+                    planType: priceData.metadata["Plan"] || priceData.metadata["plan"] || "standard"
                 },
                 billing: {
                     nextBillingDate: nextBillingDate?.iso || null,
@@ -969,7 +970,8 @@ router.get('/users/:userId/subscriptions', async (req, res) => {
                         currency: price.currency,
                         interval: price.recurring
                             ? `${price.recurring.interval_count} ${price.recurring.interval}`
-                            : 'one-time'
+                            : 'one-time',
+                        planType: price.metadata["Plan"] || price.metadata["plan"] || "standard"
                     },
                     billing: {
                         nextBillingDate: safeDateConvert(currentPeriodEnd),
