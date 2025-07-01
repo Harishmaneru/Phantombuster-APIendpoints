@@ -897,10 +897,7 @@ router.get('/cpanel/user-all-emails/:userId', async (req, res) => {
                   percentage: usageResult.status === 1 ? usageResult.data.usage_percentage : 0,
                   formatted: usageResult.status === 1 ? usageResult.data.human_readable : '0 MB'
                 },
-                servers: {
-                  imap: `mail.${domain.toLowerCase()}`,
-                  smtp: `mail.${domain.toLowerCase()}`
-                }
+
               };
             })
           );
@@ -1011,13 +1008,39 @@ router.get('/cpanel/user-all-emails/:userId', async (req, res) => {
       };
     });
 
-    // Step 5: Return response with new structure
+    // Step 5: Create domains list with all user domains
+    const allDomainsList = userDomains.map(domainRecord => {
+      const hasEmails = Object.keys(emailsByDomain).includes(domainRecord.domain);
+      const emailCount = emailsByDomain[domainRecord.domain]?.emails?.length || 0;
+      
+      const domainObj = {
+        domain: domainRecord.domain,
+        hasEmails: hasEmails,
+        emailCount: emailCount,
+        domainInfo: {
+          domainId: domainRecord._id,
+          domainStatus: domainRecord.domainStatus,
+          registrationDate: domainRecord.registrationDate,
+          expiryDate: domainRecord.expiryDate
+        }
+      };
+
+      // Only add webmailUrl if domain has emails
+      if (hasEmails && emailCount > 0) {
+        domainObj.webmailUrl = `https://${domainRecord.domain}:2096/`;
+      }
+
+      return domainObj;
+    });
+
+    // Step 6: Return response with new structure
     res.json({
       success: true,
       userId: userId,
-      totalDomains: Object.keys(emailsByDomain).length,
+      totalDomains: userDomains.length,
       totalEmails: allEmails.length,
-      domains: emailsByDomain,
+      domains: allDomainsList,
+      domainsWithEmails: emailsByDomain,
       overallStats: {
         ...overallStats,
         usagePercentage: overallStats.totalQuota === -1 ? 0 : 
