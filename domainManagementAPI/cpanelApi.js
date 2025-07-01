@@ -466,6 +466,7 @@ router.get('/cpanel/list-emails/:userId/:domain', async (req, res) => {
       success: true,
       domain: domain.toLowerCase(),
       emails: emailsWithDetails,
+      webmailUrl: `https://${domain}:2096/`,
       count: emailsWithDetails.length,
       stats: {
         ...domainStats,
@@ -811,6 +812,237 @@ router.delete('/cpanel/delete-email', async (req, res) => {
   }
 });
 
+//_____________fetch all email accounts for userID______________
 
+// Route: Fetch all email accounts for a specific userID
+router.get('/cpanel/user-all-emails/:userId', async (req, res) => {
+  const { userId } = req.params;
+
+  if (!userId) {
+    return res.status(400).json({
+      success: false,
+      error: 'userId is required.'
+    });
+  }
+
+  try {
+    // Step 1: Get all domains owned by this user
+    const userDomains = await NamecheapDomain.find({
+      userId: userId,
+      'domainStatus.isActive': true
+    });
+
+    if (!userDomains || userDomains.length === 0) {
+      return res.json({
+        success: true,
+        userId: userId,
+        domains: [],
+        totalEmails: 0,
+        emails: [],
+        stats: {
+          totalAccounts: 0,
+          totalUsed: 0,
+          totalQuota: 0,
+          usagePercentage: 0,
+          formattedUsage: '0 B',
+          formattedQuota: '0 B'
+        },
+        message: 'No active domains found for this user'
+      });
+    }
+
+    console.log(`Found ${userDomains.length} domains for user ${userId}`);
+
+    // Step 2: Fetch email accounts for each domain
+    const allEmails = [];
+    const domainStats = [];
+
+    for (const domainRecord of userDomains) {
+      const domain = domainRecord.domain;
+      
+      try {
+        // Get email accounts for this domain
+        const emailResult = await cpanelRequest('Email/list_pops_with_disk', {
+          domain: domain.toLowerCase()
+        });
+
+        if (emailResult.status === 1 && emailResult.data) {
+          // Filter emails to only include those for this specific domain
+          const domainEmails = emailResult.data.filter(email => 
+            email.domain && email.domain.toLowerCase() === domain.toLowerCase()
+          );
+
+          console.log(`Found ${domainEmails.length} email accounts for domain ${domain}`);
+
+          // Get disk usage for each email
+          const emailsWithDetails = await Promise.all(
+            domainEmails.map(async (email) => {
+              const usageResult = await cpanelRequest('Email/get_disk_usage', {
+                email: email.email
+              });
+
+              return {
+                username: email.user,
+                email: email.email,
+                domain: email.domain,
+                suspended: email.suspended === '1',
+                created: email.created,
+                quota: {
+                  limit: email.diskquota === 'unlimited' ? -1 : parseInt(email.diskquota),
+                  formatted: email.diskquota === 'unlimited' ? 'Unlimited' : `${parseInt(email.diskquota)} MB`,
+                  isUnlimited: email.diskquota === 'unlimited'
+                },
+                usage: {
+                  bytes: usageResult.status === 1 ? usageResult.data.used_bytes : 0,
+                  percentage: usageResult.status === 1 ? usageResult.data.usage_percentage : 0,
+                  formatted: usageResult.status === 1 ? usageResult.data.human_readable : '0 MB'
+                },
+                servers: {
+                  imap: `mail.${domain.toLowerCase()}`,
+                  smtp: `mail.${domain.toLowerCase()}`
+                }
+              };
+            })
+          );
+
+          // Calculate domain statistics
+          const domainTotalUsed = emailsWithDetails.reduce((sum, email) => sum + email.usage.bytes, 0);
+          const domainTotalQuota = emailsWithDetails.reduce((sum, email) => 
+            email.quota.isUnlimited ? -1 : sum + email.quota.limit, 0);
+
+          domainStats.push({
+            domain: domain,
+            emailCount: emailsWithDetails.length,
+            totalUsed: domainTotalUsed,
+            totalQuota: domainTotalQuota,
+            usagePercentage: domainTotalQuota === -1 ? 0 : 
+              Math.round((domainTotalUsed / domainTotalQuota) * 100),
+            formattedUsage: formatStorage(domainTotalUsed),
+            formattedQuota: domainTotalQuota === -1 ? 'Unlimited' : 
+              formatStorage(domainTotalQuota)
+          });
+
+          // Add domain info to each email
+          const emailsWithDomainInfo = emailsWithDetails.map(email => ({
+            ...email,
+            domainInfo: {
+              domainId: domainRecord._id,
+              domainStatus: domainRecord.domainStatus,
+              registrationDate: domainRecord.registrationDate,
+              expiryDate: domainRecord.expiryDate
+            }
+          }));
+
+          allEmails.push(...emailsWithDomainInfo);
+        }
+      } catch (domainError) {
+        console.error(`Error fetching emails for domain ${domain}:`, domainError.message);
+        // Continue with other domains even if one fails
+        domainStats.push({
+          domain: domain,
+          emailCount: 0,
+          error: domainError.message,
+          totalUsed: 0,
+          totalQuota: 0,
+          usagePercentage: 0,
+          formattedUsage: '0 B',
+          formattedQuota: '0 B'
+        });
+      }
+    }
+
+    // Step 3: Calculate overall statistics
+    const overallStats = {
+      totalAccounts: allEmails.length,
+      totalUsed: allEmails.reduce((sum, email) => sum + email.usage.bytes, 0),
+      totalQuota: allEmails.reduce((sum, email) => 
+        email.quota.isUnlimited ? -1 : sum + email.quota.limit, 0)
+    };
+
+    // Step 4: Group emails by domain
+    const emailsByDomain = {};
+    
+    allEmails.forEach(email => {
+      const domain = email.domain;
+      if (!emailsByDomain[domain]) {
+        emailsByDomain[domain] = {
+          domain: domain,
+          webmailUrl: `https://${domain}:2096/`,
+          emails: [],
+          stats: {
+            totalAccounts: 0,
+            totalUsed: 0,
+            totalQuota: 0,
+            usagePercentage: 0,
+            formattedUsage: '0 B',
+            formattedQuota: '0 B'
+          }
+        };
+      }
+      
+      emailsByDomain[domain].emails.push({
+        username: email.username,
+        email: email.email,
+        suspended: email.suspended,
+        created: email.created,
+        quota: email.quota,
+        usage: email.usage,
+        servers: email.servers,
+        domainInfo: email.domainInfo
+      });
+    });
+
+    // Calculate stats for each domain
+    Object.keys(emailsByDomain).forEach(domain => {
+      const domainEmails = emailsByDomain[domain].emails;
+      const totalUsed = domainEmails.reduce((sum, email) => sum + email.usage.bytes, 0);
+      const totalQuota = domainEmails.reduce((sum, email) => 
+        email.quota.isUnlimited ? -1 : sum + email.quota.limit, 0);
+
+      emailsByDomain[domain].stats = {
+        totalAccounts: domainEmails.length,
+        totalUsed: totalUsed,
+        totalQuota: totalQuota,
+        usagePercentage: totalQuota === -1 ? 0 : 
+          Math.round((totalUsed / totalQuota) * 100),
+        formattedUsage: formatStorage(totalUsed),
+        formattedQuota: totalQuota === -1 ? 'Unlimited' : 
+          formatStorage(totalQuota)
+      };
+    });
+
+    // Step 5: Return response with new structure
+    res.json({
+      success: true,
+      userId: userId,
+      totalDomains: Object.keys(emailsByDomain).length,
+      totalEmails: allEmails.length,
+      domains: emailsByDomain,
+      overallStats: {
+        ...overallStats,
+        usagePercentage: overallStats.totalQuota === -1 ? 0 : 
+          Math.round((overallStats.totalUsed / overallStats.totalQuota) * 100),
+        formattedUsage: formatStorage(overallStats.totalUsed),
+        formattedQuota: overallStats.totalQuota === -1 ? 'Unlimited' : 
+          formatStorage(overallStats.totalQuota)
+      },
+      summary: {
+        totalDomains: userDomains.length,
+        domainsWithEmails: Object.keys(emailsByDomain).length,
+        domainsWithErrors: domainStats.filter(d => d.error).length,
+        suspendedEmails: allEmails.filter(email => email.suspended).length,
+        activeEmails: allEmails.filter(email => !email.suspended).length
+      }
+    });
+
+  } catch (err) {
+    console.error('Failed to fetch user emails:', err.message);
+    console.error('Full error stack:', err.stack);
+    res.status(500).json({
+      success: false,
+      error: err.message
+    });
+  }
+});
 
 module.exports = router;
