@@ -219,8 +219,6 @@ router.get('/cpanel/test-domain-info', async (req, res) => {
   }
 });
 
-
-
 // Route: Create Email Account with Addon Domain Support
 router.post('/cpanel/create-email', emailCreationLimiter, async (req, res) => {
   const { userId, domain, username, password, storage = 512 } = req.body;
@@ -419,9 +417,19 @@ router.get('/cpanel/list-emails/:userId/:domain', async (req, res) => {
       throw new Error(emailResult.errors?.[0] || 'Failed to fetch email accounts');
     }
 
-    // Get disk usage for all emails
+    // Debug: Log the raw email result for this domain
+    console.log(`Raw email result for domain ${domain}:`, JSON.stringify(emailResult.data, null, 2));
+
+    // Filter emails to only include those for the requested domain
+    const domainEmails = emailResult.data.filter(email => 
+      email.domain && email.domain.toLowerCase() === domain.toLowerCase()
+    );
+
+    console.log(`Found ${domainEmails.length} email accounts for domain ${domain} out of ${emailResult.data.length} total accounts`);
+
+    // Get disk usage for filtered emails only
     const emailsWithDetails = await Promise.all(
-      emailResult.data.map(async (email) => {
+      domainEmails.map(async (email) => {
         const usageResult = await cpanelRequest('Email/get_disk_usage', {
           email: email.email
         });
@@ -434,7 +442,7 @@ router.get('/cpanel/list-emails/:userId/:domain', async (req, res) => {
           created: email.created,
           quota: {
             limit: email.diskquota === 'unlimited' ? -1 : parseInt(email.diskquota),
-            formatted: email.diskquota === 'unlimited' ? 'Unlimited' : `${Math.round(parseInt(email.diskquota) / (1024 * 1024))} MB`,
+            formatted: email.diskquota === 'unlimited' ? 'Unlimited' : `${parseInt(email.diskquota)} MB`,
             isUnlimited: email.diskquota === 'unlimited'
           },
           usage: {
@@ -442,10 +450,6 @@ router.get('/cpanel/list-emails/:userId/:domain', async (req, res) => {
             percentage: usageResult.status === 1 ? usageResult.data.usage_percentage : 0,
             formatted: usageResult.status === 1 ? usageResult.data.human_readable : '0 MB'
           },
-          servers: {
-            imap: email.imap_server || `mail.${domain.toLowerCase()}`,
-            smtp: email.smtp_server || `mail.${domain.toLowerCase()}`
-          }
         };
       })
     );
@@ -490,8 +494,6 @@ function formatStorage(bytes) {
   if (bytes < 1024 * 1024 * 1024) return `${Math.round(bytes / (1024 * 1024))} MB`;
   return `${Math.round(bytes / (1024 * 1024 * 1024))} GB`;
 }
-
-
 
 // Route: Get domain email statistics
 router.get('/cpanel/email-stats/:userId/:domain', async (req, res) => {
@@ -588,9 +590,16 @@ router.get('/cpanel/check-email/:userId/:domain/:username', async (req, res) => 
       throw new Error(emailResult.errors?.[0] || 'Failed to fetch email accounts');
     }
 
-    // Get disk usage for all emails
+    // Filter emails to only include those for the requested domain
+    const domainEmails = emailResult.data.filter(email => 
+      email.domain && email.domain.toLowerCase() === domain.toLowerCase()
+    );
+
+    console.log(`Found ${domainEmails.length} email accounts for domain ${domain} out of ${emailResult.data.length} total accounts`);
+
+    // Get disk usage for filtered emails only
     const allEmailsWithUsage = await Promise.all(
-      emailResult.data.map(async email => {
+      domainEmails.map(async email => {
         const usageResult = await cpanelRequest('Email/get_disk_usage', {
           email: email.email
         });
@@ -625,7 +634,9 @@ router.get('/cpanel/check-email/:userId/:domain/:username', async (req, res) => 
       domainInfo: {
         totalAccounts: allEmailsWithUsage.length,
         totalUsed: allEmailsWithUsage.reduce((sum, email) => sum + email.usedBytes, 0),
-        domain: domain.toLowerCase()
+        domain: domain.toLowerCase(),
+        requestedDomain: domain.toLowerCase(),
+        filteredFromTotal: emailResult.data.length
       }
     });
   } catch (err) {
@@ -636,6 +647,170 @@ router.get('/cpanel/check-email/:userId/:domain/:username', async (req, res) => 
     });
   }
 });
+
+//_______________Email Delete api______________
+
+// Route: Delete Email Account
+router.delete('/cpanel/delete-email', async (req, res) => {
+  const { userId, email, domain, flags, skip_quota = 0 } = req.body;
+
+  // Input validation
+  if (!userId || !email) {
+    return res.status(400).json({
+      success: false,
+      error: 'userId and email are required.'
+    });
+  }
+
+  // Validate email format
+  let emailUsername, emailDomain;
+  if (email.includes('@')) {
+    // Full email address provided
+    const emailParts = email.split('@');
+    if (emailParts.length !== 2) {
+      return res.status(400).json({
+        success: false,
+        error: 'Invalid email format.'
+      });
+    }
+    emailUsername = emailParts[0];
+    emailDomain = emailParts[1];
+  } else {
+    // Only username provided, use domain from request
+    if (!domain) {
+      return res.status(400).json({
+        success: false,
+        error: 'Domain is required when providing only email username.'
+      });
+    }
+    emailUsername = email;
+    emailDomain = domain;
+  }
+
+  // Validate domain if provided separately
+  if (domain && !isValidDomain(domain)) {
+    return res.status(400).json({
+      success: false,
+      error: 'Invalid domain format.'
+    });
+  }
+
+  // Validate email username
+  if (!isValidEmailUser(emailUsername)) {
+    return res.status(400).json({
+      success: false,
+      error: 'Invalid email username format.'
+    });
+  }
+
+  // Validate skip_quota parameter
+  if (skip_quota !== 0 && skip_quota !== 1) {
+    return res.status(400).json({
+      success: false,
+      error: 'skip_quota must be 0 or 1.'
+    });
+  }
+
+  try {
+    // Step 1: Verify user owns domain
+    const domainOwnership = await userOwnsDomain(userId, emailDomain);
+    if (!domainOwnership) {
+      return res.status(403).json({
+        success: false,
+        error: 'Domain not registered to user or domain is not active.'
+      });
+    }
+
+    // Step 2: Check if email account exists
+    const emailAddress = `${emailUsername.toLowerCase()}@${emailDomain.toLowerCase()}`;
+    const checkResult = await cpanelRequest('Email/list_pops', {
+      domain: emailDomain.toLowerCase()
+    });
+
+    if (checkResult.status !== 1) {
+      throw new Error(checkResult.errors?.[0] || 'Failed to fetch email accounts');
+    }
+
+    const emailExists = checkResult.data?.some(account => 
+      account.email === emailAddress || account.user === emailUsername.toLowerCase()
+    );
+
+    if (!emailExists) {
+      return res.status(404).json({
+        success: false,
+        error: 'Email account not found.'
+      });
+    }
+
+    // Step 3: Delete email account
+    const deleteParams = {
+      email: emailAddress,
+      skip_quota: skip_quota
+    };
+
+    // Add flags parameter if provided
+    if (flags) {
+      deleteParams.flags = flags;
+    }
+
+    console.log('Deleting email with params:', { ...deleteParams, email: emailAddress });
+
+    const deleteResult = await cpanelRequest('Email/delete_pop', deleteParams, 'POST');
+
+    console.log('Email deletion result:', deleteResult);
+
+    if (deleteResult.status !== 1) {
+      const errorMsg = (deleteResult.errors && deleteResult.errors[0]) || 'Unknown error from cPanel';
+      throw new Error(errorMsg);
+    }
+
+    // Step 4: Remove email account from database
+    const updatedDomain = await NamecheapDomain.findOneAndUpdate(
+      { 
+        userId, 
+        domain: emailDomain.toLowerCase(),
+        'emailAccounts.email': emailAddress
+      },
+      {
+        $pull: { 
+          emailAccounts: { email: emailAddress }
+        },
+        $set: {
+          updatedAt: new Date()
+        }
+      },
+      { new: true }
+    );
+
+    // Step 5: Return success response
+    res.json({
+      success: true,
+      message: 'Email account deleted successfully',
+      deletedEmail: emailAddress,
+      domain: emailDomain.toLowerCase(),
+      data: deleteResult.data,
+      databaseRecord: {
+        removed: !!updatedDomain,
+        domainId: updatedDomain?._id,
+        remainingEmailAccounts: updatedDomain?.emailAccounts?.length || 0
+      },
+      deletionDetails: {
+        preserveDirectory: flags === 'passwd',
+        skipQuotaModification: skip_quota === 1,
+        timestamp: new Date().toISOString()
+      }
+    });
+
+  } catch (err) {
+    console.error('Email deletion failed:', err.message);
+    res.status(500).json({
+      success: false,
+      error: err.message,
+      details: err.response?.data || null
+    });
+  }
+});
+
 
 
 module.exports = router;
