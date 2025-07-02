@@ -8,6 +8,7 @@ const mongoose = require('mongoose');
 const router = express.Router();
 const NodeCache = require('node-cache');
 const CircuitBreaker = require('opossum');
+const domainCache = new NodeCache({ stdTTL: 300 }); // 5 minute cache
 
 // MongoDB Connection
 const mongoURI = process.env.ONEPGR_MONGO_URI;
@@ -1630,7 +1631,7 @@ router.get('/namecheap/domain/check/:domain', async (req, res) => {
                 'Domain available for registration';
             response.data.nextSteps = {
                 action: 'register',
-                endpoint: '/namecheap/domain/register',
+             
                 requiredFields: ['userId', 'contactInfo', 'years', 'nameservers'],
                 optionalFields: ['enablePrivacy'],
                 privacyNote: privacyInfo.supported ?
@@ -2210,11 +2211,272 @@ router.post('/namecheap/domain/register', validateUserId, async (req, res) => {
     }
 });
 
+// router.get('/namecheap/domains/list', validateUserId, async (req, res) => {
+//     const userId = req.userId;
+
+//     try {
+//         console.log(`[Domain API] 📋 Fetching domains for user: ${userId}`);
+
+//         // Get user domains from database
+//         const userDomains = await getUserDomainsFromDatabase(userId);
+
+//         if (userDomains.length === 0) {
+//             return res.json({
+//                 success: true,
+//                 userId,
+//                 data: {
+//                     domains: [],
+//                     total: 0,
+//                     message: 'No domains found for this user',
+//                     apiMode: NAMECHEAP_SANDBOX === 'true' ? 'sandbox' : 'production'
+//                 }
+//             });
+//         }
+
+//         // For each domain in database, get live status from Namecheap API
+//         const detailedDomains = await Promise.all(userDomains.map(async (dbDomain) => {
+//             const domainObj = {
+//                 // Database information
+//                 _id: dbDomain._id,
+//                 userId: dbDomain.userId,
+//                 domain: dbDomain.domain,
+//                 registrationData: dbDomain.registrationData,
+//                 contactInfo: dbDomain.contactInfo,
+//                 domainStatus: dbDomain.domainStatus,
+//                 dnsConfiguration: dbDomain.dnsConfiguration,
+//                 redirects: dbDomain.redirects || [],
+//                 emailAccounts: dbDomain.emailAccounts || [],
+//                 pricing: dbDomain.pricing,
+//                 stripePayment: dbDomain.stripePayment || null,
+//                 createdAt: dbDomain.createdAt,
+//                 updatedAt: dbDomain.updatedAt,
+
+//                 // Initialize live status
+//                 liveStatus: {
+//                     available: false,
+//                     error: null,
+//                     lastChecked: new Date().toISOString()
+//                 }
+//             };
+
+//             try {
+//                 // Get live domain info from Namecheap (optional - can be disabled for performance)
+//                 const domainInfo = await namecheapRequest('namecheap.domains.getInfo', {
+//                     DomainName: dbDomain.domain
+//                 });
+
+//                 const namecheapResult = domainInfo.ApiResponse.CommandResponse.DomainGetInfoResult;
+
+//                 // Update live status from Namecheap API
+//                 domainObj.liveStatus = {
+//                     available: true,
+//                     status: namecheapResult.$.Status,
+//                     isExpired: namecheapResult.$.IsExpired === 'true',
+//                     isLocked: namecheapResult.$.IsLocked === 'true',
+//                     autoRenew: namecheapResult.$.AutoRenew === 'true',
+//                     isPremium: namecheapResult.$.IsPremium === 'true',
+//                     lastChecked: new Date().toISOString(),
+//                     nameservers: Array.isArray(namecheapResult.DnsDetails.Nameserver)
+//                         ? namecheapResult.DnsDetails.Nameserver
+//                         : [namecheapResult.DnsDetails.Nameserver],
+//                     isUsingNamecheapDNS: namecheapResult.DnsDetails.$.IsUsingOurDNS === 'true'
+//                 };
+
+//                 // 🔁 Fetch live redirects from DNS hosts
+//                 try {
+//                     const dnsHosts = await namecheapRequest('namecheap.domains.dns.getHosts', {
+//                         DomainName: dbDomain.domain
+//                     });
+
+//                     const hosts = dnsHosts.ApiResponse.CommandResponse?.DomainDNSGetHostsResult?.host;
+//                     const hostsList = hosts ? (Array.isArray(hosts) ? hosts : [hosts]) : [];
+
+//                     const liveRedirects = hostsList
+//                         .filter(host => host.$ && ['URL301', 'URL302', 'FRAME'].includes(host.$.Type))
+//                         .map(host => ({
+//                             type: host.$.Type,
+//                             address: host.$.Address,
+//                             title: host.$.Title || '',
+//                             keywords: host.$.Keywords || '',
+//                             description: host.$.Description || '',
+//                             ttl: host.$.TTL,
+//                             host: host.$.Name || '@',
+//                             lastUpdated: new Date().toISOString(),
+//                             source: 'live_dns'
+//                         }));
+
+//                     // Update redirects with live data if available, otherwise use database data
+//                     domainObj.redirects = liveRedirects.length > 0 ? liveRedirects : dbDomain.redirects || [];
+
+//                     // Add metadata about redirect source
+//                     domainObj.redirectMetadata = {
+//                         source: liveRedirects.length > 0 ? 'live_dns' : 'database',
+//                         liveCount: liveRedirects.length,
+//                         databaseCount: dbDomain.redirects?.length || 0,
+//                         lastSync: new Date().toISOString()
+//                     };
+
+//                     console.log(`[Domain API] Fetched ${liveRedirects.length} live redirects for ${dbDomain.domain}`);
+//                 } catch (redirectError) {
+//                     console.warn(`[Domain API] Could not fetch live redirects for ${dbDomain.domain}:`, redirectError.message);
+//                     // Fallback to database redirects
+//                     domainObj.redirects = dbDomain.redirects || [];
+//                     domainObj.redirectMetadata = {
+//                         source: 'database_fallback',
+//                         error: redirectError.message,
+//                         databaseCount: dbDomain.redirects?.length || 0,
+//                         lastSync: new Date().toISOString()
+//                     };
+//                 }
+
+//                 // Update database with live information if there are significant changes
+//                 const updateData = {};
+//                 let needsUpdate = false;
+
+//                 if (domainObj.domainStatus.autoRenew !== (namecheapResult.$.AutoRenew === 'true')) {
+//                     updateData['domainStatus.autoRenew'] = namecheapResult.$.AutoRenew === 'true';
+//                     needsUpdate = true;
+//                 }
+
+//                 if (domainObj.domainStatus.isLocked !== (namecheapResult.$.IsLocked === 'true')) {
+//                     updateData['domainStatus.isLocked'] = namecheapResult.$.IsLocked === 'true';
+//                     needsUpdate = true;
+//                 }
+
+//                 if (needsUpdate) {
+//                     await updateDomainInDatabase(userId, dbDomain.domain, updateData);
+//                     console.log(`[Domain API] Updated live status for ${dbDomain.domain}`);
+//                 }
+
+//             } catch (namecheapError) {
+//                 console.error(`[Domain API] Error fetching live status for ${dbDomain.domain}:`, {
+//                     error: namecheapError.message,
+//                     userId,
+//                     domain: dbDomain.domain
+//                 });
+
+//                 domainObj.liveStatus = {
+//                     available: false,
+//                     error: namecheapError.message,
+//                     lastChecked: new Date().toISOString(),
+//                     note: 'Using cached database information'
+//                 };
+
+//                 // Use database redirects as fallback
+//                 domainObj.redirects = dbDomain.redirects || [];
+//                 domainObj.redirectMetadata = {
+//                     source: 'database_error_fallback',
+//                     error: namecheapError.message,
+//                     databaseCount: dbDomain.redirects?.length || 0,
+//                     lastSync: new Date().toISOString()
+//                 };
+//             }
+
+//             return domainObj;
+//         }));
+
+//         // Sort domains by creation date (newest first)
+//         detailedDomains.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+
+//         res.json({
+//             success: true,
+//             userId,
+//             data: {
+//                 domains: detailedDomains,
+//                 total: detailedDomains.length,
+//                 apiMode: NAMECHEAP_SANDBOX === 'true' ? 'sandbox' : 'production',
+//                 dataSource: 'database_with_live_sync',
+//                 lastSync: new Date().toISOString(),
+//                 sandboxWarning: NAMECHEAP_SANDBOX === 'true' ?
+//                     'Running in sandbox mode - Live status may not be accurate' : null
+//             }
+//         });
+
+//     } catch (err) {
+//         console.error('[Domain API] ❌ Error fetching user domains:', {
+//             error: err.message,
+//             userId,
+//             stack: err.stack
+//         });
+
+//         res.status(500).json({
+//             success: false,
+//             userId,
+//             error: err.message,
+//             details: 'Failed to fetch user domains from database',
+//             apiMode: NAMECHEAP_SANDBOX === 'true' ? 'sandbox' : 'production'
+//         });
+//     }
+// });
+
+
+// Cache for API responses to avoid hitting rate limits
+const apiCache = new Map();
+const CACHE_DURATION = 5 * 60 * 1000; // 5 minutes
+
+
+// Rate limiting queue
+class RateLimitedQueue {
+    constructor(maxCallsPerMinute = 18) { // Leave buffer for other operations
+        this.queue = [];
+        this.processing = false;
+        this.maxCallsPerMinute = maxCallsPerMinute;
+        this.callTimes = [];
+    }
+
+    async add(apiCall) {
+        return new Promise((resolve, reject) => {
+            this.queue.push({ apiCall, resolve, reject });
+            this.process();
+        });
+    }
+
+    async process() {
+        if (this.processing || this.queue.length === 0) return;
+        this.processing = true;
+
+        while (this.queue.length > 0) {
+            // Clean old call times (older than 1 minute)
+            const now = Date.now();
+            this.callTimes = this.callTimes.filter(time => now - time < 60000);
+
+            // Check if we need to wait
+            if (this.callTimes.length >= this.maxCallsPerMinute) {
+                const oldestCall = Math.min(...this.callTimes);
+                const waitTime = 60000 - (now - oldestCall) + 100; // Add small buffer
+                console.log(`[Rate Limit] Waiting ${waitTime}ms before next call`);
+                await new Promise(resolve => setTimeout(resolve, waitTime));
+                continue;
+            }
+
+            const { apiCall, resolve, reject } = this.queue.shift();
+            
+            try {
+                this.callTimes.push(now);
+                const result = await apiCall();
+                resolve(result);
+            } catch (error) {
+                reject(error);
+            }
+
+            // Small delay between calls
+            await new Promise(resolve => setTimeout(resolve, 200));
+        }
+
+        this.processing = false;
+    }
+}
+
+const rateLimitedQueue = new RateLimitedQueue();
+
 router.get('/namecheap/domains/list', validateUserId, async (req, res) => {
     const userId = req.userId;
+    const includeLiveStatus = req.query.live === 'true';
+    const forceRefresh = req.query.refresh === 'true';
+    const timeout = parseInt(req.query.timeout) || 8000;
 
     try {
-        console.log(`[Domain API] 📋 Fetching domains for user: ${userId}`);
+        console.log(`[Domain API] 📋 Fetching domains for user: ${userId}, live: ${includeLiveStatus}`);
 
         // Get user domains from database
         const userDomains = await getUserDomainsFromDatabase(userId);
@@ -2232,10 +2494,9 @@ router.get('/namecheap/domains/list', validateUserId, async (req, res) => {
             });
         }
 
-        // For each domain in database, get live status from Namecheap API
-        const detailedDomains = await Promise.all(userDomains.map(async (dbDomain) => {
-            const domainObj = {
-                // Database information
+        // Return quick response with database data only
+        if (!includeLiveStatus) {
+            const quickDomains = userDomains.map(dbDomain => ({
                 _id: dbDomain._id,
                 userId: dbDomain.userId,
                 domain: dbDomain.domain,
@@ -2249,24 +2510,94 @@ router.get('/namecheap/domains/list', validateUserId, async (req, res) => {
                 stripePayment: dbDomain.stripePayment || null,
                 createdAt: dbDomain.createdAt,
                 updatedAt: dbDomain.updatedAt,
+                liveStatus: {
+                    available: false,
+                    note: 'Live status not requested - use ?live=true for real-time data',
+                    lastChecked: null
+                }
+            }));
 
-                // Initialize live status
+            // Sort by creation date (newest first)
+            quickDomains.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+
+            return res.json({
+                success: true,
+                userId,
+                data: {
+                    domains: quickDomains,
+                    total: quickDomains.length,
+                    apiMode: NAMECHEAP_SANDBOX === 'true' ? 'sandbox' : 'production',
+                    dataSource: 'database_only',
+                    responseTime: 'fast',
+                    note: 'Add ?live=true to get real-time status (slower response)'
+                }
+            });
+        }
+
+        // Cached API call function
+        const getCachedApiData = async (cacheKey, apiCall, forceRefresh = false) => {
+            if (!forceRefresh && apiCache.has(cacheKey)) {
+                const cached = apiCache.get(cacheKey);
+                if (Date.now() - cached.timestamp < CACHE_DURATION) {
+                    console.log(`[Cache] Using cached data for ${cacheKey}`);
+                    return cached.data;
+                }
+                apiCache.delete(cacheKey);
+            }
+
+            try {
+                const data = await rateLimitedQueue.add(apiCall);
+                apiCache.set(cacheKey, {
+                    data,
+                    timestamp: Date.now()
+                });
+                return data;
+            } catch (error) {
+                console.error(`[API Error] ${cacheKey}:`, error.message);
+                throw error;
+            }
+        };
+
+        // For live status, implement with caching and rate limiting
+        const fetchDomainDetails = async (dbDomain) => {
+            const domainObj = {
+                _id: dbDomain._id,
+                userId: dbDomain.userId,
+                domain: dbDomain.domain,
+                registrationData: dbDomain.registrationData,
+                contactInfo: dbDomain.contactInfo,
+                domainStatus: dbDomain.domainStatus,
+                dnsConfiguration: dbDomain.dnsConfiguration,
+                redirects: dbDomain.redirects || [],
+                emailAccounts: dbDomain.emailAccounts || [],
+                pricing: dbDomain.pricing,
+                stripePayment: dbDomain.stripePayment || null,
+                createdAt: dbDomain.createdAt,
+                updatedAt: dbDomain.updatedAt,
                 liveStatus: {
                     available: false,
                     error: null,
-                    lastChecked: new Date().toISOString()
+                    lastChecked: new Date().toISOString(),
+                    cached: false
                 }
             };
 
             try {
-                // Get live domain info from Namecheap (optional - can be disabled for performance)
-                const domainInfo = await namecheapRequest('namecheap.domains.getInfo', {
-                    DomainName: dbDomain.domain
-                });
+                // Fetch domain info with caching and rate limiting
+                const domainInfo = await getCachedApiData(
+                    `domain_info_${dbDomain.domain}`,
+                    () => namecheapRequest('namecheap.domains.getInfo', {
+                        DomainName: dbDomain.domain
+                    }),
+                    forceRefresh
+                );
 
                 const namecheapResult = domainInfo.ApiResponse.CommandResponse.DomainGetInfoResult;
 
-                // Update live status from Namecheap API
+                // Update live status
+                const cacheKey = `domain_info_${dbDomain.domain}`;
+                const isCached = apiCache.has(cacheKey) && !forceRefresh;
+                
                 domainObj.liveStatus = {
                     available: true,
                     status: namecheapResult.$.Status,
@@ -2275,60 +2606,72 @@ router.get('/namecheap/domains/list', validateUserId, async (req, res) => {
                     autoRenew: namecheapResult.$.AutoRenew === 'true',
                     isPremium: namecheapResult.$.IsPremium === 'true',
                     lastChecked: new Date().toISOString(),
+                    cached: isCached,
                     nameservers: Array.isArray(namecheapResult.DnsDetails.Nameserver)
                         ? namecheapResult.DnsDetails.Nameserver
                         : [namecheapResult.DnsDetails.Nameserver],
                     isUsingNamecheapDNS: namecheapResult.DnsDetails.$.IsUsingOurDNS === 'true'
                 };
 
-                // 🔁 Fetch live redirects from DNS hosts
-                try {
-                    const dnsHosts = await namecheapRequest('namecheap.domains.dns.getHosts', {
-                        DomainName: dbDomain.domain
-                    });
+                // Only fetch DNS hosts if using Namecheap DNS and not recently cached
+                if (namecheapResult.DnsDetails.$.IsUsingOurDNS === 'true') {
+                    try {
+                        const dnsHosts = await getCachedApiData(
+                            `dns_hosts_${dbDomain.domain}`,
+                            () => namecheapRequest('namecheap.domains.dns.getHosts', {
+                                DomainName: dbDomain.domain
+                            }),
+                            forceRefresh
+                        );
 
-                    const hosts = dnsHosts.ApiResponse.CommandResponse?.DomainDNSGetHostsResult?.host;
-                    const hostsList = hosts ? (Array.isArray(hosts) ? hosts : [hosts]) : [];
+                        const hosts = dnsHosts.ApiResponse.CommandResponse?.DomainDNSGetHostsResult?.host;
+                        const hostsList = hosts ? (Array.isArray(hosts) ? hosts : [hosts]) : [];
 
-                    const liveRedirects = hostsList
-                        .filter(host => host.$ && ['URL301', 'URL302', 'FRAME'].includes(host.$.Type))
-                        .map(host => ({
-                            type: host.$.Type,
-                            address: host.$.Address,
-                            title: host.$.Title || '',
-                            keywords: host.$.Keywords || '',
-                            description: host.$.Description || '',
-                            ttl: host.$.TTL,
-                            host: host.$.Name || '@',
-                            lastUpdated: new Date().toISOString(),
-                            source: 'live_dns'
-                        }));
+                        const liveRedirects = hostsList
+                            .filter(host => host.$ && ['URL301', 'URL302', 'FRAME'].includes(host.$.Type))
+                            .map(host => ({
+                                type: host.$.Type,
+                                address: host.$.Address,
+                                title: host.$.Title || '',
+                                keywords: host.$.Keywords || '',
+                                description: host.$.Description || '',
+                                ttl: host.$.TTL,
+                                host: host.$.Name || '@',
+                                lastUpdated: new Date().toISOString(),
+                                source: 'live_dns'
+                            }));
 
-                    // Update redirects with live data if available, otherwise use database data
-                    domainObj.redirects = liveRedirects.length > 0 ? liveRedirects : dbDomain.redirects || [];
+                        domainObj.redirects = liveRedirects.length > 0 ? liveRedirects : dbDomain.redirects || [];
+                        domainObj.redirectMetadata = {
+                            source: liveRedirects.length > 0 ? 'live_dns' : 'database',
+                            liveCount: liveRedirects.length,
+                            databaseCount: dbDomain.redirects?.length || 0,
+                            lastSync: new Date().toISOString(),
+                            cached: apiCache.has(`dns_hosts_${dbDomain.domain}`)
+                        };
 
-                    // Add metadata about redirect source
-                    domainObj.redirectMetadata = {
-                        source: liveRedirects.length > 0 ? 'live_dns' : 'database',
-                        liveCount: liveRedirects.length,
-                        databaseCount: dbDomain.redirects?.length || 0,
-                        lastSync: new Date().toISOString()
-                    };
-
-                    console.log(`[Domain API] Fetched ${liveRedirects.length} live redirects for ${dbDomain.domain}`);
-                } catch (redirectError) {
-                    console.warn(`[Domain API] Could not fetch live redirects for ${dbDomain.domain}:`, redirectError.message);
-                    // Fallback to database redirects
+                    } catch (redirectError) {
+                        console.warn(`[Domain API] DNS hosts fetch failed for ${dbDomain.domain}:`, redirectError.message);
+                        domainObj.redirects = dbDomain.redirects || [];
+                        domainObj.redirectMetadata = {
+                            source: 'database_fallback',
+                            error: redirectError.message,
+                            databaseCount: dbDomain.redirects?.length || 0,
+                            lastSync: new Date().toISOString()
+                        };
+                    }
+                } else {
+                    // Not using Namecheap DNS, use database redirects
                     domainObj.redirects = dbDomain.redirects || [];
                     domainObj.redirectMetadata = {
-                        source: 'database_fallback',
-                        error: redirectError.message,
+                        source: 'database_external_dns',
+                        note: 'Using external DNS - live redirects not available',
                         databaseCount: dbDomain.redirects?.length || 0,
                         lastSync: new Date().toISOString()
                     };
                 }
 
-                // Update database with live information if there are significant changes
+                // Background database update (non-blocking)
                 const updateData = {};
                 let needsUpdate = false;
 
@@ -2343,16 +2686,14 @@ router.get('/namecheap/domains/list', validateUserId, async (req, res) => {
                 }
 
                 if (needsUpdate) {
-                    await updateDomainInDatabase(userId, dbDomain.domain, updateData);
-                    console.log(`[Domain API] Updated live status for ${dbDomain.domain}`);
+                    // Non-blocking update
+                    updateDomainInDatabase(userId, dbDomain.domain, updateData)
+                        .then(() => console.log(`[Domain API] Updated live status for ${dbDomain.domain}`))
+                        .catch(err => console.warn(`[Domain API] Background update failed for ${dbDomain.domain}:`, err.message));
                 }
 
             } catch (namecheapError) {
-                console.error(`[Domain API] Error fetching live status for ${dbDomain.domain}:`, {
-                    error: namecheapError.message,
-                    userId,
-                    domain: dbDomain.domain
-                });
+                console.error(`[Domain API] Live status fetch failed for ${dbDomain.domain}:`, namecheapError.message);
 
                 domainObj.liveStatus = {
                     available: false,
@@ -2361,7 +2702,6 @@ router.get('/namecheap/domains/list', validateUserId, async (req, res) => {
                     note: 'Using cached database information'
                 };
 
-                // Use database redirects as fallback
                 domainObj.redirects = dbDomain.redirects || [];
                 domainObj.redirectMetadata = {
                     source: 'database_error_fallback',
@@ -2372,7 +2712,42 @@ router.get('/namecheap/domains/list', validateUserId, async (req, res) => {
             }
 
             return domainObj;
-        }));
+        };
+
+        // Process domains sequentially to respect rate limits (no parallel processing)
+        const detailedDomains = [];
+        let processedCount = 0;
+        
+        for (const dbDomain of userDomains) {
+            try {
+                const domainDetails = await Promise.race([
+                    fetchDomainDetails(dbDomain),
+                    new Promise((_, reject) => 
+                        setTimeout(() => reject(new Error('Domain fetch timeout')), timeout)
+                    )
+                ]);
+                detailedDomains.push(domainDetails);
+                processedCount++;
+                
+                // Progress logging
+                console.log(`[Domain API] Processed ${processedCount}/${userDomains.length} domains for user ${userId}`);
+                
+            } catch (error) {
+                console.error(`[Domain API] Failed to process domain ${dbDomain.domain}:`, error.message);
+                
+                // Add domain with error status
+                detailedDomains.push({
+                    ...dbDomain,
+                    liveStatus: {
+                        available: false,
+                        error: error.message,
+                        lastChecked: new Date().toISOString(),
+                        note: 'Using database information due to API error'
+                    }
+                });
+                processedCount++;
+            }
+        }
 
         // Sort domains by creation date (newest first)
         detailedDomains.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
@@ -2386,6 +2761,8 @@ router.get('/namecheap/domains/list', validateUserId, async (req, res) => {
                 apiMode: NAMECHEAP_SANDBOX === 'true' ? 'sandbox' : 'production',
                 dataSource: 'database_with_live_sync',
                 lastSync: new Date().toISOString(),
+                timeout: timeout,
+                concurrentLimit: CONCURRENT_LIMIT,
                 sandboxWarning: NAMECHEAP_SANDBOX === 'true' ?
                     'Running in sandbox mode - Live status may not be accurate' : null
             }
@@ -2408,6 +2785,54 @@ router.get('/namecheap/domains/list', validateUserId, async (req, res) => {
     }
 });
 
+// Additional endpoint for refreshing live status of specific domain
+router.post('/namecheap/domains/:domain/refresh', validateUserId, async (req, res) => {
+    const userId = req.userId;
+    const domainName = req.params.domain;
+
+    try {
+        // Fetch single domain with live status
+        const dbDomain = await getDomainFromDatabase(userId, domainName);
+        if (!dbDomain) {
+            return res.status(404).json({
+                success: false,
+                error: 'Domain not found'
+            });
+        }
+
+        // Get live status for single domain
+        const domainInfo = await namecheapRequest('namecheap.domains.getInfo', {
+            DomainName: domainName
+        });
+
+        const namecheapResult = domainInfo.ApiResponse.CommandResponse.DomainGetInfoResult;
+
+        res.json({
+            success: true,
+            domain: domainName,
+            liveStatus: {
+                status: namecheapResult.$.Status,
+                isExpired: namecheapResult.$.IsExpired === 'true',
+                isLocked: namecheapResult.$.IsLocked === 'true',
+                autoRenew: namecheapResult.$.AutoRenew === 'true',
+                isPremium: namecheapResult.$.IsPremium === 'true',
+                lastChecked: new Date().toISOString(),
+                nameservers: Array.isArray(namecheapResult.DnsDetails.Nameserver)
+                    ? namecheapResult.DnsDetails.Nameserver
+                    : [namecheapResult.DnsDetails.Nameserver],
+                isUsingNamecheapDNS: namecheapResult.DnsDetails.$.IsUsingOurDNS === 'true'
+            }
+        });
+
+    } catch (error) {
+        console.error(`[Domain API] Error refreshing domain ${domainName}:`, error.message);
+        res.status(500).json({
+            success: false,
+            error: 'Failed to refresh domain status',
+            details: error.message
+        });
+    }
+});
 
 
 router.post('/namecheap/domain/redirect', validateUserId, async (req, res) => {

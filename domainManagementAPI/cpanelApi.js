@@ -421,7 +421,7 @@ router.get('/cpanel/list-emails/:userId/:domain', async (req, res) => {
     console.log(`Raw email result for domain ${domain}:`, JSON.stringify(emailResult.data, null, 2));
 
     // Filter emails to only include those for the requested domain
-    const domainEmails = emailResult.data.filter(email => 
+    const domainEmails = emailResult.data.filter(email =>
       email.domain && email.domain.toLowerCase() === domain.toLowerCase()
     );
 
@@ -458,7 +458,7 @@ router.get('/cpanel/list-emails/:userId/:domain', async (req, res) => {
     const domainStats = {
       totalAccounts: emailsWithDetails.length,
       totalUsed: emailsWithDetails.reduce((sum, email) => sum + email.usage.bytes, 0),
-      totalQuota: emailsWithDetails.reduce((sum, email) => 
+      totalQuota: emailsWithDetails.reduce((sum, email) =>
         email.quota.isUnlimited ? -1 : sum + email.quota.limit, 0)
     };
 
@@ -470,10 +470,10 @@ router.get('/cpanel/list-emails/:userId/:domain', async (req, res) => {
       count: emailsWithDetails.length,
       stats: {
         ...domainStats,
-        usagePercentage: domainStats.totalQuota === -1 ? 0 : 
+        usagePercentage: domainStats.totalQuota === -1 ? 0 :
           Math.round((domainStats.totalUsed / domainStats.totalQuota) * 100),
         formattedUsage: formatStorage(domainStats.totalUsed),
-        formattedQuota: domainStats.totalQuota === -1 ? 'Unlimited' : 
+        formattedQuota: domainStats.totalQuota === -1 ? 'Unlimited' :
           formatStorage(domainStats.totalQuota)
       }
     });
@@ -592,7 +592,7 @@ router.get('/cpanel/check-email/:userId/:domain/:username', async (req, res) => 
     }
 
     // Filter emails to only include those for the requested domain
-    const domainEmails = emailResult.data.filter(email => 
+    const domainEmails = emailResult.data.filter(email =>
       email.domain && email.domain.toLowerCase() === domain.toLowerCase()
     );
 
@@ -732,7 +732,7 @@ router.delete('/cpanel/delete-email', async (req, res) => {
       throw new Error(checkResult.errors?.[0] || 'Failed to fetch email accounts');
     }
 
-    const emailExists = checkResult.data?.some(account => 
+    const emailExists = checkResult.data?.some(account =>
       account.email === emailAddress || account.user === emailUsername.toLowerCase()
     );
 
@@ -767,13 +767,13 @@ router.delete('/cpanel/delete-email', async (req, res) => {
 
     // Step 4: Remove email account from database
     const updatedDomain = await NamecheapDomain.findOneAndUpdate(
-      { 
-        userId, 
+      {
+        userId,
         domain: emailDomain.toLowerCase(),
         'emailAccounts.email': emailAddress
       },
       {
-        $pull: { 
+        $pull: {
           emailAccounts: { email: emailAddress }
         },
         $set: {
@@ -859,7 +859,7 @@ router.get('/cpanel/user-all-emails/:userId', async (req, res) => {
 
     for (const domainRecord of userDomains) {
       const domain = domainRecord.domain;
-      
+
       try {
         // Get email accounts for this domain
         const emailResult = await cpanelRequest('Email/list_pops_with_disk', {
@@ -868,7 +868,7 @@ router.get('/cpanel/user-all-emails/:userId', async (req, res) => {
 
         if (emailResult.status === 1 && emailResult.data) {
           // Filter emails to only include those for this specific domain
-          const domainEmails = emailResult.data.filter(email => 
+          const domainEmails = emailResult.data.filter(email =>
             email.domain && email.domain.toLowerCase() === domain.toLowerCase()
           );
 
@@ -904,7 +904,7 @@ router.get('/cpanel/user-all-emails/:userId', async (req, res) => {
 
           // Calculate domain statistics
           const domainTotalUsed = emailsWithDetails.reduce((sum, email) => sum + email.usage.bytes, 0);
-          const domainTotalQuota = emailsWithDetails.reduce((sum, email) => 
+          const domainTotalQuota = emailsWithDetails.reduce((sum, email) =>
             email.quota.isUnlimited ? -1 : sum + email.quota.limit, 0);
 
           domainStats.push({
@@ -912,10 +912,10 @@ router.get('/cpanel/user-all-emails/:userId', async (req, res) => {
             emailCount: emailsWithDetails.length,
             totalUsed: domainTotalUsed,
             totalQuota: domainTotalQuota,
-            usagePercentage: domainTotalQuota === -1 ? 0 : 
+            usagePercentage: domainTotalQuota === -1 ? 0 :
               Math.round((domainTotalUsed / domainTotalQuota) * 100),
             formattedUsage: formatStorage(domainTotalUsed),
-            formattedQuota: domainTotalQuota === -1 ? 'Unlimited' : 
+            formattedQuota: domainTotalQuota === -1 ? 'Unlimited' :
               formatStorage(domainTotalQuota)
           });
 
@@ -952,13 +952,13 @@ router.get('/cpanel/user-all-emails/:userId', async (req, res) => {
     const overallStats = {
       totalAccounts: allEmails.length,
       totalUsed: allEmails.reduce((sum, email) => sum + email.usage.bytes, 0),
-      totalQuota: allEmails.reduce((sum, email) => 
+      totalQuota: allEmails.reduce((sum, email) =>
         email.quota.isUnlimited ? -1 : sum + email.quota.limit, 0)
     };
 
     // Step 4: Group emails by domain
     const emailsByDomain = {};
-    
+
     allEmails.forEach(email => {
       const domain = email.domain;
       if (!emailsByDomain[domain]) {
@@ -976,7 +976,7 @@ router.get('/cpanel/user-all-emails/:userId', async (req, res) => {
           }
         };
       }
-      
+
       emailsByDomain[domain].emails.push({
         username: email.username,
         email: email.email,
@@ -993,17 +993,17 @@ router.get('/cpanel/user-all-emails/:userId', async (req, res) => {
     Object.keys(emailsByDomain).forEach(domain => {
       const domainEmails = emailsByDomain[domain].emails;
       const totalUsed = domainEmails.reduce((sum, email) => sum + email.usage.bytes, 0);
-      const totalQuota = domainEmails.reduce((sum, email) => 
+      const totalQuota = domainEmails.reduce((sum, email) =>
         email.quota.isUnlimited ? -1 : sum + email.quota.limit, 0);
 
       emailsByDomain[domain].stats = {
         totalAccounts: domainEmails.length,
         totalUsed: totalUsed,
         totalQuota: totalQuota,
-        usagePercentage: totalQuota === -1 ? 0 : 
+        usagePercentage: totalQuota === -1 ? 0 :
           Math.round((totalUsed / totalQuota) * 100),
         formattedUsage: formatStorage(totalUsed),
-        formattedQuota: totalQuota === -1 ? 'Unlimited' : 
+        formattedQuota: totalQuota === -1 ? 'Unlimited' :
           formatStorage(totalQuota)
       };
     });
@@ -1012,7 +1012,7 @@ router.get('/cpanel/user-all-emails/:userId', async (req, res) => {
     const allDomainsList = userDomains.map(domainRecord => {
       const hasEmails = Object.keys(emailsByDomain).includes(domainRecord.domain);
       const emailCount = emailsByDomain[domainRecord.domain]?.emails?.length || 0;
-      
+
       const domainObj = {
         domain: domainRecord.domain,
         hasEmails: hasEmails,
@@ -1043,10 +1043,10 @@ router.get('/cpanel/user-all-emails/:userId', async (req, res) => {
       domainsWithEmails: emailsByDomain,
       overallStats: {
         ...overallStats,
-        usagePercentage: overallStats.totalQuota === -1 ? 0 : 
+        usagePercentage: overallStats.totalQuota === -1 ? 0 :
           Math.round((overallStats.totalUsed / overallStats.totalQuota) * 100),
         formattedUsage: formatStorage(overallStats.totalUsed),
-        formattedQuota: overallStats.totalQuota === -1 ? 'Unlimited' : 
+        formattedQuota: overallStats.totalQuota === -1 ? 'Unlimited' :
           formatStorage(overallStats.totalQuota)
       },
       summary: {
@@ -1067,5 +1067,294 @@ router.get('/cpanel/user-all-emails/:userId', async (req, res) => {
     });
   }
 });
+
+//_____________send email API______________
+
+// Route: Send Email using cPanel UAPI
+router.post('/cpanel/send-email', async (req, res) => {
+  const {
+    userId,
+    domain,
+    fromEmail,
+    toEmail,
+    subject,
+    message,
+    isHtml = false,
+    replyTo = null,
+    cc = null,
+    bcc = null,
+    attachments = null
+  } = req.body;
+
+  // Input validation
+  if (!userId || !domain || !fromEmail || !toEmail || !subject || !message) {
+    return res.status(400).json({
+      success: false,
+      error: 'userId, domain, fromEmail, toEmail, subject, and message are required.'
+    });
+  }
+
+  if (!isValidDomain(domain)) {
+    return res.status(400).json({
+      success: false,
+      error: 'Invalid domain format.'
+    });
+  }
+
+  // Validate email formats
+  const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+  if (!emailRegex.test(fromEmail) || !emailRegex.test(toEmail)) {
+    return res.status(400).json({
+      success: false,
+      error: 'Invalid email format for fromEmail or toEmail.'
+    });
+  }
+
+  // Validate that fromEmail belongs to the specified domain
+  const fromDomain = fromEmail.split('@')[1];
+  if (fromDomain.toLowerCase() !== domain.toLowerCase()) {
+    return res.status(400).json({
+      success: false,
+      error: 'fromEmail must belong to the specified domain.'
+    });
+  }
+
+  // Validate subject length
+  if (subject.length > 998) {
+    return res.status(400).json({
+      success: false,
+      error: 'Subject line is too long. Maximum length is 998 characters.'
+    });
+  }
+
+  // Validate message length
+  if (message.length > 26214400) { // 25MB limit
+    return res.status(400).json({
+      success: false,
+      error: 'Message is too long. Maximum size is 25MB.'
+    });
+  }
+
+  // Validate CC and BCC if provided
+  if (cc && !Array.isArray(cc)) {
+    return res.status(400).json({
+      success: false,
+      error: 'cc must be an array of email addresses.'
+    });
+  }
+
+  if (bcc && !Array.isArray(bcc)) {
+    return res.status(400).json({
+      success: false,
+      error: 'bcc must be an array of email addresses.'
+    });
+  }
+
+  // Validate email addresses in CC and BCC
+  if (cc) {
+    for (const email of cc) {
+      if (!emailRegex.test(email)) {
+        return res.status(400).json({
+          success: false,
+          error: `Invalid email format in cc: ${email}`
+        });
+      }
+    }
+  }
+
+  if (bcc) {
+    for (const email of bcc) {
+      if (!emailRegex.test(email)) {
+        return res.status(400).json({
+          success: false,
+          error: `Invalid email format in bcc: ${email}`
+        });
+      }
+    }
+  }
+
+  try {
+    // Step 1: Verify user owns domain
+    const domainOwnership = await userOwnsDomain(userId, domain);
+    if (!domainOwnership) {
+      return res.status(403).json({
+        success: false,
+        error: 'Domain not registered to user or domain is not active.'
+      });
+    }
+
+    // Step 2: Verify that the fromEmail exists as an email account
+    const emailCheckResult = await cpanelRequest('Email/list_pops', {
+      domain: domain.toLowerCase()
+    });
+
+    if (emailCheckResult.status !== 1) {
+      throw new Error(emailCheckResult.errors?.[0] || 'Failed to fetch email accounts');
+    }
+
+    const emailExists = emailCheckResult.data?.some(account =>
+      account.email === fromEmail.toLowerCase()
+    );
+
+    if (!emailExists) {
+      return res.status(404).json({
+        success: false,
+        error: 'From email account does not exist on this domain.'
+      });
+    }
+
+    // Step 3: Prepare email parameters
+    const emailParams = {
+      from: fromEmail.toLowerCase(),
+      to: toEmail.toLowerCase(),
+      subject: subject,
+      message: message,
+      html: isHtml ? '1' : '0'
+    };
+
+    // Add optional parameters
+    if (replyTo) {
+      emailParams.replyto = replyTo.toLowerCase();
+    }
+
+    if (cc && cc.length > 0) {
+      emailParams.cc = cc.join(',').toLowerCase();
+    }
+
+    if (bcc && bcc.length > 0) {
+      emailParams.bcc = bcc.join(',').toLowerCase();
+    }
+
+    // Step 4: Send email using cPanel UAPI
+    console.log('Sending email with params:', {
+      ...emailParams,
+      message: message.length > 100 ? `${message.substring(0, 100)}...` : message
+    });
+
+    const sendResult = await cpanelRequest('Email/send_email', emailParams, 'POST');
+
+    console.log('Email send result:', sendResult);
+
+    if (sendResult.status !== 1) {
+      const errorMsg = (sendResult.errors && sendResult.errors[0]) || 'Unknown error from cPanel';
+      throw new Error(errorMsg);
+    }
+
+    // Step 5: Return success response
+    res.json({
+      success: true,
+      message: 'Email sent successfully',
+      emailDetails: {
+        from: fromEmail.toLowerCase(),
+        to: toEmail.toLowerCase(),
+        subject: subject,
+        messageLength: message.length,
+        isHtml: isHtml,
+        replyTo: replyTo,
+        cc: cc,
+        bcc: bcc,
+        timestamp: new Date().toISOString()
+      },
+      cpanelResponse: sendResult.data,
+      domain: domain.toLowerCase()
+    });
+
+  } catch (err) {
+    console.error('Email sending failed:', err.message);
+    res.status(500).json({
+      success: false,
+      error: err.message,
+      details: err.response?.data || null
+    });
+  }
+});
+
+
+
+// Route: Get Email Sending Statistics
+router.get('/cpanel/email-sending-stats/:userId/:domain', async (req, res) => {
+  const { userId, domain } = req.params;
+
+  if (!userId || !domain) {
+    return res.status(400).json({
+      success: false,
+      error: 'userId and domain are required.'
+    });
+  }
+
+  try {
+    // Verify user owns domain
+    const domainOwnership = await userOwnsDomain(userId, domain);
+    if (!domainOwnership) {
+      return res.status(403).json({
+        success: false,
+        error: 'Domain not registered to user or domain is not active.'
+      });
+    }
+
+    // Get email accounts for the domain
+    const emailResult = await cpanelRequest('Email/list_pops', {
+      domain: domain.toLowerCase()
+    });
+
+    if (emailResult.status !== 1) {
+      throw new Error(emailResult.errors?.[0] || 'Failed to fetch email accounts');
+    }
+
+    const emailAccounts = emailResult.data || [];
+
+    // Get mail queue information (if available)
+    let mailQueueInfo = null;
+    try {
+      const queueResult = await cpanelRequest('Email/get_mail_queue');
+      if (queueResult.status === 1) {
+        mailQueueInfo = {
+          queueSize: queueResult.data?.length || 0,
+          queuedEmails: queueResult.data || []
+        };
+      }
+    } catch (queueError) {
+      console.log('Mail queue information not available:', queueError.message);
+    }
+
+    // Get email sending limits (if available)
+    let sendingLimits = null;
+    try {
+      const limitsResult = await cpanelRequest('Email/get_sending_limits');
+      if (limitsResult.status === 1) {
+        sendingLimits = limitsResult.data;
+      }
+    } catch (limitsError) {
+      console.log('Sending limits information not available:', limitsError.message);
+    }
+
+    res.json({
+      success: true,
+      domain: domain.toLowerCase(),
+      emailAccounts: emailAccounts.map(email => ({
+        username: email.user,
+        email: email.email,
+        suspended: email.suspended === '1'
+      })),
+      statistics: {
+        totalEmailAccounts: emailAccounts.length,
+        activeAccounts: emailAccounts.filter(email => email.suspended !== '1').length,
+        suspendedAccounts: emailAccounts.filter(email => email.suspended === '1').length
+      },
+      mailQueue: mailQueueInfo,
+      sendingLimits: sendingLimits,
+      webmailUrl: `https://${domain.toLowerCase()}:2096/`,
+      timestamp: new Date().toISOString()
+    });
+
+  } catch (err) {
+    console.error('Failed to get email sending statistics:', err.message);
+    res.status(500).json({
+      success: false,
+      error: err.message
+    });
+  }
+});
+
 
 module.exports = router;
