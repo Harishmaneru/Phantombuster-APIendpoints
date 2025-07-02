@@ -51,7 +51,7 @@ const WarmupInbox = mongoose.model('WarmupInbox', warmupInboxSchema);
 
 // Create an Axios instance preconfigured with your Warmup Inbox base URL + API key
 const axiosInstance = axios.create({
-  baseURL: process.env.WARMUP_API_BASE_URL || 'https://api.warmupinbox.com',
+  baseURL: 'https://api.warmupinbox.com/v1',
   timeout: 30_000,
   headers: {
     'Content-Type': 'application/json',
@@ -88,13 +88,172 @@ const getInboxIdFromDB = async (userId, email) => {
  *    Endpoint hit: POST /v1/inboxes
  *    Documentation: 
  */
+// router.post('/api/warmup/add-inbox', async (req, res) => {
+//   const { userId, email, password, sender_first, sender_last } = req.body;
+
+//   // Validation - According to API docs
+//   if (!userId || !email || !password || !sender_first || !sender_last) {
+//     return res.status(400).json({
+//       status: "-1",
+//       message: "Missing required fields",
+//       details: {
+//         required_fields: {
+//           userId: "string",
+//           email: "valid email address",
+//           password: "string (min 8 chars)",
+//           sender_first: "string",
+//           sender_last: "string"
+//         }
+//       }
+//     });
+//   }
+
+//   try {
+//     await connectToMongoDB();
+
+//     // Check if inbox already exists for this user and email
+//     const existingInbox = await WarmupInbox.findOne({ userId, email });
+//     if (existingInbox) {
+//       return res.status(409).json({
+//         status: "-1",
+//         message: "Inbox already exists for this userId and email",
+//         data: {
+//           inbox_id: existingInbox.inbox_id,
+//           email: existingInbox.email,
+//           status: existingInbox.status
+//         }
+//       });
+//     }
+
+//     // Build payload according to API docs
+//     const payload = {
+//       email: email,
+//       password: password,
+//       sender_first: sender_first,
+//       sender_last: sender_last,
+//       plan: "basic", // or "pro"/"max" based on subscription
+//       frequency: {
+//         starting_baseline: 4,    // Must be ≤4 for basic plan
+//         increase_per_day: 4,      // Must be ≤4 for basic plan
+//         max_sends_per_day: 20,    // Must be ≤20 for basic plan
+//         reply_rate: 25,           // Must be ≤25 for basic plan
+//         strategy: "progressive"   // Required field per docs
+//       },
+//       // Optional but recommended:
+//       extended_reply: true,       // For more natural conversations
+//       esp_priority: {             // ESP targeting
+//         google: true,
+//         outlook: false,
+//         all_other: false
+//       }
+//     };
+
+//     console.log('Sending payload to Warmup Inbox:', {
+//       email: payload.email,
+//       sender_first: payload.sender_first,
+//       sender_last: payload.sender_last,
+//       plan: payload.plan,
+//       frequency: payload.frequency,
+//       hasPassword: !!payload.password,
+//       extended_reply: payload.extended_reply,
+//       esp_priority: payload.esp_priority
+//     });
+
+//     // Make API call
+//     const response = await axiosInstance.post('/inboxes', payload);
+
+//     // Handle response according to API docs
+//     if (response.data.code === 'created') {
+//       // Store the response in MongoDB
+//       const warmupInboxData = new WarmupInbox({
+//         userId,
+//         email,
+//         inbox_id: response.data.inbox_id,
+//         password, // Consider encrypting this before storage
+//         sender_first,
+//         sender_last,
+//         status: response.data.code || 'created',
+//         plan: payload.plan,
+//         frequency: payload.frequency,
+//         warmup_response: response.data,
+//         updated_at: new Date()
+//       });
+
+//       await warmupInboxData.save();
+
+//       return res.status(201).json({
+//         status: "1",
+//         message: "Inbox successfully added to warmup",
+//         data: {
+//           inbox_id: response.data.inbox_id,
+//           status: "pending_activation",
+//           next_steps: [
+//             "Configure email client filters using filter_id",
+//             "Verify DNS records (MX, SPF, DKIM)"
+//           ],
+//           userId,
+//           stored_in_db: true
+//         }
+//       });
+//     }
+
+//   } catch (error) {
+//     console.error('Warmup Inbox API Error:', error.response?.data || error.message);
+
+//     // Handle specific error cases from API docs
+//     const apiError = error.response?.data?.error || "unknown_error";
+//     const statusCode = error.response?.status || 500;
+
+//     const errorMap = {
+//       'invalid_api_key': 401,
+//       'missing_api_key': 401,
+//       'invalid_request': 400,
+//       'inbox_already_exists': 409,
+//       'domain_not_configured': 422
+//     };
+
+//     // More detailed error handling for common issues
+//     let errorMessage = error.response?.data?.message || error.message;
+
+//     if (error.response?.status === 422) {
+//       errorMessage = "Domain configuration error. Please verify: " + 
+//         "1) MX records are properly configured\n" +
+//         "2) SPF record includes: v=spf1 a mx include:_spf.warmupinbox.com ~all\n" +
+//         "3) Email credentials are correct and SMTP/IMAP is enabled";
+//     } else if (error.response?.status === 409) {
+//       errorMessage = "Inbox already exists in Warmup Inbox service";
+//     } else if (error.response?.status === 401) {
+//       errorMessage = "Invalid API key. Please check your WARMUPINBOX_API_KEY configuration";
+//     }
+
+//     return res.status(errorMap[apiError] || statusCode).json({
+//       status: "-1",
+//       error: apiError,
+//       message: errorMessage,
+//       details: error.response?.data?.details || undefined
+//     });
+//   }
+// });
+
+
+
 router.post('/api/warmup/add-inbox', async (req, res) => {
   const { userId, email, password, sender_first, sender_last } = req.body;
 
+  // Validation - According to API docs
   if (!userId || !email || !password || !sender_first || !sender_last) {
     return res.status(400).json({
       status: "-1",
-      message: "Missing required fields: userId, email, password, sender_first, sender_last are all required."
+      message: "Missing required fields",
+      details: {
+        required_fields: {
+          userId: "string",
+          email: "valid email address",
+          password: "string (min 8 chars)",
+          sender_first: "string",
+          sender_last: "string"
+        }
+      }
     });
   }
 
@@ -115,59 +274,162 @@ router.post('/api/warmup/add-inbox', async (req, res) => {
       });
     }
 
-    // Build the payload exactly as Warmup Inbox expects
+    // Extract domain from email to determine mail server
+    const domain = email.split('@')[1];
+    const mailServer = `mail.${domain}`;
+
+    // Build payload for ADVANCED endpoint with explicit SMTP/IMAP settings
     const payload = {
-      email,                    // e.g. "sales@testgpt.com"
-      password,                 // the cPanel‐generated mailbox password
-      sender_first,             // e.g. "Sales"
-      sender_last,              // e.g. "TestGpt"
-      plan: "basic",        // you can choose "send_only" or "engagement" depending on your plan
+      email: email,
+      sender_first: sender_first,
+      sender_last: sender_last,
+      plan: "basic", // or "pro"/"max" based on subscription
       frequency: {
-        starting_baseline: 4,   // ≤ 4 for Basic
-        increase_per_day: 4,    // ≤ 4 for Basic
-        max_sends_per_day: 20,  // any reasonable number; 25 is OK
-        reply_rate: 25
+        starting_baseline: 4,    // Must be ≤4 for basic plan
+        increase_per_day: 4,      // Must be ≤4 for basic plan
+        max_sends_per_day: 20,    // Must be ≤20 for basic plan
+        reply_rate: 25,           // Must be ≤25 for basic plan
+        strategy: "progressive"   // Required field per docs
+      },
+      // Explicit SMTP configuration
+      smtp: {
+        host: mailServer,         // mail.engagegptapp.com
+        port: 465,                // SSL port
+        username: email,          // Full email as username
+        password: password,
+        tls: true                 // Use TLS/SSL for secure connection
+      },
+      // Explicit IMAP configuration
+      imap: {
+        host: mailServer,         // mail.engagegptapp.com
+        port: 993,                // IMAP SSL port
+        username: email,          // Full email as username
+        password: password,
+        tls: true                 // Use TLS/SSL for secure connection
+      },
+      // Optional but recommended:
+      extended_reply: true,       // For more natural conversations
+      esp_priority: {             // ESP targeting
+        google: true,
+        outlook: false,
+        all_other: false
       }
     };
 
-    // POST /v1/inboxes
-    const response = await axiosInstance.post('/v1/inboxes', payload);
-
-    // Store the response in MongoDB
-    const warmupInboxData = new WarmupInbox({
-      userId,
-      email,
-      inbox_id: response.data.inbox_id,
-      password,
-      sender_first,
-      sender_last,
-      status: response.data.code || 'created',
+    console.log('Sending payload to Warmup Inbox (Advanced):', {
+      email: payload.email,
+      sender_first: payload.sender_first,
+      sender_last: payload.sender_last,
       plan: payload.plan,
       frequency: payload.frequency,
-      warmup_response: response.data,
-      updated_at: new Date()
+      smtp: {
+        host: payload.smtp.host,
+        port: payload.smtp.port,
+        username: payload.smtp.username,
+        tls: payload.smtp.tls,
+        hasPassword: !!payload.smtp.password
+      },
+      imap: {
+        host: payload.imap.host,
+        port: payload.imap.port,
+        username: payload.imap.username,
+        tls: payload.imap.tls,
+        hasPassword: !!payload.imap.password
+      },
+      extended_reply: payload.extended_reply,
+      esp_priority: payload.esp_priority
     });
 
-    await warmupInboxData.save();
+    // Make API call to ADVANCED endpoint
+    const response = await axiosInstance.post('/inboxes/advanced', payload);
 
-    return res.status(200).json({
-      status: "1",
-      message: "Inbox added to Warmup Inbox successfully and stored in database.",
-      data: {
-        ...response.data,
+    // Handle response according to API docs
+    if (response.data.code === 'created') {
+      // Store the response in MongoDB
+      const warmupInboxData = new WarmupInbox({
         userId,
-        stored_in_db: true
-      }
-    });
+        email,
+        inbox_id: response.data.inbox_id,
+        password, // Consider encrypting this before storage
+        sender_first,
+        sender_last,
+        status: response.data.code || 'created',
+        plan: payload.plan,
+        frequency: payload.frequency,
+        smtp_settings: payload.smtp,
+        imap_settings: payload.imap,
+        warmup_response: response.data,
+        updated_at: new Date()
+      });
+
+      await warmupInboxData.save();
+
+      return res.status(201).json({
+        status: "1",
+        message: "Inbox successfully added to warmup",
+        data: {
+          inbox_id: response.data.inbox_id,
+          status: "pending_activation",
+          next_steps: [
+            "Configure email client filters using filter_id",
+            "Verify DNS records (MX, SPF, DKIM)",
+            "Test SMTP/IMAP connectivity"
+          ],
+          userId,
+          stored_in_db: true
+        }
+      });
+    }
+
   } catch (error) {
-    console.error('Error adding inbox to Warmup:', error.response?.data || error.message);
-    return res.status(error.response?.status || 500).json({
+    console.error('Warmup Inbox API Error:', error.response?.data || error.message);
+
+    // Handle specific error cases from API docs
+    const apiError = error.response?.data?.error || "unknown_error";
+    const statusCode = error.response?.status || 500;
+
+    const errorMap = {
+      'invalid_api_key': 401,
+      'missing_api_key': 401,
+      'invalid_request': 400,
+      'inbox_already_exists': 409,
+      'domain_not_configured': 422,
+      'smtp_connection_failed': 422,
+      'imap_connection_failed': 422
+    };
+
+    // More detailed error handling for common issues
+    let errorMessage = error.response?.data?.message || error.message;
+
+    if (error.response?.status === 422) {
+      // Check if it's SMTP/IMAP connection error
+      if (error.response?.data?.details?.includes('SMTP') ||
+        error.response?.data?.details?.includes('IMAP')) {
+        errorMessage = "Email server connection failed. Please verify: " +
+          "1) Email credentials are correct\n" +
+          "2) SMTP/IMAP is enabled for the email account\n" +
+          "3) Mail server hostname is accessible: mail." + email.split('@')[1] + "\n" +
+          "4) Firewall allows connections on ports 465 (SMTP) and 993 (IMAP)";
+      } else {
+        errorMessage = "Domain configuration error. Please verify: " +
+          "1) MX records are properly configured\n" +
+          "2) SPF record includes: v=spf1 a mx include:_spf.warmupinbox.com ~all\n" +
+          "3) Email credentials are correct and SMTP/IMAP is enabled";
+      }
+    } else if (error.response?.status === 409) {
+      errorMessage = "Inbox already exists in Warmup Inbox service";
+    } else if (error.response?.status === 401) {
+      errorMessage = "Invalid API key. Please check your WARMUPINBOX_API_KEY configuration";
+    }
+
+    return res.status(errorMap[apiError] || statusCode).json({
       status: "-1",
-      message: error.response?.data?.message || error.message
+      error: apiError,
+      message: errorMessage,
+      details: error.response?.data?.details || undefined
     });
   }
 });
-
 /**
  * 2. Start the warmup process for an inbox
  *
@@ -199,7 +461,7 @@ router.post('/api/warmup/start-inbox', async (req, res) => {
     const inboxId = await getInboxIdFromDB(userId, email);
 
     // POST /v1/inboxes/{id}/start
-    const response = await axiosInstance.post(`/v1/inboxes/${inboxId}/start`);
+    const response = await axiosInstance.post(`/inboxes/${inboxId}/start`);
 
     // Update status in database
     await WarmupInbox.findOneAndUpdate(
@@ -257,7 +519,7 @@ router.post('/api/warmup/stop-inbox', async (req, res) => {
     const inboxId = await getInboxIdFromDB(userId, email);
 
     // POST /v1/inboxes/{id}/pause
-    const response = await axiosInstance.post(`/v1/inboxes/${inboxId}/pause`);
+    const response = await axiosInstance.post(`/inboxes/${inboxId}/pause`);
 
     // Update status in database
     await WarmupInbox.findOneAndUpdate(
@@ -347,7 +609,7 @@ router.get('/api/warmup/inbox-metrics/:userId/:email', async (req, res) => {
     const inboxId = await getInboxIdFromDB(userId, email);
 
     // GET /v1/inboxes/{id}/metrics?from={from}&to={to}
-    const response = await axiosInstance.get(`/v1/inboxes/${inboxId}/metrics`, {
+    const response = await axiosInstance.get(`/inboxes/${inboxId}/metrics`, {
       params: { from, to }
     });
 
@@ -395,7 +657,7 @@ router.post('/api/warmup/inbox-metrics', async (req, res) => {
     const inboxId = await getInboxIdFromDB(userId, email);
 
     // GET /v1/inboxes/{id}/metrics?from={from}&to={to}
-    const response = await axiosInstance.get(`/v1/inboxes/${inboxId}/metrics`, {
+    const response = await axiosInstance.get(`/inboxes/${inboxId}/metrics`, {
       params: { from: fromTime, to: toTime }
     });
 
@@ -462,7 +724,7 @@ router.get('/api/warmup/inbox-details/:userId/:email', async (req, res) => {
     const inboxId = await getInboxIdFromDB(userId, email);
 
     // GET /v1/inboxes/{id}
-    const response = await axiosInstance.get(`/v1/inboxes/${inboxId}`);
+    const response = await axiosInstance.get(`/inboxes/${inboxId}`);
 
     return res.status(200).json({
       status: "1",
@@ -516,7 +778,7 @@ router.delete('/api/warmup/delete-inbox', async (req, res) => {
     const inboxId = await getInboxIdFromDB(userId, email);
 
     // DELETE /v1/inboxes/{id}
-    const response = await axiosInstance.delete(`/v1/inboxes/${inboxId}`);
+    const response = await axiosInstance.delete(`/inboxes/${inboxId}`);
 
     // Remove from database
     await WarmupInbox.findOneAndDelete({ userId, email });
@@ -624,6 +886,201 @@ router.post('/api/warmup/inbox-status', async (req, res) => {
     return res.status(500).json({
       status: "-1",
       message: error.message
+    });
+  }
+});
+
+/**
+ * 8. Update inbox configuration
+ *
+ *    PUT /api/warmup/update-inbox
+ *
+ *    Body JSON:
+ *      {
+ *        "userId": "user123",
+ *        "email": "sales@testgpt.com",
+ *        "frequency": {
+ *          "starting_baseline": 6,
+ *          "increase_per_day": 6,
+ *          "max_sends_per_day": 30,
+ *          "reply_rate": 30
+ *        },
+ *        "sender_first": "Updated",
+ *        "sender_last": "Name"
+ *      }
+ *
+ *    → Updates the inbox configuration in Warmup Inbox
+ *
+ *    Endpoint hit: PUT /v1/inboxes/{id}
+ *    Documentation: https://docs.warmupinbox.com/
+ */
+router.put('/api/warmup/update-inbox', async (req, res) => {
+  const { userId, email, frequency, sender_first, sender_last } = req.body;
+
+  if (!userId || !email) {
+    return res.status(400).json({
+      status: "-1",
+      message: "userId and email are required"
+    });
+  }
+
+  try {
+    // Get inbox_id from database
+    const inboxId = await getInboxIdFromDB(userId, email);
+
+    // Build update payload with only provided fields
+    const updatePayload = {};
+    if (frequency) updatePayload.frequency = frequency;
+    if (sender_first) updatePayload.sender_first = sender_first;
+    if (sender_last) updatePayload.sender_last = sender_last;
+
+    // PUT /v1/inboxes/{id}
+    const response = await axiosInstance.put(`/inboxes/${inboxId}`, updatePayload);
+
+    // Update local database
+    await WarmupInbox.findOneAndUpdate(
+      { userId, email },
+      {
+        ...updatePayload,
+        updated_at: new Date()
+      }
+    );
+
+    return res.status(200).json({
+      status: "1",
+      message: "Inbox configuration updated successfully.",
+      data: {
+        ...response.data,
+        userId,
+        email,
+        inbox_id: inboxId
+      }
+    });
+  } catch (error) {
+    console.error('Error updating inbox configuration:', error.response?.data || error.message);
+    return res.status(error.response?.status || 500).json({
+      status: "-1",
+      message: error.response?.data?.message || error.message
+    });
+  }
+});
+
+/**
+ * 9. Get inbox health status
+ *
+ *    GET /api/warmup/inbox-health/:userId/:email
+ *    OR
+ *    POST /api/warmup/inbox-health
+ *
+ *    Body JSON (for POST):
+ *      {
+ *        "userId": "user123",
+ *        "email": "sales@testgpt.com"
+ *      }
+ *
+ *    → Returns health check results for the inbox
+ *
+ *    Endpoint hit: GET /v1/inboxes/{id}/health
+ *    Documentation: https://docs.warmupinbox.com/
+ */
+router.get('/api/warmup/inbox-health/:userId/:email', async (req, res) => {
+  const { userId, email } = req.params;
+
+  if (!userId || !email) {
+    return res.status(400).json({
+      status: "-1",
+      message: "userId and email are required"
+    });
+  }
+
+  try {
+    // Get inbox_id from database
+    const inboxId = await getInboxIdFromDB(userId, email);
+
+    // GET /v1/inboxes/{id}/health
+    const response = await axiosInstance.get(`/inboxes/${inboxId}/health`);
+
+    return res.status(200).json({
+      status: "1",
+      message: "Fetched inbox health status successfully.",
+      data: {
+        ...response.data,
+        userId,
+        email,
+        inbox_id: inboxId
+      }
+    });
+  } catch (error) {
+    console.error('Error fetching inbox health:', error.response?.data || error.message);
+    return res.status(error.response?.status || 500).json({
+      status: "-1",
+      message: error.response?.data?.message || error.message
+    });
+  }
+});
+
+// POST version of inbox-health
+router.post('/api/warmup/inbox-health', async (req, res) => {
+  const { userId, email } = req.body;
+
+  if (!userId || !email) {
+    return res.status(400).json({
+      status: "-1",
+      message: "userId and email are required"
+    });
+  }
+
+  try {
+    // Get inbox_id from database
+    const inboxId = await getInboxIdFromDB(userId, email);
+
+    // GET /v1/inboxes/{id}/health
+    const response = await axiosInstance.get(`/inboxes/${inboxId}/health`);
+
+    return res.status(200).json({
+      status: "1",
+      message: "Fetched inbox health status successfully.",
+      data: {
+        ...response.data,
+        userId,
+        email,
+        inbox_id: inboxId
+      }
+    });
+  } catch (error) {
+    console.error('Error fetching inbox health:', error.response?.data || error.message);
+    return res.status(error.response?.status || 500).json({
+      status: "-1",
+      message: error.response?.data?.message || error.message
+    });
+  }
+});
+
+/**
+ * 10. Get account usage and limits
+ *
+ *    GET /api/warmup/account-usage
+ *
+ *    → Returns account usage statistics and limits
+ *
+ *    Endpoint hit: GET /v1/account/usage
+ *    Documentation: https://docs.warmupinbox.com/
+ */
+router.get('/api/warmup/account-usage', async (req, res) => {
+  try {
+    // GET /v1/account/usage
+    const response = await axiosInstance.get('/account/usage');
+
+    return res.status(200).json({
+      status: "1",
+      message: "Fetched account usage successfully.",
+      data: response.data
+    });
+  } catch (error) {
+    console.error('Error fetching account usage:', error.response?.data || error.message);
+    return res.status(error.response?.status || 500).json({
+      status: "-1",
+      message: error.response?.data?.message || error.message
     });
   }
 });
