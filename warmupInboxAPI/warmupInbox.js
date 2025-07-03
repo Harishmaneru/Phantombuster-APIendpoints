@@ -285,10 +285,10 @@ router.post('/api/warmup/add-inbox', async (req, res) => {
       sender_last: sender_last,
       plan: "basic", // or "pro"/"max" based on subscription
       frequency: {
-        starting_baseline: 4,    // Must be ≤4 for basic plan
-        increase_per_day: 4,      // Must be ≤4 for basic plan
-        max_sends_per_day: 20,    // Must be ≤20 for basic plan
-        reply_rate: 25,           // Must be ≤25 for basic plan
+        starting_baseline: 2,    // Must be ≤4 for basic plan
+        increase_per_day: 2,      // Must be ≤4 for basic plan
+        max_sends_per_day: 5,    // Must be ≤20 for basic plan
+        reply_rate: 9,           // Must be ≤25 for basic plan
         strategy: "progressive"   // Required field per docs
       },
       // Explicit SMTP configuration
@@ -342,7 +342,7 @@ router.post('/api/warmup/add-inbox', async (req, res) => {
 
     // Make API call to ADVANCED endpoint
     const response = await axiosInstance.post('/inboxes/advanced', payload);
-
+    console.log('Warmup Inbox API Response:', response.data);
     // Handle response according to API docs
     if (response.data.code === 'created') {
       // Store the response in MongoDB
@@ -854,38 +854,129 @@ router.get('/api/warmup/list-inboxes/:userId', async (req, res) => {
 
 
 // POST version of inbox-status
-router.post('/api/warmup/inbox-status', async (req, res) => {
-  const { userId, email } = req.body;
+router.post('/api/warmup/inbox-status/bulk', async (req, res) => {
+  const { userId, emails } = req.body;
 
-  if (!userId || !email) {
+  if (!userId || !emails || !Array.isArray(emails)) {
     return res.status(400).json({
       status: "-1",
-      message: "userId and email are required"
+      message: "userId and emails (array) are required",
+      error_code: "missing_parameters"
     });
   }
 
   try {
     await connectToMongoDB();
 
-    const inbox = await WarmupInbox.findOne({ userId, email }).select('-password');
+    // 1. Fetch all matching inboxes from MongoDB
+    const inboxes = await WarmupInbox.find({ 
+      userId, 
+      email: { $in: emails } 
+    }).select('-password -__v');
 
-    if (!inbox) {
+    if (!inboxes.length) {
       return res.status(404).json({
         status: "-1",
-        message: "No inbox found for this userId and email"
+        message: "No inboxes found for this userId and emails",
+        error_code: "no_matching_inboxes"
       });
     }
 
+    // 2. Fetch real-time status for each inbox with proper error handling
+    const statusPromises = inboxes.map(async (inbox) => {
+      try {
+        const response = await warmupAxios.get(`/inboxes/${inbox.inbox_id}`);
+        
+        // Map API status to consistent values
+        const statusMap = {
+          running: "running",
+          paused: "paused",
+          banned: "banned",
+          error: "error",
+          suspended: "suspended"
+        };
+
+        return {
+          ...inbox.toObject(),
+          warmup_status: statusMap[response.data.status] || "unknown_status",
+          status_details: response.data, // Full API response
+          last_checked: new Date(),
+          health_check: response.data.health_check // From API docs
+        };
+      } catch (error) {
+        // Handle specific API errors from documentation
+        const errorResponse = {
+          ...inbox.toObject(),
+          last_checked: new Date(),
+          status_details: null
+        };
+
+        if (error.response) {
+          // API returned an error response
+          switch (error.response.status) {
+            case 401:
+              return {
+                ...errorResponse,
+                warmup_status: "auth_error",
+                error_code: "invalid_api_key"
+              };
+            case 404:
+              return {
+                ...errorResponse,
+                warmup_status: "not_found",
+                error_code: "inbox_not_found"
+              };
+            case 429:
+              return {
+                ...errorResponse,
+                warmup_status: "rate_limited",
+                error_code: "too_many_requests"
+              };
+            default:
+              return {
+                ...errorResponse,
+                warmup_status: "api_error",
+                error_code: error.response.data?.error || "unknown_api_error"
+              };
+          }
+        } else {
+          // Network/other errors
+          return {
+            ...errorResponse,
+            warmup_status: "connection_error",
+            error_code: error.code || "network_error"
+          };
+        }
+      }
+    });
+
+    const results = await Promise.all(statusPromises);
+
+    // 3. Prepare metadata
+    const foundEmails = inboxes.map(i => i.email);
+    const missingEmails = emails.filter(email => !foundEmails.includes(email));
+
     return res.status(200).json({
       status: "1",
-      message: "Fetched inbox status successfully.",
-      data: inbox
+      message: "Bulk status fetched successfully",
+      data: {
+        inboxes: results,
+        metadata: {
+          total_requested: emails.length,
+          success_count: results.filter(r => !r.error_code).length,
+          error_count: results.filter(r => r.error_code).length,
+          missing_from_db: missingEmails
+        }
+      }
     });
+
   } catch (error) {
-    console.error('Error fetching inbox status:', error.message);
+    console.error('Bulk status error:', error);
     return res.status(500).json({
       status: "-1",
-      message: error.message
+      message: "Internal server error",
+      error_code: "server_error",
+      details: process.env.NODE_ENV === 'development' ? error.message : undefined
     });
   }
 });

@@ -814,7 +814,8 @@ router.delete('/cpanel/delete-email', async (req, res) => {
 
 //_____________fetch all email accounts for userID______________
 
-// Route: Fetch all email accounts for a specific userID
+// Route: Fetch all email accounts for a specific userID (REAL-TIME from cPanel)
+// This API fetches live storage usage and email data directly from cPanel servers
 router.get('/cpanel/user-all-emails/:userId', async (req, res) => {
   const { userId } = req.params;
 
@@ -853,92 +854,266 @@ router.get('/cpanel/user-all-emails/:userId', async (req, res) => {
 
     console.log(`Found ${userDomains.length} domains for user ${userId}`);
 
-    // Step 2: Fetch email accounts for each domain
+    // Step 2: Fetch email accounts for all domains in parallel (REAL-TIME from cPanel)
     const allEmails = [];
     const domainStats = [];
+    const fetchStartTime = new Date();
 
-    for (const domainRecord of userDomains) {
-      const domain = domainRecord.domain;
+    // Process all domains in parallel for better performance
+    const domainResults = await Promise.allSettled(
+      userDomains.map(async (domainRecord) => {
+        const domain = domainRecord.domain;
 
-      try {
-        // Get email accounts for this domain
-        const emailResult = await cpanelRequest('Email/list_pops_with_disk', {
-          domain: domain.toLowerCase()
-        });
+        try {
+          // Get email accounts for this domain
+          const emailResult = await cpanelRequest('Email/list_pops_with_disk', {
+            domain: domain.toLowerCase()
+          });
 
-        if (emailResult.status === 1 && emailResult.data) {
-          // Filter emails to only include those for this specific domain
-          const domainEmails = emailResult.data.filter(email =>
-            email.domain && email.domain.toLowerCase() === domain.toLowerCase()
-          );
+          if (emailResult.status === 1 && emailResult.data) {
+            // Filter emails to only include those for this specific domain
+            const domainEmails = emailResult.data.filter(email =>
+              email.domain && email.domain.toLowerCase() === domain.toLowerCase()
+            );
 
-          console.log(`Found ${domainEmails.length} email accounts for domain ${domain}`);
+            console.log(`Found ${domainEmails.length} email accounts for domain ${domain} out of ${emailResult.data.length} total emails returned`);
+            
+            // Debug: Log all emails returned by cPanel for this domain
+            if (emailResult.data.length > 0) {
+              console.log(`All emails returned by cPanel for domain ${domain}:`, 
+                emailResult.data.map(e => ({ email: e.email, domain: e.domain })));
+            }
 
-          // Get disk usage for each email
-          const emailsWithDetails = await Promise.all(
-            domainEmails.map(async (email) => {
-              const usageResult = await cpanelRequest('Email/get_disk_usage', {
-                email: email.email
+            // Get detailed email information including creation dates
+            let emailDetails = {};
+            try {
+              // Try different approaches to get email details
+              const detailsResult = await cpanelRequest('Email/list_pops', {
+                domain: domain.toLowerCase()
               });
+              
+              console.log(`Detailed email info for ${domain}:`, detailsResult);
+              
+              if (detailsResult.status === 1 && detailsResult.data) {
+                detailsResult.data.forEach(email => {
+                  emailDetails[email.email] = {
+                    created: email.created,
+                    last_login: email.last_login,
+                    message_count: email.message_count,
+                    // Include all available fields for debugging
+                    all_fields: email
+                  };
+                });
+              }
+            } catch (detailsError) {
+              console.log(`Could not get detailed email info for domain ${domain}:`, detailsError.message);
+              
+              // Try alternative approach - get individual email details
+              try {
+                console.log(`Trying individual email details for ${domain}...`);
+                for (const email of domainEmails) {
+                  const individualResult = await cpanelRequest('Email/get_pop_quota', {
+                    user: email.user,
+                    domain: email.domain
+                  });
+                  
+                  if (individualResult.status === 1) {
+                    emailDetails[email.email] = {
+                      quota_info: individualResult.data,
+                      // Try to extract creation info from quota data
+                      created: individualResult.data?.created || null,
+                      last_login: individualResult.data?.last_login || null,
+                      message_count: individualResult.data?.message_count || 0
+                    };
+                  }
+                }
+              } catch (individualError) {
+                console.log(`Could not get individual email details for ${domain}:`, individualError.message);
+              }
+            }
 
-              return {
+            // Get disk usage for each email - Use data from list_pops_with_disk which already has storage info
+            // This is more efficient as it avoids additional API calls and uses real-time data from cPanel
+            const emailsWithDetails = domainEmails.map((email) => {
+              // The list_pops_with_disk already provides disk usage data
+              // Use the data directly from the email object instead of making additional API calls
+              const diskUsedBytes = parseInt(email._diskused) || 0;
+              const diskQuotaBytes = parseInt(email._diskquota) || 0;
+              const diskUsedPercent = parseFloat(email.diskusedpercent_float) || 0;
+              
+              // Get creation date from detailed email info or fallback to mtime
+              let creationDate = null;
+              let lastLogin = null;
+              let messageCount = 0;
+              let createdField = null;
+              
+              // Try to get detailed info first
+              if (emailDetails[email.email]) {
+                const details = emailDetails[email.email];
+                if (details.created) {
+                  try {
+                    creationDate = new Date(details.created).toISOString();
+                    createdField = details.created;
+                  } catch (e) {
+                    console.log(`Could not parse created date for ${email.email}:`, details.created);
+                  }
+                }
+                lastLogin = details.last_login;
+                messageCount = details.message_count || 0;
+              }
+              
+              // Fallback to mtime if no creation date found (this is what we actually have)
+              if (!creationDate && email.mtime) {
+                try {
+                  creationDate = new Date(email.mtime * 1000).toISOString();
+                  createdField = `Unix timestamp: ${email.mtime}`;
+                } catch (e) {
+                  console.log(`Could not parse mtime for ${email.email}:`, email.mtime);
+                }
+              }
+              
+              // If still no creation date, use current time as fallback
+              if (!creationDate) {
+                creationDate = new Date().toISOString();
+                createdField = 'Unknown (using current time)';
+              }
+
+              const emailData = {
                 username: email.user,
                 email: email.email,
                 domain: email.domain,
                 suspended: email.suspended === '1',
-                created: email.created,
+                created: createdField, // Raw creation date field
+                creationDate: creationDate, // Parsed creation date
+                lastLogin: lastLogin,
+                messageCount: messageCount,
                 quota: {
                   limit: email.diskquota === 'unlimited' ? -1 : parseInt(email.diskquota),
                   formatted: email.diskquota === 'unlimited' ? 'Unlimited' : `${parseInt(email.diskquota)} MB`,
-                  isUnlimited: email.diskquota === 'unlimited'
+                  isUnlimited: email.diskquota === 'unlimited',
+                  bytes: diskQuotaBytes
                 },
                 usage: {
-                  bytes: usageResult.status === 1 ? usageResult.data.used_bytes : 0,
-                  percentage: usageResult.status === 1 ? usageResult.data.usage_percentage : 0,
-                  formatted: usageResult.status === 1 ? usageResult.data.human_readable : '0 MB'
+                  bytes: diskUsedBytes,
+                  percentage: diskUsedPercent * 100, // Convert to percentage
+                  formatted: email.humandiskused || '0 MB',
+                  raw: {
+                    diskused: email.diskused,
+                    diskusedpercent: email.diskusedpercent,
+                    diskusedpercent_float: email.diskusedpercent_float,
+                    _diskused: email._diskused,
+                    _diskquota: email._diskquota
+                  }
                 },
-
+                lastUpdated: new Date().toISOString(), // Timestamp when this data was fetched
+                mtime: email.mtime ? new Date(email.mtime * 1000).toISOString() : null, // Convert Unix timestamp
+                // Additional info from cPanel response
+                login: email.login,
+                suspended_incoming: email.suspended_incoming === '1',
+                suspended_login: email.suspended_login === '1'
               };
-            })
-          );
 
-          // Calculate domain statistics
-          const domainTotalUsed = emailsWithDetails.reduce((sum, email) => sum + email.usage.bytes, 0);
-          const domainTotalQuota = emailsWithDetails.reduce((sum, email) =>
-            email.quota.isUnlimited ? -1 : sum + email.quota.limit, 0);
+              // Debug: Log storage data for this email
+              console.log(`Email data for ${email.email}:`, {
+                diskUsedBytes,
+                diskQuotaBytes,
+                diskUsedPercent,
+                humanReadable: email.humandiskused,
+                formatted: emailData.usage.formatted,
+                created: emailData.created,
+                creationDate: emailData.creationDate,
+                lastLogin: emailData.lastLogin,
+                messageCount: emailData.messageCount,
+                mtime: email.mtime,
+                emailDetails: emailDetails[email.email] ? 'Available' : 'Not available'
+              });
 
-          domainStats.push({
-            domain: domain,
-            emailCount: emailsWithDetails.length,
-            totalUsed: domainTotalUsed,
-            totalQuota: domainTotalQuota,
-            usagePercentage: domainTotalQuota === -1 ? 0 :
-              Math.round((domainTotalUsed / domainTotalQuota) * 100),
-            formattedUsage: formatStorage(domainTotalUsed),
-            formattedQuota: domainTotalQuota === -1 ? 'Unlimited' :
-              formatStorage(domainTotalQuota)
-          });
+              return emailData;
+            });
 
-          // Add domain info to each email
-          const emailsWithDomainInfo = emailsWithDetails.map(email => ({
-            ...email,
-            domainInfo: {
-              domainId: domainRecord._id,
-              domainStatus: domainRecord.domainStatus,
-              registrationDate: domainRecord.registrationDate,
-              expiryDate: domainRecord.expiryDate
-            }
-          }));
+            // Calculate domain statistics
+            const domainTotalUsed = emailsWithDetails.reduce((sum, email) => sum + email.usage.bytes, 0);
+            const domainTotalQuota = emailsWithDetails.reduce((sum, email) =>
+              email.quota.isUnlimited ? -1 : sum + email.quota.limit, 0);
 
-          allEmails.push(...emailsWithDomainInfo);
+            const domainStat = {
+              domain: domain,
+              emailCount: emailsWithDetails.length,
+              totalUsed: domainTotalUsed,
+              totalQuota: domainTotalQuota,
+              usagePercentage: domainTotalQuota === -1 ? 0 :
+                Math.round((domainTotalUsed / domainTotalQuota) * 100),
+              formattedUsage: formatStorage(domainTotalUsed),
+              formattedQuota: domainTotalQuota === -1 ? 'Unlimited' :
+                formatStorage(domainTotalQuota)
+            };
+
+            // Add domain info to each email
+            const emailsWithDomainInfo = emailsWithDetails.map(email => ({
+              ...email,
+              domainInfo: {
+                domainId: domainRecord._id,
+                domainStatus: domainRecord.domainStatus,
+                registrationDate: domainRecord.registrationDate,
+                expiryDate: domainRecord.expiryDate
+              }
+            }));
+
+            return {
+              success: true,
+              domainStat,
+              emails: emailsWithDomainInfo
+            };
+          } else {
+            return {
+              success: false,
+              domainStat: {
+                domain: domain,
+                emailCount: 0,
+                error: 'No email data returned from cPanel',
+                totalUsed: 0,
+                totalQuota: 0,
+                usagePercentage: 0,
+                formattedUsage: '0 B',
+                formattedQuota: '0 B'
+              },
+              emails: []
+            };
+          }
+        } catch (domainError) {
+          console.error(`Error fetching emails for domain ${domain}:`, domainError.message);
+          return {
+            success: false,
+            domainStat: {
+              domain: domain,
+              emailCount: 0,
+              error: domainError.message,
+              totalUsed: 0,
+              totalQuota: 0,
+              usagePercentage: 0,
+              formattedUsage: '0 B',
+              formattedQuota: '0 B'
+            },
+            emails: []
+          };
         }
-      } catch (domainError) {
-        console.error(`Error fetching emails for domain ${domain}:`, domainError.message);
-        // Continue with other domains even if one fails
+      })
+    );
+
+    // Process results
+    domainResults.forEach((result, index) => {
+      if (result.status === 'fulfilled') {
+        const { domainStat, emails } = result.value;
+        domainStats.push(domainStat);
+        allEmails.push(...emails);
+      } else {
+        // Handle rejected promises
+        const domain = userDomains[index]?.domain || 'unknown';
+        console.error(`Domain ${domain} failed:`, result.reason);
         domainStats.push({
           domain: domain,
           emailCount: 0,
-          error: domainError.message,
+          error: result.reason?.message || 'Unknown error',
           totalUsed: 0,
           totalQuota: 0,
           usagePercentage: 0,
@@ -946,7 +1121,7 @@ router.get('/cpanel/user-all-emails/:userId', async (req, res) => {
           formattedQuota: '0 B'
         });
       }
-    }
+    });
 
     // Step 3: Calculate overall statistics
     const overallStats = {
@@ -1034,6 +1209,9 @@ router.get('/cpanel/user-all-emails/:userId', async (req, res) => {
     });
 
     // Step 6: Return response with new structure
+    const fetchEndTime = new Date();
+    const fetchDuration = fetchEndTime - fetchStartTime;
+    
     res.json({
       success: true,
       userId: userId,
@@ -1055,6 +1233,19 @@ router.get('/cpanel/user-all-emails/:userId', async (req, res) => {
         domainsWithErrors: domainStats.filter(d => d.error).length,
         suspendedEmails: allEmails.filter(email => email.suspended).length,
         activeEmails: allEmails.filter(email => !email.suspended).length
+      },
+      metadata: {
+        dataSource: 'cPanel Real-time API',
+        fetchTimestamp: fetchEndTime.toISOString(),
+        fetchDurationMs: fetchDuration,
+        domainsProcessed: userDomains.length,
+        totalApiCalls: userDomains.length * 2, // list_pops_with_disk + list_pops per domain
+        realTimeData: true,
+        storageDataFrom: 'list_pops_with_disk (included in response)',
+        creationDataFrom: 'list_pops (detailed email info) + mtime fallback',
+        performance: 'Parallel processing enabled',
+        optimization: 'Minimal API calls (2 per domain for complete data)',
+        note: 'Creation date uses mtime (last modified) as cPanel API may not provide exact creation date'
       }
     });
 
