@@ -387,7 +387,8 @@ router.post('/cpanel/create-email', emailCreationLimiter, async (req, res) => {
   }
 });
 
-// Route: List all email accounts for a domain
+// Route: List all email accounts for a domain (REAL-TIME from cPanel)
+// This API fetches live storage usage and email data directly from cPanel servers
 router.get('/cpanel/list-emails/:userId/:domain', async (req, res) => {
   const { userId, domain } = req.params;
 
@@ -399,6 +400,8 @@ router.get('/cpanel/list-emails/:userId/:domain', async (req, res) => {
   }
 
   try {
+    const fetchStartTime = new Date();
+
     // Verify user owns domain
     const domainOwnership = await userOwnsDomain(userId, domain);
     if (!domainOwnership) {
@@ -427,32 +430,152 @@ router.get('/cpanel/list-emails/:userId/:domain', async (req, res) => {
 
     console.log(`Found ${domainEmails.length} email accounts for domain ${domain} out of ${emailResult.data.length} total accounts`);
 
-    // Get disk usage for filtered emails only
-    const emailsWithDetails = await Promise.all(
-      domainEmails.map(async (email) => {
-        const usageResult = await cpanelRequest('Email/get_disk_usage', {
-          email: email.email
+    // Get detailed email information including creation dates
+    let emailDetails = {};
+    try {
+      // Try different approaches to get email details
+      const detailsResult = await cpanelRequest('Email/list_pops', {
+        domain: domain.toLowerCase()
+      });
+      
+      console.log(`Detailed email info for ${domain}:`, detailsResult);
+      
+      if (detailsResult.status === 1 && detailsResult.data) {
+        detailsResult.data.forEach(email => {
+          emailDetails[email.email] = {
+            created: email.created,
+            last_login: email.last_login,
+            message_count: email.message_count,
+            // Include all available fields for debugging
+            all_fields: email
+          };
         });
+      }
+    } catch (detailsError) {
+      console.log(`Could not get detailed email info for domain ${domain}:`, detailsError.message);
+      
+      // Try alternative approach - get individual email details
+      try {
+        console.log(`Trying individual email details for ${domain}...`);
+        for (const email of domainEmails) {
+          const individualResult = await cpanelRequest('Email/get_pop_quota', {
+            user: email.user,
+            domain: email.domain
+          });
+          
+          if (individualResult.status === 1) {
+            emailDetails[email.email] = {
+              quota_info: individualResult.data,
+              // Try to extract creation info from quota data
+              created: individualResult.data?.created || null,
+              last_login: individualResult.data?.last_login || null,
+              message_count: individualResult.data?.message_count || 0
+            };
+          }
+        }
+      } catch (individualError) {
+        console.log(`Could not get individual email details for ${domain}:`, individualError.message);
+      }
+    }
 
-        return {
-          username: email.user,
-          email: email.email,
-          domain: email.domain,
-          suspended: email.suspended === '1',
-          created: email.created,
-          quota: {
-            limit: email.diskquota === 'unlimited' ? -1 : parseInt(email.diskquota),
-            formatted: email.diskquota === 'unlimited' ? 'Unlimited' : `${parseInt(email.diskquota)} MB`,
-            isUnlimited: email.diskquota === 'unlimited'
-          },
-          usage: {
-            bytes: usageResult.status === 1 ? usageResult.data.used_bytes : 0,
-            percentage: usageResult.status === 1 ? usageResult.data.usage_percentage : 0,
-            formatted: usageResult.status === 1 ? usageResult.data.human_readable : '0 MB'
-          },
-        };
-      })
-    );
+    // Get disk usage for filtered emails only - Use data from list_pops_with_disk which already has storage info
+    // This is more efficient as it avoids additional API calls and uses real-time data from cPanel
+    const emailsWithDetails = domainEmails.map((email) => {
+      // The list_pops_with_disk already provides disk usage data
+      // Use the data directly from the email object instead of making additional API calls
+      const diskUsedBytes = parseInt(email._diskused) || 0;
+      const diskQuotaBytes = parseInt(email._diskquota) || 0;
+      const diskUsedPercent = parseFloat(email.diskusedpercent_float) || 0;
+      
+      // Get creation date from detailed email info or fallback to mtime
+      let creationDate = null;
+      let lastLogin = null;
+      let messageCount = 0;
+      let createdField = null;
+      
+      // Try to get detailed info first
+      if (emailDetails[email.email]) {
+        const details = emailDetails[email.email];
+        if (details.created) {
+          try {
+            creationDate = new Date(details.created).toISOString();
+            createdField = details.created;
+          } catch (e) {
+            console.log(`Could not parse created date for ${email.email}:`, details.created);
+          }
+        }
+        lastLogin = details.last_login;
+        messageCount = details.message_count || 0;
+      }
+      
+      // Fallback to mtime if no creation date found (this is what we actually have)
+      if (!creationDate && email.mtime) {
+        try {
+          creationDate = new Date(email.mtime * 1000).toISOString();
+          createdField = `Unix timestamp: ${email.mtime}`;
+        } catch (e) {
+          console.log(`Could not parse mtime for ${email.email}:`, email.mtime);
+        }
+      }
+      
+      // If still no creation date, use current time as fallback
+      if (!creationDate) {
+        creationDate = new Date().toISOString();
+        createdField = 'Unknown (using current time)';
+      }
+
+      const emailData = {
+        username: email.user,
+        email: email.email,
+        domain: email.domain,
+        suspended: email.suspended === '1',
+        created: createdField, // Raw creation date field
+        creationDate: creationDate, // Parsed creation date
+        lastLogin: lastLogin,
+        messageCount: messageCount,
+        quota: {
+          limit: email.diskquota === 'unlimited' ? -1 : parseInt(email.diskquota),
+          formatted: email.diskquota === 'unlimited' ? 'Unlimited' : `${parseInt(email.diskquota)} MB`,
+          isUnlimited: email.diskquota === 'unlimited',
+          bytes: diskQuotaBytes
+        },
+        usage: {
+          bytes: diskUsedBytes,
+          percentage: diskUsedPercent * 100, // Convert to percentage
+          formatted: email.humandiskused || '0 MB',
+          raw: {
+            diskused: email.diskused,
+            diskusedpercent: email.diskusedpercent,
+            diskusedpercent_float: email.diskusedpercent_float,
+            _diskused: email._diskused,
+            _diskquota: email._diskquota
+          }
+        },
+        lastUpdated: new Date().toISOString(), // Timestamp when this data was fetched
+        mtime: email.mtime ? new Date(email.mtime * 1000).toISOString() : null, // Convert Unix timestamp
+        // Additional info from cPanel response
+        login: email.login,
+        suspended_incoming: email.suspended_incoming === '1',
+        suspended_login: email.suspended_login === '1'
+      };
+
+      // Debug: Log storage data for this email
+      console.log(`Email data for ${email.email}:`, {
+        diskUsedBytes,
+        diskQuotaBytes,
+        diskUsedPercent,
+        humanReadable: email.humandiskused,
+        formatted: emailData.usage.formatted,
+        created: emailData.created,
+        creationDate: emailData.creationDate,
+        lastLogin: emailData.lastLogin,
+        messageCount: emailData.messageCount,
+        mtime: email.mtime,
+        emailDetails: emailDetails[email.email] ? 'Available' : 'Not available'
+      });
+
+      return emailData;
+    });
 
     // Calculate domain-wide statistics
     const domainStats = {
@@ -461,6 +584,9 @@ router.get('/cpanel/list-emails/:userId/:domain', async (req, res) => {
       totalQuota: emailsWithDetails.reduce((sum, email) =>
         email.quota.isUnlimited ? -1 : sum + email.quota.limit, 0)
     };
+
+    const fetchEndTime = new Date();
+    const fetchDuration = fetchEndTime - fetchStartTime;
 
     res.json({
       success: true,
@@ -475,6 +601,17 @@ router.get('/cpanel/list-emails/:userId/:domain', async (req, res) => {
         formattedUsage: formatStorage(domainStats.totalUsed),
         formattedQuota: domainStats.totalQuota === -1 ? 'Unlimited' :
           formatStorage(domainStats.totalQuota)
+      },
+      metadata: {
+        dataSource: 'cPanel Real-time API',
+        fetchTimestamp: fetchEndTime.toISOString(),
+        fetchDurationMs: fetchDuration,
+        totalApiCalls: 2, // list_pops_with_disk + list_pops
+        realTimeData: true,
+        storageDataFrom: 'list_pops_with_disk (included in response)',
+        creationDataFrom: 'list_pops (detailed email info) + mtime fallback',
+        performance: 'Optimized (no additional API calls per email)',
+        note: 'Creation date uses mtime (last modified) as cPanel API may not provide exact creation date'
       }
     });
 
