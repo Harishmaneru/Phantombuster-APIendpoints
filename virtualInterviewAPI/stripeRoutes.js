@@ -1846,7 +1846,7 @@ router.get('/invoice/:paymentIntentId', async (req, res) => {
 
 router.post('/create-checkout-session-by-app', async (req, res) => {
   try {
-    const { userId, priceId, app, couponId } = req.body; // Changed from couponCode
+    const { userId, priceId, app, couponId } = req.body;
 
     // 1️⃣ Validate app URLs
     const appUrlMap = {
@@ -1859,16 +1859,8 @@ router.post('/create-checkout-session-by-app', async (req, res) => {
       return res.status(400).json({ error: 'Invalid or missing app parameter' });
     }
 
-    // 2️⃣ Retrieve price metadata from Stripe
-    const price = await stripe.prices.retrieve(priceId);
-    
-    // 3️⃣ Block coupon if price isn't eligible (metadata.coupon_eligible !== "true")
+    // 2️⃣ Optional: Verify coupon exists (basic safety check)
     if (couponId) {
-      if (price.metadata?.coupon_eligible !== "true") {
-        throw new Error("This plan is not eligible for coupons. Use Email-only plans.");
-      }
-      
-      // Optional: Verify coupon exists (prevent typos)
       try {
         await stripe.coupons.retrieve(couponId);
       } catch {
@@ -1887,7 +1879,7 @@ router.post('/create-checkout-session-by-app', async (req, res) => {
 
     // Add discount if coupon ID is provided
     if (couponId) {
-      sessionPayload.discounts = [{ coupon: couponId }]; // Pass the coupon ID here
+      sessionPayload.discounts = [{ coupon: couponId }];
     }
 
     const session = await stripe.checkout.sessions.create(sessionPayload);
