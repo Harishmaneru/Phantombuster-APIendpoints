@@ -1796,52 +1796,104 @@ router.get('/invoice/:paymentIntentId', async (req, res) => {
 
 //______________________________API's for All Applications________________________
 
-
-
 router.post('/create-checkout-session-by-app', async (req, res) => {
     try {
-        const { userId, priceId, app } = req.body;
-
-        // Map app names to their base URLs
-        const appUrlMap = {
-            kampaignai: 'http://localhost:4200',
-            gps: 'https://gps.onepgr.com',
-            getsalesgpt: 'https://sales.onepgr.com',
-        };
-
-        // Determine URLs
-        let successUrl, cancelUrl;
-        if (app && appUrlMap[app]) {
-            successUrl = `${appUrlMap[app]}/success?session_id={CHECKOUT_SESSION_ID}`;
-            cancelUrl = `${appUrlMap[app]}/cancel`;
-        } else {
-            if (!app || !appUrlMap[app]) {
-                return res.status(400).json({ error: 'Invalid or missing app parameter' });
-            }
-        }
-
-        const session = await stripe.checkout.sessions.create({
-            mode: 'subscription',
-            payment_method_types: ['card'],
-            line_items: [{ price: priceId, quantity: 1 }],
-            success_url: successUrl,
-            cancel_url: cancelUrl,
-            metadata: { userId, app }
-        });
-
-        res.json({ url: session.url });
+      const { userId, priceId, app, coupon } = req.body;
+  
+      // Map app names to their base URLs
+      const appUrlMap = {
+        kampaignai: 'http://localhost:4200',
+        gps: 'https://gps.onepgr.com',
+        getsalesgpt: 'https://sales.onepgr.com',
+      };
+  
+      // Determine URLs
+      let successUrl, cancelUrl;
+      if (app && appUrlMap[app]) {
+        successUrl = `${appUrlMap[app]}/success?session_id={CHECKOUT_SESSION_ID}`;
+        cancelUrl = `${appUrlMap[app]}/cancel`;
+      } else {
+        return res.status(400).json({ error: 'Invalid or missing app parameter' });
+      }
+  
+      // Build the session payload
+      const sessionPayload = {
+        mode: 'subscription',
+        payment_method_types: ['card'],
+        line_items: [{ price: priceId, quantity: 1 }],
+        success_url: successUrl,
+        cancel_url: cancelUrl,
+        metadata: { userId, app },
+      };
+  
+      // 🧾 Add discounts if coupon is provided
+      if (coupon) {
+        sessionPayload.discounts = [{ coupon }];
+      }
+  
+      // Create the checkout session
+      const session = await stripe.checkout.sessions.create(sessionPayload);
+  
+      res.json({ url: session.url });
+  
     } catch (err) {
-        console.error("Stripe error (by-app):", {
-            statusCode: err.statusCode,
-            code: err.code,
-            message: err.message,
-            request_log_url: err.request_log_url
-        });
-        return res
-            .status(err.statusCode || 500)
-            .json({ error: err.message });
+      console.error("Stripe error (by-app):", {
+        statusCode: err.statusCode,
+        code: err.code,
+        message: err.message,
+        request_log_url: err.request_log_url,
+      });
+      return res
+        .status(err.statusCode || 500)
+        .json({ error: err.message });
     }
-});
+  });
+  
+
+// router.post('/create-checkout-session-by-app', async (req, res) => {
+//     try {
+//         const { userId, priceId, app } = req.body;
+
+//         // Map app names to their base URLs
+//         const appUrlMap = {
+//             kampaignai: 'http://localhost:4200',
+//             gps: 'https://gps.onepgr.com',
+//             getsalesgpt: 'https://sales.onepgr.com',
+//         };
+
+//         // Determine URLs
+//         let successUrl, cancelUrl;
+//         if (app && appUrlMap[app]) {
+//             successUrl = `${appUrlMap[app]}/success?session_id={CHECKOUT_SESSION_ID}`;
+//             cancelUrl = `${appUrlMap[app]}/cancel`;
+//         } else {
+//             if (!app || !appUrlMap[app]) {
+//                 return res.status(400).json({ error: 'Invalid or missing app parameter' });
+//             }
+//         }
+
+//         const session = await stripe.checkout.sessions.create({
+//             mode: 'subscription',
+//             payment_method_types: ['card'],
+//             line_items: [{ price: priceId, quantity: 1 }],
+//             success_url: successUrl,
+//             cancel_url: cancelUrl,
+//             metadata: { userId, app }
+//         });
+
+//         res.json({ url: session.url });
+//     } catch (err) {
+//         console.error("Stripe error (by-app):", {
+//             statusCode: err.statusCode,
+//             code: err.code,
+//             message: err.message,
+//             request_log_url: err.request_log_url
+//         });
+//         return res
+//             .status(err.statusCode || 500)
+//             .json({ error: err.message });
+//     }
+// });
 
 // Create a Billing Portal session to manage subscription
 router.post('/create-billing-portal-session-by-app', async (req, res) => {
