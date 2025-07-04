@@ -1845,61 +1845,59 @@ router.get('/invoice/:paymentIntentId', async (req, res) => {
   
 
 router.post('/create-checkout-session-by-app', async (req, res) => {
-    try {
-      const { userId, priceId, app, coupon } = req.body;
-  
-      // 1️⃣ Validate app URLs
-      const appUrlMap = {
-        kampaignai: 'http://localhost:4200',
-        gps: 'https://gps.onepgr.com',
-        getsalesgpt: 'https://sales.onepgr.com',
-      };
-      
-      if (!app || !appUrlMap[app]) {
-        return res.status(400).json({ error: 'Invalid or missing app parameter' });
-      }
-  
-      // 2️⃣ Retrieve price metadata from Stripe
-      const price = await stripe.prices.retrieve(priceId);
-      
-      // 3️⃣ Block coupon if price isn't eligible (metadata.coupon_eligible !== "true")
-      if (coupon) {
-        if (price.metadata?.coupon_eligible !== "true") {
-          throw new Error("This plan is not eligible for coupons. Use Email-only plans.");
-        }
-        
-        // Optional: Verify coupon exists (prevent typos)
-        try {
-          await stripe.coupons.retrieve(coupon);
-        } catch {
-          throw new Error("Invalid coupon code");
-        }
-      }
-  
-      // 4️⃣ Create session
-      const session = await stripe.checkout.sessions.create({
-        mode: 'subscription',
-        payment_method_types: ['card'],
-        line_items: [{ price: priceId, quantity: 1 }],
-        success_url: `${appUrlMap[app]}/success?session_id={CHECKOUT_SESSION_ID}`,
-        cancel_url: `${appUrlMap[app]}/cancel`,
-        metadata: { userId, app },
-        discounts: coupon ? [{ coupon }] : [], // Apply valid coupon
-      });
-  
-      res.json({ url: session.url });
-  
-    } catch (err) {
-      console.error("Stripe Checkout Error:", { 
-        endpoint: "/create-checkout-session-by-app",
-        error: err.message 
-      });
-      
-      res.status(err.statusCode || 500).json({ 
-        error: err.message || "Checkout failed" 
-      });
+  try {
+    const { userId, priceId, app, couponId } = req.body; // Changed from couponCode
+
+    // 1️⃣ Validate app URLs
+    const appUrlMap = {
+      kampaignai: 'http://localhost:4200',
+      gps: 'https://gps.onepgr.com',
+      getsalesgpt: 'https://sales.onepgr.com',
+    };
+    
+    if (!app || !appUrlMap[app]) {
+      return res.status(400).json({ error: 'Invalid or missing app parameter' });
     }
-  });
+
+    // 2️⃣ Retrieve price metadata from Stripe
+    const price = await stripe.prices.retrieve(priceId);
+    
+    // 3️⃣ Block coupon if price isn't eligible (metadata.coupon_eligible !== "true")
+    if (couponId) {
+      if (price.metadata?.coupon_eligible !== "true") {
+        throw new Error("This plan is not eligible for coupons. Use Email-only plans.");
+      }
+      
+      // Optional: Verify coupon exists (prevent typos)
+      try {
+        await stripe.coupons.retrieve(couponId);
+      } catch {
+        throw new Error("Invalid coupon code");
+      }
+    }
+
+    const sessionPayload = {
+      mode: 'subscription',
+      payment_method_types: ['card'],
+      line_items: [{ price: priceId, quantity: 1 }],
+      success_url: `${appUrlMap[app]}/success?session_id={CHECKOUT_SESSION_ID}`,
+      cancel_url: `${appUrlMap[app]}/cancel`,
+      metadata: { userId, app }
+    };
+
+    // Add discount if coupon ID is provided
+    if (couponId) {
+      sessionPayload.discounts = [{ coupon: couponId }]; // Pass the coupon ID here
+    }
+
+    const session = await stripe.checkout.sessions.create(sessionPayload);
+    res.json({ url: session.url });
+
+  } catch (err) {
+    console.error("Stripe error:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
 
 // router.post('/create-checkout-session-by-app', async (req, res) => {
 //     try {
