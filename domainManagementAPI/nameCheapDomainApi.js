@@ -2033,14 +2033,15 @@ router.get('/namecheap/domain/:domain/pricing', apiLimiter, asyncHandler(async (
         const price = domainResult.$.Price ? parseFloat(domainResult.$.Price) : null;
 
         if (!available) {
-            return res.status(400).json({
-                success: false,
-                error: "Domain is not available for registration",
+            return res.status(200).json({
+                success: true,
+                message: "Domain is not available for registration",
                 data: {
                     domain,
                     available: false,
                     isPremium,
-                    price
+                    price,
+                    note: "This domain is already registered or reserved"
                 },
                 apiMode: NAMECHEAP_SANDBOX === 'true' ? 'sandbox' : 'production'
             });
@@ -2089,15 +2090,17 @@ router.get('/namecheap/domain/:domain/pricing', apiLimiter, asyncHandler(async (
         }
 
         if (!pricing || pricing.register === null) {
-            return res.status(400).json({
-                success: false,
-                error: `${years}-year pricing not available for this TLD`,
+            return res.status(200).json({
+                success: true,
+                message: `${years}-year pricing not available for this TLD`,
                 data: {
                     domain,
                     years: yearsInt,
                     available: true,
                     tld,
-                    message: `This TLD may not support ${years}-year registration`
+                    pricing: null,
+                    message: `This TLD may not support ${years}-year registration`,
+                    note: "Try checking with different year values (2-10 years) or contact support for pricing information"
                 },
                 apiMode: NAMECHEAP_SANDBOX === 'true' ? 'sandbox' : 'production'
             });
