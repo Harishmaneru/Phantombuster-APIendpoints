@@ -884,7 +884,7 @@ function extractPriceForDuration(xml, years) {
     }
 }
 
-// Industry-standard suggestion generator 
+// Industry-standard suggestion generator (Robust Version)
 async function generateProductionSuggestions(keyword, originalTld, isPrimaryAvailable, acceptPremiumPricing = false) {
     console.log(`[Suggestion Engine] Generating suggestions for "${keyword}.${originalTld}" (Available: ${isPrimaryAvailable})`);
 
@@ -896,8 +896,8 @@ async function generateProductionSuggestions(keyword, originalTld, isPrimaryAvai
 
     const checkedDomains = new Set(); // Prevent duplicates
     const maxSuggestions = {
-        tldVariations: 8,
-        keywordVariations: 6
+        tldVariations: 6, // Reduced for better performance
+        keywordVariations: 4 // Reduced for better performance
     };
 
     try {
@@ -905,7 +905,7 @@ async function generateProductionSuggestions(keyword, originalTld, isPrimaryAvai
         console.log(`[Suggestion Engine] Checking TLD variations for "${keyword}"`);
         const tldPromises = POPULAR_TLDS
             .filter(tld => tld !== originalTld.toLowerCase())
-            .slice(0, 12) // Check top 12 TLDs
+            .slice(0, 8) // Reduced to 8 TLDs for better performance
             .map(async (tld) => {
                 const variant = `${keyword}.${tld}`;
                 if (checkedDomains.has(variant)) return null;
@@ -928,34 +928,54 @@ async function generateProductionSuggestions(keyword, originalTld, isPrimaryAvai
                         domainResult.$.ErrorNo === '0';
 
                     if (isValid) {
-                        // Get pricing for this TLD
-                        // console.log(`[Suggestion Engine]  Getting pricing for available domain ${variant} (.${tld})`);
-                        const pricing = await getPricingForTLD(tld);
-                        // console.log(`[Suggestion Engine]  Pricing fetched for ${variant}:`, pricing);
+                        // Get pricing for this TLD (with fallback)
+                        let pricing = null;
+                        try {
+                            pricing = await getPricingForTLD(tld);
+                        } catch (pricingError) {
+                            console.warn(`[Suggestion Engine] Pricing failed for ${variant}:`, pricingError.message);
+                            pricing = {
+                                register: null,
+                                renew: null,
+                                transfer: null,
+                                icannFee: 0.18,
+                                currency: 'USD'
+                            };
+                        }
 
-                        // Get privacy protection info for this TLD
-                        const privacyInfo = await getPrivacyProtectionInfo(tld);
+                        // Get privacy protection info for this TLD (with fallback)
+                        let privacyInfo = null;
+                        try {
+                            privacyInfo = await getPrivacyProtectionInfo(tld);
+                        } catch (privacyError) {
+                            console.warn(`[Suggestion Engine] Privacy info failed for ${variant}:`, privacyError.message);
+                            privacyInfo = {
+                                supported: null,
+                                pricing: { cost: null, note: 'Unable to determine' },
+                                dataSource: 'error_fallback'
+                            };
+                        }
 
                         return {
                             domain: variant,
                             type: 'tld_variation',
                             tld: tld,
                             available: isAvailable,
-                            availableString: domainResult.$.Available, // Raw Namecheap response
+                            availableString: domainResult.$.Available,
                             isPremium,
                             price: isPremium ? price : null,
                             pricing: {
-                                register: isPremium ? price : pricing.register,
-                                renew: pricing.renew,
-                                transfer: pricing.transfer,
-                                icannFee: pricing.icannFee,
+                                register: isPremium ? price : (pricing?.register || null),
+                                renew: pricing?.renew || null,
+                                transfer: pricing?.transfer || null,
+                                icannFee: pricing?.icannFee || 0.18,
                                 currency: 'USD'
                             },
                             privacyProtection: {
-                                supported: privacyInfo.supported,
-                                cost: privacyInfo.pricing.cost,
-                                note: privacyInfo.pricing.note,
-                                dataSource: privacyInfo.dataSource
+                                supported: privacyInfo?.supported,
+                                cost: privacyInfo?.pricing?.cost || null,
+                                note: privacyInfo?.pricing?.note || 'Unable to determine',
+                                dataSource: privacyInfo?.dataSource || 'error_fallback'
                             },
                             priority: POPULAR_TLDS.indexOf(tld) + 1
                         };
@@ -1003,33 +1023,54 @@ async function generateProductionSuggestions(keyword, originalTld, isPrimaryAvai
                                         domainResult.$.ErrorNo === '0';
 
                                     if (isValid) {
-                                        // console.log(`[Suggestion Engine] Getting pricing for keyword variation ${domain} (.${tld})`);
-                                        const pricing = await getPricingForTLD(tld);
-                                        // console.log(`[Suggestion Engine]Keyword variation pricing fetched for ${domain}:`, pricing);
+                                        // Get pricing for this TLD (with fallback)
+                                        let pricing = null;
+                                        try {
+                                            pricing = await getPricingForTLD(tld);
+                                        } catch (pricingError) {
+                                            console.warn(`[Suggestion Engine] Keyword variation pricing failed for ${domain}:`, pricingError.message);
+                                            pricing = {
+                                                register: null,
+                                                renew: null,
+                                                transfer: null,
+                                                icannFee: 0.18,
+                                                currency: 'USD'
+                                            };
+                                        }
 
-                                        // Get privacy protection info for this TLD
-                                        const privacyInfo = await getPrivacyProtectionInfo(tld);
+                                        // Get privacy protection info for this TLD (with fallback)
+                                        let privacyInfo = null;
+                                        try {
+                                            privacyInfo = await getPrivacyProtectionInfo(tld);
+                                        } catch (privacyError) {
+                                            console.warn(`[Suggestion Engine] Keyword variation privacy info failed for ${domain}:`, privacyError.message);
+                                            privacyInfo = {
+                                                supported: null,
+                                                pricing: { cost: null, note: 'Unable to determine' },
+                                                dataSource: 'error_fallback'
+                                            };
+                                        }
 
                                         return {
                                             domain,
                                             type: 'keyword_variation',
                                             tld: tld,
                                             available: isAvailable,
-                                            availableString: domainResult.$.Available, // Raw Namecheap response
+                                            availableString: domainResult.$.Available,
                                             isPremium,
                                             price: isPremium ? price : null,
                                             pricing: {
-                                                register: isPremium ? price : pricing.register,
-                                                renew: pricing.renew,
-                                                transfer: pricing.transfer,
-                                                icannFee: pricing.icannFee,
+                                                register: isPremium ? price : (pricing?.register || null),
+                                                renew: pricing?.renew || null,
+                                                transfer: pricing?.transfer || null,
+                                                icannFee: pricing?.icannFee || 0.18,
                                                 currency: 'USD'
                                             },
                                             privacyProtection: {
-                                                supported: privacyInfo.supported,
-                                                cost: privacyInfo.pricing.cost,
-                                                note: privacyInfo.pricing.note,
-                                                dataSource: privacyInfo.dataSource
+                                                supported: privacyInfo?.supported,
+                                                cost: privacyInfo?.pricing?.cost || null,
+                                                note: privacyInfo?.pricing?.note || 'Unable to determine',
+                                                dataSource: privacyInfo?.dataSource || 'error_fallback'
                                             },
                                             variation: variant,
                                             originalKeyword: keyword
@@ -1467,11 +1508,10 @@ router.get('/namecheap/wallet/account-info', async (req, res) => {
     }
 });
 
-// _________________________Domain Availability Checker______________
+// _________________________Domain Availability Checker (Optimized & Reliable)______________
 router.get('/namecheap/domain/check/:domain', async (req, res) => {
     const domain = req.params.domain;
     const startTime = Date.now();
-
 
     // Enhanced domain validation
     if (!isValidDomain(domain)) {
@@ -1493,69 +1533,118 @@ router.get('/namecheap/domain/check/:domain', async (req, res) => {
 
         console.log(`[Domain API] Checking "${keyword}.${originalTld}"`);
 
-        // 1. Primary domain availability check with caching
+        // 1. Primary domain availability check with caching and error handling
         console.log(`[Domain API] Step 1: Primary availability check for ${domain}`);
         
-        // Check cache first
-        const cacheKey = `domain_check_${domain}`;
-        let primaryCheck = getCachedData(cacheKey);
+        let primaryCheck, domainResult, isAvailable, isPremium, price, icannFee;
         
-        if (!primaryCheck) {
-            primaryCheck = await namecheapRequest('namecheap.domains.check', {
-                DomainList: domain
+        try {
+            // Check cache first
+            const cacheKey = `domain_check_${domain}`;
+            primaryCheck = getCachedData(cacheKey);
+            
+            if (!primaryCheck) {
+                primaryCheck = await namecheapRequest('namecheap.domains.check', {
+                    DomainList: domain
+                });
+                setCachedData(cacheKey, primaryCheck);
+            } else {
+                console.log(`[Domain API] Using cached data for ${domain}`);
+            }
+
+            domainResult = primaryCheck.ApiResponse.CommandResponse.DomainCheckResult;
+            isAvailable = domainResult.$.Available === 'true';
+            isPremium = domainResult.$.IsPremiumName === 'true';
+            price = domainResult.$.Price ? parseFloat(domainResult.$.Price) : null;
+            icannFee = domainResult.$.IcannFee ? parseFloat(domainResult.$.IcannFee) : 0.18;
+        } catch (primaryError) {
+            console.error(`[Domain API] Primary check failed for ${domain}:`, primaryError.message);
+            return res.status(200).json({
+                status: "0",
+                message: "Unable to check domain availability at this time",
+                data: {
+                    domain,
+                    available: null,
+                    isPremium: null,
+                    error: "Primary availability check failed",
+                    processingTime: Date.now() - startTime
+                },
+                apiMode: NAMECHEAP_SANDBOX === 'true' ? 'sandbox' : 'production'
             });
-            setCachedData(cacheKey, primaryCheck);
-        } else {
-            console.log(`[Domain API] Using cached data for ${domain}`);
         }
 
-        const domainResult = primaryCheck.ApiResponse.CommandResponse.DomainCheckResult;
-        const isAvailable = domainResult.$.Available === 'true';
-        const isPremium = domainResult.$.IsPremiumName === 'true';
-        const price = domainResult.$.Price ? parseFloat(domainResult.$.Price) : null;
-        const premiumRegistrationPrice = domainResult.$.PremiumRegistrationPrice ? parseFloat(domainResult.$.PremiumRegistrationPrice) : null;
-        const premiumRenewalPrice = domainResult.$.PremiumRenewalPrice ? parseFloat(domainResult.$.PremiumRenewalPrice) : null;
-        const icannFee = domainResult.$.IcannFee ? parseFloat(domainResult.$.IcannFee) : 0.18;
-        const eapFee = domainResult.$.EapFee ? parseFloat(domainResult.$.EapFee) : null;
+        // 2. Get pricing for primary domain (with fallback)
+        let primaryPricing = null;
+        try {
+            primaryPricing = await getPricingForTLD(originalTld);
+        } catch (pricingError) {
+            console.warn(`[Domain API] Pricing fetch failed for ${domain}:`, pricingError.message);
+            primaryPricing = {
+                register: null,
+                renew: null,
+                transfer: null,
+                currency: 'USD'
+            };
+        }
 
-        // 2. Get pricing for primary domain
-        const primaryPricing = await getPricingForTLD(originalTld);
+        // 3. Get privacy protection information (with fallback)
+        let privacyInfo = null;
+        try {
+            console.log(`[Domain API] Step 2.5: Getting privacy protection info for .${originalTld}`);
+            privacyInfo = await getPrivacyProtectionInfo(originalTld);
+        } catch (privacyError) {
+            console.warn(`[Domain API] Privacy info fetch failed for ${domain}:`, privacyError.message);
+            privacyInfo = {
+                supported: null,
+                available: null,
+                pricing: { cost: null, currency: 'USD' },
+                restrictions: ['Unable to determine privacy protection'],
+                dataSource: 'error_fallback'
+            };
+        }
 
-        // 2.5. Get privacy protection information for the TLD
-        console.log(`[Domain API] Step 2.5: Getting privacy protection info for .${originalTld}`);
-        const privacyInfo = await getPrivacyProtectionInfo(originalTld);
-
-        // 3. Generate suggestions using production algorithm (with timeout and simplified approach)
-        console.log(`[Domain API] Step 3: Generating industry-standard suggestions`);
+        // 4. Generate suggestions with better error handling
+        let suggestions = {
+            tldVariations: [],
+            keywordVariations: [],
+            premiumDomains: []
+        };
         
-        // Add timeout for suggestions to prevent long response times
-        const suggestionsPromise = generateProductionSuggestions(keyword, originalTld, isAvailable, false);
-        const suggestions = await Promise.race([
-            suggestionsPromise,
-            new Promise((resolve) => setTimeout(() => {
-                console.log('[Domain API] Suggestions generation timed out, using empty results');
-                resolve({
-                    tldVariations: [],
-                    keywordVariations: [],
-                    premiumDomains: []
-                });
-            }, 10000)) // 10 second timeout
-        ]);
+        try {
+            console.log(`[Domain API] Step 3: Generating suggestions for ${domain}`);
+            
+            const suggestionsPromise = generateProductionSuggestions(keyword, originalTld, isAvailable, false);
+            suggestions = await Promise.race([
+                suggestionsPromise,
+                new Promise((resolve) => setTimeout(() => {
+                    console.log('[Domain API] Suggestions generation timed out, using empty results');
+                    resolve({
+                        tldVariations: [],
+                        keywordVariations: [],
+                        premiumDomains: []
+                    });
+                }, 8000)) // Reduced to 8 second timeout
+            ]);
+        } catch (suggestionsError) {
+            console.warn(`[Domain API] Suggestions generation failed for ${domain}:`, suggestionsError.message);
+            // Continue with empty suggestions
+        }
 
-        // ---- OPTIMIZED: Simplified suggestions without bulk enrichment to improve performance ----
-        // Skip bulk enrichment to reduce API calls and improve response time
-        console.log(`[Domain API] Skipping bulk enrichment for performance - using direct suggestion data`);
-        // ---- END OPTIMIZED ----
+        // 5. Create domain groups (with error handling)
+        let groups = [];
+        try {
+            groups = generateDomainGroups(suggestions, originalTld);
+        } catch (groupsError) {
+            console.warn(`[Domain API] Groups generation failed for ${domain}:`, groupsError.message);
+            groups = [];
+        }
 
-        // 4. Create domain groups (GoDaddy-style organization)
-        const groups = generateDomainGroups(suggestions, originalTld);
-
-        // 5. Calculate summary statistics
+        // 6. Calculate summary statistics
         const totalSuggestions = suggestions.tldVariations.length + suggestions.keywordVariations.length;
         const premiumCount = [...suggestions.tldVariations, ...suggestions.keywordVariations]
             .filter(d => d.isPremium).length;
 
-        // 6. Build production-grade response
+        // 7. Build robust response
         const response = {
             status: "1",
             message: "Success",
@@ -1566,62 +1655,58 @@ router.get('/namecheap/domain/check/:domain', async (req, res) => {
                 tld: originalTld,
                 available: isAvailable,
                 availabilityStatus: isAvailable ? "AVAILABLE" : "UNAVAILABLE",
-                namecheapAvailable: domainResult.$.Available, // Raw string from Namecheap
+                namecheapAvailable: domainResult.$.Available,
                 isPremium,
 
-                // Primary domain pricing
+                // Primary domain pricing (with fallbacks)
                 pricing: {
-                    register: isPremium ? (price || premiumRegistrationPrice) : primaryPricing.register,
-                    renew: isPremium ? premiumRenewalPrice : primaryPricing.renew,
-                    transfer: primaryPricing.transfer,
-                    icannFee,
+                    register: isPremium ? price : (primaryPricing?.register || null),
+                    renew: primaryPricing?.renew || null,
+                    transfer: primaryPricing?.transfer || null,
+                    icannFee: icannFee || 0.18,
                     currency: 'USD',
                     isPremiumPricing: isPremium,
                     totalFirstYear: isPremium ?
-                        (price || premiumRegistrationPrice || 0) + icannFee :
-                        (primaryPricing.register || 0) + icannFee,
+                        (price || 0) + (icannFee || 0.18) :
+                        (primaryPricing?.register || 0) + (icannFee || 0.18),
                     premiumDetails: isPremium ? {
-                        registrationPrice: price || premiumRegistrationPrice
+                        registrationPrice: price
                     } : null
                 },
 
-                // Privacy Protection Information
+                // Privacy Protection Information (with fallbacks)
                 privacyProtection: {
-                    supported: privacyInfo.supported,
-                    available: privacyInfo.available,
-                    pricing: privacyInfo.pricing,
-                    restrictions: privacyInfo.restrictions,
-                    recommendation: privacyInfo.supported === true ?
+                    supported: privacyInfo?.supported,
+                    available: privacyInfo?.available,
+                    pricing: privacyInfo?.pricing || { cost: null, currency: 'USD' },
+                    restrictions: privacyInfo?.restrictions || ['Unable to determine'],
+                    recommendation: privacyInfo?.supported === true ?
                         'Recommended for privacy and security' :
-                        privacyInfo.supported === false ?
+                        privacyInfo?.supported === false ?
                             'Consider alternative TLD if privacy is important' :
                             'Privacy support unknown - check during registration',
-                    dataSource: privacyInfo.dataSource,
-                    note: privacyInfo.dataSource === 'namecheap_api' ?
-                        'Information verified via Namecheap API' :
-                        privacyInfo.dataSource === 'known_restrictions' ?
-                            'Based on known registry restrictions' :
-                            'Unable to verify - please check during registration'
+                    dataSource: privacyInfo?.dataSource || 'error_fallback',
+                    note: 'Privacy information may be incomplete due to API limitations'
                 },
 
-                // Industry-standard suggestions structure (now enriched)
+                // Suggestions (with fallbacks)
                 suggestions: {
-                    tldVariations: suggestions.tldVariations,
-                    keywordVariations: suggestions.keywordVariations,
+                    tldVariations: suggestions.tldVariations || [],
+                    keywordVariations: suggestions.keywordVariations || [],
                     premiumDomains: suggestions.premiumDomains || []
                 },
 
-                groups,
+                groups: groups || [],
 
                 // Summary statistics
                 summary: {
                     totalSuggestions,
-                    tldVariationCount: suggestions.tldVariations.length,
-                    keywordVariationCount: suggestions.keywordVariations.length,
+                    tldVariationCount: suggestions.tldVariations?.length || 0,
+                    keywordVariationCount: suggestions.keywordVariations?.length || 0,
                     premiumCount,
                     recommendedAction: isAvailable ? 'register' : 'consider_alternatives',
                     bestAlternative: totalSuggestions > 0 ?
-                        (suggestions.tldVariations[0] || suggestions.keywordVariations[0]) : null
+                        (suggestions.tldVariations?.[0] || suggestions.keywordVariations?.[0]) : null
                 },
 
                 // Metadata
@@ -1632,22 +1717,21 @@ router.get('/namecheap/domain/check/:domain', async (req, res) => {
                     apiMode: NAMECHEAP_SANDBOX === 'true' ? 'sandbox' : 'production',
                     timestamp: new Date().toISOString(),
                     cacheHits: pricingCache.size,
-                    suggestionAlgorithm: 'production_v2_bulk_enriched'
+                    suggestionAlgorithm: 'production_v2_robust'
                 }
             }
         };
 
-        // 7. Add availability-specific messaging
+        // 8. Add availability-specific messaging
         if (isAvailable) {
             response.data.message = isPremium ?
                 'Premium domain available for registration' :
                 'Domain available for registration';
             response.data.nextSteps = {
                 action: 'register',
-             
                 requiredFields: ['userId', 'contactInfo', 'years', 'nameservers'],
                 optionalFields: ['enablePrivacy'],
-                privacyNote: privacyInfo.supported ?
+                privacyNote: privacyInfo?.supported ?
                     'Privacy protection can be enabled during registration (free)' :
                     'Privacy protection not available for this TLD'
             };
@@ -1662,7 +1746,7 @@ router.get('/namecheap/domain/check/:domain', async (req, res) => {
             };
         }
 
-        // 8. Add sandbox mode warnings
+        // 9. Add sandbox mode warnings
         if (NAMECHEAP_SANDBOX === 'true') {
             response.data.sandboxWarning = {
                 mode: 'sandbox',
@@ -1681,7 +1765,7 @@ router.get('/namecheap/domain/check/:domain', async (req, res) => {
         res.json(response);
 
     } catch (err) {
-        console.error('[Domain API] ❌ Error in production domain check:', {
+        console.error('[Domain API] ❌ Unexpected error in domain check:', {
             error: err.message,
             domain,
             status: err.response?.status,
@@ -1691,17 +1775,22 @@ router.get('/namecheap/domain/check/:domain', async (req, res) => {
             timestamp: new Date().toISOString()
         });
 
-        // Enhanced error response
-        res.status(500).json({
+        // Return 200 with error info instead of 500
+        res.status(200).json({
             status: "0",
-            message: err.message,
-            data: null,
-            error: {
-                type: 'api_error',
-                details: err.response?.data || 'Unknown error occurred',
+            message: "Domain check completed with errors",
+            data: {
                 domain,
-                timestamp: new Date().toISOString(),
+                available: null,
+                isPremium: null,
+                error: "Unexpected error occurred during domain check",
                 processingTime: Date.now() - startTime,
+                timestamp: new Date().toISOString()
+            },
+            error: {
+                type: 'unexpected_error',
+                details: err.message,
+                domain,
                 recoveryOptions: [
                     'Try again in a few moments',
                     'Check domain spelling',
@@ -4359,70 +4448,6 @@ const whmBreaker = new CircuitBreaker(async (endpoint, params) => {
 
 
 
-// Bulk domain check endpoint with partial success handling
-router.post('/check-bulk', apiLimiter, asyncHandler(async (req, res) => {
-    const operation = 'BULK_DOMAIN_CHECK';
-    try {
-        const { domains } = req.body;
-        if (!Array.isArray(domains) || domains.length === 0) {
-            throw new Error('Invalid domains array');
-        }
-
-        const results = [];
-        const errors = [];
-
-        // Process domains in parallel with individual timeouts
-        const checkPromises = domains.map(async (domain) => {
-            try {
-                const cacheKey = `domain_check_${domain}`;
-                const cached = cache.get(cacheKey);
-                if (cached) {
-                    return { domain, ...cached, source: 'cache' };
-                }
-
-                const result = await retryWithBackoff(async () => {
-                    return await namecheapBreaker.fire('namecheap.domains.check', {
-                        DomainList: domain
-                    });
-                });
-
-                const processedResult = {
-                    domain,
-                    available: result.ApiResponse.CommandResponse.DomainCheckResult.$.Available === 'true',
-                    price: extractOneYearPrice(result),
-                    timestamp: new Date().toISOString()
-                };
-
-                cache.set(cacheKey, processedResult, 300); // Cache for 5 minutes
-                return processedResult;
-
-            } catch (error) {
-                return {
-                    domain,
-                    error: error.message,
-                    success: false
-                };
-            }
-        });
-
-        const checkResults = await Promise.all(checkPromises);
-
-        res.json({
-            success: true,
-            operation,
-            results: checkResults,
-            summary: {
-                total: domains.length,
-                succeeded: checkResults.filter(r => !r.error).length,
-                failed: checkResults.filter(r => r.error).length
-            }
-        });
-
-    } catch (error) {
-        const errorResponse = createErrorResponse(error, operation);
-        res.status(error.status || 500).json(errorResponse);
-    }
-}));
 
 // Contact info endpoint with caching and retries
 router.get('/contact-info/:domain', apiLimiter, asyncHandler(async (req, res) => {
