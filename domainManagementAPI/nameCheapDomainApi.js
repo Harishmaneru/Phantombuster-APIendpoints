@@ -10,6 +10,38 @@ const NodeCache = require('node-cache');
 const CircuitBreaker = require('opossum');
 const domainCache = new NodeCache({ stdTTL: 300 }); // 5 minute cache
 
+// Add missing helper functions
+const CONCURRENT_LIMIT = 5; // Limit concurrent API calls
+
+// Helper function to create standardized error responses
+function createErrorResponse(error, operation) {
+    return {
+        success: false,
+        operation,
+        error: error.message,
+        details: error.response?.data || 'Unknown error occurred',
+        timestamp: new Date().toISOString(),
+        apiMode: NAMECHEAP_SANDBOX === 'true' ? 'sandbox' : 'production'
+    };
+}
+
+// Helper function for retry logic with exponential backoff
+async function retryWithBackoff(fn, maxRetries = 3, baseDelay = 1000) {
+    for (let attempt = 1; attempt <= maxRetries; attempt++) {
+        try {
+            return await fn();
+        } catch (error) {
+            if (attempt === maxRetries) {
+                throw error;
+            }
+            
+            const delay = baseDelay * Math.pow(2, attempt - 1);
+            console.log(`[Retry] Attempt ${attempt} failed, retrying in ${delay}ms...`);
+            await new Promise(resolve => setTimeout(resolve, delay));
+        }
+    }
+}
+
 // MongoDB Connection
 const mongoURI = process.env.ONEPGR_MONGO_URI;
 
@@ -853,7 +885,7 @@ function extractPriceForDuration(xml, years) {
 }
 
 // Industry-standard suggestion generator 
-async function generateProductionSuggestions(keyword, originalTld, isPrimaryAvailable) {
+async function generateProductionSuggestions(keyword, originalTld, isPrimaryAvailable, acceptPremiumPricing = false) {
     console.log(`[Suggestion Engine] Generating suggestions for "${keyword}.${originalTld}" (Available: ${isPrimaryAvailable})`);
 
     const results = {
@@ -1461,11 +1493,21 @@ router.get('/namecheap/domain/check/:domain', async (req, res) => {
 
         console.log(`[Domain API] Checking "${keyword}.${originalTld}"`);
 
-        // 1. Primary domain availability check
+        // 1. Primary domain availability check with caching
         console.log(`[Domain API] Step 1: Primary availability check for ${domain}`);
-        const primaryCheck = await namecheapRequest('namecheap.domains.check', {
-            DomainList: domain
-        });
+        
+        // Check cache first
+        const cacheKey = `domain_check_${domain}`;
+        let primaryCheck = getCachedData(cacheKey);
+        
+        if (!primaryCheck) {
+            primaryCheck = await namecheapRequest('namecheap.domains.check', {
+                DomainList: domain
+            });
+            setCachedData(cacheKey, primaryCheck);
+        } else {
+            console.log(`[Domain API] Using cached data for ${domain}`);
+        }
 
         const domainResult = primaryCheck.ApiResponse.CommandResponse.DomainCheckResult;
         const isAvailable = domainResult.$.Available === 'true';
@@ -1483,56 +1525,27 @@ router.get('/namecheap/domain/check/:domain', async (req, res) => {
         console.log(`[Domain API] Step 2.5: Getting privacy protection info for .${originalTld}`);
         const privacyInfo = await getPrivacyProtectionInfo(originalTld);
 
-        // 3. Generate suggestions using production algorithm
+        // 3. Generate suggestions using production algorithm (with timeout and simplified approach)
         console.log(`[Domain API] Step 3: Generating industry-standard suggestions`);
-        const suggestions = await generateProductionSuggestions(keyword, originalTld, isAvailable);
+        
+        // Add timeout for suggestions to prevent long response times
+        const suggestionsPromise = generateProductionSuggestions(keyword, originalTld, isAvailable, false);
+        const suggestions = await Promise.race([
+            suggestionsPromise,
+            new Promise((resolve) => setTimeout(() => {
+                console.log('[Domain API] Suggestions generation timed out, using empty results');
+                resolve({
+                    tldVariations: [],
+                    keywordVariations: [],
+                    premiumDomains: []
+                });
+            }, 10000)) // 10 second timeout
+        ]);
 
-        // ---- NEW: Bulk check all suggested domains for live info ----
-        // Helper to extract all suggested domains
-        function extractAllSuggestedDomains(suggestions) {
-            const all = [];
-            if (suggestions.tldVariations) all.push(...suggestions.tldVariations.map(d => d.domain));
-            if (suggestions.keywordVariations) all.push(...suggestions.keywordVariations.map(d => d.domain));
-            if (suggestions.premiumDomains) all.push(...suggestions.premiumDomains.map(d => d.domain));
-            return Array.from(new Set(all));
-        }
-        const allSuggestedDomains = extractAllSuggestedDomains(suggestions);
-        let bulkResultsMap = {};
-        if (allSuggestedDomains.length > 0) {
-            try {
-                const bulkCheck = await namecheapRequest('namecheap.domains.check', {
-                    DomainList: allSuggestedDomains.join(',')
-                });
-                const checkResults = bulkCheck.ApiResponse.CommandResponse.DomainCheckResult;
-                const resultsArray = Array.isArray(checkResults) ? checkResults : [checkResults];
-                // Map: domain -> result
-                resultsArray.forEach(r => {
-                    bulkResultsMap[r.$.Domain.toLowerCase()] = r.$;
-                });
-            } catch (err) {
-                console.warn('[Domain API] Bulk check for suggestions failed:', err.message);
-            }
-        }
-        // Helper to enrich a suggestion with live info
-        function enrichSuggestion(suggestion) {
-            const live = bulkResultsMap[suggestion.domain.toLowerCase()];
-            if (!live) return suggestion;
-            return {
-                ...suggestion,
-                available: live.Available === 'true',
-                isPremium: live.IsPremiumName === 'true',
-                price: live.Price ? parseFloat(live.Price) : suggestion.price || null,
-                icannFee: live.IcannFee ? parseFloat(live.IcannFee) : 0.18,
-                premium: live.IsPremiumName === 'true',
-                namecheapAvailable: live.Available,
-                // Optionally add more fields as needed
-            };
-        }
-        // Enrich all suggestions
-        if (suggestions.tldVariations) suggestions.tldVariations = suggestions.tldVariations.map(enrichSuggestion);
-        if (suggestions.keywordVariations) suggestions.keywordVariations = suggestions.keywordVariations.map(enrichSuggestion);
-        if (suggestions.premiumDomains) suggestions.premiumDomains = suggestions.premiumDomains.map(enrichSuggestion);
-        // ---- END NEW ----
+        // ---- OPTIMIZED: Simplified suggestions without bulk enrichment to improve performance ----
+        // Skip bulk enrichment to reduce API calls and improve response time
+        console.log(`[Domain API] Skipping bulk enrichment for performance - using direct suggestion data`);
+        // ---- END OPTIMIZED ----
 
         // 4. Create domain groups (GoDaddy-style organization)
         const groups = generateDomainGroups(suggestions, originalTld);
@@ -1772,13 +1785,20 @@ router.post('/namecheap/domain/bulk-pricing', apiLimiter, asyncHandler(async (re
     try {
         console.log(`[Bulk Pricing API] Checking ${domains.length} domains for ${years} year(s)`);
 
-        // Step 1: Bulk availability check
+        // Step 1: Bulk availability check with timeout
         const domainList = domains.join(',');
         console.log(`[Bulk Pricing API] Making bulk availability check for: ${domainList}`);
 
-        const bulkCheck = await namecheapRequest('namecheap.domains.check', {
+        const bulkCheckPromise = namecheapRequest('namecheap.domains.check', {
             DomainList: domainList
         });
+
+        const bulkCheck = await Promise.race([
+            bulkCheckPromise,
+            new Promise((_, reject) => setTimeout(() => {
+                reject(new Error('Bulk availability check timed out'));
+            }, 15000)) // 15 second timeout
+        ]);
 
         // Parse the bulk check results
         const checkResults = bulkCheck.ApiResponse.CommandResponse.DomainCheckResult;
@@ -1791,19 +1811,41 @@ router.post('/namecheap/domain/bulk-pricing', apiLimiter, asyncHandler(async (re
 
         console.log(`[Bulk Pricing API] Getting pricing for ${uniqueTlds.length} unique TLDs: ${uniqueTlds.join(', ')}`);
 
-        // Step 3: Fetch pricing for all unique TLDs
+        // Step 3: Fetch pricing for all unique TLDs with timeout
         const tldPricingPromises = uniqueTlds.map(async (tld) => {
             try {
                 if (yearsInt === 1) {
-                    return { tld, pricing: await getPricingForTLD(tld) };
+                    const pricingPromise = getPricingForTLD(tld);
+                    const pricing = await Promise.race([
+                        pricingPromise,
+                        new Promise((_, reject) => setTimeout(() => {
+                            reject(new Error('Pricing fetch timeout'));
+                        }, 10000)) // 10 second timeout
+                    ]);
+                    return { tld, pricing };
                 } else {
-                    // Get multi-year pricing
-                    const priceXml = await namecheapRequest('namecheap.users.getPricing', {
+                    // Get multi-year pricing with timeout
+                    const priceXmlPromise = namecheapRequest('namecheap.users.getPricing', {
                         ProductType: 'DOMAIN',
                         ProductCategory: 'REGISTER',
                         ProductName: tld
                     });
-                    const pricing = extractPriceForDuration(priceXml, years);
+                    
+                    const priceXml = await Promise.race([
+                        priceXmlPromise,
+                        new Promise((_, reject) => setTimeout(() => {
+                            reject(new Error('Pricing XML fetch timeout'));
+                        }, 10000)) // 10 second timeout
+                    ]);
+                    
+                    let pricing;
+                    try {
+                        pricing = extractPriceForDuration(priceXml, years);
+                    } catch (extractionError) {
+                        console.warn(`[Bulk Pricing API] Failed to extract pricing for .${tld}:`, extractionError.message);
+                        throw new Error(`Pricing extraction failed: ${extractionError.message}`);
+                    }
+                    
                     return { tld, pricing };
                 }
             } catch (error) {
@@ -2004,20 +2046,47 @@ router.get('/namecheap/domain/:domain/pricing', apiLimiter, asyncHandler(async (
             });
         }
 
-        // 2. Get TLD and fetch multi-year pricing
+        // 2. Get TLD and fetch multi-year pricing with caching
         const tld = domain.split('.').pop().toUpperCase();
         console.log(`[Domain Pricing API] Step 2: Fetching ${years}-year pricing for TLD ${tld}`);
 
-        const priceXml = await namecheapRequest('namecheap.users.getPricing', {
-            ProductType: 'DOMAIN',
-            ProductCategory: 'REGISTER',
-            ProductName: tld
-        });
+        // Check cache first
+        const pricingCacheKey = `pricing_${tld}_${years}`;
+        let priceXml = getCachedData(pricingCacheKey);
+        
+        if (!priceXml) {
+            priceXml = await namecheapRequest('namecheap.users.getPricing', {
+                ProductType: 'DOMAIN',
+                ProductCategory: 'REGISTER',
+                ProductName: tld
+            });
+            setCachedData(pricingCacheKey, priceXml);
+        } else {
+            console.log(`[Domain Pricing API] Using cached pricing data for .${tld} (${years} years)`);
+        }
 
-        // Use appropriate extraction function based on years
-        const pricing = yearsInt === 1
-            ? extractOneYearPrice(priceXml)
-            : extractPriceForDuration(priceXml, years);
+        // Use appropriate extraction function based on years with error handling
+        let pricing;
+        try {
+            pricing = yearsInt === 1
+                ? extractOneYearPrice(priceXml)
+                : extractPriceForDuration(priceXml, years);
+        } catch (extractionError) {
+            console.error(`[Domain Pricing API] Error extracting pricing for ${domain}:`, extractionError.message);
+            return res.status(500).json({
+                success: false,
+                error: "Failed to extract pricing information",
+                data: {
+                    domain,
+                    years: yearsInt,
+                    available: true,
+                    tld,
+                    message: "Pricing extraction failed",
+                    extractionError: extractionError.message
+                },
+                apiMode: NAMECHEAP_SANDBOX === 'true' ? 'sandbox' : 'production'
+            });
+        }
 
         if (!pricing || pricing.register === null) {
             return res.status(400).json({
@@ -2039,6 +2108,23 @@ router.get('/namecheap/domain/:domain/pricing', apiLimiter, asyncHandler(async (
             pricing.premiumNote = "This is a premium domain with special pricing";
             pricing.premiumPrice = price;
             pricing.isPremium = true;
+        }
+
+        // 4. Add error handling for missing pricing data
+        if (!pricing || typeof pricing !== 'object') {
+            console.error(`[Domain Pricing API] Invalid pricing data for ${domain}:`, pricing);
+            return res.status(500).json({
+                success: false,
+                error: "Failed to extract pricing information",
+                data: {
+                    domain,
+                    years: yearsInt,
+                    available: true,
+                    tld,
+                    message: "Pricing extraction failed"
+                },
+                apiMode: NAMECHEAP_SANDBOX === 'true' ? 'sandbox' : 'production'
+            });
         }
 
         // 4. Format response based on whether it's 1-year or multi-year
@@ -2413,6 +2499,22 @@ router.post('/namecheap/domain/register', validateUserId, async (req, res) => {
 // Cache for API responses to avoid hitting rate limits
 const apiCache = new Map();
 const CACHE_DURATION = 5 * 60 * 1000; // 5 minutes
+
+// Simple cache helper function
+function getCachedData(key) {
+    const cached = apiCache.get(key);
+    if (cached && Date.now() - cached.timestamp < CACHE_DURATION) {
+        return cached.data;
+    }
+    return null;
+}
+
+function setCachedData(key, data) {
+    apiCache.set(key, {
+        data,
+        timestamp: Date.now()
+    });
+}
 
 
 // Rate limiting queue
