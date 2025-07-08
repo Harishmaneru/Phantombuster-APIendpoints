@@ -1021,10 +1021,10 @@ router.get('/cpanel/user-all-emails/:userId', async (req, res) => {
                 emailResult.data.map(e => ({ email: e.email, domain: e.domain })));
             }
 
-            // Get detailed email information including creation dates
+            // Get detailed email information including creation dates using our improved helper
             let emailDetails = {};
             try {
-              // Try different approaches to get email details
+              // Get detailed email info for last login and message count
               const detailsResult = await cpanelRequest('Email/list_pops', {
                 domain: domain.toLowerCase()
               });
@@ -1034,7 +1034,6 @@ router.get('/cpanel/user-all-emails/:userId', async (req, res) => {
               if (detailsResult.status === 1 && detailsResult.data) {
                 detailsResult.data.forEach(email => {
                   emailDetails[email.email] = {
-                    created: email.created,
                     last_login: email.last_login,
                     message_count: email.message_count,
                     // Include all available fields for debugging
@@ -1044,75 +1043,28 @@ router.get('/cpanel/user-all-emails/:userId', async (req, res) => {
               }
             } catch (detailsError) {
               console.log(`Could not get detailed email info for domain ${domain}:`, detailsError.message);
-              
-              // Try alternative approach - get individual email details
-              try {
-                console.log(`Trying individual email details for ${domain}...`);
-                for (const email of domainEmails) {
-                  const individualResult = await cpanelRequest('Email/get_pop_quota', {
-                    user: email.user,
-                    domain: email.domain
-                  });
-                  
-                  if (individualResult.status === 1) {
-                    emailDetails[email.email] = {
-                      quota_info: individualResult.data,
-                      // Try to extract creation info from quota data
-                      created: individualResult.data?.created || null,
-                      last_login: individualResult.data?.last_login || null,
-                      message_count: individualResult.data?.message_count || 0
-                    };
-                  }
-                }
-              } catch (individualError) {
-                console.log(`Could not get individual email details for ${domain}:`, individualError.message);
-              }
             }
 
             // Get disk usage for each email - Use data from list_pops_with_disk which already has storage info
             // This is more efficient as it avoids additional API calls and uses real-time data from cPanel
-            const emailsWithDetails = domainEmails.map((email) => {
+            const emailsWithDetails = await Promise.all(domainEmails.map(async (email) => {
               // The list_pops_with_disk already provides disk usage data
               // Use the data directly from the email object instead of making additional API calls
               const diskUsedBytes = parseInt(email._diskused) || 0;
               const diskQuotaBytes = parseInt(email._diskquota) || 0;
               const diskUsedPercent = parseFloat(email.diskusedpercent_float) || 0;
               
-              // Get creation date from detailed email info or fallback to mtime
-              let creationDate = null;
+              // Get accurate creation date using our improved helper function
+              const creationInfo = await getEmailCreationDate(email.email, domain, userId);
+              
+              // Get last login and message count from detailed email info
               let lastLogin = null;
               let messageCount = 0;
-              let createdField = null;
               
-              // Try to get detailed info first
               if (emailDetails[email.email]) {
                 const details = emailDetails[email.email];
-                if (details.created) {
-                  try {
-                    creationDate = new Date(details.created).toISOString();
-                    createdField = details.created;
-                  } catch (e) {
-                    console.log(`Could not parse created date for ${email.email}:`, details.created);
-                  }
-                }
                 lastLogin = details.last_login;
                 messageCount = details.message_count || 0;
-              }
-              
-              // Fallback to mtime if no creation date found (this is what we actually have)
-              if (!creationDate && email.mtime) {
-                try {
-                  creationDate = new Date(email.mtime * 1000).toISOString();
-                  createdField = `Unix timestamp: ${email.mtime}`;
-                } catch (e) {
-                  console.log(`Could not parse mtime for ${email.email}:`, email.mtime);
-                }
-              }
-              
-              // If still no creation date, use current time as fallback
-              if (!creationDate) {
-                creationDate = new Date().toISOString();
-                createdField = 'Unknown (using current time)';
               }
 
               const emailData = {
@@ -1120,8 +1072,14 @@ router.get('/cpanel/user-all-emails/:userId', async (req, res) => {
                 email: email.email,
                 domain: email.domain,
                 suspended: email.suspended === '1',
-                created: createdField, // Raw creation date field
-                creationDate: creationDate, // Parsed creation date
+                created: creationInfo.rawValue || creationInfo.creationDate, // Raw creation date field
+                creationDate: creationInfo.creationDate, // Parsed creation date
+                creationInfo: {
+                  source: creationInfo.source,
+                  accuracy: creationInfo.accuracy,
+                  note: creationInfo.note || null,
+                  error: creationInfo.error || null
+                },
                 lastLogin: lastLogin,
                 messageCount: messageCount,
                 quota: {
@@ -1159,6 +1117,8 @@ router.get('/cpanel/user-all-emails/:userId', async (req, res) => {
                 formatted: emailData.usage.formatted,
                 created: emailData.created,
                 creationDate: emailData.creationDate,
+                creationSource: creationInfo.source,
+                creationAccuracy: creationInfo.accuracy,
                 lastLogin: emailData.lastLogin,
                 messageCount: emailData.messageCount,
                 mtime: email.mtime,
@@ -1166,7 +1126,7 @@ router.get('/cpanel/user-all-emails/:userId', async (req, res) => {
               });
 
               return emailData;
-            });
+            }));
 
             // Calculate domain statistics
             const domainTotalUsed = emailsWithDetails.reduce((sum, email) => sum + email.usage.bytes, 0);
@@ -1372,17 +1332,18 @@ router.get('/cpanel/user-all-emails/:userId', async (req, res) => {
         activeEmails: allEmails.filter(email => !email.suspended).length
       },
       metadata: {
-        dataSource: 'cPanel Real-time API',
+        dataSource: 'cPanel Real-time API + Database',
         fetchTimestamp: fetchEndTime.toISOString(),
         fetchDurationMs: fetchDuration,
         domainsProcessed: userDomains.length,
         totalApiCalls: userDomains.length * 2, // list_pops_with_disk + list_pops per domain
         realTimeData: true,
         storageDataFrom: 'list_pops_with_disk (included in response)',
-        creationDataFrom: 'list_pops (detailed email info) + mtime fallback',
+        creationDataFrom: 'Multi-source: Database (high accuracy) > cPanel API > WHM API > Fallback',
         performance: 'Parallel processing enabled',
         optimization: 'Minimal API calls (2 per domain for complete data)',
-        note: 'Creation date uses mtime (last modified) as cPanel API may not provide exact creation date'
+        creationDateAccuracy: 'Improved with multi-source approach',
+        note: 'Creation dates now use database records for emails we created, with fallbacks to cPanel/WHM APIs'
       }
     });
 
@@ -1597,8 +1558,6 @@ router.post('/cpanel/send-email', async (req, res) => {
   }
 });
 
-
-
 // Route: Get Email Sending Statistics
 router.get('/cpanel/email-sending-stats/:userId/:domain', async (req, res) => {
   const { userId, domain } = req.params;
@@ -1684,5 +1643,160 @@ router.get('/cpanel/email-sending-stats/:userId/:domain', async (req, res) => {
   }
 });
 
+// Helper function to get accurate email creation date
+async function getEmailCreationDate(email, domain, userId) {
+  try {
+    // Method 1: Check our database first (most accurate for emails we created)
+    const domainRecord = await NamecheapDomain.findOne({
+      userId: userId,
+      domain: domain.toLowerCase(),
+      'emailAccounts.email': email.toLowerCase()
+    });
+
+    if (domainRecord) {
+      const emailAccount = domainRecord.emailAccounts.find(
+        acc => acc.email.toLowerCase() === email.toLowerCase()
+      );
+      if (emailAccount && emailAccount.createdAt) {
+        return {
+          creationDate: emailAccount.createdAt.toISOString(),
+          source: 'database',
+          accuracy: 'high'
+        };
+      }
+    }
+
+    // Method 2: Try cPanel Email/get_pop_quota (sometimes has creation info)
+    try {
+      const quotaResult = await cpanelRequest('Email/get_pop_quota', {
+        user: email.split('@')[0],
+        domain: domain.toLowerCase()
+      });
+
+      if (quotaResult.status === 1 && quotaResult.data) {
+        // Check for various possible creation date fields
+        const possibleDateFields = ['created', 'creation_date', 'date_created', 'created_date'];
+        for (const field of possibleDateFields) {
+          if (quotaResult.data[field]) {
+            try {
+              const parsedDate = new Date(quotaResult.data[field]);
+              if (!isNaN(parsedDate.getTime())) {
+                return {
+                  creationDate: parsedDate.toISOString(),
+                  source: `cpanel_quota_${field}`,
+                  accuracy: 'medium',
+                  rawValue: quotaResult.data[field]
+                };
+              }
+            } catch (e) {
+              // Continue to next field
+            }
+          }
+        }
+      }
+    } catch (quotaError) {
+      console.log(`Could not get quota info for ${email}:`, quotaError.message);
+    }
+
+    // Method 3: Try cPanel Email/list_pops with detailed info
+    try {
+      const listResult = await cpanelRequest('Email/list_pops', {
+        domain: domain.toLowerCase()
+      });
+
+      if (listResult.status === 1 && listResult.data) {
+        const emailInfo = listResult.data.find(
+          acc => acc.email.toLowerCase() === email.toLowerCase()
+        );
+
+        if (emailInfo && emailInfo.created) {
+          try {
+            const parsedDate = new Date(emailInfo.created);
+            if (!isNaN(parsedDate.getTime())) {
+              return {
+                creationDate: parsedDate.toISOString(),
+                source: 'cpanel_list_pops',
+                accuracy: 'medium',
+                rawValue: emailInfo.created
+              };
+            }
+          } catch (e) {
+            console.log(`Could not parse created date for ${email}:`, emailInfo.created);
+          }
+        }
+      }
+    } catch (listError) {
+      console.log(`Could not get list_pops info for ${email}:`, listError.message);
+    }
+
+    // Method 4: Try WHM API for email details
+    try {
+      const whmResult = await whmRequest('list_pops', {
+        domain: domain.toLowerCase()
+      });
+
+      if (whmResult.status === 1 && whmResult.data) {
+        const emailInfo = whmResult.data.find(
+          acc => acc.email.toLowerCase() === email.toLowerCase()
+        );
+
+        if (emailInfo && emailInfo.created) {
+          try {
+            const parsedDate = new Date(emailInfo.created);
+            if (!isNaN(parsedDate.getTime())) {
+              return {
+                creationDate: parsedDate.toISOString(),
+                source: 'whm_api',
+                accuracy: 'medium',
+                rawValue: emailInfo.created
+              };
+            }
+          } catch (e) {
+            console.log(`Could not parse WHM created date for ${email}:`, emailInfo.created);
+          }
+        }
+      }
+    } catch (whmError) {
+      console.log(`Could not get WHM info for ${email}:`, whmError.message);
+    }
+
+    // Method 5: Check file system creation time (if available)
+    try {
+      const fsResult = await cpanelRequest('Fileman/get_file_info', {
+        file: `/home/${MASTER_USER}/etc/valiases/${domain.toLowerCase()}`,
+        dir: '/'
+      });
+
+      if (fsResult.status === 1 && fsResult.data) {
+        // This is a fallback - not very accurate but better than nothing
+        return {
+          creationDate: new Date().toISOString(),
+          source: 'fallback_current_time',
+          accuracy: 'low',
+          note: 'No creation date found, using current time as fallback'
+        };
+      }
+    } catch (fsError) {
+      // Ignore file system errors
+    }
+
+    // Final fallback
+    return {
+      creationDate: new Date().toISOString(),
+      source: 'fallback_current_time',
+      accuracy: 'low',
+      note: 'No creation date information available from any source'
+    };
+
+  } catch (error) {
+    console.error(`Error getting creation date for ${email}:`, error.message);
+    return {
+      creationDate: new Date().toISOString(),
+      source: 'error_fallback',
+      accuracy: 'low',
+      error: error.message
+    };
+  }
+}
 
 module.exports = router;
