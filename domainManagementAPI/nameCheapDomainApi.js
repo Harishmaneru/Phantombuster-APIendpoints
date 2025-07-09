@@ -10,6 +10,9 @@ const NodeCache = require('node-cache');
 const CircuitBreaker = require('opossum');
 const domainCache = new NodeCache({ stdTTL: 300 }); // 5 minute cache
 
+// Import simple file logging system
+const fileLogger = require('../loggingSystem/fileLogger');
+
 // Add missing helper functions
 const CONCURRENT_LIMIT = 5; // Limit concurrent API calls
 
@@ -4156,7 +4159,42 @@ async function registerDomainWithNamecheap(registrationData) {
         stripePaymentInfo = null
     } = registrationData;
 
-    // Validate required fields
+    // Log domain registration initiation
+    try {
+        fileLogger.logDomainPurchase({
+            userId: userId,
+            userEmail: email,
+            domainName: domain,
+            amount: 0, // Will be updated after successful registration
+            currency: 'USD',
+            status: 'initiated',
+            stripeSessionId: stripePaymentInfo?.sessionId,
+            paymentIntentId: stripePaymentInfo?.paymentIntentId,
+            customerId: stripePaymentInfo?.customerId,
+            invoiceId: stripePaymentInfo?.invoiceId,
+            hostedInvoiceUrl: stripePaymentInfo?.hostedInvoiceUrl,
+            invoicePdf: stripePaymentInfo?.invoicePdf,
+            registrationYears: parseInt(years),
+            enablePrivacy: enablePrivacy,
+            ipAddress: 'Namecheap API',
+            userAgent: 'Namecheap Domain Registration',
+            apiEndpoint: '/namecheap/register-domain',
+            requestMethod: 'POST',
+            metadata: {
+                registrationInitiated: true,
+                acceptPremiumPricing: acceptPremiumPricing,
+                useNamecheapDNS: useNamecheapDNS,
+                customNameservers: !!customNameservers,
+                apiMode: process.env.NAMECHEAP_SANDBOX === 'true' ? 'sandbox' : 'production'
+            }
+        });
+    } catch (logError) {
+        console.error('Error logging domain registration initiation:', logError);
+        // Don't fail the registration if logging fails
+    }
+
+    try {
+        // Validate required fields
     if (!domain || !firstName || !lastName || !email || !phone || !address1 || !city || !stateProvince || !country || !postalCode) {
         throw new Error('Missing required registration fields: domain, firstName, lastName, email, phone, address1, city, stateProvince, country, postalCode are required');
     }
@@ -4418,8 +4456,100 @@ async function registerDomainWithNamecheap(registrationData) {
             'Running in sandbox mode - Domain registration is simulated' : null
     };
 
+    // Log successful domain registration
+    try {
+        fileLogger.logDomainPurchase({
+            userId: userId,
+            userEmail: email,
+            domainName: domain,
+            amount: domainData.registrationData.chargedAmount,
+            currency: 'USD',
+            status: 'completed',
+            stripeSessionId: stripePaymentInfo?.sessionId,
+            paymentIntentId: stripePaymentInfo?.paymentIntentId,
+            customerId: stripePaymentInfo?.customerId,
+            invoiceId: stripePaymentInfo?.invoiceId,
+            hostedInvoiceUrl: stripePaymentInfo?.hostedInvoiceUrl,
+            invoicePdf: stripePaymentInfo?.invoicePdf,
+            registrationYears: parseInt(years),
+            enablePrivacy: enablePrivacy,
+            domainId: domainData.registrationData.domainId,
+            orderId: domainData.registrationData.orderId,
+            transactionId: domainData.registrationData.transactionId,
+            expirationDate: domainData.registrationData.expirationDate,
+            contactInfo: {
+                firstName,
+                lastName,
+                email,
+                phone,
+                address1,
+                address2,
+                city,
+                stateProvince,
+                country,
+                postalCode
+            },
+            ipAddress: 'Namecheap API', // Since this is called from API, not direct user request
+            userAgent: 'Namecheap Domain Registration',
+            apiEndpoint: '/namecheap/register-domain',
+            requestMethod: 'POST',
+            metadata: {
+                registrationSuccess: true,
+                databaseRecordId: savedDomain._id,
+                isPremium: isPremium,
+                nameserverType: nameserverResult.type,
+                apiMode: process.env.NAMECHEAP_SANDBOX === 'true' ? 'sandbox' : 'production'
+            }
+        });
+    } catch (logError) {
+        console.error('Error logging domain registration:', logError);
+        // Don't fail the registration if logging fails
+    }
+
     console.log(`[Domain Registration] ✅ Successfully registered ${domain} for user ${userId}`);
     return result;
+  } catch (error) {
+    // Log failed domain registration
+    try {
+      fileLogger.logDomainPurchase({
+        userId: userId,
+        userEmail: email,
+        domainName: domain,
+        amount: 0,
+        currency: 'USD',
+        status: 'failed',
+        stripeSessionId: stripePaymentInfo?.sessionId,
+        paymentIntentId: stripePaymentInfo?.paymentIntentId,
+        customerId: stripePaymentInfo?.customerId,
+        invoiceId: stripePaymentInfo?.invoiceId,
+        hostedInvoiceUrl: stripePaymentInfo?.hostedInvoiceUrl,
+        invoicePdf: stripePaymentInfo?.invoicePdf,
+        registrationYears: parseInt(years),
+        enablePrivacy: enablePrivacy,
+        ipAddress: 'Namecheap API',
+        userAgent: 'Namecheap Domain Registration',
+        apiEndpoint: '/namecheap/register-domain',
+        requestMethod: 'POST',
+        errorDetails: {
+          errorMessage: error.message,
+          errorCode: error.response?.status || 'DOMAIN_REGISTRATION_FAILED',
+          errorStack: error.stack
+        },
+        metadata: {
+          registrationFailed: true,
+          acceptPremiumPricing: acceptPremiumPricing,
+          useNamecheapDNS: useNamecheapDNS,
+          customNameservers: !!customNameservers,
+          apiMode: process.env.NAMECHEAP_SANDBOX === 'true' ? 'sandbox' : 'production'
+        }
+      });
+    } catch (logError) {
+      console.error('Error logging failed domain registration:', logError);
+    }
+    
+    console.error(`[Domain Registration] ❌ Failed to register ${domain} for user ${userId}:`, error.message);
+    throw error;
+  }
 }
 
 // Cache instance with 5 minute TTL by default

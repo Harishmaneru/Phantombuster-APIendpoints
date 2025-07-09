@@ -7,6 +7,9 @@ const rateLimit = require('express-rate-limit');
 // Import the NamecheapDomain model from the existing schema
 const { NamecheapDomain } = require('./nameCheapDomainApi.js');
 
+// Import simple file logging system
+const fileLogger = require('../loggingSystem/fileLogger');
+
 // Configuration - USE IP ADDRESS HERE
 const WHM_HOST = process.env.WHM_HOST;
 const MASTER_USER = process.env.CPANEL_MASTER_USER;
@@ -354,7 +357,34 @@ router.post('/cpanel/create-email', emailCreationLimiter, async (req, res) => {
       // Still return success since email was created in cPanel
     }
 
-    // Step 5: Return success response with additional info
+    // Step 5: Log email creation
+    try {
+      fileLogger.logEmailCreation({
+        userId: userId,
+        userEmail: `${username.toLowerCase()}@${domain.toLowerCase()}`,
+        emailAddress: emailAddress,
+        username: username.toLowerCase(),
+        domain: domain.toLowerCase(),
+        quota: storage,
+        storageUsed: 0,
+        suspended: false,
+        status: 'completed',
+        ipAddress: req.ip,
+        userAgent: req.get('User-Agent'),
+        apiEndpoint: '/cpanel/create-email',
+        requestMethod: 'POST',
+        metadata: {
+          domainId: updatedDomain?._id,
+          emailAccountsCount: updatedDomain?.emailAccounts?.length || 0,
+          cpanelResponse: emailResult.data
+        }
+      });
+    } catch (logError) {
+      console.error('Error logging email creation:', logError);
+      // Don't fail the request if logging fails
+    }
+
+    // Step 6: Return success response with additional info
     res.json({
       success: true,
       email: emailAddress,
@@ -379,6 +409,38 @@ router.post('/cpanel/create-email', emailCreationLimiter, async (req, res) => {
     });
   } catch (err) {
     console.error('Email creation failed:', err.message);
+    
+    // Log failed email creation
+    try {
+      fileLogger.logEmailCreation({
+        userId: userId,
+        userEmail: `${username.toLowerCase()}@${domain.toLowerCase()}`,
+        emailAddress: `${username.toLowerCase()}@${domain.toLowerCase()}`,
+        username: username.toLowerCase(),
+        domain: domain.toLowerCase(),
+        quota: storage,
+        storageUsed: 0,
+        suspended: false,
+        status: 'failed',
+        ipAddress: req.ip,
+        userAgent: req.get('User-Agent'),
+        apiEndpoint: '/cpanel/create-email',
+        requestMethod: 'POST',
+        errorDetails: {
+          errorMessage: err.message,
+          errorCode: err.response?.status || 'EMAIL_CREATION_FAILED',
+          errorStack: err.stack
+        },
+        metadata: {
+          domain: domain.toLowerCase(),
+          username: username.toLowerCase(),
+          quota: storage
+        }
+      });
+    } catch (logError) {
+      console.error('Error logging failed email creation:', logError);
+    }
+    
     res.status(500).json({
       success: false,
       error: err.message,

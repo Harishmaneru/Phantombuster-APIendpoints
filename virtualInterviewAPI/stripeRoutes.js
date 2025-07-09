@@ -6,6 +6,9 @@ const mongoose = require('mongoose');
 // Import domain registration function from Namecheap API
 const { registerDomainWithNamecheap } = require('../domainManagementAPI/nameCheapDomainApi');
 
+// Import simple file logging system
+const fileLogger = require('../loggingSystem/fileLogger');
+
 // Middleware to parse JSON for all routes except /webhook
 router.use((req, res, next) => {
     if (req.originalUrl === '/api/stripe/webhook') {
@@ -460,6 +463,45 @@ router.post('/domain/create-checkout-session', async (req, res) => {
             metadata: metadata,
             customer_creation: 'always'
         });
+
+        // Log the domain purchase initiation
+        try {
+            fileLogger.logDomainPurchase({
+                userId: userId,
+                userEmail: email,
+                domainName: domainName,
+                amount: price,
+                currency: currency || 'usd',
+                status: 'pending',
+                stripeSessionId: session.id,
+                registrationYears: parseInt(years),
+                enablePrivacy: enablePrivacy,
+                contactInfo: {
+                    firstName,
+                    lastName,
+                    email,
+                    phone,
+                    address1,
+                    address2,
+                    city,
+                    stateProvince,
+                    country,
+                    postalCode
+                },
+                ipAddress: req.ip,
+                userAgent: req.get('User-Agent'),
+                apiEndpoint: '/domain/create-checkout-session',
+                requestMethod: 'POST',
+                metadata: {
+                    productId: product.id,
+                    years: years.toString(),
+                    enablePrivacy: enablePrivacy.toString()
+                }
+            });
+        } catch (logError) {
+            console.error('Error logging domain purchase initiation:', logError);
+            // Don't fail the request if logging fails
+        }
 
         res.json({ url: session.url, sessionId: session.id });
 
@@ -1656,6 +1698,53 @@ router.post('/domain/process-success-payment', async (req, res) => {
 
             console.log('Step 2 Complete: Domain registered successfully');
 
+            // Log successful domain purchase completion
+            try {
+                fileLogger.logDomainPurchase({
+                    userId: userId,
+                    userEmail: contactInfo.email,
+                    domainName: domainName,
+                    amount: session.amount_total / 100,
+                    currency: session.currency,
+                    status: 'completed',
+                    stripeSessionId: session.id,
+                    paymentIntentId: session.payment_intent,
+                    customerId: session.customer ? (typeof session.customer === 'object' ? session.customer.id : session.customer) : null,
+                    invoiceId: stripePaymentInfo.invoiceId,
+                    hostedInvoiceUrl: stripePaymentInfo.hostedInvoiceUrl,
+                    invoicePdf: stripePaymentInfo.invoicePdf,
+                    registrationYears: parseInt(session.metadata.years || '1'),
+                    enablePrivacy: session.metadata.enablePrivacy === 'true',
+                    domainId: registrationResult.data?.registration?.domainId,
+                    orderId: registrationResult.data?.registration?.orderId,
+                    transactionId: registrationResult.data?.registration?.transactionId,
+                    expirationDate: registrationResult.data?.registration?.expirationDate,
+                    contactInfo: {
+                        firstName: contactInfo.firstName,
+                        lastName: contactInfo.lastName,
+                        email: contactInfo.email,
+                        phone: contactInfo.phone,
+                        address1: contactInfo.address1,
+                        address2: contactInfo.address2,
+                        city: contactInfo.city,
+                        stateProvince: contactInfo.stateProvince,
+                        country: contactInfo.country,
+                        postalCode: contactInfo.postalCode
+                    },
+                    ipAddress: req.ip,
+                    userAgent: req.get('User-Agent'),
+                    apiEndpoint: '/domain/process-success-payment',
+                    requestMethod: 'POST',
+                    metadata: {
+                        registrationSuccess: true,
+                        databaseRecordId: registrationResult.data?.databaseRecord?._id
+                    }
+                });
+            } catch (logError) {
+                console.error('Error logging successful domain purchase:', logError);
+                // Don't fail the request if logging fails
+            }
+
             // Step 4: Prepare comprehensive response
             const paymentDetails = {
                 sessionId: session.id,
@@ -1699,6 +1788,50 @@ router.post('/domain/process-success-payment', async (req, res) => {
                 name: namecheapError.name,
                 code: namecheapError.code
             });
+
+            // Log failed domain registration
+            try {
+                fileLogger.logDomainPurchase({
+                    userId: userId,
+                    userEmail: contactInfo.email,
+                    domainName: domainName,
+                    amount: session.amount_total / 100,
+                    currency: session.currency,
+                    status: 'failed',
+                    stripeSessionId: session.id,
+                    paymentIntentId: session.payment_intent,
+                    customerId: session.customer ? (typeof session.customer === 'object' ? session.customer.id : session.customer) : null,
+                    registrationYears: parseInt(session.metadata.years || '1'),
+                    enablePrivacy: session.metadata.enablePrivacy === 'true',
+                    contactInfo: {
+                        firstName: contactInfo.firstName,
+                        lastName: contactInfo.lastName,
+                        email: contactInfo.email,
+                        phone: contactInfo.phone,
+                        address1: contactInfo.address1,
+                        address2: contactInfo.address2,
+                        city: contactInfo.city,
+                        stateProvince: contactInfo.stateProvince,
+                        country: contactInfo.country,
+                        postalCode: contactInfo.postalCode
+                    },
+                    ipAddress: req.ip,
+                    userAgent: req.get('User-Agent'),
+                    apiEndpoint: '/domain/process-success-payment',
+                    requestMethod: 'POST',
+                    errorDetails: {
+                        errorMessage: namecheapError.message,
+                        errorCode: namecheapError.code || 'REGISTRATION_FAILED',
+                        errorStack: namecheapError.stack
+                    },
+                    metadata: {
+                        registrationSuccess: false,
+                        errorType: namecheapError.name
+                    }
+                });
+            } catch (logError) {
+                console.error('Error logging failed domain registration:', logError);
+            }
 
             if (namecheapError.isHtmlResponse) {
                 return res.status(502).json({
