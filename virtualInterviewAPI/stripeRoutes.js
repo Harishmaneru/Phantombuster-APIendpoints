@@ -1356,12 +1356,6 @@ router.post('/domain/process-success-payment', async (req, res) => {
     try {
         const { sessionId, userId } = req.body;
 
-        console.log('Processing successful domain payment:', {
-            sessionId,
-            userId,
-            timestamp: new Date().toISOString()
-        });
-
         // Validate required fields
         if (!sessionId || !userId) {
             return res.status(400).json({
@@ -1370,8 +1364,7 @@ router.post('/domain/process-success-payment', async (req, res) => {
             });
         }
 
-        // Step 1: Verify payment was successful
-        console.log('Step 1: Verifying payment status...');
+        // Step 1: Verify payment and extract data in parallel
         const session = await stripe.checkout.sessions.retrieve(sessionId, {
             expand: ['line_items', 'customer']
         });
@@ -1383,7 +1376,7 @@ router.post('/domain/process-success-payment', async (req, res) => {
             });
         }
 
-        // Check if payment was successful
+        // Quick validation checks
         if (session.payment_status !== 'paid') {
             return res.status(400).json({
                 success: false,
@@ -1393,17 +1386,13 @@ router.post('/domain/process-success-payment', async (req, res) => {
             });
         }
 
-        // Verify this is a domain purchase
-        const isDomainPurchase = session.metadata?.purchaseType === 'domain';
-
-        if (!isDomainPurchase) {
+        if (session.metadata?.purchaseType !== 'domain') {
             return res.status(400).json({
                 success: false,
                 error: 'This session is not a domain purchase'
             });
         }
 
-        // Verify user matches
         if (session.metadata?.userId !== userId) {
             return res.status(400).json({
                 success: false,
@@ -1411,13 +1400,8 @@ router.post('/domain/process-success-payment', async (req, res) => {
             });
         }
 
-        console.log('Step 1 Complete: Payment verified successfully');
-
-        // Step 2: Extract contact information from session metadata
         const domainName = session.metadata?.domainName;
-
         if (!domainName) {
-            console.error('Domain name not found in session metadata:', session.metadata);
             return res.status(400).json({
                 success: false,
                 error: 'Domain name not found in session metadata',
@@ -1425,6 +1409,7 @@ router.post('/domain/process-success-payment', async (req, res) => {
             });
         }
 
+        // Extract contact information
         const contactInfo = {
             firstName: session.metadata?.firstName || null,
             lastName: session.metadata?.lastName || null,
@@ -1438,267 +1423,98 @@ router.post('/domain/process-success-payment', async (req, res) => {
             postalCode: session.metadata?.postalCode || null
         };
 
-        console.log('Step 2: Extracted contact information:', {
-            domainName,
-            hasContactInfo: !!(contactInfo.firstName && contactInfo.lastName && contactInfo.email),
-            contactFields: {
-                firstName: !!contactInfo.firstName,
-                lastName: !!contactInfo.lastName,
-                email: !!contactInfo.email,
-                phone: !!contactInfo.phone,
-                address1: !!contactInfo.address1,
-                city: !!contactInfo.city,
-                stateProvince: !!contactInfo.stateProvince,
-                country: !!contactInfo.country,
-                postalCode: !!contactInfo.postalCode
+        // Validate required contact information
+        const requiredFields = ['firstName', 'lastName', 'email', 'phone', 'address1', 'city', 'stateProvince', 'country', 'postalCode'];
+        const missingFields = requiredFields.filter(field => !contactInfo[field]);
+
+        if (missingFields.length > 0) {
+            return res.status(400).json({
+                success: false,
+                error: 'Missing required contact information for domain registration',
+                missingFields,
+                contactInfo: {
+                    firstName: contactInfo.firstName || null,
+                    lastName: contactInfo.lastName || null,
+                    email: contactInfo.email || null,
+                    phone: contactInfo.phone || null,
+                    hasAddress: !!(contactInfo.address1 && contactInfo.city && contactInfo.stateProvince && contactInfo.country && contactInfo.postalCode)
+                }
+            });
+        }
+
+        // Step 2: Optimized invoice processing - simplified approach
+        let hostedInvoiceUrl = null;
+        let invoicePdf = null;
+        let invoiceId = null;
+
+        // Quick invoice lookup - try the most common methods first
+        if (session.invoice) {
+            invoiceId = session.invoice;
+        } else if (session.payment_intent) {
+            try {
+                const paymentIntent = await stripe.paymentIntents.retrieve(session.payment_intent);
+                invoiceId = paymentIntent.invoice;
+            } catch (error) {
+                // Continue without invoice if payment intent retrieval fails
             }
-        });
+        }
+
+        // Fetch invoice details if we have an invoice ID
+        if (invoiceId) {
+            try {
+                const invoice = await stripe.invoices.retrieve(invoiceId);
+                hostedInvoiceUrl = invoice.hosted_invoice_url || null;
+                invoicePdf = invoice.invoice_pdf || null;
+            } catch (error) {
+                // Continue without invoice details if retrieval fails
+            }
+        }
+
+        // Fallback receipt URL
+        if (!hostedInvoiceUrl && session.payment_intent) {
+            hostedInvoiceUrl = `https://dashboard.stripe.com/payments/${session.payment_intent}`;
+        }
+
+        const stripePaymentInfo = {
+            sessionId: session.id,
+            subscriptionId: session.subscription || null,
+            hostedInvoiceUrl: hostedInvoiceUrl,
+            invoicePdf: invoicePdf,
+            paymentIntentId: session.payment_intent || null,
+            customerId: session.customer ? (typeof session.customer === 'object' ? session.customer.id : session.customer) : null,
+            paymentStatus: session.payment_status || 'unknown',
+            amountPaid: session.amount_total ? session.amount_total / 100 : 0,
+            currency: session.currency || 'usd',
+            paymentMethod: session.payment_method_types?.[0] || 'card',
+            paymentDate: new Date(session.created * 1000),
+            receiptUrl: session.receipt_email ? `Receipt sent to ${session.receipt_email}` : null,
+            invoiceId: invoiceId
+        };
 
         // Step 3: Register domain with Namecheap
-        console.log('Step 2: Registering domain with Namecheap...');
+        const registrationResult = await registerDomainWithNamecheap({
+            userId,
+            domain: domainName,
+            firstName: contactInfo.firstName,
+            lastName: contactInfo.lastName,
+            email: contactInfo.email,
+            phone: contactInfo.phone,
+            address1: contactInfo.address1,
+            address2: contactInfo.address2,
+            city: contactInfo.city,
+            stateProvince: contactInfo.stateProvince,
+            country: contactInfo.country,
+            postalCode: contactInfo.postalCode,
+            years: session.metadata.years || '1',
+            enablePrivacy: session.metadata.enablePrivacy === 'true',
+            customNameservers: null,
+            useNamecheapDNS: false,
+            acceptPremiumPricing: true,
+            stripePaymentInfo
+        });
 
-        try {
-            // Debug: Log all available session fields
-            console.log('🔍 Stripe Session Debug Info:', {
-                sessionId: session.id,
-                mode: session.mode,
-                paymentStatus: session.payment_status,
-                hasInvoice: !!session.invoice,
-                hasPaymentIntent: !!session.payment_intent,
-                hasCustomer: !!session.customer,
-                availableFields: Object.keys(session).filter(key => 
-                    ['id', 'mode', 'payment_status', 'invoice', 'payment_intent', 'customer', 
-                     'amount_total', 'currency', 'created', 'metadata'].includes(key)
-                )
-            });
-
-            // Prepare Stripe payment information for database storage
-            let hostedInvoiceUrl = null;
-            let invoicePdf = null;
-            let invoiceId = null;
-            
-            // Method 1: Try to get invoice ID from session
-            if (session.invoice) {
-                invoiceId = session.invoice;
-                console.log('📄 Found invoice ID in session:', invoiceId);
-            }
-            
-            // Method 2: Try to get invoice from payment intent
-            if (!invoiceId && session.payment_intent) {
-                try {
-                    const paymentIntent = await stripe.paymentIntents.retrieve(session.payment_intent);
-                    if (paymentIntent.invoice) {
-                        invoiceId = paymentIntent.invoice;
-                        console.log('📄 Found invoice ID from payment intent:', invoiceId);
-                    }
-                } catch (piError) {
-                    console.warn('Could not retrieve payment intent:', piError.message);
-                }
-            }
-            
-            // Method 3: Try to find invoice by customer and amount
-            if (!invoiceId && session.customer) {
-                try {
-                    const customerId = typeof session.customer === 'object' ? session.customer.id : session.customer;
-                    const amount = session.amount_total;
-                    
-                    const invoices = await stripe.invoices.list({
-                        customer: customerId,
-                        limit: 5
-                    });
-                    
-                    // Find matching invoice by amount and recent date
-                    const matchingInvoice = invoices.data.find(inv => 
-                        inv.amount_paid === amount && 
-                        inv.status === 'paid' &&
-                        Math.abs(inv.created - session.created) < 300 // Within 5 minutes
-                    );
-                    
-                    if (matchingInvoice) {
-                        invoiceId = matchingInvoice.id;
-                        console.log('📄 Found matching invoice by customer and amount:', invoiceId);
-                    }
-                } catch (invError) {
-                    console.warn('Could not search invoices by customer:', invError.message);
-                }
-            }
-            
-            // Method 4: Create an invoice if none exists (for one-time payments)
-            if (!invoiceId && session.customer && session.amount_total) {
-                try {
-                    const customerId = typeof session.customer === 'object' ? session.customer.id : session.customer;
-                    
-                    // Create a simple invoice for the payment
-                    const invoice = await stripe.invoices.create({
-                        customer: customerId,
-                        description: `Domain registration: ${domainName}`,
-                        metadata: {
-                            sessionId: session.id,
-                            domainName: domainName,
-                            purchaseType: 'domain_registration'
-                        }
-                    });
-                    
-                    // Add an invoice item for the payment
-                    await stripe.invoiceItems.create({
-                        customer: customerId,
-                        invoice: invoice.id,
-                        amount: session.amount_total,
-                        currency: session.currency,
-                        description: `Domain registration for ${domainName}`
-                    });
-                    
-                    // Finalize and pay the invoice
-                    const finalizedInvoice = await stripe.invoices.finalizeInvoice(invoice.id);
-                    const paidInvoice = await stripe.invoices.pay(finalizedInvoice.id);
-                    
-                    invoiceId = paidInvoice.id;
-                    hostedInvoiceUrl = paidInvoice.hosted_invoice_url || null;
-                    invoicePdf = paidInvoice.invoice_pdf || null;
-                    
-                    console.log('📄 Created and paid invoice for one-time payment:', {
-                        invoiceId: invoiceId,
-                        hostedInvoiceUrl: hostedInvoiceUrl ? 'Available' : 'Not available',
-                        invoicePdf: invoicePdf ? 'Available' : 'Not available'
-                    });
-                } catch (createError) {
-                    console.warn('Could not create invoice for one-time payment:', createError.message);
-                }
-            }
-            
-            // Method 5: Try to get invoice from payment intent's charges
-            if (!invoiceId && session.payment_intent) {
-                try {
-                    const paymentIntent = await stripe.paymentIntents.retrieve(session.payment_intent, {
-                        expand: ['charges']
-                    });
-                    
-                    if (paymentIntent.charges && paymentIntent.charges.data.length > 0) {
-                        const latestCharge = paymentIntent.charges.data[0];
-                        if (latestCharge.invoice) {
-                            invoiceId = latestCharge.invoice;
-                            console.log('📄 Found invoice ID from payment intent charge:', invoiceId);
-                        }
-                    }
-                } catch (chargeError) {
-                    console.warn('Could not retrieve payment intent charges:', chargeError.message);
-                }
-            }
-            
-            // Now fetch invoice details if we have an invoice ID
-            if (invoiceId) {
-                try {
-                    const invoice = await stripe.invoices.retrieve(invoiceId);
-                    hostedInvoiceUrl = invoice.hosted_invoice_url || null;
-                    invoicePdf = invoice.invoice_pdf || null;
-                    console.log('✅ Fetched invoice details:', {
-                        invoiceId: invoiceId,
-                        hostedInvoiceUrl: hostedInvoiceUrl ? 'Available' : 'Not available',
-                        invoicePdf: invoicePdf ? 'Available' : 'Not available',
-                        invoiceStatus: invoice.status,
-                        invoiceAmount: invoice.amount_paid
-                    });
-                } catch (invoiceError) {
-                    console.warn('❌ Could not fetch invoice details:', invoiceError.message);
-                }
-            } else {
-                console.warn('⚠️ No invoice ID found in session or related data');
-            }
-            
-            // Fallback: Create a simple receipt URL if no hosted invoice URL is available
-            if (!hostedInvoiceUrl && session.payment_intent) {
-                try {
-                    // Create a simple receipt URL using the payment intent
-                    hostedInvoiceUrl = `https://dashboard.stripe.com/payments/${session.payment_intent}`;
-                    console.log('📄 Created fallback receipt URL:', hostedInvoiceUrl);
-                } catch (fallbackError) {
-                    console.warn('Could not create fallback receipt URL:', fallbackError.message);
-                }
-            }
-
-            const stripePaymentInfo = {
-                sessionId: session.id,
-                subscriptionId: session.subscription || null,
-                hostedInvoiceUrl: hostedInvoiceUrl,
-                invoicePdf: invoicePdf,
-                paymentIntentId: session.payment_intent || null,
-                customerId: session.customer ? (typeof session.customer === 'object' ? session.customer.id : session.customer) : null,
-                paymentStatus: session.payment_status || 'unknown',
-                amountPaid: session.amount_total ? session.amount_total / 100 : 0,
-                currency: session.currency || 'usd',
-                paymentMethod: session.payment_method_types?.[0] || 'card',
-                paymentDate: new Date(session.created * 1000),
-                receiptUrl: session.receipt_email ? `Receipt sent to ${session.receipt_email}` : null,
-                invoiceId: invoiceId
-            };
-
-            console.log('Step 3: Prepared Stripe payment info:', {
-                sessionId: stripePaymentInfo.sessionId,
-                customerId: stripePaymentInfo.customerId,
-                amountPaid: stripePaymentInfo.amountPaid,
-                paymentStatus: stripePaymentInfo.paymentStatus,
-                hostedInvoiceUrl: stripePaymentInfo.hostedInvoiceUrl ? 'Available' : 'Not available',
-                invoicePdf: stripePaymentInfo.invoicePdf ? 'Available' : 'Not available',
-                invoiceId: stripePaymentInfo.invoiceId,
-                paymentIntentId: stripePaymentInfo.paymentIntentId,
-                receiptUrl: stripePaymentInfo.receiptUrl
-            });
-            
-            // Additional debug info
-            console.log('📊 Final Payment Info Summary:', {
-                invoiceId: invoiceId,
-                hostedInvoiceUrl: hostedInvoiceUrl,
-                invoicePdf: invoicePdf,
-                hasInvoice: !!invoiceId,
-                hasHostedUrl: !!hostedInvoiceUrl,
-                hasPdf: !!invoicePdf
-            });
-
-            // Validate required contact information before calling Namecheap API
-            const requiredFields = ['firstName', 'lastName', 'email', 'phone', 'address1', 'city', 'stateProvince', 'country', 'postalCode'];
-            const missingFields = requiredFields.filter(field => !contactInfo[field]);
-
-            if (missingFields.length > 0) {
-                console.error('Missing required contact information:', missingFields);
-                return res.status(400).json({
-                    success: false,
-                    error: 'Missing required contact information for domain registration',
-                    missingFields,
-                    contactInfo: {
-                        firstName: contactInfo.firstName || null,
-                        lastName: contactInfo.lastName || null,
-                        email: contactInfo.email || null,
-                        phone: contactInfo.phone || null,
-                        hasAddress: !!(contactInfo.address1 && contactInfo.city && contactInfo.stateProvince && contactInfo.country && contactInfo.postalCode)
-                    }
-                });
-            }
-
-            // Call the domain registration function
-            const registrationResult = await registerDomainWithNamecheap({
-                userId,
-                domain: domainName,
-                firstName: contactInfo.firstName,
-                lastName: contactInfo.lastName,
-                email: contactInfo.email,
-                phone: contactInfo.phone,
-                address1: contactInfo.address1,
-                address2: contactInfo.address2,
-                city: contactInfo.city,
-                stateProvince: contactInfo.stateProvince,
-                country: contactInfo.country,
-                postalCode: contactInfo.postalCode,
-                years: session.metadata.years || '1',
-                enablePrivacy: session.metadata.enablePrivacy === 'true',
-                customNameservers: null,
-                useNamecheapDNS: false,
-                acceptPremiumPricing: true,
-                stripePaymentInfo
-            });
-
-            console.log('Step 2 Complete: Domain registered successfully');
-
-            // Log successful domain purchase completion
+        // Step 4: Async logging (don't wait for it)
+        setImmediate(() => {
             try {
                 fileLogger.logDomainPurchase({
                     userId: userId,
@@ -1742,136 +1558,76 @@ router.post('/domain/process-success-payment', async (req, res) => {
                 });
             } catch (logError) {
                 console.error('Error logging successful domain purchase:', logError);
-                // Don't fail the request if logging fails
             }
+        });
 
-            // Step 4: Prepare comprehensive response
-            const paymentDetails = {
-                sessionId: session.id,
-                status: session.status,
-                paymentStatus: session.payment_status,
-                amount: session.amount_total / 100,
-                currency: session.currency,
-                customer: {
-                    id: session.customer ? (typeof session.customer === 'object' ? session.customer.id : session.customer) : null,
-                    email: session.customer ? (typeof session.customer === 'object' ? session.customer.email : null) : session.customer_details?.email || null,
-                    name: session.customer ? (typeof session.customer === 'object' ? session.customer.name : null) : session.customer_details?.name || null
-                },
-                createdAt: new Date(session.created * 1000).toISOString(),
-                paymentMethod: session.payment_method_types?.[0] || 'card'
-            };
+        // Step 5: Prepare and send response
+        const paymentDetails = {
+            sessionId: session.id,
+            status: session.status,
+            paymentStatus: session.payment_status,
+            amount: session.amount_total / 100,
+            currency: session.currency,
+            customer: {
+                id: session.customer ? (typeof session.customer === 'object' ? session.customer.id : session.customer) : null,
+                email: session.customer ? (typeof session.customer === 'object' ? session.customer.email : null) : session.customer_details?.email || null,
+                name: session.customer ? (typeof session.customer === 'object' ? session.customer.name : null) : session.customer_details?.name || null
+            },
+            createdAt: new Date(session.created * 1000).toISOString(),
+            paymentMethod: session.payment_method_types?.[0] || 'card'
+        };
 
-            // Return combined response
-            res.json({
-                success: true,
-                message: 'Domain purchased and registered successfully',
-                data: {
-                    payment: paymentDetails,
-                    registration: registrationResult,
-                    domain: domainName,
-                    registrationYears: session.metadata.years,
-                    userId: userId,
-                    combinedRecord: {
-                        stripePaymentStored: true,
-                        domainRegistered: true,
-                        databaseRecordId: registrationResult.data?.databaseRecord?._id
-                    }
-                },
-                timestamp: new Date().toISOString()
-            });
+        res.json({
+            success: true,
+            message: 'Domain purchased and registered successfully',
+            data: {
+                payment: paymentDetails,
+                registration: registrationResult,
+                domain: domainName,
+                registrationYears: session.metadata.years,
+                userId: userId,
+                combinedRecord: {
+                    stripePaymentStored: true,
+                    domainRegistered: true,
+                    databaseRecordId: registrationResult.data?.databaseRecord?._id
+                }
+            },
+            timestamp: new Date().toISOString()
+        });
 
-        } catch (namecheapError) {
-            console.error('Namecheap registration failed:', namecheapError.message);
-            console.error('Full error details:', {
-                message: namecheapError.message,
-                stack: namecheapError.stack,
-                name: namecheapError.name,
-                code: namecheapError.code
-            });
-
-            // Log failed domain registration
+    } catch (error) {
+        console.error('Domain success processing error:', error);
+        
+        // Async error logging
+        setImmediate(() => {
             try {
                 fileLogger.logDomainPurchase({
-                    userId: userId,
-                    userEmail: contactInfo.email,
-                    domainName: domainName,
-                    amount: session.amount_total / 100,
-                    currency: session.currency,
-                    status: 'failed',
-                    stripeSessionId: session.id,
-                    paymentIntentId: session.payment_intent,
-                    customerId: session.customer ? (typeof session.customer === 'object' ? session.customer.id : session.customer) : null,
-                    registrationYears: parseInt(session.metadata.years || '1'),
-                    enablePrivacy: session.metadata.enablePrivacy === 'true',
-                    contactInfo: {
-                        firstName: contactInfo.firstName,
-                        lastName: contactInfo.lastName,
-                        email: contactInfo.email,
-                        phone: contactInfo.phone,
-                        address1: contactInfo.address1,
-                        address2: contactInfo.address2,
-                        city: contactInfo.city,
-                        stateProvince: contactInfo.stateProvince,
-                        country: contactInfo.country,
-                        postalCode: contactInfo.postalCode
-                    },
+                    userId: req.body.userId,
+                    userEmail: req.body.email || null,
+                    domainName: req.body.domainName || null,
+                    amount: 0,
+                    currency: 'usd',
+                    status: 'error',
+                    stripeSessionId: req.body.sessionId,
                     ipAddress: req.ip,
                     userAgent: req.get('User-Agent'),
                     apiEndpoint: '/domain/process-success-payment',
                     requestMethod: 'POST',
                     errorDetails: {
-                        errorMessage: namecheapError.message,
-                        errorCode: namecheapError.code || 'REGISTRATION_FAILED',
-                        errorStack: namecheapError.stack
+                        errorMessage: error.message,
+                        errorCode: 'PROCESSING_ERROR',
+                        errorStack: error.stack
                     },
                     metadata: {
                         registrationSuccess: false,
-                        errorType: namecheapError.name
+                        errorType: error.name
                     }
                 });
             } catch (logError) {
-                console.error('Error logging failed domain registration:', logError);
+                console.error('Error logging processing error:', logError);
             }
+        });
 
-            if (namecheapError.isHtmlResponse) {
-                return res.status(502).json({
-                    success: false,
-                    error: 'Namecheap API returned an unexpected HTML response',
-                    details: namecheapError.message,
-                    recoveryOptions: [
-                        'Check Namecheap API status page for outages',
-                        'Retry after a few minutes',
-                        'Check your API credentials and IP whitelist',
-                        'Contact support if the issue persists'
-                    ],
-                    timestamp: new Date().toISOString()
-                });
-            }
-
-            return res.status(500).json({
-                success: false,
-                error: 'Domain registration failed after successful payment',
-                paymentDetails: {
-                    sessionId: session.id,
-                    status: session.status,
-                    paymentStatus: session.payment_status,
-                    amount: session.amount_total / 100,
-                    currency: session.currency
-                },
-                registrationError: {
-                    message: namecheapError.message,
-                    type: namecheapError.name,
-                    code: namecheapError.code
-                },
-                nextSteps: [
-                    'Contact support for manual domain registration',
-                    'Payment was successful and recorded in Stripe'
-                ]
-            });
-        }
-
-    } catch (error) {
-        console.error('Domain success processing error:', error);
         res.status(500).json({
             success: false,
             error: 'Failed to process successful domain payment',
