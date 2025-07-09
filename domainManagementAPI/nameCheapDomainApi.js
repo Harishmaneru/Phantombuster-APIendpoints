@@ -392,8 +392,8 @@ console.log(`[cPanel/WHM] Host: ${CPANEL_HOST}`);
 console.log(`[cPanel/WHM] User: ${CPANEL_USERNAME}`);
 
 
-const BASE_URL = 'https://api.namecheap.com/xml.response';
-// const BASE_URL = 'https://api.sandbox.namecheap.com/xml.response';
+// const BASE_URL = 'https://api.namecheap.com/xml.response';
+const BASE_URL = 'https://api.sandbox.namecheap.com/xml.response';
 
 
 
@@ -4194,7 +4194,7 @@ async function registerDomainWithNamecheap(registrationData) {
     }
 
     try {
-        // Validate required fields
+    // Validate required fields
     if (!domain || !firstName || !lastName || !email || !phone || !address1 || !city || !stateProvince || !country || !postalCode) {
         throw new Error('Missing required registration fields: domain, firstName, lastName, email, phone, address1, city, stateProvince, country, postalCode are required');
     }
@@ -4669,10 +4669,468 @@ router.get('/transfer/:domain/status', apiLimiter, asyncHandler(async (req, res)
 }));
 
 
-//_______________API for delete Domain____
+//_______________API for setup costum nameservers____
 
+router.post('/namecheap/domain/nameservers', validateUserId, async (req, res) => {
+    const {
+        domain,
+        customNameservers = null,
+        useNamecheapDNS = false
+    } = req.body;
 
+    const userId = req.userId;
 
+    // Validate required fields
+    if (!domain) {
+        return res.status(400).json({
+            success: false,
+            error: 'Domain is required',
+            details: 'Please provide the domain name for nameserver configuration'
+        });
+    }
+
+    // Validate domain format
+    if (!isValidDomain(domain)) {
+        return res.status(400).json({
+            success: false,
+            error: 'Invalid domain format',
+            details: 'Please provide a valid domain name'
+        });
+    }
+
+    // Validate nameserver configuration
+    if (!customNameservers && !useNamecheapDNS) {
+        return res.status(400).json({
+            success: false,
+            error: 'Nameserver configuration required',
+            details: 'Please provide either customNameservers array or set useNamecheapDNS to true'
+        });
+    }
+
+    // Validate custom nameservers if provided
+    if (customNameservers) {
+        if (!Array.isArray(customNameservers) || customNameservers.length < 2) {
+            return res.status(400).json({
+                success: false,
+                error: 'Invalid custom nameservers',
+                details: 'Please provide at least 2 valid nameserver addresses in an array'
+            });
+        }
+
+        // Validate each nameserver format
+        const invalidNameservers = customNameservers.filter(ns => {
+            return typeof ns !== 'string' || 
+                   ns.length === 0 || 
+                   !/^[a-zA-Z0-9.-]+$/.test(ns) || 
+                   !ns.includes('.');
+        });
+
+        if (invalidNameservers.length > 0) {
+            return res.status(400).json({
+                success: false,
+                error: 'Invalid nameserver format',
+                details: 'Nameservers must be valid hostnames with at least one dot',
+                invalidNameservers
+            });
+        }
+
+        // Limit to maximum 4 nameservers
+        if (customNameservers.length > 4) {
+            return res.status(400).json({
+                success: false,
+                error: 'Too many nameservers',
+                details: 'Maximum 4 nameservers allowed',
+                provided: customNameservers.length,
+                limit: 4
+            });
+        }
+    }
+
+    try {
+        // 1. Verify domain ownership through database
+        const userDomain = await NamecheapDomain.findOne({
+            userId,
+            domain: domain.toLowerCase()
+        });
+
+        if (!userDomain) {
+            return res.status(404).json({
+                success: false,
+                error: 'Domain not found for this user',
+                details: 'Please ensure the domain is registered under your account'
+            });
+        }
+
+        console.log(`[Nameserver API] Configuring nameservers for ${domain} (User: ${userId})`);
+
+        // 2. Get current domain info from Namecheap
+        const domainInfo = await namecheapRequest('namecheap.domains.getInfo', {
+            DomainName: domain
+        });
+
+        const domainResult = domainInfo.ApiResponse.CommandResponse.DomainGetInfoResult;
+        const currentNameservers = Array.isArray(domainResult.DnsDetails.Nameserver)
+            ? domainResult.DnsDetails.Nameserver
+            : [domainResult.DnsDetails.Nameserver];
+        const isCurrentlyUsingNamecheapDNS = domainResult.DnsDetails.$.IsUsingOurDNS === 'true';
+
+        // 3. Determine nameserver configuration
+        let nameserverConfig;
+        try {
+            nameserverConfig = getNameserverConfig(customNameservers, useNamecheapDNS);
+        } catch (error) {
+            return res.status(400).json({
+                success: false,
+                error: 'Invalid nameserver configuration',
+                details: error.message
+            });
+        }
+
+        // 4. Check if configuration is already applied
+        const currentConfig = {
+            nameservers: currentNameservers,
+            isNamecheapDNS: isCurrentlyUsingNamecheapDNS,
+            isCustom: !isCurrentlyUsingNamecheapDNS
+        };
+
+        const isSameConfiguration = 
+            nameserverConfig.isNamecheapDNS === currentConfig.isNamecheapDNS &&
+            nameserverConfig.nameservers.length === currentConfig.nameservers.length &&
+            nameserverConfig.nameservers.every((ns, index) => ns === currentConfig.nameservers[index]);
+
+        if (isSameConfiguration) {
+            return res.status(200).json({
+                success: true,
+                userId,
+                data: {
+                    domain,
+                    message: 'Nameserver configuration is already applied',
+                    currentConfiguration: {
+                        nameservers: currentNameservers,
+                        type: isCurrentlyUsingNamecheapDNS ? 'namecheap_dns' : 'custom',
+                        isUsingNamecheapDNS: isCurrentlyUsingNamecheapDNS
+                    },
+                    requestedConfiguration: {
+                        nameservers: nameserverConfig.nameservers,
+                        type: nameserverConfig.isNamecheapDNS ? 'namecheap_dns' : 'custom',
+                        isUsingNamecheapDNS: nameserverConfig.isNamecheapDNS
+                    },
+                    noChangesNeeded: true,
+                    timestamp: new Date().toISOString()
+                }
+            });
+        }
+
+        // 5. Apply nameserver configuration
+        console.log(`[Nameserver API] Applying nameserver configuration for ${domain}:`, {
+            current: currentConfig,
+            requested: nameserverConfig
+        });
+
+        const nameserverResult = await setDomainNameservers(domain, nameserverConfig);
+
+        // 6. Verify the change was applied
+        const verificationInfo = await namecheapRequest('namecheap.domains.getInfo', {
+            DomainName: domain
+        });
+
+        const verificationResult = verificationInfo.ApiResponse.CommandResponse.DomainGetInfoResult;
+        const newNameservers = Array.isArray(verificationResult.DnsDetails.Nameserver)
+            ? verificationResult.DnsDetails.Nameserver
+            : [verificationResult.DnsDetails.Nameserver];
+        const newIsUsingNamecheapDNS = verificationResult.DnsDetails.$.IsUsingOurDNS === 'true';
+
+        // 7. Update database with new nameserver configuration
+        const updateData = {
+            'dnsConfiguration.isUsingNamecheapDNS': newIsUsingNamecheapDNS,
+            'dnsConfiguration.nameservers': newNameservers,
+            'dnsConfiguration.customNameservers': !newIsUsingNamecheapDNS,
+            'dnsConfiguration.lastDNSUpdate': new Date()
+        };
+
+        const updatedDomain = await updateDomainInDatabase(userId, domain, updateData);
+
+        // 8. Prepare response
+        const response = {
+            success: true,
+            userId,
+            data: {
+                domain,
+                message: 'Nameserver configuration updated successfully',
+                previousConfiguration: {
+                    nameservers: currentNameservers,
+                    type: isCurrentlyUsingNamecheapDNS ? 'namecheap_dns' : 'custom',
+                    isUsingNamecheapDNS: isCurrentlyUsingNamecheapDNS
+                },
+                newConfiguration: {
+                    nameservers: newNameservers,
+                    type: newIsUsingNamecheapDNS ? 'namecheap_dns' : 'custom',
+                    isUsingNamecheapDNS: newIsUsingNamecheapDNS,
+                    customNameservers: !newIsUsingNamecheapDNS
+                },
+                nameserverResult: {
+                    success: nameserverResult.success,
+                    type: nameserverResult.type,
+                    appliedNameservers: nameserverResult.nameservers
+                },
+                propagation: {
+                    status: 'pending',
+                    estimatedTime: '5-30 minutes',
+                    note: 'DNS changes may take time to propagate globally',
+                    checkEndpoint: `/namecheap/domain/${domain}/dns-status?userId=${userId}`
+                },
+                databaseRecord: {
+                    _id: updatedDomain._id,
+                    updatedAt: updatedDomain.updatedAt
+                },
+                timestamp: new Date().toISOString()
+            }
+        };
+
+        // 9. Add specific messages based on configuration type
+        if (newIsUsingNamecheapDNS) {
+            response.data.nextSteps = {
+                dnsManagement: 'Use Namecheap DNS management panel for DNS records',
+                emailSetup: 'Email accounts can be created once DNS propagates',
+                redirects: 'URL forwarding can be configured through Namecheap'
+            };
+        } else {
+            response.data.nextSteps = {
+                dnsManagement: 'Manage DNS records through your external DNS provider',
+                emailSetup: 'Email setup requires external email service configuration',
+                redirects: 'URL forwarding must be configured through external DNS provider',
+                note: 'External DNS providers may have different features and limitations'
+            };
+        }
+
+        console.log(`[Nameserver API] ✅ Successfully updated nameservers for ${domain} (User: ${userId})`);
+
+        res.json(response);
+
+    } catch (error) {
+        console.error(`[Nameserver API] ❌ Error configuring nameservers for ${domain} (User: ${userId}):`, {
+            error: error.message,
+            stack: error.stack,
+            response: error.response?.data
+        });
+
+        // Handle specific error cases
+        if (error.message.includes('Domain not found')) {
+            return res.status(404).json({
+                success: false,
+                userId,
+                error: 'Domain not found in your Namecheap account',
+                domain,
+                details: 'Please verify the domain is registered with your Namecheap account'
+            });
+        }
+
+        if (error.message.includes('Invalid domain name')) {
+            return res.status(400).json({
+                success: false,
+                userId,
+                error: 'Invalid domain name format',
+                domain,
+                details: 'Please check the domain name spelling and format'
+            });
+        }
+
+        if (error.message.includes('Authentication failed')) {
+            return res.status(401).json({
+                success: false,
+                userId,
+                error: 'Namecheap API authentication failed',
+                details: 'Please check your API credentials'
+            });
+        }
+
+        if (error.message.includes('Failed to set custom nameservers')) {
+            return res.status(400).json({
+                success: false,
+                userId,
+                error: 'Failed to set custom nameservers',
+                domain,
+                details: 'Please verify the nameserver addresses are correct and accessible',
+                troubleshooting: [
+                    'Ensure nameserver addresses are valid and accessible',
+                    'Check that nameservers are properly configured at the provider',
+                    'Verify nameserver addresses don\'t have typos',
+                    'Some TLDs may have restrictions on custom nameservers'
+                ]
+            });
+        }
+
+        res.status(500).json({
+            success: false,
+            userId,
+            error: error.message,
+            domain,
+            details: error.response?.data || null,
+            timestamp: new Date().toISOString()
+        });
+    }
+});
+
+// Get current nameserver configuration for a domain
+router.get('/namecheap/domain/:domain/nameservers', validateUserId, async (req, res) => {
+    const { domain } = req.params;
+    const userId = req.userId;
+
+    if (!isValidDomain(domain)) {
+        return res.status(400).json({
+            success: false,
+            error: 'Invalid domain format',
+            details: 'Please provide a valid domain name'
+        });
+    }
+
+    try {
+        // 1. Verify domain ownership through database
+        const userDomain = await NamecheapDomain.findOne({
+            userId,
+            domain: domain.toLowerCase()
+        });
+
+        if (!userDomain) {
+            return res.status(404).json({
+                success: false,
+                error: 'Domain not found for this user',
+                details: 'Please ensure the domain is registered under your account'
+            });
+        }
+
+        console.log(`[Nameserver API] Getting nameserver configuration for ${domain} (User: ${userId})`);
+
+        // 2. Get current nameserver info from Namecheap
+        const domainInfo = await namecheapRequest('namecheap.domains.getInfo', {
+            DomainName: domain
+        });
+
+        const domainResult = domainInfo.ApiResponse.CommandResponse.DomainGetInfoResult;
+        const currentNameservers = Array.isArray(domainResult.DnsDetails.Nameserver)
+            ? domainResult.DnsDetails.Nameserver
+            : [domainResult.DnsDetails.Nameserver];
+        const isUsingNamecheapDNS = domainResult.DnsDetails.$.IsUsingOurDNS === 'true';
+
+        // 3. Get DNS hosts if using Namecheap DNS
+        let dnsRecords = [];
+        let dnsError = null;
+
+        if (isUsingNamecheapDNS) {
+            try {
+                const dnsHosts = await namecheapRequest('namecheap.domains.dns.getHosts', {
+                    DomainName: domain
+                });
+
+                const hosts = dnsHosts.ApiResponse.CommandResponse?.DomainDNSGetHostsResult?.host;
+                if (hosts) {
+                    const hostsArray = Array.isArray(hosts) ? hosts : [hosts];
+                    dnsRecords = hostsArray.map(host => ({
+                        name: host.$.Name,
+                        type: host.$.Type,
+                        address: host.$.Address,
+                        ttl: host.$.TTL,
+                        mxPref: host.$.MXPref || null
+                    }));
+                }
+            } catch (error) {
+                dnsError = error.message;
+                console.warn(`[Nameserver API] Could not fetch DNS records for ${domain}:`, error.message);
+            }
+        }
+
+        // 4. Prepare response
+        const response = {
+            success: true,
+            userId,
+            data: {
+                domain,
+                currentConfiguration: {
+                    nameservers: currentNameservers,
+                    type: isUsingNamecheapDNS ? 'namecheap_dns' : 'custom',
+                    isUsingNamecheapDNS: isUsingNamecheapDNS,
+                    customNameservers: !isUsingNamecheapDNS
+                },
+                dnsRecords: isUsingNamecheapDNS ? {
+                    count: dnsRecords.length,
+                    records: dnsRecords,
+                    error: dnsError
+                } : {
+                    note: 'DNS records not available - domain uses external nameservers',
+                    externalProvider: 'Manage DNS records through your external DNS provider'
+                },
+                databaseRecord: {
+                    nameservers: userDomain.dnsConfiguration.nameservers,
+                    isUsingNamecheapDNS: userDomain.dnsConfiguration.isUsingNamecheapDNS,
+                    customNameservers: userDomain.dnsConfiguration.customNameservers,
+                    lastDNSUpdate: userDomain.dnsConfiguration.lastDNSUpdate
+                },
+                recommendations: {
+                    ifUsingNamecheapDNS: [
+                        'Use Namecheap DNS management for easy record management',
+                        'Email accounts can be created through cPanel',
+                        'URL forwarding available through Namecheap'
+                    ],
+                    ifUsingCustomNameservers: [
+                        'Manage DNS records through your external provider',
+                        'Email setup requires external email service',
+                        'Consider DNS propagation time for changes'
+                    ]
+                },
+                timestamp: new Date().toISOString()
+            }
+        };
+
+        // 5. Add configuration options
+        response.data.configurationOptions = {
+            switchToNamecheapDNS: {
+                endpoint: `/namecheap/domain/nameservers`,
+                method: 'POST',
+                body: {
+                    domain: domain,
+                    useNamecheapDNS: true
+                },
+                description: 'Switch to Namecheap DNS servers for easier management'
+            },
+            switchToCustomNameservers: {
+                endpoint: `/namecheap/domain/nameservers`,
+                method: 'POST',
+                body: {
+                    domain: domain,
+                    customNameservers: ['ns1.example.com', 'ns2.example.com']
+                },
+                description: 'Switch to custom nameservers (provide valid nameserver addresses)'
+            }
+        };
+
+        res.json(response);
+
+    } catch (error) {
+        console.error(`[Nameserver API] ❌ Error getting nameserver config for ${domain} (User: ${userId}):`, {
+            error: error.message,
+            stack: error.stack
+        });
+
+        if (error.message.includes('Domain not found')) {
+            return res.status(404).json({
+                success: false,
+                userId,
+                error: 'Domain not found in your Namecheap account',
+                domain
+            });
+        }
+
+        res.status(500).json({
+            success: false,
+            userId,
+            error: error.message,
+            domain,
+            timestamp: new Date().toISOString()
+        });
+    }
+});
+
+//_______________API for setup costum nameservers____
 
 module.exports = {
     router,
