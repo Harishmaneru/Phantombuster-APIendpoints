@@ -1597,7 +1597,7 @@ router.post('/domain/process-success-payment', async (req, res) => {
 
     } catch (error) {
         console.error('Domain success processing error:', error);
-        
+
         // Async error logging
         setImmediate(() => {
             try {
@@ -1648,32 +1648,32 @@ function extractHtmlErrorMessage(html) {
 
 router.get('/invoice/:paymentIntentId', async (req, res) => {
     const { paymentIntentId } = req.params;
-  
+
     try {
-      // Option A: Retrieve PI and expand invoice
-      const pi = await stripe.paymentIntents.retrieve(paymentIntentId, {
-        expand: ['invoice'],
-      });
-      if (pi.invoice) {
-        return res.json({ invoice: pi.invoice });
-      }
-  
-      // Option B: Fallback to list invoices
-      const invList = await stripe.invoices.list({
-        payment_intent: paymentIntentId,
-        limit: 1,
-      });
-      if (invList.data.length > 0) {
-        return res.json({ invoice: invList.data[0] });
-      }
-  
-      return res.status(404).json({ error: 'Invoice not found for that PaymentIntent.' });
+        // Option A: Retrieve PI and expand invoice
+        const pi = await stripe.paymentIntents.retrieve(paymentIntentId, {
+            expand: ['invoice'],
+        });
+        if (pi.invoice) {
+            return res.json({ invoice: pi.invoice });
+        }
+
+        // Option B: Fallback to list invoices
+        const invList = await stripe.invoices.list({
+            payment_intent: paymentIntentId,
+            limit: 1,
+        });
+        if (invList.data.length > 0) {
+            return res.json({ invoice: invList.data[0] });
+        }
+
+        return res.status(404).json({ error: 'Invoice not found for that PaymentIntent.' });
     } catch (err) {
-      console.error('Error fetching invoice:', err);
-      return res.status(400).json({ error: err.message });
+        console.error('Error fetching invoice:', err);
+        return res.status(400).json({ error: err.message });
     }
-  });
-  
+});
+
 //______________________________________________________________________________________
 
 
@@ -1682,14 +1682,14 @@ router.get('/invoice/:paymentIntentId', async (req, res) => {
 // router.post('/create-checkout-session-by-app', async (req, res) => {
 //     try {
 //       const { userId, priceId, app, coupon } = req.body;
-  
+
 //       // Map app names to their base URLs
 //       const appUrlMap = {
 //         kampaignai: 'http://localhost:4200',
 //         gps: 'https://gps.onepgr.com',
 //         getsalesgpt: 'https://sales.onepgr.com',
 //       };
-  
+
 //       // Determine URLs
 //       let successUrl, cancelUrl;
 //       if (app && appUrlMap[app]) {
@@ -1698,7 +1698,7 @@ router.get('/invoice/:paymentIntentId', async (req, res) => {
 //       } else {
 //         return res.status(400).json({ error: 'Invalid or missing app parameter' });
 //       }
-  
+
 //       // Build the session payload
 //       const sessionPayload = {
 //         mode: 'subscription',
@@ -1708,17 +1708,17 @@ router.get('/invoice/:paymentIntentId', async (req, res) => {
 //         cancel_url: cancelUrl,
 //         metadata: { userId, app },
 //       };
-  
+
 //       // 🧾 Add discounts if coupon is provided
 //       if (coupon) {
 //         sessionPayload.discounts = [{ coupon }];
 //       }
-  
+
 //       // Create the checkout session
 //       const session = await stripe.checkout.sessions.create(sessionPayload);
-  
+
 //       res.json({ url: session.url });
-  
+
 //     } catch (err) {
 //       console.error("Stripe error (by-app):", {
 //         statusCode: err.statusCode,
@@ -1731,53 +1731,53 @@ router.get('/invoice/:paymentIntentId', async (req, res) => {
 //         .json({ error: err.message });
 //     }
 //   });
-  
+
 
 router.post('/create-checkout-session-by-app', async (req, res) => {
-  try {
-    const { userId, priceId, app, couponId } = req.body;
+    try {
+        const { userId, priceId, app, couponId } = req.body;
 
-    // 1️⃣ Validate app URLs
-    const appUrlMap = {
-      kampaignai: 'http://localhost:4200',
-      gps: 'https://gps.onepgr.com',
-      getsalesgpt: 'https://sales.onepgr.com',
-    };
-    
-    if (!app || !appUrlMap[app]) {
-      return res.status(400).json({ error: 'Invalid or missing app parameter' });
+        // 1️⃣ Validate app URLs
+        const appUrlMap = {
+            kampaignai: 'http://localhost:4200',
+            gps: 'https://gps.onepgr.com',
+            getsalesgpt: 'https://sales.onepgr.com',
+        };
+
+        if (!app || !appUrlMap[app]) {
+            return res.status(400).json({ error: 'Invalid or missing app parameter' });
+        }
+
+        // 2️⃣ Optional: Verify coupon exists (basic safety check)
+        if (couponId) {
+            try {
+                await stripe.coupons.retrieve(couponId);
+            } catch {
+                throw new Error("Invalid coupon code");
+            }
+        }
+
+        const sessionPayload = {
+            mode: 'subscription',
+            payment_method_types: ['card'],
+            line_items: [{ price: priceId, quantity: 1 }],
+            success_url: `${appUrlMap[app]}/success?session_id={CHECKOUT_SESSION_ID}`,
+            cancel_url: `${appUrlMap[app]}/cancel`,
+            metadata: { userId, app }
+        };
+
+        // Add discount if coupon ID is provided
+        if (couponId) {
+            sessionPayload.discounts = [{ coupon: couponId }];
+        }
+
+        const session = await stripe.checkout.sessions.create(sessionPayload);
+        res.json({ url: session.url });
+
+    } catch (err) {
+        console.error("Stripe error:", err);
+        res.status(500).json({ error: err.message });
     }
-
-    // 2️⃣ Optional: Verify coupon exists (basic safety check)
-    if (couponId) {
-      try {
-        await stripe.coupons.retrieve(couponId);
-      } catch {
-        throw new Error("Invalid coupon code");
-      }
-    }
-
-    const sessionPayload = {
-      mode: 'subscription',
-      payment_method_types: ['card'],
-      line_items: [{ price: priceId, quantity: 1 }],
-      success_url: `${appUrlMap[app]}/success?session_id={CHECKOUT_SESSION_ID}`,
-      cancel_url: `${appUrlMap[app]}/cancel`,
-      metadata: { userId, app }
-    };
-
-    // Add discount if coupon ID is provided
-    if (couponId) {
-      sessionPayload.discounts = [{ coupon: couponId }];
-    }
-
-    const session = await stripe.checkout.sessions.create(sessionPayload);
-    res.json({ url: session.url });
-
-  } catch (err) {
-    console.error("Stripe error:", err);
-    res.status(500).json({ error: err.message });
-  }
 });
 
 // router.post('/create-checkout-session-by-app', async (req, res) => {

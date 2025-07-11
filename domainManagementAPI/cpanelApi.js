@@ -409,7 +409,7 @@ router.post('/cpanel/create-email', emailCreationLimiter, async (req, res) => {
     });
   } catch (err) {
     console.error('Email creation failed:', err.message);
-    
+
     // Log failed email creation
     try {
       fileLogger.logEmailCreation({
@@ -440,7 +440,7 @@ router.post('/cpanel/create-email', emailCreationLimiter, async (req, res) => {
     } catch (logError) {
       console.error('Error logging failed email creation:', logError);
     }
-    
+
     res.status(500).json({
       success: false,
       error: err.message,
@@ -499,9 +499,9 @@ router.get('/cpanel/list-emails/:userId/:domain', async (req, res) => {
       const detailsResult = await cpanelRequest('Email/list_pops', {
         domain: domain.toLowerCase()
       });
-      
+
       console.log(`Detailed email info for ${domain}:`, detailsResult);
-      
+
       if (detailsResult.status === 1 && detailsResult.data) {
         detailsResult.data.forEach(email => {
           emailDetails[email.email] = {
@@ -515,7 +515,7 @@ router.get('/cpanel/list-emails/:userId/:domain', async (req, res) => {
       }
     } catch (detailsError) {
       console.log(`Could not get detailed email info for domain ${domain}:`, detailsError.message);
-      
+
       // Try alternative approach - get individual email details
       try {
         console.log(`Trying individual email details for ${domain}...`);
@@ -524,7 +524,7 @@ router.get('/cpanel/list-emails/:userId/:domain', async (req, res) => {
             user: email.user,
             domain: email.domain
           });
-          
+
           if (individualResult.status === 1) {
             emailDetails[email.email] = {
               quota_info: individualResult.data,
@@ -548,13 +548,13 @@ router.get('/cpanel/list-emails/:userId/:domain', async (req, res) => {
       const diskUsedBytes = parseInt(email._diskused) || 0;
       const diskQuotaBytes = parseInt(email._diskquota) || 0;
       const diskUsedPercent = parseFloat(email.diskusedpercent_float) || 0;
-      
+
       // Get creation date from detailed email info or fallback to mtime
       let creationDate = null;
       let lastLogin = null;
       let messageCount = 0;
       let createdField = null;
-      
+
       // Try to get detailed info first
       if (emailDetails[email.email]) {
         const details = emailDetails[email.email];
@@ -569,7 +569,7 @@ router.get('/cpanel/list-emails/:userId/:domain', async (req, res) => {
         lastLogin = details.last_login;
         messageCount = details.message_count || 0;
       }
-      
+
       // Fallback to mtime if no creation date found (this is what we actually have)
       if (!creationDate && email.mtime) {
         try {
@@ -579,7 +579,7 @@ router.get('/cpanel/list-emails/:userId/:domain', async (req, res) => {
           console.log(`Could not parse mtime for ${email.email}:`, email.mtime);
         }
       }
-      
+
       // If still no creation date, use current time as fallback
       if (!creationDate) {
         creationDate = new Date().toISOString();
@@ -1076,10 +1076,10 @@ router.get('/cpanel/user-all-emails/:userId', async (req, res) => {
             );
 
             console.log(`Found ${domainEmails.length} email accounts for domain ${domain} out of ${emailResult.data.length} total emails returned`);
-            
+
             // Debug: Log all emails returned by cPanel for this domain
             if (emailResult.data.length > 0) {
-              console.log(`All emails returned by cPanel for domain ${domain}:`, 
+              console.log(`All emails returned by cPanel for domain ${domain}:`,
                 emailResult.data.map(e => ({ email: e.email, domain: e.domain })));
             }
 
@@ -1090,9 +1090,9 @@ router.get('/cpanel/user-all-emails/:userId', async (req, res) => {
               const detailsResult = await cpanelRequest('Email/list_pops', {
                 domain: domain.toLowerCase()
               });
-              
+
               console.log(`Detailed email info for ${domain}:`, detailsResult);
-              
+
               if (detailsResult.status === 1 && detailsResult.data) {
                 detailsResult.data.forEach(email => {
                   emailDetails[email.email] = {
@@ -1115,14 +1115,14 @@ router.get('/cpanel/user-all-emails/:userId', async (req, res) => {
               const diskUsedBytes = parseInt(email._diskused) || 0;
               const diskQuotaBytes = parseInt(email._diskquota) || 0;
               const diskUsedPercent = parseFloat(email.diskusedpercent_float) || 0;
-              
+
               // Get accurate creation date using our improved helper function
               const creationInfo = await getEmailCreationDate(email.email, domain, userId);
-              
+
               // Get last login and message count from detailed email info
               let lastLogin = null;
               let messageCount = 0;
-              
+
               if (emailDetails[email.email]) {
                 const details = emailDetails[email.email];
                 lastLogin = details.last_login;
@@ -1370,7 +1370,7 @@ router.get('/cpanel/user-all-emails/:userId', async (req, res) => {
     // Step 6: Return response with new structure
     const fetchEndTime = new Date();
     const fetchDuration = fetchEndTime - fetchStartTime;
-    
+
     res.json({
       success: true,
       userId: userId,
