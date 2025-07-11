@@ -355,12 +355,50 @@ require('dotenv').config();
 
 const router = express.Router();
 
+// AES Encryption/Decryption functions
+const ENCRYPTION_KEY = process.env.ENCRYPTION_KEY;
+const IV_LENGTH = 16;
+
+function encrypt(text) {
+  if (!ENCRYPTION_KEY) {
+    throw new Error('ENCRYPTION_KEY environment variable is required');
+  }
+  if (ENCRYPTION_KEY.length !== 32) {
+    throw new Error('ENCRYPTION_KEY must be exactly 32 characters long');
+  }
+  
+  const iv = crypto.randomBytes(IV_LENGTH);
+  const cipher = crypto.createCipheriv('aes-256-cbc', Buffer.from(ENCRYPTION_KEY), iv);
+  let encrypted = cipher.update(text, 'utf8', 'hex');
+  encrypted += cipher.final('hex');
+  return iv.toString('hex') + ':' + encrypted;
+}
+
+function decrypt(text) {
+  if (!ENCRYPTION_KEY) {
+    throw new Error('ENCRYPTION_KEY environment variable is required');
+  }
+  if (ENCRYPTION_KEY.length !== 32) {
+    throw new Error('ENCRYPTION_KEY must be exactly 32 characters long');
+  }
+  
+  const [iv, encryptedText] = text.split(':');
+  const decipher = crypto.createDecipheriv(
+    'aes-256-cbc',
+    Buffer.from(ENCRYPTION_KEY),
+    Buffer.from(iv, 'hex')
+  );
+  let decrypted = decipher.update(encryptedText, 'hex', 'utf8');
+  decrypted += decipher.final('utf8');
+  return decrypted;
+}
+
 // MongoDB Model
 const smtpAuthSchema = new mongoose.Schema({
   email: { type: String, required: true, unique: true },
   host: String,
   port: Number,
-  pass: String,
+  pass: String, // This will store encrypted password
   token: String,
   createdAt: { type: Date, default: Date.now }
 }, { collection: 'email_smtp_auth' });
@@ -376,57 +414,264 @@ mongoose.connect(process.env.ONEPGR_MONGO_URI, {
 
 // 1️⃣ Setup Sender and generate API token
 router.post('/api/senderemail/smtpauth', async (req, res) => {
-  const { host, port, email, pass } = req.body;
-  if (!host || !port || !email || !pass) return res.status(400).json({ success: false, error: 'Missing fields' });
+  try {
+    const { host, port, email, pass } = req.body;
+    if (!host || !port || !email || !pass) {
+      return res.status(400).json({ success: false, error: 'Missing required fields: host, port, email, pass' });
+    }
 
-  const token = crypto.randomBytes(6).toString('hex');
+    // Validate ENCRYPTION_KEY
+    if (!ENCRYPTION_KEY) {
+      return res.status(500).json({ success: false, error: 'ENCRYPTION_KEY environment variable is not configured' });
+    }
+    if (ENCRYPTION_KEY.length !== 32) {
+      return res.status(500).json({ success: false, error: 'ENCRYPTION_KEY must be exactly 32 characters long' });
+    }
 
-  await SMTPAuth.findOneAndUpdate(
-    { email },
-    { host, port, pass, token },
-    { upsert: true, new: true }
-  );
+    const token = crypto.randomBytes(6).toString('hex');
+    
+    // Encrypt the password before saving
+    const encryptedPass = encrypt(pass);
 
-  return res.json({ success: true, token });
+    await SMTPAuth.findOneAndUpdate(
+      { email },
+      { host, port, pass: encryptedPass, token },
+      { upsert: true, new: true }
+    );
+
+    return res.json({ 
+      success: true, 
+      token, 
+      message: `Use token: ${token} and email: ${email} to send and retrieve emails`
+    });
+  } catch (error) {
+    console.error('SMTP Auth Error:', error);
+    return res.status(500).json({ success: false, error: error.message });
+  }
 });
 
 // 2️⃣ Send Email
 router.post('/api/emailsend', async (req, res) => {
-  const { token, email, to, subject, html, text } = req.body;
-  if (!token || !email) return res.status(400).json({ success: false, error: 'Missing API token or email' });
-
-  const smtp = await SMTPAuth.findOne({ email, token });
-  if (!smtp) return res.status(403).json({ success: false, error: 'Invalid token or sender' });
-
   try {
+    const { token, from, to, subject, html, text, template, templateData } = req.body;
+    if (!token || !from) {
+      return res.status(400).json({ success: false, error: 'Missing API token or from email' });
+    }
+
+    const smtp = await SMTPAuth.findOne({ email: from, token });
+    if (!smtp) {
+      return res.status(403).json({ success: false, error: 'Invalid token or sender email' });
+    }
+
+    // Decrypt the password
+    let decryptedPass;
+    try {
+      decryptedPass = decrypt(smtp.pass);
+    } catch (decryptError) {
+      console.error('Password decryption failed:', decryptError);
+      return res.status(500).json({ success: false, error: 'Failed to decrypt stored credentials' });
+    }
+
     const transporter = nodemailer.createTransport({
       host: smtp.host,
       port: smtp.port,
       secure: true,
-      auth: { user: email, pass: smtp.pass }
+      auth: { user: from, pass: decryptedPass }
     });
 
-    const info = await transporter.sendMail({ from: email, to, subject, html, text });
+    // Generate professional email content
+    let emailHtml = html;
+    let emailText = text;
+
+    if (template) {
+      const templateContent = generateEmailTemplate(template, templateData || {});
+      emailHtml = templateContent.html;
+      emailText = templateContent.text;
+    } else if (!html && !text) {
+      // Default professional template if no content provided
+      const defaultTemplate = generateEmailTemplate('default', { subject, content: 'This is a professional email.' });
+      emailHtml = defaultTemplate.html;
+      emailText = defaultTemplate.text;
+    }
+
+    const info = await transporter.sendMail({ 
+      from: from, 
+      to, 
+      subject, 
+      html: emailHtml, 
+      text: emailText 
+    });
+    
     return res.json({ success: true, messageId: info.messageId });
   } catch (err) {
+    console.error('Email Send Error:', err);
     return res.status(500).json({ success: false, error: err.message });
   }
 });
 
+// Professional Email Template Generator
+function generateEmailTemplate(templateName, data) {
+  const templates = {
+    default: {
+      html: `
+        <!DOCTYPE html>
+        <html>
+        <head>
+          <meta charset="utf-8">
+          <meta name="viewport" content="width=device-width, initial-scale=1.0">
+          <title>${data.subject || 'Professional Email'}</title>
+          <style>
+            body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; line-height: 1.6; color: #333; margin: 0; padding: 0; }
+            .container { max-width: 600px; margin: 0 auto; background: #ffffff; }
+            .header { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 30px; text-align: center; }
+            .content { padding: 40px 30px; }
+            .footer { background: #f8f9fa; padding: 20px; text-align: center; color: #666; font-size: 14px; }
+            .button { display: inline-block; padding: 12px 24px; background: #007bff; color: white; text-decoration: none; border-radius: 5px; margin: 20px 0; }
+            .signature { border-top: 1px solid #eee; margin-top: 30px; padding-top: 20px; }
+          </style>
+        </head>
+        <body>
+          <div class="container">
+            <div class="header">
+              <h1>${data.subject || 'Professional Communication'}</h1>
+            </div>
+            <div class="content">
+              <p>${data.content || 'Thank you for your attention to this matter.'}</p>
+              ${data.callToAction ? `<a href="${data.callToAction.url}" class="button">${data.callToAction.text}</a>` : ''}
+              <div class="signature">
+                <p><strong>Best regards,</strong><br>
+                ${data.senderName || 'Your Team'}</p>
+              </div>
+            </div>
+            <div class="footer">
+              <p>This email was sent from a professional email service.</p>
+            </div>
+          </div>
+        </body>
+        </html>
+      `,
+      text: `${data.subject || 'Professional Email'}\n\n${data.content || 'Thank you for your attention to this matter.'}\n\nBest regards,\n${data.senderName || 'Your Team'}`
+    },
+    
+
+    plaintext: {
+      html: `
+        <p>Hello!</p>
+        <p>${data.content || 'This is a simple message.'}</p>
+        <br/>
+        <p>Best regards,<br/>${data.senderName || 'Team EngageGPT'}</p>
+      `,
+      text: `Hello!\n\n${data.content || 'This is a simple message.'}\n\nBest regards,\n${data.senderName || 'Team EngageGPT'}`
+    },
+
+
+    welcome: {
+      html: `
+        <!DOCTYPE html>
+        <html>
+        <head>
+          <meta charset="utf-8">
+          <meta name="viewport" content="width=device-width, initial-scale=1.0">
+          <title>Welcome!</title>
+          <style>
+            body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; line-height: 1.6; color: #333; margin: 0; padding: 0; }
+            .container { max-width: 600px; margin: 0 auto; background: #ffffff; }
+            .header { background: linear-gradient(135deg, #28a745 0%, #20c997 100%); color: white; padding: 30px; text-align: center; }
+            .content { padding: 40px 30px; }
+            .footer { background: #f8f9fa; padding: 20px; text-align: center; color: #666; font-size: 14px; }
+            .button { display: inline-block; padding: 12px 24px; background: #28a745; color: white; text-decoration: none; border-radius: 5px; margin: 20px 0; }
+          </style>
+        </head>
+        <body>
+          <div class="container">
+            <div class="header">
+              <h1>Welcome, ${data.name || 'there'}! 🎉</h1>
+            </div>
+            <div class="content">
+              <p>We're excited to have you on board!</p>
+              <p>${data.message || 'Thank you for joining us. We look forward to providing you with excellent service.'}</p>
+              ${data.actionUrl ? `<a href="${data.actionUrl}" class="button">Get Started</a>` : ''}
+            </div>
+            <div class="footer">
+              <p>Welcome to our community!</p>
+            </div>
+          </div>
+        </body>
+        </html>
+      `,
+      text: `Welcome, ${data.name || 'there'}!\n\nWe're excited to have you on board!\n\n${data.message || 'Thank you for joining us. We look forward to providing you with excellent service.'}`
+    },
+    
+    notification: {
+      html: `
+        <!DOCTYPE html>
+        <html>
+        <head>
+          <meta charset="utf-8">
+          <meta name="viewport" content="width=device-width, initial-scale=1.0">
+          <title>Notification</title>
+          <style>
+            body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; line-height: 1.6; color: #333; margin: 0; padding: 0; }
+            .container { max-width: 600px; margin: 0 auto; background: #ffffff; }
+            .header { background: linear-gradient(135deg, #17a2b8 0%, #6f42c1 100%); color: white; padding: 30px; text-align: center; }
+            .content { padding: 40px 30px; }
+            .footer { background: #f8f9fa; padding: 20px; text-align: center; color: #666; font-size: 14px; }
+            .alert { background: #e3f2fd; border-left: 4px solid #2196f3; padding: 15px; margin: 20px 0; }
+          </style>
+        </head>
+        <body>
+          <div class="container">
+            <div class="header">
+              <h1>📢 ${data.title || 'Notification'}</h1>
+            </div>
+            <div class="content">
+              <div class="alert">
+                <p><strong>${data.alert || 'Important Update'}</strong></p>
+              </div>
+              <p>${data.message || 'This is an important notification for you.'}</p>
+              ${data.details ? `<p><strong>Details:</strong> ${data.details}</p>` : ''}
+            </div>
+            <div class="footer">
+              <p>Thank you for your attention.</p>
+            </div>
+          </div>
+        </body>
+        </html>
+      `,
+      text: `${data.title || 'Notification'}\n\n${data.alert || 'Important Update'}\n\n${data.message || 'This is an important notification for you.'}\n\n${data.details ? `Details: ${data.details}` : ''}`
+    }
+  };
+
+  return templates[templateName] || templates.default;
+}
+
 // 3️⃣ Inbox Fetch with Read/Unread
 router.post('/api/fetchinbox', async (req, res) => {
-  const { token, email, limit = 10 } = req.body;
-  if (!token || !email) return res.status(400).json({ success: false, error: 'Missing token or email' });
-
-  const smtp = await SMTPAuth.findOne({ email, token });
-  if (!smtp) return res.status(403).json({ success: false, error: 'Invalid token or sender' });
-
   try {
+    const { token, email, limit = 10 } = req.body;
+    if (!token || !email) {
+      return res.status(400).json({ success: false, error: 'Missing token or email' });
+    }
+
+    const smtp = await SMTPAuth.findOne({ email, token });
+    if (!smtp) {
+      return res.status(403).json({ success: false, error: 'Invalid token or sender email' });
+    }
+
+    // Decrypt the password
+    let decryptedPass;
+    try {
+      decryptedPass = decrypt(smtp.pass);
+    } catch (decryptError) {
+      console.error('Password decryption failed:', decryptError);
+      return res.status(500).json({ success: false, error: 'Failed to decrypt stored credentials' });
+    }
+
     const client = new ImapFlow({
       host: smtp.host,
       port: 993,
       secure: true,
-      auth: { user: email, pass: smtp.pass },
+      auth: { user: email, pass: decryptedPass },
       logger: false
     });
 
@@ -444,7 +689,7 @@ router.post('/api/fetchinbox', async (req, res) => {
         from: msg.envelope.from.map(f => `${f.name} <${f.address}>`).join(', '),
         date: msg.envelope.date,
         uid: msg.uid,
-        read: msg.flags.includes('Seen'),
+        read: Array.isArray(msg.flags) ? msg.flags.includes('Seen') : false,
         text: parsed.text || '',
         html: parsed.html || ''
       });
@@ -453,6 +698,7 @@ router.post('/api/fetchinbox', async (req, res) => {
 
     return res.json({ success: true, inbox: messages.reverse() });
   } catch (err) {
+    console.error('Inbox Fetch Error:', err);
     return res.status(500).json({ success: false, error: err.message });
   }
 });
