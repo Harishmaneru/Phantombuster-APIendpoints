@@ -336,7 +336,7 @@ router.post('/api/senderemail/smtpauth', async (req, res) => {
 // 2️⃣ Send Email
 router.post('/api/emailsend', async (req, res) => {
   try {
-    const { token, from, to, subject, html, text, template, templateData } = req.body;
+    const { token, from, to, cc, bcc, subject, html, text, template, templateData } = req.body;
     if (!token || !from) {
       return res.status(400).json({ success: false, error: 'Missing API token or from email' });
     }
@@ -398,13 +398,26 @@ router.post('/api/emailsend', async (req, res) => {
       emailText = defaultTemplate.text;
     }
 
-    const info = await transporter.sendMail({
+    // Prepare email options with CC and BCC support
+    const emailOptions = {
       from: from,
       to,
       subject,
       html: emailHtml,
       text: emailText
-    });
+    };
+
+    // Add CC if provided
+    if (cc) {
+      emailOptions.cc = cc;
+    }
+
+    // Add BCC if provided
+    if (bcc) {
+      emailOptions.bcc = bcc;
+    }
+
+    const info = await transporter.sendMail(emailOptions);
 
     console.log('Email sent successfully:', info.messageId);
 
@@ -412,7 +425,12 @@ router.post('/api/emailsend', async (req, res) => {
       success: true, 
       messageId: info.messageId,
       smtpHost: smtp.host,
-      smtpPort: smtp.port
+      smtpPort: smtp.port,
+      recipients: {
+        to: to,
+        cc: cc || null,
+        bcc: bcc || null
+      }
     });
   } catch (err) {
     console.error('Email Send Error:', err);
