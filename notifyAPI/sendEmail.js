@@ -366,7 +366,7 @@ function encrypt(text) {
   if (ENCRYPTION_KEY.length !== 32) {
     throw new Error('ENCRYPTION_KEY must be exactly 32 characters long');
   }
-  
+
   const iv = crypto.randomBytes(IV_LENGTH);
   const cipher = crypto.createCipheriv('aes-256-cbc', Buffer.from(ENCRYPTION_KEY), iv);
   let encrypted = cipher.update(text, 'utf8', 'hex');
@@ -381,7 +381,7 @@ function decrypt(text) {
   if (ENCRYPTION_KEY.length !== 32) {
     throw new Error('ENCRYPTION_KEY must be exactly 32 characters long');
   }
-  
+
   const [iv, encryptedText] = text.split(':');
   const decipher = crypto.createDecipheriv(
     'aes-256-cbc',
@@ -428,24 +428,56 @@ router.post('/api/senderemail/smtpauth', async (req, res) => {
       return res.status(500).json({ success: false, error: 'ENCRYPTION_KEY must be exactly 32 characters long' });
     }
 
-    const token = crypto.randomBytes(6).toString('hex');
+    // Check if email already exists
+    const existingRecord = await SMTPAuth.findOne({ email });
     
+    if (existingRecord) {
+      // If email already exists, return error with existing token
+      console.log(`Email ${email} already exists with token: ${existingRecord.token}`);
+      return res.status(409).json({
+        success: false,
+        error: 'Email already configured',
+        message: `Email ${email} is already created with token: ${existingRecord.token}`,
+        existingToken: existingRecord.token,
+        createdAt: existingRecord.createdAt
+      });
+    }
+
+    // Generate new token for new record
+    const token = crypto.randomBytes(6).toString('hex');
+    console.log(`Creating new SMTP auth for email: ${email}`);
+
     // Encrypt the password before saving
     const encryptedPass = encrypt(pass);
 
-    await SMTPAuth.findOneAndUpdate(
-      { email },
-      { host, port, pass: encryptedPass, token },
-      { upsert: true, new: true }
-    );
+    // Create new record
+    const result = await SMTPAuth.create({
+      email,
+      host,
+      port,
+      pass: encryptedPass,
+      token
+    });
 
-    return res.json({ 
-      success: true, 
-      token, 
-      message: `Use token: ${token} and email: ${email} to send and retrieve emails`
+    console.log(`SMTP auth created successfully for email: ${email}`);
+
+    return res.json({
+      success: true,
+      token,
+      message: `New SMTP auth created for ${email}. Use token: ${token} to send and retrieve emails`
     });
   } catch (error) {
     console.error('SMTP Auth Error:', error);
+    
+    // Handle duplicate key error specifically
+    if (error.code === 11000) {
+      return res.status(409).json({ 
+        success: false, 
+        error: 'Email already exists',
+        message: 'This email is already configured. Please use a different email or contact support.'
+      });
+    }
+    
     return res.status(500).json({ success: false, error: error.message });
   }
 });
@@ -494,14 +526,14 @@ router.post('/api/emailsend', async (req, res) => {
       emailText = defaultTemplate.text;
     }
 
-    const info = await transporter.sendMail({ 
-      from: from, 
-      to, 
-      subject, 
-      html: emailHtml, 
-      text: emailText 
+    const info = await transporter.sendMail({
+      from: from,
+      to,
+      subject,
+      html: emailHtml,
+      text: emailText
     });
-    
+
     return res.json({ success: true, messageId: info.messageId });
   } catch (err) {
     console.error('Email Send Error:', err);
@@ -552,7 +584,7 @@ function generateEmailTemplate(templateName, data) {
       `,
       text: `${data.subject || 'Professional Email'}\n\n${data.content || 'Thank you for your attention to this matter.'}\n\nBest regards,\n${data.senderName || 'Your Team'}`
     },
-    
+
 
     plaintext: {
       html: `
@@ -601,7 +633,7 @@ function generateEmailTemplate(templateName, data) {
       `,
       text: `Welcome, ${data.name || 'there'}!\n\nWe're excited to have you on board!\n\n${data.message || 'Thank you for joining us. We look forward to providing you with excellent service.'}`
     },
-    
+
     notification: {
       html: `
         <!DOCTYPE html>
