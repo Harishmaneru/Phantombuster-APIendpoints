@@ -191,121 +191,293 @@
 
 
 
+// const express = require('express');
+// const nodemailer = require('nodemailer');
+// const { ImapFlow } = require('imapflow');
+// const router = express.Router();
+// require('dotenv').config();
+// const simpleParser = require('mailparser').simpleParser;
+// const dns = require('node:dns').promises;
+// let smtpConfig = null;
+
+// // _____________1️⃣ Setup sender (store SMTP config in memory for this demo)____________________
+
+// router.post('/sender/setup', (req, res) => {
+//   const { host, port, user, pass } = req.body;
+//   console.log('SMTP credentials:', { host, port, user, pass });
+//   if (!host || !port || !user || !pass) {
+//     return res.status(400).json({ success: false, error: 'Missing SMTP credentials' });
+//   }
+
+//   smtpConfig = {
+//     host,
+//     port,
+//     secure: true,
+//     auth: {
+//       user,
+//       pass
+//     }
+//   };
+
+//   return res.json({ success: true, message: 'SMTP sender configured' });
+// });
+
+// // _____________2️⃣ Send email using saved sender config____________________
+
+// router.post('/send', async (req, res) => {
+//   try {
+//     if (!smtpConfig) {
+//       return res.status(400).json({ success: false, error: 'Sender not configured' });
+//     }
+
+//     const { to, subject, html, text } = req.body;
+
+//     const transporter = nodemailer.createTransport(smtpConfig);
+
+//     const info = await transporter.sendMail({
+//       from: smtpConfig.auth.user,
+//       to,
+//       subject,
+//       text,
+//       html
+//     });
+
+//     return res.json({ success: true, messageId: info.messageId });
+//   } catch (err) {
+//     console.error(err);
+//     return res.status(500).json({ success: false, error: err.message });
+//   }
+// });
+
+
+// // _____________3️⃣ Retrieve inbox (IMAP read)____________________
+// router.post('/inbox', async (req, res) => {
+//   const { host, user, pass, limit = 10 } = req.body;
+
+//   if (!host || !user || !pass) {
+//     return res.status(400).json({ success: false, error: 'Missing required IMAP credentials (host, user, pass)' });
+//   }
+
+//   try {
+//     const client = new ImapFlow({
+//       host,
+//       port: 993,
+//       secure: true,
+//       auth: { user, pass },
+//       logger: false // Disable ImapFlow debug logs
+//     });
+
+//     await client.connect();
+//     const lock = await client.mailboxOpen('INBOX');
+
+//     const total = lock.exists; // total number of messages
+//     const maxLimit = Math.max(Math.min(limit, 50), 1); // clamp between 1-50
+//     const start = Math.max(total - (maxLimit - 1), 1); // last N messages
+
+//     console.log(`Fetching messages ${start} to ${total} (last ${maxLimit} messages)`);
+
+//     const messages = [];
+
+//     for await (let msg of client.fetch(`${start}:${total}`, { envelope: true, uid: true, flags: true, source: true })) {
+//       const parsed = await simpleParser(msg.source);
+
+//       messages.push({
+//         subject: msg.envelope.subject,
+//         from: msg.envelope.from.map(f => `${f.name} <${f.address}>`).join(', '),
+//         date: msg.envelope.date,
+//         flags: msg.flags,
+//         uid: msg.uid,
+//         text: parsed.text || '',
+//         html: parsed.html || ''
+//       });
+//     }
+
+//     await client.logout();
+
+//     return res.json({
+//       success: true,
+//       inbox: messages.reverse(), // reverse to show newest first
+//       total: total,
+//       fetched: messages.length
+//     });
+
+//   } catch (err) {
+//     console.error('IMAP error:', err);
+//     return res.status(500).json({ success: false, error: err.message });
+//   }
+// });
+
+// // _____________4️⃣ get host from email____________________
+
+
+// router.get('/get-host', async (req, res) => {
+//   try {
+//     const { email } = req.query;
+
+//     if (!email || !email.includes('@')) {
+//       return res.status(400).json({ success: false, message: 'Invalid email address' });
+//     }
+
+//     const domain = email.split('@')[1];
+
+//     // Perform MX lookup
+//     const mxRecords = await dns.resolveMx(domain);
+//     const sorted = mxRecords.sort((a, b) => a.priority - b.priority);
+//     const mainExchange = sorted[0]?.exchange || `mail.${domain}`;
+
+//     return res.json({
+//       success: true,
+//       domain,
+//       suggested_smtp: `mail.${domain}`,
+//       suggested_imap: `mail.${domain}`,
+//       mx_records: sorted
+//     });
+//   } catch (err) {
+//     console.error('MX Lookup error:', err);
+//     return res.status(500).json({ success: false, message: 'Could not resolve host', error: err.message });
+//   }
+// });
+
+
+// module.exports = router;
+
+
+// Secure Email API with SMTP Send and IMAP Retrieve - MongoDB Backed
+
 const express = require('express');
 const nodemailer = require('nodemailer');
 const { ImapFlow } = require('imapflow');
-const router = express.Router();
+const { simpleParser } = require('mailparser');
+const dns = require('node:dns').promises;
+const crypto = require('crypto');
+const mongoose = require('mongoose');
 require('dotenv').config();
-const simpleParser = require('mailparser').simpleParser;
 
-let smtpConfig = null;
- 
-// _____________1️⃣ Setup sender (store SMTP config in memory for this demo)____________________
- 
-router.post('/sender/setup', (req, res) => {
-  const { host, port, user, pass } = req.body;
-  console.log('SMTP credentials:', { host, port, user, pass });
-  if (!host || !port || !user || !pass) {
-    return res.status(400).json({ success: false, error: 'Missing SMTP credentials' });
-  }
+const router = express.Router();
 
-  smtpConfig = {
-    host,
-    port,
-    secure: true,
-    auth: {
-      user,
-      pass
-    }
-  };
+// MongoDB Model
+const smtpAuthSchema = new mongoose.Schema({
+  email: { type: String, required: true, unique: true },
+  host: String,
+  port: Number,
+  pass: String,
+  token: String,
+  createdAt: { type: Date, default: Date.now }
+}, { collection: 'email_smtp_auth' });
 
-  return res.json({ success: true, message: 'SMTP sender configured' });
+const SMTPAuth = mongoose.model('SMTPAuth', smtpAuthSchema);
+
+// Connect MongoDB
+mongoose.connect(process.env.ONEPGR_MONGO_URI, {
+  dbName: 'onepgr_apps',
+  useNewUrlParser: true,
+  useUnifiedTopology: true
 });
 
-// _____________2️⃣ Send email using saved sender config____________________
+// 1️⃣ Setup Sender and generate API token
+router.post('/api/senderemail/smtpauth', async (req, res) => {
+  const { host, port, email, pass } = req.body;
+  if (!host || !port || !email || !pass) return res.status(400).json({ success: false, error: 'Missing fields' });
 
-router.post('/send', async (req, res) => {
+  const token = crypto.randomBytes(6).toString('hex');
+
+  await SMTPAuth.findOneAndUpdate(
+    { email },
+    { host, port, pass, token },
+    { upsert: true, new: true }
+  );
+
+  return res.json({ success: true, token });
+});
+
+// 2️⃣ Send Email
+router.post('/api/emailsend', async (req, res) => {
+  const { token, email, to, subject, html, text } = req.body;
+  if (!token || !email) return res.status(400).json({ success: false, error: 'Missing API token or email' });
+
+  const smtp = await SMTPAuth.findOne({ email, token });
+  if (!smtp) return res.status(403).json({ success: false, error: 'Invalid token or sender' });
+
   try {
-    if (!smtpConfig) {
-      return res.status(400).json({ success: false, error: 'Sender not configured' });
-    }
-
-    const { to, subject, html, text } = req.body;
-
-    const transporter = nodemailer.createTransport(smtpConfig);
-
-    const info = await transporter.sendMail({
-      from: smtpConfig.auth.user,
-      to,
-      subject,
-      text,
-      html
+    const transporter = nodemailer.createTransport({
+      host: smtp.host,
+      port: smtp.port,
+      secure: true,
+      auth: { user: email, pass: smtp.pass }
     });
 
+    const info = await transporter.sendMail({ from: email, to, subject, html, text });
     return res.json({ success: true, messageId: info.messageId });
   } catch (err) {
-    console.error(err);
     return res.status(500).json({ success: false, error: err.message });
   }
 });
 
+// 3️⃣ Inbox Fetch with Read/Unread
+router.post('/api/fetchinbox', async (req, res) => {
+  const { token, email, limit = 10 } = req.body;
+  if (!token || !email) return res.status(400).json({ success: false, error: 'Missing token or email' });
 
-// _____________3️⃣ Retrieve inbox (IMAP read)____________________
-router.post('/inbox', async (req, res) => {
-  const { host, user, pass, limit = 10 } = req.body;
-
-  if (!host || !user || !pass) {
-    return res.status(400).json({ success: false, error: 'Missing required IMAP credentials (host, user, pass)' });
-  }
+  const smtp = await SMTPAuth.findOne({ email, token });
+  if (!smtp) return res.status(403).json({ success: false, error: 'Invalid token or sender' });
 
   try {
     const client = new ImapFlow({
-      host,
+      host: smtp.host,
       port: 993,
       secure: true,
-      auth: { user, pass },
-      logger: false // Disable ImapFlow debug logs
+      auth: { user: email, pass: smtp.pass },
+      logger: false
     });
 
     await client.connect();
     const lock = await client.mailboxOpen('INBOX');
-
-    const total = lock.exists; // total number of messages
-    const maxLimit = Math.max(Math.min(limit, 50), 1); // clamp between 1-50
-    const start = Math.max(total - (maxLimit - 1), 1); // last N messages
-
-    console.log(`Fetching messages ${start} to ${total} (last ${maxLimit} messages)`);
+    const total = lock.exists;
+    const maxLimit = Math.max(Math.min(limit, 50), 1);
+    const start = Math.max(total - (maxLimit - 1), 1);
 
     const messages = [];
-
     for await (let msg of client.fetch(`${start}:${total}`, { envelope: true, uid: true, flags: true, source: true })) {
       const parsed = await simpleParser(msg.source);
-
       messages.push({
         subject: msg.envelope.subject,
         from: msg.envelope.from.map(f => `${f.name} <${f.address}>`).join(', '),
         date: msg.envelope.date,
-        flags: msg.flags,
         uid: msg.uid,
+        read: msg.flags.includes('Seen'),
         text: parsed.text || '',
         html: parsed.html || ''
       });
     }
-
     await client.logout();
 
-    return res.json({
-      success: true,
-      inbox: messages.reverse(), // reverse to show newest first
-      total: total,
-      fetched: messages.length
-    });
-
+    return res.json({ success: true, inbox: messages.reverse() });
   } catch (err) {
-    console.error('IMAP error:', err);
     return res.status(500).json({ success: false, error: err.message });
   }
 });
 
+// 4️⃣ Host discovery from email
+router.get('/api/get-host', async (req, res) => {
+  try {
+    const { email } = req.query;
+    if (!email.includes('@')) return res.status(400).json({ success: false, message: 'Invalid email' });
+    const domain = email.split('@')[1];
+
+    const mxRecords = await dns.resolveMx(domain);
+    const sorted = mxRecords.sort((a, b) => a.priority - b.priority);
+    const main = sorted[0]?.exchange || `mail.${domain}`;
+
+    return res.json({
+      success: true,
+      domain,
+      suggested_smtp: `mail.${domain}`,
+      suggested_imap: `mail.${domain}`,
+      mx_records: sorted
+    });
+  } catch (err) {
+    return res.status(500).json({ success: false, message: 'Could not resolve host', error: err.message });
+  }
+});
 
 module.exports = router;
