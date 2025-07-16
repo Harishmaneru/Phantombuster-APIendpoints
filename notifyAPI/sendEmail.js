@@ -88,11 +88,7 @@ const emailTrackingSchema = new mongoose.Schema({
 
 const EmailTracking = mongoose.model('EmailTracking', emailTrackingSchema);
 
-// Simple webhook configuration - no database needed
-const WEBHOOK_CONFIG = {
-  url: process.env.EMAIL_WEBHOOK_URL || null,
-  secret: process.env.EMAIL_WEBHOOK_SECRET || 'default-secret-change-this'
-};
+
 
 // Connect MongoDB
 mongoose.connect(process.env.ONEPGR_MONGO_URI, {
@@ -298,42 +294,18 @@ function generateEmailTemplate(templateName, data) {
   return templates[templateName] || templates.default;
 }
 
-// Utility function to trigger webhooks
-async function triggerWebhook(eventType, trackingData) {
+// Utility function to log events (for frontend polling)
+async function logEmailEvent(eventType, trackingData) {
   try {
-    // Only trigger if webhook URL is configured
-    if (!WEBHOOK_CONFIG.url) {
-      console.log(`Webhook not configured, skipping ${eventType} event`);
-      return;
-    }
-
-    const payload = {
-      event: eventType,
-      data: trackingData,
+    console.log(`📧 Email Event: ${eventType}`, {
+      trackingId: trackingData.trackingId,
+      email: trackingData.email,
+      from: trackingData.from,
+      subject: trackingData.subject,
       timestamp: new Date()
-    };
-
-    // Sign the payload for security
-    const signature = crypto.createHmac('sha256', WEBHOOK_CONFIG.secret)
-                          .update(JSON.stringify(payload))
-                          .digest('hex');
-
-    try {
-      await fetch(WEBHOOK_CONFIG.url, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'X-Email-Event-Signature': signature
-        },
-        body: JSON.stringify(payload),
-        timeout: 10000 // 10 second timeout
-      });
-      console.log(`Webhook triggered successfully for ${eventType} event`);
-    } catch (webhookError) {
-      console.error(`Webhook delivery failed:`, webhookError.message);
-    }
+    });
   } catch (error) {
-    console.error('Webhook trigger error:', error);
+    console.error('Event logging error:', error);
   }
 }
 
@@ -663,8 +635,8 @@ router.get('/api/track/open/:trackingId', async (req, res) => {
     );
 
     if (tracking) {
-      // Trigger webhook
-      await triggerWebhook('opened', {
+      // Log email event
+      await logEmailEvent('opened', {
         trackingId,
         email: tracking.toEmail,
         from: tracking.fromEmail,
@@ -707,8 +679,8 @@ router.get('/api/track/click/:trackingId', async (req, res) => {
     );
 
     if (tracking) {
-      // Trigger webhook
-      await triggerWebhook('clicked', {
+      // Log email event
+      await logEmailEvent('clicked', {
         trackingId,
         email: tracking.toEmail,
         from: tracking.fromEmail,
@@ -921,8 +893,8 @@ async function checkForReplies() {
           tracking.repliedAt = new Date();
           await tracking.save();
 
-          // Trigger webhook
-          await triggerWebhook('replied', {
+          // Log email event
+          await logEmailEvent('replied', {
             trackingId: tracking.messageId,
             email: tracking.toEmail,
             from: tracking.fromEmail,
