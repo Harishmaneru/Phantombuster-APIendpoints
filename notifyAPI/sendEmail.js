@@ -8,7 +8,6 @@ const dns = require('node:dns').promises;
 const crypto = require('crypto');
 const mongoose = require('mongoose');
 const fetch = require('node-fetch');
-const { v4: uuidv4 } = require('uuid');
 require('dotenv').config();
 
 const router = express.Router();
@@ -452,8 +451,9 @@ router.post('/api/emailsend', async (req, res) => {
       });
     }
 
-    // Generate a unique tracking ID using UUID
-    const trackingId = uuidv4();
+    // Generate a unique tracking ID using crypto
+    const trackingId = crypto.randomBytes(16).toString('hex');
+    
     const baseUrl = process.env.BASE_URL || 'http://localhost:3000';
     const trackingPixelUrl = `${baseUrl}/api/track/open/${trackingId}`;
     
@@ -516,16 +516,22 @@ router.post('/api/emailsend', async (req, res) => {
     console.log('Email sent successfully:', info.messageId);
 
     // Save tracking information
-    const trackingRecord = new EmailTracking({
-      messageId: trackingId,
-      fromEmail: from,
-      toEmail: to,
-      subject,
-      webhookUrl: webhookUrl // Optional per-email webhook override
-    });
+    try {
+      const trackingRecord = new EmailTracking({
+        messageId: trackingId,
+        fromEmail: from,
+        toEmail: to,
+        subject,
+        webhookUrl: webhookUrl // Optional per-email webhook override
+      });
 
-    await trackingRecord.save();
-    console.log('Tracking record created for message:', trackingId);
+      await trackingRecord.save();
+      console.log('Tracking record created for message:', trackingId);
+    } catch (trackingError) {
+      console.error('Tracking record creation error:', trackingError);
+      // Continue without tracking if it fails
+      console.log('Email sent but tracking failed');
+    }
 
     return res.json({ 
       success: true, 
