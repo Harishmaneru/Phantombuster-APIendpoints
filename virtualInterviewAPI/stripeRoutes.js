@@ -1491,6 +1491,14 @@ router.post('/domain/process-success-payment', async (req, res) => {
             invoiceId: invoiceId
         };
 
+        // Debug: Log session metadata to see what's available
+        console.log('[Stripe Domain Registration] Session metadata:', {
+            sessionId: session.id,
+            metadata: session.metadata,
+            enableAutoNameservers: session.metadata.enableAutoNameservers,
+            enableAutoNameserversBool: session.metadata.enableAutoNameservers === 'true'
+        });
+
         // Step 3: Register domain with Namecheap
         const registrationResult = await registerDomainWithNamecheap({
             userId,
@@ -1509,7 +1517,7 @@ router.post('/domain/process-success-payment', async (req, res) => {
             enablePrivacy: session.metadata.enablePrivacy === 'true',
             customNameservers: null,
             useNamecheapDNS: false,
-            enableAutoNameservers: session.metadata.enableAutoNameservers === 'true', // Add auto nameservers support
+            enableAutoNameservers: session.metadata.enableAutoNameservers !== 'false', // Enable auto nameservers by default unless explicitly disabled
             acceptPremiumPricing: true,
             stripePaymentInfo
         });
