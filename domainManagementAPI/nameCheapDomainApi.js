@@ -5018,8 +5018,12 @@ router.get('/namecheap/domain/:domain/nameservers', validateUserId, async (req, 
 
         if (isUsingNamecheapDNS) {
             try {
+                // Split domain into SLD and TLD for the API call
+                const [sld, tld] = domain.split('.');
+                
                 const dnsHosts = await namecheapRequest('namecheap.domains.dns.getHosts', {
-                    DomainName: domain
+                    SLD: sld,
+                    TLD: tld
                 });
 
                 const hosts = dnsHosts.ApiResponse.CommandResponse?.DomainDNSGetHostsResult?.host;
