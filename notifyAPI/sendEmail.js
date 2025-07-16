@@ -81,7 +81,10 @@ const emailTrackingSchema = new mongoose.Schema({
     ip: String,
     userAgent: String
   }]
-}, { collection: 'email_tracking' });
+}, { 
+  collection: 'email_tracking_v2',
+  timestamps: true 
+});
 
 const EmailTracking = mongoose.model('EmailTracking', emailTrackingSchema);
 
@@ -516,22 +519,17 @@ router.post('/api/emailsend', async (req, res) => {
     console.log('Email sent successfully:', info.messageId);
 
     // Save tracking information
-    try {
-      const trackingRecord = new EmailTracking({
-        messageId: trackingId,
-        fromEmail: from,
-        toEmail: to,
-        subject,
-        webhookUrl: webhookUrl // Optional per-email webhook override
-      });
+    console.log('Creating tracking record for:', trackingId);
+    const trackingRecord = new EmailTracking({
+      messageId: trackingId,
+      fromEmail: from,
+      toEmail: to,
+      subject,
+      webhookUrl: webhookUrl // Optional per-email webhook override
+    });
 
-      await trackingRecord.save();
-      console.log('Tracking record created for message:', trackingId);
-    } catch (trackingError) {
-      console.error('Tracking record creation error:', trackingError);
-      // Continue without tracking if it fails
-      console.log('Email sent but tracking failed');
-    }
+    await trackingRecord.save();
+    console.log('Tracking record created successfully for message:', trackingId);
 
     return res.json({ 
       success: true, 
@@ -759,6 +757,27 @@ router.get('/api/track/:trackingId', async (req, res) => {
 });
 
 // 6️⃣ Webhook Endpoint for Frontend Notifications
+
+// Check if tracking record exists (for debugging)
+router.get('/api/track-exists/:trackingId', async (req, res) => {
+  try {
+    const tracking = await EmailTracking.findOne({ messageId: req.params.trackingId });
+    res.json({
+      success: true,
+      exists: !!tracking,
+      tracking: tracking ? {
+        messageId: tracking.messageId,
+        fromEmail: tracking.fromEmail,
+        toEmail: tracking.toEmail,
+        subject: tracking.subject,
+        sentAt: tracking.sentAt
+      } : null
+    });
+  } catch (error) {
+    console.error('Track exists check error:', error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
 
 // Get real-time email notifications
 router.get('/api/webhook', async (req, res) => {
