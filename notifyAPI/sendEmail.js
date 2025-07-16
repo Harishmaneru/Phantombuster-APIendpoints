@@ -7,6 +7,8 @@ const { simpleParser } = require('mailparser');
 const dns = require('node:dns').promises;
 const crypto = require('crypto');
 const mongoose = require('mongoose');
+const fetch = require('node-fetch');
+const { v4: uuidv4 } = require('uuid');
 require('dotenv').config();
 
 const router = express.Router();
@@ -61,6 +63,34 @@ const smtpAuthSchema = new mongoose.Schema({
 }, { collection: 'email_smtp_auth' });
 
 const SMTPAuth = mongoose.model('SMTPAuth', smtpAuthSchema);
+
+// Email Tracking Schema
+const emailTrackingSchema = new mongoose.Schema({
+  messageId: { type: String, required: true, unique: true },
+  fromEmail: { type: String, required: true },
+  toEmail: { type: String, required: true },
+  subject: String,
+  sentAt: { type: Date, default: Date.now },
+  openedAt: Date,
+  openedCount: { type: Number, default: 0 },
+  lastOpenedIP: String,
+  repliedAt: Date,
+  webhookUrl: String,
+  clickEvents: [{
+    url: String,
+    clickedAt: Date,
+    ip: String,
+    userAgent: String
+  }]
+}, { collection: 'email_tracking' });
+
+const EmailTracking = mongoose.model('EmailTracking', emailTrackingSchema);
+
+// Simple webhook configuration - no database needed
+const WEBHOOK_CONFIG = {
+  url: process.env.EMAIL_WEBHOOK_URL || null,
+  secret: process.env.EMAIL_WEBHOOK_SECRET || 'default-secret-change-this'
+};
 
 // Connect MongoDB
 mongoose.connect(process.env.ONEPGR_MONGO_URI, {
@@ -266,6 +296,45 @@ function generateEmailTemplate(templateName, data) {
   return templates[templateName] || templates.default;
 }
 
+// Utility function to trigger webhooks
+async function triggerWebhook(eventType, trackingData) {
+  try {
+    // Only trigger if webhook URL is configured
+    if (!WEBHOOK_CONFIG.url) {
+      console.log(`Webhook not configured, skipping ${eventType} event`);
+      return;
+    }
+
+    const payload = {
+      event: eventType,
+      data: trackingData,
+      timestamp: new Date()
+    };
+
+    // Sign the payload for security
+    const signature = crypto.createHmac('sha256', WEBHOOK_CONFIG.secret)
+                          .update(JSON.stringify(payload))
+                          .digest('hex');
+
+    try {
+      await fetch(WEBHOOK_CONFIG.url, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Email-Event-Signature': signature
+        },
+        body: JSON.stringify(payload),
+        timeout: 10000 // 10 second timeout
+      });
+      console.log(`Webhook triggered successfully for ${eventType} event`);
+    } catch (webhookError) {
+      console.error(`Webhook delivery failed:`, webhookError.message);
+    }
+  } catch (error) {
+    console.error('Webhook trigger error:', error);
+  }
+}
+
 // 1️⃣ Setup Sender and generate API token
 router.post('/api/senderemail/smtpauth', async (req, res) => {
   try {
@@ -336,7 +405,7 @@ router.post('/api/senderemail/smtpauth', async (req, res) => {
 // 2️⃣ Send Email
 router.post('/api/emailsend', async (req, res) => {
   try {
-    const { token, from, to, cc, bcc, subject, html, text, template, templateData } = req.body;
+    const { token, from, to, cc, bcc, subject, html, text, template, templateData, trackLinks, webhookUrl } = req.body;
     if (!token || !from) {
       return res.status(400).json({ success: false, error: 'Missing API token or from email' });
     }
@@ -383,6 +452,11 @@ router.post('/api/emailsend', async (req, res) => {
       });
     }
 
+    // Generate a unique tracking ID using UUID
+    const trackingId = uuidv4();
+    const baseUrl = process.env.BASE_URL || 'http://localhost:3000';
+    const trackingPixelUrl = `${baseUrl}/api/track/open/${trackingId}`;
+    
     // Generate professional email content
     let emailHtml = html;
     let emailText = text;
@@ -398,13 +472,33 @@ router.post('/api/emailsend', async (req, res) => {
       emailText = defaultTemplate.text;
     }
 
+    // Add tracking pixel to HTML emails
+    if (emailHtml) {
+      emailHtml += `<img src="${trackingPixelUrl}" width="1" height="1" style="display:none" alt=""/>`;
+    }
+
+    // Modify links for click tracking if requested
+    if (emailHtml && trackLinks) {
+      emailHtml = emailHtml.replace(/href="(.*?)"/g, (match, url) => {
+        if (url.startsWith('http') && !url.includes(baseUrl)) {
+          const encodedUrl = encodeURIComponent(url);
+          return `href="${baseUrl}/api/track/click/${trackingId}?url=${encodedUrl}"`;
+        }
+        return match;
+      });
+    }
+
     // Prepare email options with CC and BCC support
     const emailOptions = {
       from: from,
       to,
       subject,
       html: emailHtml,
-      text: emailText
+      text: emailText,
+      headers: {
+        'X-Tracking-ID': trackingId,
+        'References': trackingId  // For reliable reply detection
+      }
     };
 
     // Add CC if provided
@@ -421,9 +515,22 @@ router.post('/api/emailsend', async (req, res) => {
 
     console.log('Email sent successfully:', info.messageId);
 
+    // Save tracking information
+    const trackingRecord = new EmailTracking({
+      messageId: trackingId,
+      fromEmail: from,
+      toEmail: to,
+      subject,
+      webhookUrl: webhookUrl // Optional per-email webhook override
+    });
+
+    await trackingRecord.save();
+    console.log('Tracking record created for message:', trackingId);
+
     return res.json({ 
       success: true, 
       messageId: info.messageId,
+      trackingId,
       smtpHost: smtp.host,
       smtpPort: smtp.port,
       recipients: {
@@ -529,5 +636,285 @@ router.get('/api/get-host', async (req, res) => {
     return res.status(500).json({ success: false, message: 'Could not resolve host', error: err.message });
   }
 });
+
+// 5️⃣ Email Tracking Endpoints
+
+// Track email opens
+router.get('/api/track/open/:trackingId', async (req, res) => {
+  try {
+    const trackingId = req.params.trackingId;
+    const ip = req.headers['x-forwarded-for'] || req.connection.remoteAddress;
+    const userAgent = req.headers['user-agent'];
+
+    const tracking = await EmailTracking.findOneAndUpdate(
+      { messageId: trackingId },
+      { 
+        $inc: { openedCount: 1 },
+        $set: { 
+          openedAt: new Date(),
+          lastOpenedIP: ip 
+        }
+      },
+      { new: true }
+    );
+
+    if (tracking) {
+      // Trigger webhook
+      await triggerWebhook('opened', {
+        trackingId,
+        email: tracking.toEmail,
+        from: tracking.fromEmail,
+        subject: tracking.subject,
+        ip,
+        userAgent,
+        timestamp: new Date()
+      });
+    }
+
+    // Return a transparent pixel
+    res.set('Content-Type', 'image/png');
+    res.send(Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=', 'base64'));
+  } catch (error) {
+    console.error('Open tracking error:', error);
+    res.status(500).send('Tracking error');
+  }
+});
+
+// Track link clicks
+router.get('/api/track/click/:trackingId', async (req, res) => {
+  try {
+    const trackingId = req.params.trackingId;
+    const url = decodeURIComponent(req.query.url);
+    const ip = req.headers['x-forwarded-for'] || req.connection.remoteAddress;
+    const userAgent = req.headers['user-agent'];
+
+    const tracking = await EmailTracking.findOneAndUpdate(
+      { messageId: trackingId },
+      { 
+        $push: { 
+          clickEvents: {
+            url,
+            clickedAt: new Date(),
+            ip,
+            userAgent
+          }
+        }
+      }
+    );
+
+    if (tracking) {
+      // Trigger webhook
+      await triggerWebhook('clicked', {
+        trackingId,
+        email: tracking.toEmail,
+        from: tracking.fromEmail,
+        subject: tracking.subject,
+        url,
+        ip,
+        userAgent,
+        timestamp: new Date()
+      });
+    }
+
+    res.redirect(url);
+  } catch (error) {
+    console.error('Click tracking error:', error);
+    res.status(500).send('Tracking error');
+  }
+});
+
+// Get tracking status
+router.get('/api/track/:trackingId', async (req, res) => {
+  try {
+    const tracking = await EmailTracking.findOne({ 
+      messageId: req.params.trackingId 
+    });
+
+    if (!tracking) {
+      return res.status(404).json({ success: false, error: 'Tracking not found' });
+    }
+
+    res.json({
+      success: true,
+      tracking: {
+        sentAt: tracking.sentAt,
+        opened: !!tracking.openedAt,
+        openedCount: tracking.openedCount,
+        lastOpenedAt: tracking.openedAt,
+        replied: !!tracking.repliedAt,
+        repliedAt: tracking.repliedAt,
+        clicks: tracking.clickEvents || []
+      }
+    });
+  } catch (error) {
+    console.error('Tracking status error:', error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// 6️⃣ Webhook Endpoint for Frontend Notifications
+
+// Get real-time email notifications
+router.get('/api/webhook', async (req, res) => {
+  try {
+    const { trackingId, lastCheck } = req.query;
+    
+    if (!trackingId) {
+      return res.status(400).json({ 
+        success: false, 
+        error: 'trackingId is required' 
+      });
+    }
+
+    // Find the tracking record
+    const tracking = await EmailTracking.findOne({ messageId: trackingId });
+    
+    if (!tracking) {
+      return res.status(404).json({ 
+        success: false, 
+        error: 'Tracking not found' 
+      });
+    }
+
+    // Check for new events since last check
+    const lastCheckTime = lastCheck ? new Date(lastCheck) : new Date(0);
+    const newEvents = [];
+
+    // Check for opens
+    if (tracking.openedAt && tracking.openedAt > lastCheckTime) {
+      newEvents.push({
+        event: 'opened',
+        timestamp: tracking.openedAt,
+        data: {
+          trackingId: tracking.messageId,
+          email: tracking.toEmail,
+          from: tracking.fromEmail,
+          subject: tracking.subject,
+          openedCount: tracking.openedCount,
+          ip: tracking.lastOpenedIP
+        }
+      });
+    }
+
+    // Check for replies
+    if (tracking.repliedAt && tracking.repliedAt > lastCheckTime) {
+      newEvents.push({
+        event: 'replied',
+        timestamp: tracking.repliedAt,
+        data: {
+          trackingId: tracking.messageId,
+          email: tracking.toEmail,
+          from: tracking.fromEmail,
+          subject: tracking.subject
+        }
+      });
+    }
+
+    // Check for new clicks
+    const newClicks = tracking.clickEvents.filter(click => 
+      click.clickedAt > lastCheckTime
+    );
+
+    newClicks.forEach(click => {
+      newEvents.push({
+        event: 'clicked',
+        timestamp: click.clickedAt,
+        data: {
+          trackingId: tracking.messageId,
+          email: tracking.toEmail,
+          from: tracking.fromEmail,
+          subject: tracking.subject,
+          url: click.url,
+          ip: click.ip,
+          userAgent: click.userAgent
+        }
+      });
+    });
+
+    // Sort events by timestamp
+    newEvents.sort((a, b) => a.timestamp - b.timestamp);
+
+    res.json({
+      success: true,
+      trackingId,
+      newEvents,
+      currentStatus: {
+        opened: !!tracking.openedAt,
+        openedCount: tracking.openedCount,
+        lastOpenedAt: tracking.openedAt,
+        replied: !!tracking.repliedAt,
+        repliedAt: tracking.repliedAt,
+        totalClicks: tracking.clickEvents.length
+      }
+    });
+
+  } catch (error) {
+    console.error('Webhook error:', error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// 7️⃣ Reply Detection Function
+async function checkForReplies() {
+  try {
+    // Get all active tracking records where we haven't detected a reply yet
+    const trackings = await EmailTracking.find({ 
+      repliedAt: { $exists: false },
+      fromEmail: { $exists: true }
+    });
+
+    for (const tracking of trackings) {
+      const smtp = await SMTPAuth.findOne({ email: tracking.fromEmail });
+      if (!smtp) continue;
+
+      // Decrypt password
+      const decryptedPass = decrypt(smtp.pass);
+
+      const client = new ImapFlow({
+        host: smtp.host.replace('smtp.', 'imap.'), // Convert to IMAP host
+        port: 993,
+        secure: true,
+        auth: { user: tracking.fromEmail, pass: decryptedPass },
+        logger: false
+      });
+
+      try {
+        await client.connect();
+        await client.mailboxOpen('INBOX');
+
+        // Search for replies to this message using References header
+        const messages = await client.search({
+          answered: true,
+          OR: [
+            { headers: { 'In-Reply-To': tracking.messageId } },
+            { headers: { 'References': tracking.messageId } }
+          ]
+        });
+
+        if (messages.length > 0) {
+          // Update tracking record
+          tracking.repliedAt = new Date();
+          await tracking.save();
+
+          // Trigger webhook
+          await triggerWebhook('replied', {
+            trackingId: tracking.messageId,
+            email: tracking.toEmail,
+            from: tracking.fromEmail,
+            subject: tracking.subject,
+            timestamp: new Date()
+          });
+        }
+      } finally {
+        await client.logout();
+      }
+    }
+  } catch (error) {
+    console.error('Reply checking error:', error);
+  }
+}
+
+// Set up periodic reply checking (every 5 minutes)
+setInterval(checkForReplies, 5 * 60 * 1000);
 
 module.exports = router;
