@@ -392,8 +392,8 @@ console.log(`[cPanel/WHM] Host: ${CPANEL_HOST}`);
 console.log(`[cPanel/WHM] User: ${CPANEL_USERNAME}`);
 
 
-// const BASE_URL = 'https://api.namecheap.com/xml.response';
-const BASE_URL = 'https://api.sandbox.namecheap.com/xml.response';
+const BASE_URL = 'https://api.namecheap.com/xml.response';
+// const BASE_URL = 'https://api.sandbox.namecheap.com/xml.response';
 
 
 
