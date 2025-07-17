@@ -449,11 +449,15 @@ router.post('/domain/create-checkout-session', async (req, res) => {
         // Stripe Checkout Session
         const session = await stripe.checkout.sessions.create({
             payment_method_types: ['card'],
-            mode: 'payment', // One-time payment (not subscription)
+            mode: 'payment',
             line_items: [{
                 price_data: {
                     currency: currency || 'usd',
-                    product: product.id,
+                    product_data: {  // Embed product data directly
+                        name: `Domain: ${domainName}`,
+                        description: `Registration for ${domainName}`,
+                        metadata: { type: 'domain', userId, domainName }
+                    },
                     unit_amount: Math.round(price * 100),
                 },
                 quantity: 1,

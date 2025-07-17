@@ -1,0 +1,39 @@
+[
+  {
+    "id": "1752736037402_3sretqaba",
+    "timestamp": "2025-07-17T07:07:17.402Z",
+    "type": "domain_purchase",
+    "userId": "4991",
+    "userEmail": "harish@onepgr.us",
+    "domainName": "buydomain.dev",
+    "amount": 15.18,
+    "currency": "usd",
+    "status": "pending",
+    "stripeSessionId": "cs_live_a1zVIAQ8Yu6KNxpnMOQdY3HsnilV5dC5AEIEd3qGAPVBbXMVNiLW9pJBLK",
+    "registrationYears": 1,
+    "enablePrivacy": true,
+    "contactInfo": {
+      "firstName": "harish",
+      "lastName": "maneru",
+      "email": "harish@onepgr.us",
+      "phone": "+155.55555555",
+      "address1": "123 Main Street",
+      "address2": "",
+      "city": "new york",
+      "stateProvince": "NY",
+      "country": "US",
+      "postalCode": "10001"
+    },
+    "systemInfo": {
+      "ipAddress": "::1",
+      "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36",
+      "apiEndpoint": "/domain/create-checkout-session",
+      "requestMethod": "POST"
+    },
+    "metadata": {
+      "productId": "prod_ShAEgVM7hfYdU7",
+      "years": "1",
+      "enablePrivacy": "true"
+    }
+  }
+]
