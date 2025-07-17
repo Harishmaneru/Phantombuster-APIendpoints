@@ -1004,6 +1004,13 @@ const emailTrackingSchema = new mongoose.Schema({
   lastOpenedIP: String,
   repliedAt: Date,
   webhookUrl: String,
+  // Enhanced open tracking
+  openEvents: [{
+    openedAt: Date,
+    ip: String,
+    userAgent: String,
+    sessionId: String // To track unique sessions
+  }],
   clickEvents: [{
     url: String,
     clickedAt: Date,
@@ -1404,26 +1411,70 @@ router.get('/api/get-host', async (req, res) => {
 
 //_________________________Tracking API's_________________________
 
-// 3️⃣ Track Email Opens
+// 3️⃣ Track Email Opens with Better Accuracy
 router.get('/api/track/open/:trackingId', async (req, res) => {
   try {
     const trackingId = req.params.trackingId;
     const ip = req.headers['x-forwarded-for']?.split(',')[0] || req.connection.remoteAddress;
     const userAgent = req.headers['user-agent'];
+    const referer = req.headers['referer'] || '';
+    
+    // Create a session ID based on IP and User Agent to detect unique opens
+    const sessionId = crypto.createHash('md5').update(`${ip}-${userAgent}`).digest('hex');
+    
+    // Get current time
+    const now = new Date();
+    
+    // Find the tracking record
+    const tracking = await EmailTracking.findOne({ messageId: trackingId });
+    if (!tracking) {
+      console.log(`Tracking not found for: ${trackingId}`);
+      res.set('Content-Type', 'image/png');
+      res.set('Cache-Control', 'no-store, no-cache, must-revalidate, private');
+      return res.send(Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=', 'base64'));
+    }
 
-    const tracking = await EmailTracking.findOneAndUpdate(
-      { messageId: trackingId },
-      {
-        $inc: { openedCount: 1 },
-        $set: {
-          openedAt: new Date(),
-          lastOpenedIP: ip
-        }
-      },
-      { new: true }
+    // Check if this is a duplicate open (same session within 1 hour)
+    const oneHourAgo = new Date(now.getTime() - 60 * 60 * 1000);
+    const recentOpen = tracking.openEvents && tracking.openEvents.find(event => 
+      event.sessionId === sessionId && event.openedAt > oneHourAgo
     );
 
-    if (tracking && tracking.webhookUrl) {
+    let shouldCount = false;
+    let updatedTracking = tracking;
+
+    if (!recentOpen) {
+      // This is a new open or first open
+      shouldCount = true;
+      
+      // Update tracking with new open event
+      updatedTracking = await EmailTracking.findOneAndUpdate(
+        { messageId: trackingId },
+        {
+          $inc: { openedCount: 1 },
+          $set: {
+            openedAt: now,
+            lastOpenedIP: ip
+          },
+          $push: {
+            openEvents: {
+              openedAt: now,
+              ip: ip,
+              userAgent: userAgent,
+              sessionId: sessionId
+            }
+          }
+        },
+        { new: true }
+      );
+
+      console.log(`📧 New email open detected: ${trackingId} from IP: ${ip}, Count: ${updatedTracking.openedCount}`);
+    } else {
+      console.log(`📧 Duplicate open ignored: ${trackingId} from IP: ${ip} (same session within 1 hour)`);
+    }
+
+    // Send webhook notification only for new opens
+    if (shouldCount && tracking.webhookUrl) {
       await sendWebhookNotification(tracking.webhookUrl, {
         event: 'opened',
         trackingId,
@@ -1432,13 +1483,17 @@ router.get('/api/track/open/:trackingId', async (req, res) => {
         subject: tracking.subject,
         ip,
         userAgent,
-        openedCount: tracking.openedCount,
-        timestamp: new Date()
+        openedCount: updatedTracking.openedCount,
+        sessionId: sessionId,
+        isNewOpen: true,
+        timestamp: now
       });
     }
 
+    // Set cache headers to prevent multiple loads
     res.set('Content-Type', 'image/png');
-    res.set('Cache-Control', 'no-store, no-cache, must-revalidate, private');
+    res.set('Cache-Control', 'public, max-age=3600'); // Cache for 1 hour
+    res.set('Expires', new Date(now.getTime() + 3600 * 1000).toUTCString());
     res.send(Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=', 'base64'));
   } catch (error) {
     console.error('Open tracking error:', error);
@@ -1888,6 +1943,15 @@ router.get('/api/track/:trackingId', async (req, res) => {
         lastOpenedIP: cleanIP(tracking.lastOpenedIP),
         replied: !!tracking.repliedAt,
         repliedAt: formatDate(tracking.repliedAt),
+        
+        // Enhanced Open Tracking
+        openEvents: tracking.openEvents ? tracking.openEvents.map(event => ({
+          openedAt: formatDate(event.openedAt),
+          ip: cleanIP(event.ip),
+          userAgent: event.userAgent,
+          sessionId: event.sessionId
+        })) : [],
+        uniqueOpens: tracking.openEvents ? tracking.openEvents.length : 0,
 
         // Click Events
         clicks: tracking.clickEvents ? tracking.clickEvents.map(click => ({
