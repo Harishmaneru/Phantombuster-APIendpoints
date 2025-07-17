@@ -458,8 +458,8 @@ router.post('/domain/create-checkout-session', async (req, res) => {
                 },
                 quantity: 1,
             }],
-            success_url: 'http://localhost:4200/domain-success?session_id={CHECKOUT_SESSION_ID}',
-            cancel_url: 'http://localhost:4200/cancel',
+            success_url: 'https://kampaign.onepgr.com//domain-success?session_id={CHECKOUT_SESSION_ID}',
+            cancel_url: 'https://kampaign.onepgr.com//cancel',
             metadata: metadata,
             customer_creation: 'always'
         });
@@ -1739,7 +1739,7 @@ router.post('/create-checkout-session-by-app', async (req, res) => {
 
         // 1️⃣ Validate app URLs
         const appUrlMap = {
-            kampaignai: 'http://localhost:4200',
+            kampaignai: 'https://kampaign.onepgr.com',
             gps: 'https://gps.onepgr.com',
             getsalesgpt: 'https://sales.onepgr.com',
         };
@@ -1842,7 +1842,7 @@ router.post('/create-billing-portal-session-by-app', async (req, res) => {
 
         // Map app names to their base URLs
         const appUrlMap = {
-            kampaignai: 'http://localhost:4200',
+            kampaignai: 'https://kampaign.onepgr.com',
             gps: 'https://gps.onepgr.com',
             getsalesgpt: 'https://sales.onepgr.com',
         };

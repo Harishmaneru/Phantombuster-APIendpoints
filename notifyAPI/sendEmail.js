@@ -440,16 +440,24 @@ router.post('/api/emailsend', async (req, res) => {
       const templateContent = generateEmailTemplate(template, templateData || {});
       emailHtml = templateContent.html;
       emailText = templateContent.text;
+      console.log('📧 Using template:', template);
     } else if (!html && !text) {
       // Default professional template if no content provided
       const defaultTemplate = generateEmailTemplate('default', { subject, content: 'This is a professional email.' });
       emailHtml = defaultTemplate.html;
       emailText = defaultTemplate.text;
+      console.log('📧 Using default template');
     }
+    
+    console.log('📧 Email HTML length:', emailHtml ? emailHtml.length : 0);
+    console.log('📧 Email Text length:', emailText ? emailText.length : 0);
 
     // Add tracking pixel to HTML emails
     if (emailHtml) {
       emailHtml += `<img src="${trackingPixelUrl}" width="1" height="1" style="display:none" alt=""/>`;
+      console.log('📧 Tracking pixel added to email:', trackingPixelUrl);
+    } else {
+      console.log('⚠️ No HTML content, tracking pixel not added');
     }
 
     // Modify links for click tracking if requested
@@ -621,6 +629,10 @@ router.get('/api/track/open/:trackingId', async (req, res) => {
     const trackingId = req.params.trackingId;
     const ip = req.headers['x-forwarded-for'] || req.connection.remoteAddress;
     const userAgent = req.headers['user-agent'];
+
+    console.log('🔍 Tracking pixel accessed:', trackingId);
+    console.log('🔍 IP:', ip);
+    console.log('🔍 User Agent:', userAgent);
 
     const tracking = await EmailTracking.findOneAndUpdate(
       { messageId: trackingId },
