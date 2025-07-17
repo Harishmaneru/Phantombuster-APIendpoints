@@ -1515,15 +1515,61 @@ async function checkForReplies() {
         await client.connect();
         await client.mailboxOpen('INBOX');
 
-        const messages = await client.search({
-          from: tracking.toEmail,
-          header: {
-            'References': tracking.messageId,
-            'In-Reply-To': tracking.messageId
-          }
-        });
+        // Search for replies using multiple methods
+        let foundReplies = false;
 
-        if (messages.length > 0) {
+        // Method 1: Search by In-Reply-To header
+        try {
+          const inReplyToMessages = await client.search({
+            header: { 'In-Reply-To': tracking.originalMessageId }
+          });
+          
+          if (inReplyToMessages.length > 0) {
+            foundReplies = true;
+            console.log(`Found ${inReplyToMessages.length} replies via In-Reply-To for ${tracking.messageId}`);
+          }
+        } catch (error) {
+          console.log(`In-Reply-To search failed for ${tracking.messageId}:`, error.message);
+        }
+
+        // Method 2: Search by References header
+        if (!foundReplies) {
+          try {
+            const referencesMessages = await client.search({
+              header: { 'References': tracking.originalMessageId }
+            });
+            
+            if (referencesMessages.length > 0) {
+              foundReplies = true;
+              console.log(`Found ${referencesMessages.length} replies via References for ${tracking.messageId}`);
+            }
+          } catch (error) {
+            console.log(`References search failed for ${tracking.messageId}:`, error.message);
+          }
+        }
+
+        // Method 3: Search by subject line containing "Re:" and from the recipient
+        if (!foundReplies) {
+          try {
+            const subjectReplies = await client.search({
+              from: tracking.toEmail,
+              subject: 'Re:'
+            });
+            
+            for await (let msg of client.fetch(subjectReplies, { source: true })) {
+              const parsed = await simpleParser(msg.source);
+              if (parsed.references && parsed.references.includes(tracking.originalMessageId)) {
+                foundReplies = true;
+                console.log(`Found reply via subject search for ${tracking.messageId}`);
+                break;
+              }
+            }
+          } catch (error) {
+            console.log(`Subject search failed for ${tracking.messageId}:`, error.message);
+          }
+        }
+
+        if (foundReplies) {
           const replyTime = new Date();
           await EmailTracking.findOneAndUpdate(
             { messageId: tracking.messageId },
@@ -1550,7 +1596,137 @@ async function checkForReplies() {
   }
 }
 
-// 6️⃣ Get Tracking Status
+// 5️⃣.1️⃣ Manual Reply Check API
+router.post('/api/check-replies', async (req, res) => {
+  try {
+    const { token, email, messageId } = req.body;
+    if (!token || !email || !messageId) {
+      return res.status(400).json({ success: false, error: 'Missing token, email, or messageId' });
+    }
+
+    const smtp = await SMTPAuth.findOne({ email, token });
+    if (!smtp) {
+      return res.status(403).json({ success: false, error: 'Invalid token or sender email' });
+    }
+
+    // Decrypt the password
+    let decryptedPass;
+    try {
+      decryptedPass = decrypt(smtp.pass);
+    } catch (decryptError) {
+      console.error('Password decryption failed:', decryptError);
+      return res.status(500).json({ success: false, error: 'Failed to decrypt stored credentials' });
+    }
+
+    const client = new ImapFlow({
+      host: smtp.host.replace('smtp.', 'imap.'),
+      port: 993,
+      secure: true,
+      auth: { user: email, pass: decryptedPass },
+      logger: false
+    });
+
+    await client.connect();
+    await client.mailboxOpen('INBOX');
+
+    const replies = [];
+    let foundReplies = false;
+
+    // Method 1: Search by In-Reply-To header
+    try {
+      const inReplyToMessages = await client.search({
+        header: { 'In-Reply-To': messageId }
+      });
+      
+      for await (let msg of client.fetch(inReplyToMessages, { 
+        envelope: true, 
+        uid: true, 
+        flags: true, 
+        source: true 
+      })) {
+        const parsed = await simpleParser(msg.source);
+        const flags = Array.isArray(msg.flags) ? msg.flags : [];
+        const isRead = flags.includes('Seen') || flags.includes('\\Seen');
+        
+        replies.push({
+          subject: msg.envelope.subject || '(No Subject)',
+          from: msg.envelope.from ? msg.envelope.from.map(f => `${f.name || ''} <${f.address}>`).join(', ') : 'Unknown',
+          date: msg.envelope.date,
+          uid: msg.uid,
+          read: isRead,
+          status: isRead ? 'read' : 'unread',
+          text: parsed.text || '',
+          html: parsed.html || '',
+          messageId: parsed.messageId,
+          inReplyTo: parsed.inReplyTo,
+          references: parsed.references,
+          replyMethod: 'In-Reply-To'
+        });
+        foundReplies = true;
+      }
+    } catch (error) {
+      console.log('In-Reply-To search failed:', error.message);
+    }
+
+    // Method 2: Search by References header
+    try {
+      const referencesMessages = await client.search({
+        header: { 'References': messageId }
+      });
+      
+      for await (let msg of client.fetch(referencesMessages, { 
+        envelope: true, 
+        uid: true, 
+        flags: true, 
+        source: true 
+      })) {
+        const parsed = await simpleParser(msg.source);
+        const flags = Array.isArray(msg.flags) ? msg.flags : [];
+        const isRead = flags.includes('Seen') || flags.includes('\\Seen');
+        
+        // Avoid duplicates
+        const existingReply = replies.find(r => r.uid === msg.uid);
+        if (!existingReply) {
+          replies.push({
+            subject: msg.envelope.subject || '(No Subject)',
+            from: msg.envelope.from ? msg.envelope.from.map(f => `${f.name || ''} <${f.address}>`).join(', ') : 'Unknown',
+            date: msg.envelope.date,
+            uid: msg.uid,
+            read: isRead,
+            status: isRead ? 'read' : 'unread',
+            text: parsed.text || '',
+            html: parsed.html || '',
+            messageId: parsed.messageId,
+            inReplyTo: parsed.inReplyTo,
+            references: parsed.references,
+            replyMethod: 'References'
+          });
+          foundReplies = true;
+        }
+      }
+    } catch (error) {
+      console.log('References search failed:', error.message);
+    }
+
+    await client.logout();
+
+    // Sort replies by date
+    replies.sort((a, b) => new Date(a.date) - new Date(b.date));
+
+    return res.json({ 
+      success: true, 
+      originalMessageId: messageId,
+      foundReplies: foundReplies,
+      replies: replies,
+      totalReplies: replies.length
+    });
+  } catch (err) {
+    console.error('Manual Reply Check Error:', err);
+    return res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// 6️⃣ Get Tracking Status with Reply Details
 router.get('/api/track/:trackingId', async (req, res) => {
   try {
     const tracking = await EmailTracking.findOne({ messageId: req.params.trackingId });
@@ -1577,6 +1753,122 @@ router.get('/api/track/:trackingId', async (req, res) => {
       if (!ip) return null;
       return ip.replace('::ffff:', '');
     };
+
+    // Get reply details if tracking has webhook enabled
+    let replyDetails = null;
+    if (tracking.webhookUrl) {
+      try {
+        const smtp = await SMTPAuth.findOne({ email: tracking.fromEmail });
+        if (smtp) {
+          const decryptedPass = decrypt(smtp.pass);
+          const client = new ImapFlow({
+            host: smtp.host.replace('smtp.', 'imap.'),
+            port: 993,
+            secure: true,
+            auth: { user: tracking.fromEmail, pass: decryptedPass },
+            logger: false
+          });
+
+          await client.connect();
+          await client.mailboxOpen('INBOX');
+
+          const replies = [];
+
+          // Method 1: Search by In-Reply-To header
+          try {
+            const inReplyToMessages = await client.search({
+              header: { 'In-Reply-To': tracking.originalMessageId }
+            });
+            
+            for await (let msg of client.fetch(inReplyToMessages, { 
+              envelope: true, 
+              uid: true, 
+              flags: true, 
+              source: true 
+            })) {
+              const parsed = await simpleParser(msg.source);
+              const flags = Array.isArray(msg.flags) ? msg.flags : [];
+              const isRead = flags.includes('Seen') || flags.includes('\\Seen');
+              
+              replies.push({
+                subject: msg.envelope.subject || '(No Subject)',
+                from: msg.envelope.from ? msg.envelope.from.map(f => `${f.name || ''} <${f.address}>`).join(', ') : 'Unknown',
+                date: formatDate(msg.envelope.date),
+                uid: msg.uid,
+                read: isRead,
+                status: isRead ? 'read' : 'unread',
+                text: parsed.text || '',
+                html: parsed.html || '',
+                messageId: parsed.messageId,
+                inReplyTo: parsed.inReplyTo,
+                references: parsed.references,
+                replyMethod: 'In-Reply-To'
+              });
+            }
+          } catch (error) {
+            console.log('In-Reply-To search failed:', error.message);
+          }
+
+          // Method 2: Search by References header
+          try {
+            const referencesMessages = await client.search({
+              header: { 'References': tracking.originalMessageId }
+            });
+            
+            for await (let msg of client.fetch(referencesMessages, { 
+              envelope: true, 
+              uid: true, 
+              flags: true, 
+              source: true 
+            })) {
+              const parsed = await simpleParser(msg.source);
+              const flags = Array.isArray(msg.flags) ? msg.flags : [];
+              const isRead = flags.includes('Seen') || flags.includes('\\Seen');
+              
+              // Avoid duplicates
+              const existingReply = replies.find(r => r.uid === msg.uid);
+              if (!existingReply) {
+                replies.push({
+                  subject: msg.envelope.subject || '(No Subject)',
+                  from: msg.envelope.from ? msg.envelope.from.map(f => `${f.name || ''} <${f.address}>`).join(', ') : 'Unknown',
+                  date: formatDate(msg.envelope.date),
+                  uid: msg.uid,
+                  read: isRead,
+                  status: isRead ? 'read' : 'unread',
+                  text: parsed.text || '',
+                  html: parsed.html || '',
+                  messageId: parsed.messageId,
+                  inReplyTo: parsed.inReplyTo,
+                  references: parsed.references,
+                  replyMethod: 'References'
+                });
+              }
+            }
+          } catch (error) {
+            console.log('References search failed:', error.message);
+          }
+
+          await client.logout();
+
+          // Sort replies by date
+          replies.sort((a, b) => new Date(a.date) - new Date(b.date));
+
+          replyDetails = {
+            foundReplies: replies.length > 0,
+            replies: replies,
+            totalReplies: replies.length
+          };
+        }
+      } catch (error) {
+        console.error('Reply details fetch error:', error);
+        replyDetails = {
+          foundReplies: false,
+          replies: [],
+          totalReplies: 0,
+          error: 'Failed to fetch reply details'
+        };
+      }
+    }
 
     res.json({
       success: true,
@@ -1607,6 +1899,9 @@ router.get('/api/track/:trackingId', async (req, res) => {
 
         // Webhook (only if trackLinks was enabled)
         webhookUrl: tracking.webhookUrl || null,
+
+        // Reply Details
+        replyDetails: replyDetails,
 
         // Timestamps
         createdAt: formatDate(tracking.createdAt),
@@ -1700,8 +1995,7 @@ router.post('/emailtrachwebhook', async (req, res) => {
 });
 
 // Start periodic reply checking
-setInterval(checkForReplies, 2 * 60 * 1000); // Check every 2 minutes
-
+setInterval(checkForReplies, 2 * 60 * 1000); 
 
 
 
