@@ -19,7 +19,7 @@
 
 // function encrypt(text) {
 //   if (!text) return '';
-  
+
 //   try {
 //     const iv = crypto.randomBytes(ivLength);
 //     const cipher = crypto.createCipheriv(algorithm, key, iv);
@@ -33,7 +33,7 @@
 
 // function decrypt(encryptedText) {
 //   if (!encryptedText) return '';
-  
+
 //   try {
 //     const [ivHex, encryptedHex] = encryptedText.split(':');
 //     if (!ivHex || !encryptedHex) {
@@ -100,12 +100,12 @@
 // // Helper function to get proper SMTP settings for common providers
 // async function getSMTPSettings(email, customHost, customPort) {
 //   const domain = email.split('@')[1].toLowerCase();
-  
+
 //   // If custom settings provided, use them
 //   if (customHost && customPort) {
 //     return { host: customHost, port: customPort };
 //   }
-  
+
 //   // Default settings for common providers
 //   const providerSettings = {
 //     'gmail.com': { host: 'smtp.gmail.com', port: 587 },
@@ -117,43 +117,43 @@
 //     'zoho.com': { host: 'smtp.zoho.com', port: 587 },
 //     'yandex.com': { host: 'smtp.yandex.com', port: 587 }
 //   };
-  
+
 //   // Check if it's a known provider first
 //   if (providerSettings[domain]) {
 //     return providerSettings[domain];
 //   }
-  
+
 //   // For unknown domains, check MX records to detect Google Workspace
 //   try {
 //     const mxRecords = await dns.resolveMx(domain);
 //     const sorted = mxRecords.sort((a, b) => a.priority - b.priority);
-    
+
 //     // Check if it's Google Workspace (uses Google's MX servers)
 //     const isGoogleWorkspace = sorted.some(mx => 
 //       mx.exchange.includes('google') || 
 //       mx.exchange.includes('aspmx.l.google.com') ||
 //       mx.exchange.includes('googlemail.com')
 //     );
-    
+
 //     if (isGoogleWorkspace) {
 //       return { host: 'smtp.gmail.com', port: 587 };
 //     }
-    
+
 //     // Check if it's Microsoft 365/Outlook
 //     const isOutlook = sorted.some(mx => 
 //       mx.exchange.includes('outlook') || 
 //       mx.exchange.includes('hotmail') ||
 //       mx.exchange.includes('microsoft')
 //     );
-    
+
 //     if (isOutlook) {
 //       return { host: 'smtp-mail.outlook.com', port: 587 };
 //     }
-    
+
 //   } catch (error) {
 //     console.log(`Could not resolve MX records for ${domain}:`, error.message);
 //   }
-  
+
 //   // Default fallback
 //   return { host: `smtp.${domain}`, port: 587 };
 // }
@@ -323,7 +323,7 @@
 
 //     // Check if email already exists
 //     const existingRecord = await SMTPAuth.findOne({ email });
-    
+
 //     if (existingRecord) {
 //       console.log(`Email ${email} already exists with token: ${existingRecord.token}`);
 //       return res.status(409).json({
@@ -362,7 +362,7 @@
 //     });
 //   } catch (error) {
 //     console.error('SMTP Auth Error:', error);
-    
+
 //     // Handle duplicate key error specifically
 //     if (error.code === 11000) {
 //       return res.status(409).json({ 
@@ -371,7 +371,7 @@
 //         message: 'This email is already configured. Please use a different email or contact support.'
 //       });
 //     }
-    
+
 //     return res.status(500).json({ success: false, error: error.message });
 //   }
 // });
@@ -428,10 +428,10 @@
 
 //     // Generate a unique tracking ID using crypto
 //     const trackingId = crypto.randomBytes(16).toString('hex');
-    
+
 //     const baseUrl = process.env.BASE_URL || 'http://localhost:3000';
 //     const trackingPixelUrl = `${baseUrl}/api/track/open/${trackingId}`;
-    
+
 //     // Generate professional email content
 //     let emailHtml = html;
 //     let emailText = text;
@@ -448,7 +448,7 @@
 //       emailText = defaultTemplate.text;
 //       console.log('📧 Using default template');
 //     }
-    
+
 //     console.log('📧 Email HTML length:', emailHtml ? emailHtml.length : 0);
 //     console.log('📧 Email Text length:', emailText ? emailText.length : 0);
 
@@ -596,7 +596,7 @@
 
 //     // Get proper SMTP settings using the same logic as the setup endpoint
 //     const smtpSettings = await getSMTPSettings(email);
-    
+
 //     // Get MX records for additional info
 //     const mxRecords = await dns.resolveMx(domain);
 //     const sorted = mxRecords.sort((a, b) => a.priority - b.priority);
@@ -767,7 +767,7 @@
 // router.get('/api/webhook', async (req, res) => {
 //   try {
 //     const { trackingId, lastCheck } = req.query;
-    
+
 //     if (!trackingId) {
 //       return res.status(400).json({ 
 //         success: false, 
@@ -777,7 +777,7 @@
 
 //     // Find the tracking record
 //     const tracking = await EmailTracking.findOne({ messageId: trackingId });
-    
+
 //     if (!tracking) {
 //       return res.status(404).json({ 
 //         success: false, 
@@ -1010,9 +1010,9 @@ const emailTrackingSchema = new mongoose.Schema({
     ip: String,
     userAgent: String
   }]
-}, { 
+}, {
   collection: 'email_tracking_v2',
-  timestamps: true 
+  timestamps: true
 });
 
 const EmailTracking = mongoose.model('EmailTracking', emailTrackingSchema);
@@ -1028,7 +1028,7 @@ mongoose.connect(process.env.ONEPGR_MONGO_URI, {
 async function getSMTPSettings(email, customHost, customPort) {
   const domain = email.split('@')[1].toLowerCase();
   if (customHost && customPort) return { host: customHost, port: customPort };
-  
+
   const providerSettings = {
     'gmail.com': { host: 'smtp.gmail.com', port: 587 },
     'outlook.com': { host: 'smtp-mail.outlook.com', port: 587 },
@@ -1045,18 +1045,18 @@ async function getSMTPSettings(email, customHost, customPort) {
   try {
     const mxRecords = await dns.resolveMx(domain);
     const sorted = mxRecords.sort((a, b) => a.priority - b.priority);
-    const isGoogleWorkspace = sorted.some(mx => 
+    const isGoogleWorkspace = sorted.some(mx =>
       mx.exchange.includes('google') || mx.exchange.includes('aspmx.l.google.com') ||
       mx.exchange.includes('googlemail.com')
     );
     if (isGoogleWorkspace) return { host: 'smtp.gmail.com', port: 587 };
 
-    const isOutlook = sorted.some(mx => 
+    const isOutlook = sorted.some(mx =>
       mx.exchange.includes('outlook') || mx.exchange.includes('hotmail') ||
       mx.exchange.includes('microsoft')
     );
     if (isOutlook) return { host: 'smtp-mail.outlook.com', port: 587 };
-    
+
     return { host: `smtp.${domain}`, port: 587 };
   } catch (error) {
     console.log(`Could not resolve MX records for ${domain}:`, error.message);
@@ -1156,7 +1156,7 @@ router.post('/api/senderemail/smtpauth', async (req, res) => {
 
     const smtpSettings = await getSMTPSettings(email, host, port);
     const existingRecord = await SMTPAuth.findOne({ email });
-    
+
     if (existingRecord) {
       return res.status(409).json({
         success: false,
@@ -1187,8 +1187,8 @@ router.post('/api/senderemail/smtpauth', async (req, res) => {
   } catch (error) {
     console.error('SMTP Auth Error:', error);
     if (error.code === 11000) {
-      return res.status(409).json({ 
-        success: false, 
+      return res.status(409).json({
+        success: false,
         error: 'Email already exists'
       });
     }
@@ -1199,7 +1199,7 @@ router.post('/api/senderemail/smtpauth', async (req, res) => {
 // 2️⃣ Send Email
 router.post('/api/emailsend', async (req, res) => {
   try {
-    const { token, from, to, cc, bcc, subject, html, text, template, templateData, trackLinks, webhookUrl } = req.body;
+    const { token, from, to, cc, bcc, subject, html, text, template, templateData, trackLinks } = req.body;
     if (!token || !from || !to) {
       return res.status(400).json({ success: false, error: 'Missing required fields: token, from, to' });
     }
@@ -1271,6 +1271,9 @@ router.post('/api/emailsend', async (req, res) => {
 
     const info = await transporter.sendMail(emailOptions);
 
+    // Set webhook URL only if trackLinks is true
+    const webhookUrl = trackLinks ? 'https://videoresponse.onepgr.com:3001/emailtrachwebhook' : null;
+
     const trackingRecord = new EmailTracking({
       messageId: trackingId,
       originalMessageId: info.messageId,
@@ -1282,18 +1285,20 @@ router.post('/api/emailsend', async (req, res) => {
 
     await trackingRecord.save();
 
-    // Send immediate notification
-    await sendWebhookNotification(webhookUrl, {
-      event: 'sent',
-      trackingId,
-      email: to,
-      from,
-      subject,
-      timestamp: new Date()
-    });
+    // Send immediate notification only if webhook is enabled
+    if (webhookUrl) {
+      await sendWebhookNotification(webhookUrl, {
+        event: 'sent',
+        trackingId,
+        email: to,
+        from,
+        subject,
+        timestamp: new Date()
+      });
+    }
 
-    return res.json({ 
-      success: true, 
+    return res.json({
+      success: true,
       messageId: info.messageId,
       trackingId,
       recipients: { to, cc: cc || null, bcc: bcc || null }
@@ -1304,6 +1309,101 @@ router.post('/api/emailsend', async (req, res) => {
   }
 });
 
+// 3️⃣ Inbox Fetch with Read/Unread
+router.post('/api/fetchinbox', async (req, res) => {
+  try {
+    const { token, email, limit = 10 } = req.body;
+    if (!token || !email) {
+      return res.status(400).json({ success: false, error: 'Missing token or email' });
+    }
+
+    const smtp = await SMTPAuth.findOne({ email, token });
+    if (!smtp) {
+      return res.status(403).json({ success: false, error: 'Invalid token or sender email' });
+    }
+
+    // Decrypt the password
+    let decryptedPass;
+    try {
+      decryptedPass = decrypt(smtp.pass);
+    } catch (decryptError) {
+      console.error('Password decryption failed:', decryptError);
+      return res.status(500).json({ success: false, error: 'Failed to decrypt stored credentials' });
+    }
+
+    const client = new ImapFlow({
+      host: smtp.host,
+      port: 993,
+      secure: true,
+      auth: { user: email, pass: decryptedPass },
+      logger: false
+    });
+
+    await client.connect();
+    const lock = await client.mailboxOpen('INBOX');
+    const total = lock.exists;
+    const maxLimit = Math.max(Math.min(limit, 50), 1);
+    const start = Math.max(total - (maxLimit - 1), 1);
+
+    const messages = [];
+    for await (let msg of client.fetch(`${start}:${total}`, { envelope: true, uid: true, flags: true, source: true })) {
+      const parsed = await simpleParser(msg.source);
+      messages.push({
+        subject: msg.envelope.subject,
+        from: msg.envelope.from.map(f => `${f.name} <${f.address}>`).join(', '),
+        date: msg.envelope.date,
+        uid: msg.uid,
+        read: Array.isArray(msg.flags) ? msg.flags.includes('Seen') : false,
+        text: parsed.text || '',
+        html: parsed.html || ''
+      });
+    }
+    await client.logout();
+
+    return res.json({ success: true, inbox: messages.reverse() });
+  } catch (err) {
+    console.error('Inbox Fetch Error:', err);
+    return res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// 4️⃣ Host discovery from email
+router.get('/api/get-host', async (req, res) => {
+  try {
+    const { email } = req.query;
+    if (!email.includes('@')) return res.status(400).json({ success: false, message: 'Invalid email' });
+    const domain = email.split('@')[1];
+
+    // Get proper SMTP settings using the same logic as the setup endpoint
+    const smtpSettings = await getSMTPSettings(email);
+
+    // Get MX records for additional info
+    const mxRecords = await dns.resolveMx(domain);
+    const sorted = mxRecords.sort((a, b) => a.priority - b.priority);
+
+    return res.json({
+      success: true,
+      domain,
+      suggested_smtp: smtpSettings.host,
+      suggested_imap: smtpSettings.host.replace('smtp.', 'imap.'), // Convert SMTP to IMAP
+      smtp_port: smtpSettings.port,
+      imap_port: 993, // Standard IMAP port
+      mx_records: sorted,
+      provider_info: {
+        is_gmail: domain === 'gmail.com' || sorted.some(mx => mx.exchange.includes('google')),
+        is_google_workspace: sorted.some(mx => mx.exchange.includes('google')),
+        is_outlook: domain.includes('outlook') || domain.includes('hotmail'),
+        is_yahoo: domain.includes('yahoo')
+      }
+    });
+  } catch (err) {
+    return res.status(500).json({ success: false, message: 'Could not resolve host', error: err.message });
+  }
+});
+
+
+//_________________________Tracking API's_________________________
+
 // 3️⃣ Track Email Opens
 router.get('/api/track/open/:trackingId', async (req, res) => {
   try {
@@ -1313,17 +1413,17 @@ router.get('/api/track/open/:trackingId', async (req, res) => {
 
     const tracking = await EmailTracking.findOneAndUpdate(
       { messageId: trackingId },
-      { 
+      {
         $inc: { openedCount: 1 },
-        $set: { 
+        $set: {
           openedAt: new Date(),
-          lastOpenedIP: ip 
+          lastOpenedIP: ip
         }
       },
       { new: true }
     );
 
-    if (tracking) {
+    if (tracking && tracking.webhookUrl) {
       await sendWebhookNotification(tracking.webhookUrl, {
         event: 'opened',
         trackingId,
@@ -1356,8 +1456,8 @@ router.get('/api/track/click/:trackingId', async (req, res) => {
 
     const tracking = await EmailTracking.findOneAndUpdate(
       { messageId: trackingId },
-      { 
-        $push: { 
+      {
+        $push: {
           clickEvents: {
             url,
             clickedAt: new Date(),
@@ -1369,7 +1469,7 @@ router.get('/api/track/click/:trackingId', async (req, res) => {
       { new: true }
     );
 
-    if (tracking) {
+    if (tracking && tracking.webhookUrl) {
       await sendWebhookNotification(tracking.webhookUrl, {
         event: 'clicked',
         trackingId,
@@ -1393,7 +1493,7 @@ router.get('/api/track/click/:trackingId', async (req, res) => {
 // 5️⃣ Reply Detection
 async function checkForReplies() {
   try {
-    const trackings = await EmailTracking.find({ 
+    const trackings = await EmailTracking.find({
       repliedAt: { $exists: false },
       fromEmail: { $exists: true }
     }).limit(50);
@@ -1430,14 +1530,16 @@ async function checkForReplies() {
             { $set: { repliedAt: replyTime } }
           );
 
-          await sendWebhookNotification(tracking.webhookUrl, {
-            event: 'replied',
-            trackingId: tracking.messageId,
-            email: tracking.toEmail,
-            from: tracking.fromEmail,
-            subject: tracking.subject,
-            timestamp: replyTime
-          });
+          if (tracking.webhookUrl) {
+            await sendWebhookNotification(tracking.webhookUrl, {
+              event: 'replied',
+              trackingId: tracking.messageId,
+              email: tracking.toEmail,
+              from: tracking.fromEmail,
+              subject: tracking.subject,
+              timestamp: replyTime
+            });
+          }
         }
       } finally {
         await client.logout();
@@ -1456,16 +1558,59 @@ router.get('/api/track/:trackingId', async (req, res) => {
       return res.status(404).json({ success: false, error: 'Tracking not found' });
     }
 
+    // Format dates to readable format
+    const formatDate = (date) => {
+      if (!date) return null;
+      return new Date(date).toLocaleString('en-US', {
+        year: 'numeric',
+        month: 'long',
+        day: 'numeric',
+        hour: '2-digit',
+        minute: '2-digit',
+        second: '2-digit',
+        timeZoneName: 'short'
+      });
+    };
+
+    // Clean IP address (remove IPv6 prefix)
+    const cleanIP = (ip) => {
+      if (!ip) return null;
+      return ip.replace('::ffff:', '');
+    };
+
     res.json({
       success: true,
       tracking: {
-        sentAt: tracking.sentAt,
+        // Email Details
+        fromEmail: tracking.fromEmail,
+        toEmail: tracking.toEmail,
+        subject: tracking.subject,
+        messageId: tracking.messageId,
+        originalMessageId: tracking.originalMessageId,
+
+        // Timing
+        sentAt: formatDate(tracking.sentAt),
         opened: !!tracking.openedAt,
         openedCount: tracking.openedCount,
-        lastOpenedAt: tracking.openedAt,
+        lastOpenedAt: formatDate(tracking.openedAt),
+        lastOpenedIP: cleanIP(tracking.lastOpenedIP),
         replied: !!tracking.repliedAt,
-        repliedAt: tracking.repliedAt,
-        clicks: tracking.clickEvents || []
+        repliedAt: formatDate(tracking.repliedAt),
+
+        // Click Events
+        clicks: tracking.clickEvents ? tracking.clickEvents.map(click => ({
+          ...click,
+          clickedAt: formatDate(click.clickedAt),
+          ip: cleanIP(click.ip)
+        })) : [],
+        totalClicks: tracking.clickEvents ? tracking.clickEvents.length : 0,
+
+        // Webhook (only if trackLinks was enabled)
+        webhookUrl: tracking.webhookUrl || null,
+
+        // Timestamps
+        createdAt: formatDate(tracking.createdAt),
+        updatedAt: formatDate(tracking.updatedAt)
       }
     });
   } catch (error) {
@@ -1556,5 +1701,9 @@ router.post('/emailtrachwebhook', async (req, res) => {
 
 // Start periodic reply checking
 setInterval(checkForReplies, 2 * 60 * 1000); // Check every 2 minutes
+
+
+
+
 
 module.exports = router;
