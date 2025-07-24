@@ -4971,6 +4971,212 @@ router.post('/namecheap/domain/nameservers', validateUserId, async (req, res) =>
     }
 });
 
+// Create custom nameserver for a domain
+router.post('/namecheap/domain/nameserver/create', validateUserId, async (req, res) => {
+    const {
+        domain,
+        nameserver,
+        ipAddress
+    } = req.body;
+
+    const userId = req.userId;
+
+    // Validate required fields
+    if (!domain || !nameserver || !ipAddress) {
+        return res.status(400).json({
+            success: false,
+            error: 'Missing required fields',
+            details: 'domain, nameserver, and ipAddress are required'
+        });
+    }
+
+    // Validate domain format
+    if (!isValidDomain(domain)) {
+        return res.status(400).json({
+            success: false,
+            error: 'Invalid domain format',
+            details: 'Please provide a valid domain name'
+        });
+    }
+
+    // Validate nameserver format
+    if (!isValidDomain(nameserver)) {
+        return res.status(400).json({
+            success: false,
+            error: 'Invalid nameserver format',
+            details: 'Nameserver must be a valid hostname'
+        });
+    }
+
+    // Validate IP address format
+    const ipRegex = /^(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)$/;
+    if (!ipRegex.test(ipAddress)) {
+        return res.status(400).json({
+            success: false,
+            error: 'Invalid IP address format',
+            details: 'Please provide a valid IPv4 address'
+        });
+    }
+
+    try {
+        // 1. Verify domain ownership through database
+        const userDomain = await NamecheapDomain.findOne({
+            userId,
+            domain: domain.toLowerCase()
+        });
+
+        if (!userDomain) {
+            return res.status(404).json({
+                success: false,
+                error: 'Domain not found for this user',
+                details: 'Please ensure the domain is registered under your account'
+            });
+        }
+
+        console.log(`[Nameserver API] Creating nameserver ${nameserver} for ${domain} (User: ${userId})`);
+
+        // 2. Split domain into SLD and TLD
+        const [sld, tld] = domain.split('.');
+
+        // 3. Create nameserver via Namecheap API
+        const createResult = await namecheapRequest('namecheap.domains.ns.create', {
+            SLD: sld,
+            TLD: tld,
+            Nameserver: nameserver,
+            IP: ipAddress
+        });
+
+        const result = createResult.ApiResponse.CommandResponse.DomainNSCreateResult;
+
+        if (result.$.IsSuccess === 'true') {
+            // 4. Update database with new nameserver info
+            await updateDomainInDatabase(userId, domain, {
+                'dnsConfiguration.customNameservers': true,
+                'dnsConfiguration.lastDNSUpdate': new Date()
+            });
+
+            return res.json({
+                success: true,
+                message: 'Nameserver created successfully',
+                domain: domain.toLowerCase(),
+                nameserver: result.$.Nameserver,
+                ipAddress: result.$.IP,
+                data: result
+            });
+        } else {
+            throw new Error('Nameserver creation failed');
+        }
+
+    } catch (error) {
+        console.error('[Nameserver API] Error creating nameserver:', error.message);
+        
+        return res.status(500).json({
+            success: false,
+            userId,
+            error: `Nameserver creation failed: ${error.message}`,
+            domain: domain.toLowerCase(),
+            details: error.response?.data || null,
+            timestamp: new Date().toISOString()
+        });
+    }
+});
+
+
+
+// Get nameserver information
+router.get('/namecheap/domain/nameserver/info', validateUserId, async (req, res) => {
+    const { domain, nameserver } = req.query;
+    const userId = req.userId;
+
+    // Validate required fields
+    if (!domain || !nameserver) {
+        return res.status(400).json({
+            success: false,
+            error: 'Missing required fields',
+            details: 'domain and nameserver query parameters are required'
+        });
+    }
+
+    // Validate domain format
+    if (!isValidDomain(domain)) {
+        return res.status(400).json({
+            success: false,
+            error: 'Invalid domain format',
+            details: 'Please provide a valid domain name'
+        });
+    }
+
+    // Validate nameserver format
+    if (!isValidDomain(nameserver)) {
+        return res.status(400).json({
+            success: false,
+            error: 'Invalid nameserver format',
+            details: 'Nameserver must be a valid hostname'
+        });
+    }
+
+    try {
+        // 1. Verify domain ownership through database
+        const userDomain = await NamecheapDomain.findOne({
+            userId,
+            domain: domain.toLowerCase()
+        });
+
+        if (!userDomain) {
+            return res.status(404).json({
+                success: false,
+                error: 'Domain not found for this user',
+                details: 'Please ensure the domain is registered under your account'
+            });
+        }
+
+        console.log(`[Nameserver API] Getting info for nameserver ${nameserver} for ${domain} (User: ${userId})`);
+
+        // 2. Split domain into SLD and TLD
+        const [sld, tld] = domain.split('.');
+
+        // 3. Get nameserver info via Namecheap API
+        const infoResult = await namecheapRequest('namecheap.domains.ns.getInfo', {
+            SLD: sld,
+            TLD: tld,
+            Nameserver: nameserver
+        });
+
+        const result = infoResult.ApiResponse.CommandResponse.DomainNSInfoResult;
+
+        if (result) {
+            // Extract statuses if available
+            const statuses = result.NameserverStatuses?.Status;
+            const statusArray = Array.isArray(statuses) ? statuses : [statuses];
+
+            return res.json({
+                success: true,
+                message: 'Nameserver information retrieved successfully',
+                domain: domain.toLowerCase(),
+                nameserver: result.$.Nameserver,
+                ipAddress: result.$.IP,
+                statuses: statusArray,
+                data: result
+            });
+        } else {
+            throw new Error('Nameserver not found or not associated with this domain');
+        }
+
+    } catch (error) {
+        console.error('[Nameserver API] Error getting nameserver info:', error.message);
+        
+        return res.status(500).json({
+            success: false,
+            userId,
+            error: `Failed to get nameserver info: ${error.message}`,
+            domain: domain.toLowerCase(),
+            nameserver: nameserver,
+            details: error.response?.data || null,
+            timestamp: new Date().toISOString()
+        });
+    }
+});
+
 // Get current nameserver configuration for a domain
 router.get('/namecheap/domain/:domain/nameservers', validateUserId, async (req, res) => {
     const { domain } = req.params;
