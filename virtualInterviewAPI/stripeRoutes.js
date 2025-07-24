@@ -1426,7 +1426,7 @@ router.post('/domain/process-success-payment', async (req, res) => {
             country: session.metadata?.country || null,
             postalCode: session.metadata?.postalCode || null
         };
-
+        console.log("contactInfo", contactInfo);
         // Validate required contact information
         const requiredFields = ['firstName', 'lastName', 'email', 'phone', 'address1', 'city', 'stateProvince', 'country', 'postalCode'];
         const missingFields = requiredFields.filter(field => !contactInfo[field]);
@@ -1516,7 +1516,7 @@ router.post('/domain/process-success-payment', async (req, res) => {
             acceptPremiumPricing: true,
             stripePaymentInfo
         });
-
+        console.log("registrationResult", registrationResult);
         // Step 4: Async logging (don't wait for it)
         setImmediate(() => {
             try {

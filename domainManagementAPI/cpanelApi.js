@@ -144,6 +144,29 @@ async function checkAddonDomainExists(domain) {
   }
 }
 
+// Check domain ownership using WHM
+async function checkDomainOwnership(domain) {
+  try {
+    const result = await whmRequest('get_domain_info', {
+      domain: domain.toLowerCase()
+    });
+    
+    if (result.status === 1 && result.data) {
+      console.log(`Domain ${domain} ownership info:`, result.data);
+      return {
+        exists: true,
+        owner: result.data.owner,
+        type: result.data.type,
+        status: result.data.status
+      };
+    }
+    return { exists: false };
+  } catch (error) {
+    console.log(`Domain ${domain} ownership check failed:`, error.message);
+    return { exists: false, error: error.message };
+  }
+}
+
 // Add domain as addon domain (only if needed and supported)
 async function addAddonDomain(domain) {
   try {
@@ -222,6 +245,116 @@ router.get('/cpanel/test-domain-info', async (req, res) => {
   }
 });
 
+router.post('/cpanel/add-domain', async (req, res) => {
+  const { userId, domain, subdomain = null, directory = null } = req.body;
+
+  // Enhanced input validation
+  if (!userId || !domain) {
+    return res.status(400).json({
+      success: false,
+      error: 'userId and domain are required.'
+    });
+  }
+
+  if (!isValidDomain(domain)) {
+    return res.status(400).json({
+      success: false,
+      error: 'Invalid domain format.'
+    });
+  }
+
+  try {
+    // Step 1: Verify user owns domain
+    const domainOwnership = await userOwnsDomain(userId, domain);
+    if (!domainOwnership) {
+      return res.status(403).json({
+        success: false,
+        error: 'Domain not registered to user or domain is not active.'
+      });
+    }
+
+    // Step 2: Check if domain already exists in cPanel
+    const domainExists = await checkAddonDomainExists(domain);
+    if (domainExists) {
+      return res.status(409).json({
+        success: false,
+        error: 'Domain already exists in cPanel.',
+        domain: domain.toLowerCase()
+      });
+    }
+
+    // Generate subdomain and directory if not provided
+    const autoSubdomain = subdomain || `${domain.replace(/[^a-zA-Z0-9]/g, '_')}_addon`;
+    const autoDirectory = directory || `public_html/${domain}`;
+
+    // Step 3: Add domain to cPanel using WHM API only
+    console.log(`Adding domain ${domain} to cPanel via WHM API...`);
+    
+    try {
+      const whmResult = await whmRequest('addaddondomain', {
+        domain: domain.toLowerCase(),
+        subdomain: autoSubdomain,
+        dir: autoDirectory,
+        newuser: MASTER_USER,
+        passwd: 'auto'
+      });
+
+      if (whmResult.status !== 1) {
+        throw new Error(whmResult.message || 'WHM API returned unsuccessful status');
+      }
+
+      // Step 4: Update domain record in database
+      const updatedDomain = await NamecheapDomain.findOneAndUpdate(
+        { userId, domain: domain.toLowerCase() },
+        {
+          $set: {
+            'cpanelConfiguration.domainAdded': true,
+            'cpanelConfiguration.domainAddedAt': new Date(),
+            'cpanelConfiguration.subdomain': autoSubdomain,
+            'cpanelConfiguration.directory': autoDirectory,
+            updatedAt: new Date()
+          }
+        },
+        { new: true }
+      );
+
+      return res.json({
+        success: true,
+        message: 'Domain added to cPanel successfully via WHM API',
+        domain: domain.toLowerCase(),
+        subdomain: autoSubdomain,
+        directory: autoDirectory,
+        methodUsed: 'whm_api',
+        data: whmResult.data,
+        databaseRecord: {
+          updated: !!updatedDomain,
+          domainId: updatedDomain?._id
+        }
+      });
+
+    } catch (whmError) {
+      console.error('WHM API failed:', whmError.message);
+      
+      return res.status(500).json({
+        success: false,
+        error: `Domain addition failed via WHM API: ${whmError.message}`,
+        details: whmError.response?.data || null,
+        attemptedMethods: {
+          whmApi: true,
+          cpanelApi: false
+        }
+      });
+    }
+
+  } catch (err) {
+    console.error('Domain addition failed:', err.message);
+    res.status(500).json({
+      success: false,
+      error: err.message,
+      details: err.response?.data || null
+    });
+  }
+});
 // Route: Create Email Account with Addon Domain Support
 router.post('/cpanel/create-email', emailCreationLimiter, async (req, res) => {
   const { userId, domain, username, password, storage = 512 } = req.body;
@@ -279,14 +412,68 @@ router.post('/cpanel/create-email', emailCreationLimiter, async (req, res) => {
       });
     }
 
-    // Step 2: Check if domain exists as addon domain, add if needed
+    // Step 2: Check domain ownership and existence
+    console.log(`Checking domain ${domain} ownership and existence...`);
+    const domainCpanelOwnership = await checkDomainOwnership(domain);
     const domainExists = await checkAddonDomainExists(domain);
+    let domainAdded = false;
+    let domainAdditionAttempted = false;
+    
+    console.log(`Domain ownership check:`, domainCpanelOwnership);
+    console.log(`Domain exists in cPanel:`, domainExists);
+    
     if (!domainExists) {
-      console.log(`Adding domain ${domain} as addon domain...`);
-      const addonResult = await addAddonDomain(domain);
-      console.log('Addon domain result:', addonResult);
+      console.log(`Domain ${domain} not found in cPanel, attempting to add via WHM...`);
+      domainAdditionAttempted = true;
+      
+      // Try WHM API to add domain (more reliable than cPanel AddonDomain)
+      try {
+        console.log('Trying WHM API to add domain...');
+        const whmResult = await whmRequest('addaddondomain', {
+          domain: domain.toLowerCase(),
+          subdomain: `${domain.replace(/[^a-zA-Z0-9]/g, '_')}_addon`,
+          dir: `public_html/${domain}`,
+          newuser: MASTER_USER,
+          passwd: 'auto' // Let WHM generate password
+        });
+        console.log('WHM API result:', whmResult);
+        
+        if (whmResult.status === 1) {
+          domainAdded = true;
+          console.log(`Domain ${domain} successfully added via WHM API`);
+          
+          // Update domain record in database
+          await NamecheapDomain.findOneAndUpdate(
+            { userId, domain: domain.toLowerCase() },
+            {
+              $set: {
+                'cpanelConfiguration.domainAdded': true,
+                'cpanelConfiguration.domainAddedAt': new Date(),
+                'cpanelConfiguration.subdomain': `${domain.replace(/[^a-zA-Z0-9]/g, '_')}_addon`,
+                'cpanelConfiguration.directory': `public_html/${domain}`,
+                updatedAt: new Date()
+              }
+            },
+            { new: true }
+          );
+        } else {
+          console.log('WHM API failed, trying cPanel AddonDomain...');
+          const addonResult = await addAddonDomain(domain);
+          console.log('cPanel AddonDomain result:', addonResult);
+          
+          if (addonResult.status === 1) {
+            domainAdded = true;
+            console.log(`Domain ${domain} successfully added via cPanel`);
+          } else {
+            console.log('Both WHM and cPanel domain addition failed');
+          }
+        }
+      } catch (error) {
+        console.log('Domain addition failed:', error.message);
+      }
     } else {
-      console.log(`Domain ${domain} already exists (main or addon domain)`);
+      console.log(`Domain ${domain} already exists in cPanel (main or addon domain)`);
+      domainAdded = true;
     }
 
     // Step 3: Create email account
@@ -325,7 +512,21 @@ router.post('/cpanel/create-email', emailCreationLimiter, async (req, res) => {
 
     if (emailResult.status !== 1) {
       const errorMsg = (emailResult.errors && emailResult.errors[0]) || 'Unknown error from cPanel';
-      throw new Error(errorMsg);
+      
+      // Return the actual API response for better debugging
+      res.status(500).json({
+        success: false,
+        error: `Email creation failed: ${errorMsg}`,
+        apiResponse: emailResult,
+        domain: domain.toLowerCase(),
+        attemptedMethods: {
+          whmApi: true,
+          cpanelApi: true,
+          domainAdditionAttempted: domainAdditionAttempted,
+          domainAdded: domainAdded
+        }
+      });
+      return;
     }
 
     // Step 4: Save created email to database
@@ -387,6 +588,7 @@ router.post('/cpanel/create-email', emailCreationLimiter, async (req, res) => {
     // Step 6: Return success response with additional info
     res.json({
       success: true,
+      message: 'Email account created successfully',
       email: emailAddress,
       quota: storage,
       webmailUrl: `https://${domain.toLowerCase()}/webmail`,
@@ -399,6 +601,19 @@ router.post('/cpanel/create-email', emailCreationLimiter, async (req, res) => {
         server: `mail.${domain.toLowerCase()}`,
         // port: 993,
         // security: 'SSL/TLS'
+      },
+      domainSetup: {
+        domain: domain.toLowerCase(),
+        wasAddedToCpanel: domainAdded,
+        wasAlreadyInCpanel: domainExists,
+        additionAttempted: domainAdditionAttempted,
+        ownershipInfo: domainCpanelOwnership,
+        subdomain: `${domain.replace(/[^a-zA-Z0-9]/g, '_')}_addon`,
+        directory: `public_html/${domain}`,
+        note: domainAdded ? 'Domain successfully added to cPanel' : 
+              domainExists ? 'Domain was already in cPanel' : 
+              domainAdditionAttempted ? 'Domain addition failed, but email creation succeeded. Domain may need manual setup.' :
+              'Domain was already available in cPanel'
       },
       data: emailResult.data,
       databaseRecord: {
