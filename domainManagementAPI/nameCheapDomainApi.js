@@ -5176,7 +5176,6 @@ router.get('/namecheap/domain/nameserver/info', validateUserId, async (req, res)
         });
     }
 });
-
 // Get current nameserver configuration for a domain
 router.get('/namecheap/domain/:domain/nameservers', validateUserId, async (req, res) => {
     const { domain } = req.params;
