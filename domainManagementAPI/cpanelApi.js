@@ -248,32 +248,22 @@ router.get('/cpanel/test-domain-info', async (req, res) => {
 router.post('/cpanel/add-domain', async (req, res) => {
   const { userId, domain, subdomain = null, directory = null } = req.body;
 
-  // Enhanced input validation
   if (!userId || !domain) {
-    return res.status(400).json({
-      success: false,
-      error: 'userId and domain are required.'
-    });
+    return res.status(400).json({ success: false, error: 'userId and domain are required.' });
   }
 
   if (!isValidDomain(domain)) {
-    return res.status(400).json({
-      success: false,
-      error: 'Invalid domain format.'
-    });
+    return res.status(400).json({ success: false, error: 'Invalid domain format.' });
   }
 
   try {
-    // Step 1: Verify user owns domain
+    // (Optional) Step: Verify user owns domain
     const domainOwnership = await userOwnsDomain(userId, domain);
     if (!domainOwnership) {
-      return res.status(403).json({
-        success: false,
-        error: 'Domain not registered to user or domain is not active.'
-      });
+      return res.status(403).json({ success: false, error: 'Domain not registered to user or not active.' });
     }
 
-    // Step 2: Check if domain already exists in cPanel
+    // (Optional) Step: Check if domain already exists
     const domainExists = await checkAddonDomainExists(domain);
     if (domainExists) {
       return res.status(409).json({
@@ -283,75 +273,56 @@ router.post('/cpanel/add-domain', async (req, res) => {
       });
     }
 
-    // Generate subdomain and directory if not provided
-    const autoSubdomain = subdomain || `${domain.replace(/[^a-zA-Z0-9]/g, '_')}_addon`;
-    const autoDirectory = directory || `public_html/${domain}`;
+    const safeDomain = domain.toLowerCase();
+    const autoSubdomain = subdomain || `${safeDomain.replace(/[^a-zA-Z0-9]/g, '_')}_addon`;
+    const autoDirectory = directory || `public_html/${safeDomain}`;
 
-    // Step 3: Add domain to cPanel using WHM API only
-    console.log(`Adding domain ${domain} to cPanel via WHM API...`);
-    
-    try {
-      const whmResult = await whmRequest('addaddondomain', {
-        domain: domain.toLowerCase(),
-        subdomain: autoSubdomain,
-        dir: autoDirectory,
-        newuser: MASTER_USER,
-        passwd: 'auto'
-      });
+    // ✅ Add domain using WHM API
+    const whmResult = await whmRequest('createaddondomain', {
+      user: MASTER_USER,
+      domain: safeDomain,
+      dir: autoDirectory,
+      subdomain: autoSubdomain
+    });
 
-      if (whmResult.status !== 1) {
-        throw new Error(whmResult.message || 'WHM API returned unsuccessful status');
-      }
-
-      // Step 4: Update domain record in database
-      const updatedDomain = await NamecheapDomain.findOneAndUpdate(
-        { userId, domain: domain.toLowerCase() },
-        {
-          $set: {
-            'cpanelConfiguration.domainAdded': true,
-            'cpanelConfiguration.domainAddedAt': new Date(),
-            'cpanelConfiguration.subdomain': autoSubdomain,
-            'cpanelConfiguration.directory': autoDirectory,
-            updatedAt: new Date()
-          }
-        },
-        { new: true }
-      );
-
-      return res.json({
-        success: true,
-        message: 'Domain added to cPanel successfully via WHM API',
-        domain: domain.toLowerCase(),
-        subdomain: autoSubdomain,
-        directory: autoDirectory,
-        methodUsed: 'whm_api',
-        data: whmResult.data,
-        databaseRecord: {
-          updated: !!updatedDomain,
-          domainId: updatedDomain?._id
-        }
-      });
-
-    } catch (whmError) {
-      console.error('WHM API failed:', whmError.message);
-      
-      return res.status(500).json({
-        success: false,
-        error: `Domain addition failed via WHM API: ${whmError.message}`,
-        details: whmError.response?.data || null,
-        attemptedMethods: {
-          whmApi: true,
-          cpanelApi: false
-        }
-      });
+    if (!whmResult || whmResult.metadata?.result !== 1) {
+      throw new Error(whmResult.metadata?.reason || 'WHM API failed without clear reason');
     }
 
-  } catch (err) {
-    console.error('Domain addition failed:', err.message);
-    res.status(500).json({
+    // (Optional) Save domain config to DB
+    const updatedDomain = await NamecheapDomain.findOneAndUpdate(
+      { userId, domain: safeDomain },
+      {
+        $set: {
+          'cpanelConfiguration.domainAdded': true,
+          'cpanelConfiguration.domainAddedAt': new Date(),
+          'cpanelConfiguration.subdomain': autoSubdomain,
+          'cpanelConfiguration.directory': autoDirectory,
+          updatedAt: new Date()
+        }
+      },
+      { new: true }
+    );
+
+    return res.json({
+      success: true,
+      message: 'Domain added successfully via WHM API',
+      domain: safeDomain,
+      subdomain: autoSubdomain,
+      directory: autoDirectory,
+      data: whmResult.data,
+      databaseRecord: {
+        updated: !!updatedDomain,
+        domainId: updatedDomain?._id
+      }
+    });
+
+  } catch (error) {
+    console.error('WHM API error:', error.message);
+    return res.status(500).json({
       success: false,
-      error: err.message,
-      details: err.response?.data || null
+      error: 'Failed to add domain via WHM API',
+      details: error.response?.data || error.message
     });
   }
 });
