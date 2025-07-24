@@ -1,7 +1,7 @@
 # Node modules and dependencies
 node_modules/
 package-lock.json
-
+loggingSystem/logs
 # Environment files (contain sensitive data)
 .env
 *.key
