@@ -228,10 +228,11 @@ router.post('/api/senderemail/smtpauth', async (req, res) => {
     const existingRecord = await SMTPAuth.findOne({ email });
 
     if (existingRecord) {
-      return res.status(409).json({
+      return res.status(200).json({
         success: false,
         error: 'Email already configured',
-        message: `Email ${email} is already created with token: ${existingRecord.token}`,
+        message: `Email ${email} is already configured with token: ${existingRecord.token}`,
+        isExistingToken: true,
         existingToken: existingRecord.token,
         createdAt: existingRecord.createdAt
       });
