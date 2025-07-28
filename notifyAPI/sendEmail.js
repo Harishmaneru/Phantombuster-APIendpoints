@@ -94,11 +94,37 @@ mongoose.connect(process.env.ONEPGR_MONGO_URI, {
   useUnifiedTopology: true
 });
 
+// MX Cache for performance
+const mxCache = new Map();
+
+// Cached MX lookup function
+async function cachedMxLookup(domain) {
+  if (mxCache.has(domain)) {
+    const cached = mxCache.get(domain);
+    // Cache for 1 hour
+    if (Date.now() - cached.timestamp < 3600000) {
+      return cached.records;
+    }
+  }
+  
+  try {
+    const records = await dns.resolveMx(domain);
+    mxCache.set(domain, { records, timestamp: Date.now() });
+    return records;
+  } catch (error) {
+    console.error(`MX lookup failed for ${domain}:`, error);
+    throw error;
+  }
+}
+
 // SMTP Settings Helper
 async function getSMTPSettings(email, customHost, customPort) {
   const domain = email.split('@')[1].toLowerCase();
+  
+  // 1. Check for custom settings first
   if (customHost && customPort) return { host: customHost, port: customPort };
 
+  // 2. Check for known providers
   const providerSettings = {
     'gmail.com': { host: 'smtp.gmail.com', port: 587 },
     'outlook.com': { host: 'smtp-mail.outlook.com', port: 587 },
@@ -112,25 +138,55 @@ async function getSMTPSettings(email, customHost, customPort) {
 
   if (providerSettings[domain]) return providerSettings[domain];
 
+  // 3. Check MX records for provider detection
   try {
-    const mxRecords = await dns.resolveMx(domain);
+    const mxRecords = await cachedMxLookup(domain);
     const sorted = mxRecords.sort((a, b) => a.priority - b.priority);
+    
+    // Detect Google Workspace
     const isGoogleWorkspace = sorted.some(mx =>
-      mx.exchange.includes('google') || mx.exchange.includes('aspmx.l.google.com') ||
+      mx.exchange.includes('google') || 
+      mx.exchange.includes('aspmx.l.google.com') ||
       mx.exchange.includes('googlemail.com')
     );
     if (isGoogleWorkspace) return { host: 'smtp.gmail.com', port: 587 };
 
+    // Detect Outlook/Microsoft
     const isOutlook = sorted.some(mx =>
-      mx.exchange.includes('outlook') || mx.exchange.includes('hotmail') ||
+      mx.exchange.includes('outlook') || 
+      mx.exchange.includes('hotmail') ||
       mx.exchange.includes('microsoft')
     );
     if (isOutlook) return { host: 'smtp-mail.outlook.com', port: 587 };
 
+    // Detect cPanel/WHM servers
+    const isCPanel = sorted.some(mx => 
+      mx.exchange.includes('cpanel') || 
+      mx.exchange.includes('whm') ||
+      mx.exchange === domain || // Self-hosted MX
+      mx.exchange.endsWith(`.${domain}`) // Subdomain of the same domain
+    );
+    
+    if (isCPanel) {
+      return { host: `mail.${domain}`, port: 465 };
+    }
+
+    // For other self-hosted domains, default to cPanel style
+    const isSelfHosted = sorted.some(mx => 
+      mx.exchange === domain || 
+      mx.exchange.endsWith(`.${domain}`)
+    );
+    
+    if (isSelfHosted) {
+      return { host: `mail.${domain}`, port: 465 };
+    }
+
+    // Fallback for unknown providers
     return { host: `smtp.${domain}`, port: 587 };
   } catch (error) {
     console.log(`Could not resolve MX records for ${domain}:`, error.message);
-    return { host: `smtp.${domain}`, port: 587 };
+    // Default to cPanel style as fallback for unknown domains
+    return { host: `mail.${domain}`, port: 465 };
   }
 }
 
@@ -449,22 +505,64 @@ router.get('/api/get-host', async (req, res) => {
     const smtpSettings = await getSMTPSettings(email);
 
     // Get MX records for additional info
-    const mxRecords = await dns.resolveMx(domain);
+    const mxRecords = await cachedMxLookup(domain);
     const sorted = mxRecords.sort((a, b) => a.priority - b.priority);
+
+    // Detect provider type based on MX records
+    const isGoogleWorkspace = sorted.some(mx => mx.exchange.includes('google'));
+    const isOutlook = sorted.some(mx => 
+      mx.exchange.includes('outlook') || 
+      mx.exchange.includes('hotmail') ||
+      mx.exchange.includes('microsoft')
+    );
+    const isYahoo = sorted.some(mx => mx.exchange.includes('yahoo'));
+    const isCPanel = sorted.some(mx => 
+      mx.exchange.includes('cpanel') || 
+      mx.exchange.includes('whm') ||
+      mx.exchange === domain ||
+      mx.exchange.endsWith(`.${domain}`)
+    );
+    const isSelfHosted = sorted.some(mx => 
+      mx.exchange === domain || 
+      mx.exchange.endsWith(`.${domain}`)
+    );
+
+    // Override suggestions for self-hosted domains
+    const isSelfHostedDomain = !smtpSettings.host.includes('gmail') && 
+                               !smtpSettings.host.includes('outlook') &&
+                               !smtpSettings.host.includes('yahoo') &&
+                               !smtpSettings.host.includes('zoho') &&
+                               !smtpSettings.host.includes('yandex');
+
+    const suggestedSmtp = isSelfHostedDomain ? `mail.${domain}` : smtpSettings.host;
+    const suggestedImap = isSelfHostedDomain ? `mail.${domain}` : smtpSettings.host.replace('smtp.', 'imap.');
 
     return res.json({
       success: true,
       domain,
-      suggested_smtp: smtpSettings.host,
-      suggested_imap: smtpSettings.host.replace('smtp.', 'imap.'), // Convert SMTP to IMAP
+      suggested_smtp: suggestedSmtp,
+      suggested_imap: suggestedImap,
       smtp_port: smtpSettings.port,
       imap_port: 993, // Standard IMAP port
       mx_records: sorted,
       provider_info: {
-        is_gmail: domain === 'gmail.com' || sorted.some(mx => mx.exchange.includes('google')),
-        is_google_workspace: sorted.some(mx => mx.exchange.includes('google')),
-        is_outlook: domain.includes('outlook') || domain.includes('hotmail'),
-        is_yahoo: domain.includes('yahoo')
+        is_gmail: domain === 'gmail.com' || isGoogleWorkspace,
+        is_google_workspace: isGoogleWorkspace,
+        is_outlook: domain.includes('outlook') || domain.includes('hotmail') || isOutlook,
+        is_yahoo: domain.includes('yahoo') || isYahoo,
+        is_cpanel: isCPanel,
+        is_self_hosted: isSelfHosted,
+        provider_type: isGoogleWorkspace ? 'google_workspace' : 
+                      isOutlook ? 'outlook' : 
+                      isYahoo ? 'yahoo' : 
+                      isCPanel ? 'cpanel' : 
+                      isSelfHosted ? 'self_hosted' : 'unknown'
+      },
+      detection_notes: {
+        mx_analysis: `Analyzed ${sorted.length} MX records`,
+        recommended_host: suggestedSmtp,
+        recommended_port: smtpSettings.port,
+        fallback_reason: isSelfHostedDomain ? 'Self-hosted domain detected' : 'Standard provider detected'
       }
     });
   } catch (err) {
@@ -1121,6 +1219,232 @@ router.post('/emailtrachwebhook', async (req, res) => {
     res.status(500).json({ success: false, error: error.message });
   }
 });
+
+// 5️⃣ Detailed Email Provider Detection API
+router.get('/api/email-provider', async (req, res) => {
+  try {
+    const { email } = req.query;
+    if (!email.includes('@')) {
+      return res.status(400).json({ success: false, error: 'Invalid email format' });
+    }
+
+    const domain = email.split('@')[1];
+    const smtpSettings = await getSMTPSettings(email);
+    
+    // Get detailed MX analysis
+    const mxRecords = await cachedMxLookup(domain);
+    const sorted = mxRecords.sort((a, b) => a.priority - b.priority);
+
+    // Comprehensive provider detection
+    const providerAnalysis = {
+      domain: domain,
+      mx_records: sorted.map(mx => ({
+        priority: mx.priority,
+        exchange: mx.exchange,
+        is_self_hosted: mx.exchange === domain || mx.exchange.endsWith(`.${domain}`),
+        is_google: mx.exchange.includes('google'),
+        is_microsoft: mx.exchange.includes('outlook') || mx.exchange.includes('hotmail') || mx.exchange.includes('microsoft'),
+        is_yahoo: mx.exchange.includes('yahoo'),
+        is_cpanel: mx.exchange.includes('cpanel') || mx.exchange.includes('whm')
+      })),
+      
+      provider_detection: {
+        is_google_workspace: sorted.some(mx => mx.exchange.includes('google')),
+        is_outlook: sorted.some(mx => 
+          mx.exchange.includes('outlook') || 
+          mx.exchange.includes('hotmail') ||
+          mx.exchange.includes('microsoft')
+        ),
+        is_yahoo: sorted.some(mx => mx.exchange.includes('yahoo')),
+        is_cpanel: sorted.some(mx => 
+          mx.exchange.includes('cpanel') || 
+          mx.exchange.includes('whm') ||
+          mx.exchange === domain ||
+          mx.exchange.endsWith(`.${domain}`)
+        ),
+        is_self_hosted: sorted.some(mx => 
+          mx.exchange === domain || 
+          mx.exchange.endsWith(`.${domain}`)
+        ),
+        is_known_provider: ['gmail.com', 'outlook.com', 'hotmail.com', 'yahoo.com', 'zoho.com'].includes(domain)
+      },
+
+      recommended_settings: {
+        smtp_host: smtpSettings.host,
+        smtp_port: smtpSettings.port,
+        imap_host: smtpSettings.host.replace('smtp.', 'imap.'),
+        imap_port: 993,
+        secure: smtpSettings.port === 465,
+        tls: smtpSettings.port === 587
+      },
+
+      alternative_settings: {
+        cpanel_style: {
+          smtp_host: `mail.${domain}`,
+          smtp_port: 465,
+          imap_host: `mail.${domain}`,
+          imap_port: 993
+        },
+        standard_style: {
+          smtp_host: `smtp.${domain}`,
+          smtp_port: 587,
+          imap_host: `imap.${domain}`,
+          imap_port: 993
+        }
+      },
+
+      confidence_score: calculateConfidenceScore(sorted, domain),
+      recommendations: generateProviderRecommendations(sorted, domain, smtpSettings)
+    };
+
+    return res.json({
+      success: true,
+      email: email,
+      analysis: providerAnalysis
+    });
+
+  } catch (error) {
+    console.error('Provider detection error:', error);
+    return res.status(500).json({ 
+      success: false, 
+      error: 'Failed to analyze email provider',
+      details: error.message 
+    });
+  }
+});
+
+// Helper function to calculate confidence score
+function calculateConfidenceScore(mxRecords, domain) {
+  let score = 0;
+  const totalRecords = mxRecords.length;
+
+  if (totalRecords === 0) return 0;
+
+  // Check for known providers
+  const hasGoogle = mxRecords.some(mx => mx.exchange.includes('google'));
+  const hasMicrosoft = mxRecords.some(mx => 
+    mx.exchange.includes('outlook') || 
+    mx.exchange.includes('hotmail') ||
+    mx.exchange.includes('microsoft')
+  );
+  const hasYahoo = mxRecords.some(mx => mx.exchange.includes('yahoo'));
+  const isSelfHosted = mxRecords.some(mx => 
+    mx.exchange === domain || 
+    mx.exchange.endsWith(`.${domain}`)
+  );
+
+  if (hasGoogle) score += 40;
+  if (hasMicrosoft) score += 40;
+  if (hasYahoo) score += 40;
+  if (isSelfHosted) score += 30;
+
+  // Bonus for multiple matching records
+  const matchingRecords = mxRecords.filter(mx => 
+    mx.exchange.includes('google') ||
+    mx.exchange.includes('outlook') ||
+    mx.exchange.includes('hotmail') ||
+    mx.exchange.includes('microsoft') ||
+    mx.exchange.includes('yahoo') ||
+    mx.exchange === domain ||
+    mx.exchange.endsWith(`.${domain}`)
+  ).length;
+
+  score += (matchingRecords / totalRecords) * 30;
+
+  return Math.min(score, 100);
+}
+
+// Helper function to generate provider recommendations
+function generateProviderRecommendations(mxRecords, domain, smtpSettings) {
+  const recommendations = [];
+
+  const isGoogle = mxRecords.some(mx => mx.exchange.includes('google'));
+  const isMicrosoft = mxRecords.some(mx => 
+    mx.exchange.includes('outlook') || 
+    mx.exchange.includes('hotmail') ||
+    mx.exchange.includes('microsoft')
+  );
+  const isSelfHosted = mxRecords.some(mx => 
+    mx.exchange === domain || 
+    mx.exchange.endsWith(`.${domain}`)
+  );
+
+  if (isGoogle) {
+    recommendations.push({
+      type: 'primary',
+      provider: 'Google Workspace',
+      settings: {
+        smtp_host: 'smtp.gmail.com',
+        smtp_port: 587,
+        imap_host: 'imap.gmail.com',
+        imap_port: 993,
+        auth_method: 'OAuth2 or App Password',
+        security: 'TLS'
+      }
+    });
+  }
+
+  if (isMicrosoft) {
+    recommendations.push({
+      type: 'primary',
+      provider: 'Microsoft 365/Outlook',
+      settings: {
+        smtp_host: 'smtp-mail.outlook.com',
+        smtp_port: 587,
+        imap_host: 'outlook.office365.com',
+        imap_port: 993,
+        auth_method: 'OAuth2 or App Password',
+        security: 'TLS'
+      }
+    });
+  }
+
+  if (isSelfHosted) {
+    recommendations.push({
+      type: 'primary',
+      provider: 'Self-hosted (cPanel/WHM)',
+      settings: {
+        smtp_host: `mail.${domain}`,
+        smtp_port: 465,
+        imap_host: `mail.${domain}`,
+        imap_port: 993,
+        auth_method: 'Username/Password',
+        security: 'SSL'
+      }
+    });
+  }
+
+  // Fallback recommendations
+  if (!isGoogle && !isMicrosoft && !isSelfHosted) {
+    recommendations.push({
+      type: 'fallback',
+      provider: 'Generic SMTP',
+      settings: {
+        smtp_host: `smtp.${domain}`,
+        smtp_port: 587,
+        imap_host: `imap.${domain}`,
+        imap_port: 993,
+        auth_method: 'Username/Password',
+        security: 'TLS'
+      }
+    });
+
+    recommendations.push({
+      type: 'fallback',
+      provider: 'cPanel Style',
+      settings: {
+        smtp_host: `mail.${domain}`,
+        smtp_port: 465,
+        imap_host: `mail.${domain}`,
+        imap_port: 993,
+        auth_method: 'Username/Password',
+        security: 'SSL'
+      }
+    });
+  }
+
+  return recommendations;
+}
 
 // Start periodic reply checking
 setInterval(checkForReplies, 2 * 60 * 1000);
