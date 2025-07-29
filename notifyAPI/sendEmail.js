@@ -72,6 +72,17 @@ const emailTrackingSchema = new mongoose.Schema({
     html: String,
     text: String
   },
+  // Store tracking payload directly
+  trackingPayload: {
+    email: String,
+    sender_user_id: String,
+    object_type: String,
+    object_id: String,
+    contaction_id: String,
+    page_id: String,
+    list_id: String,
+    action_block_id: String
+  },
   // Enhanced open tracking
   openEvents: [{
     openedAt: Date,
@@ -331,7 +342,20 @@ router.post('/api/senderemail/smtpauth', async (req, res) => {
 // 2️⃣ Send Email
 router.post('/api/emailsend', async (req, res) => {
   try {
-    const { token, from, to, cc, bcc, subject, html, text, trackLinks } = req.body;
+    const { 
+      token, 
+      from, 
+      to, 
+      cc, 
+      bcc, 
+      subject, 
+      html, 
+      text, 
+      trackLinks, 
+      sender_name,
+      Trackingpayload 
+    } = req.body;
+    
     if (!token || !from || !to) {
       return res.status(400).json({ success: false, error: 'Missing required fields: token, from, to' });
     }
@@ -384,8 +408,11 @@ router.post('/api/emailsend', async (req, res) => {
       });
     }
 
+    // Format from field with sender name if provided
+    const fromField = sender_name ? `${sender_name} <${from}>` : from;
+
     const emailOptions = {
-      from,
+      from: fromField,
       to,
       subject: subject || 'No Subject',
       html: emailHtml,
@@ -415,7 +442,8 @@ router.post('/api/emailsend', async (req, res) => {
       emailContent: {
         html: html,
         text: text
-      }
+      },
+      trackingPayload: Trackingpayload || null
     });
 
     await trackingRecord.save();
@@ -441,7 +469,9 @@ router.post('/api/emailsend', async (req, res) => {
         html: !!html,
         text: !!text,
         trackingEnabled: !!trackLinks
-      }
+      },
+      trackingPayload: Trackingpayload || null,
+      senderName: sender_name || null
     });
   } catch (err) {
     console.error('Email Send Error:', err);
@@ -609,49 +639,59 @@ router.get('/api/track/open/:trackingId', async (req, res) => {
       return res.send(Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=', 'base64'));
     }
 
-    // Extract tracking payload data from email content
+    // Get tracking payload data (directly stored or extracted from content)
     let extractedTrackingData = {};
     
-    // Try to extract tracking data from the email content
-    try {
-      // Look for tracking data in HTML content (if available)
-      if (tracking.emailContent && tracking.emailContent.html) {
-        const htmlContent = tracking.emailContent.html;
-        
-        // Extract tracking payload using regex patterns
-        const trackingPatterns = {
-          email: /data-tracking-email=["']([^"']+)["']/i,
-          sender_user_id: /data-sender-user-id=["']([^"']+)["']/i,
-          object_type: /data-object-type=["']([^"']+)["']/i,
-          object_id: /data-object-id=["']([^"']+)["']/i,
-          contact_action_id: /data-contact-action-id=["']([^"']+)["']/i,
-          page_id: /data-page-id=["']([^"']+)["']/i,
-          sequence_id: /data-sequence-id=["']([^"']+)["']/i,
-          action_block_id: /data-action-block-id=["']([^"']+)["']/i
-        };
+    // First, check if tracking payload was directly stored
+    if (tracking.trackingPayload) {
+      extractedTrackingData = { ...tracking.trackingPayload };
+      console.log('📊 Direct Tracking Payload Found:', {
+        trackingId,
+        email: tracking.toEmail,
+        trackingPayload: extractedTrackingData,
+        timestamp: now
+      });
+    } else {
+      // Fallback: Try to extract tracking data from the email content
+      try {
+        if (tracking.emailContent && tracking.emailContent.html) {
+          const htmlContent = tracking.emailContent.html;
+          
+          // Extract tracking payload using regex patterns
+          const trackingPatterns = {
+            email: /data-tracking-email=["']([^"']+)["']/i,
+            sender_user_id: /data-sender-user-id=["']([^"']+)["']/i,
+            object_type: /data-object-type=["']([^"']+)["']/i,
+            object_id: /data-object-id=["']([^"']+)["']/i,
+            contact_action_id: /data-contact-action-id=["']([^"']+)["']/i,
+            page_id: /data-page-id=["']([^"']+)["']/i,
+            sequence_id: /data-sequence-id=["']([^"']+)["']/i,
+            action_block_id: /data-action-block-id=["']([^"']+)["']/i
+          };
 
-        // Extract each tracking field
-        Object.keys(trackingPatterns).forEach(key => {
-          const match = htmlContent.match(trackingPatterns[key]);
-          if (match && match[1]) {
-            extractedTrackingData[key] = match[1];
-          }
-        });
+          // Extract each tracking field
+          Object.keys(trackingPatterns).forEach(key => {
+            const match = htmlContent.match(trackingPatterns[key]);
+            if (match && match[1]) {
+              extractedTrackingData[key] = match[1];
+            }
+          });
 
-        // Also try to extract from URL parameters or hidden inputs
-        const urlPattern = /tracking-data=([^&\s]+)/i;
-        const urlMatch = htmlContent.match(urlPattern);
-        if (urlMatch && urlMatch[1]) {
-          try {
-            const decodedData = JSON.parse(decodeURIComponent(urlMatch[1]));
-            extractedTrackingData = { ...extractedTrackingData, ...decodedData };
-          } catch (e) {
-            console.log('Failed to parse URL tracking data');
+          // Also try to extract from URL parameters or hidden inputs
+          const urlPattern = /tracking-data=([^&\s]+)/i;
+          const urlMatch = htmlContent.match(urlPattern);
+          if (urlMatch && urlMatch[1]) {
+            try {
+              const decodedData = JSON.parse(decodeURIComponent(urlMatch[1]));
+              extractedTrackingData = { ...extractedTrackingData, ...decodedData };
+            } catch (e) {
+              console.log('Failed to parse URL tracking data');
+            }
           }
         }
+      } catch (extractError) {
+        console.log('Error extracting tracking data:', extractError.message);
       }
-    } catch (extractError) {
-      console.log('Error extracting tracking data:', extractError.message);
     }
 
     // Log extracted tracking data
@@ -754,47 +794,60 @@ router.get('/api/track/click/:trackingId', async (req, res) => {
       { new: true }
     );
 
-    // Extract tracking payload data from email content
+    // Get tracking payload data (directly stored or extracted from content)
     let extractedTrackingData = {};
     
-    try {
-      if (tracking.emailContent && tracking.emailContent.html) {
-        const htmlContent = tracking.emailContent.html;
-        
-        // Extract tracking payload using regex patterns
-        const trackingPatterns = {
-          email: /data-tracking-email=["']([^"']+)["']/i,
-          sender_user_id: /data-sender-user-id=["']([^"']+)["']/i,
-          object_type: /data-object-type=["']([^"']+)["']/i,
-          object_id: /data-object-id=["']([^"']+)["']/i,
-          contact_action_id: /data-contact-action-id=["']([^"']+)["']/i,
-          page_id: /data-page-id=["']([^"']+)["']/i,
-          sequence_id: /data-sequence-id=["']([^"']+)["']/i,
-          action_block_id: /data-action-block-id=["']([^"']+)["']/i
-        };
+    // First, check if tracking payload was directly stored
+    if (tracking.trackingPayload) {
+      extractedTrackingData = { ...tracking.trackingPayload };
+      console.log('🔗 Click Tracking - Direct Payload Found:', {
+        trackingId,
+        email: tracking.toEmail,
+        clickedUrl: url,
+        trackingPayload: extractedTrackingData,
+        timestamp: new Date()
+      });
+    } else {
+      // Fallback: Try to extract tracking data from the email content
+      try {
+        if (tracking.emailContent && tracking.emailContent.html) {
+          const htmlContent = tracking.emailContent.html;
+          
+          // Extract tracking payload using regex patterns
+          const trackingPatterns = {
+            email: /data-tracking-email=["']([^"']+)["']/i,
+            sender_user_id: /data-sender-user-id=["']([^"']+)["']/i,
+            object_type: /data-object-type=["']([^"']+)["']/i,
+            object_id: /data-object-id=["']([^"']+)["']/i,
+            contact_action_id: /data-contact-action-id=["']([^"']+)["']/i,
+            page_id: /data-page-id=["']([^"']+)["']/i,
+            sequence_id: /data-sequence-id=["']([^"']+)["']/i,
+            action_block_id: /data-action-block-id=["']([^"']+)["']/i
+          };
 
-        // Extract each tracking field
-        Object.keys(trackingPatterns).forEach(key => {
-          const match = htmlContent.match(trackingPatterns[key]);
-          if (match && match[1]) {
-            extractedTrackingData[key] = match[1];
-          }
-        });
+          // Extract each tracking field
+          Object.keys(trackingPatterns).forEach(key => {
+            const match = htmlContent.match(trackingPatterns[key]);
+            if (match && match[1]) {
+              extractedTrackingData[key] = match[1];
+            }
+          });
 
-        // Also try to extract from URL parameters
-        const urlPattern = /tracking-data=([^&\s]+)/i;
-        const urlMatch = htmlContent.match(urlPattern);
-        if (urlMatch && urlMatch[1]) {
-          try {
-            const decodedData = JSON.parse(decodeURIComponent(urlMatch[1]));
-            extractedTrackingData = { ...extractedTrackingData, ...decodedData };
-          } catch (e) {
-            console.log('Failed to parse URL tracking data');
+          // Also try to extract from URL parameters
+          const urlPattern = /tracking-data=([^&\s]+)/i;
+          const urlMatch = htmlContent.match(urlPattern);
+          if (urlMatch && urlMatch[1]) {
+            try {
+              const decodedData = JSON.parse(decodeURIComponent(urlMatch[1]));
+              extractedTrackingData = { ...extractedTrackingData, ...decodedData };
+            } catch (e) {
+              console.log('Failed to parse URL tracking data');
+            }
           }
         }
+      } catch (extractError) {
+        console.log('Error extracting tracking data from click:', extractError.message);
       }
-    } catch (extractError) {
-      console.log('Error extracting tracking data from click:', extractError.message);
     }
 
     // Log extracted tracking data
