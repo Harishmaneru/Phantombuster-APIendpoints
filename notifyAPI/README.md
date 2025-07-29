@@ -10,6 +10,7 @@ Simple email API with automatic webhook notifications when recipients open, clic
 - ✅ **Automatic Webhooks** - Real-time notifications to your webhook URL
 - ✅ **Professional Templates** - Pre-built email templates
 - ✅ **Secure Authentication** - Encrypted password storage
+- ✅ **HTML Subject Support** - Properly handles HTML content in subject lines
 
 ## Quick Setup
 
@@ -57,6 +58,36 @@ EMAIL_WEBHOOK_SECRET=your-webhook-secret-key
 }
 ```
 
+#### HTML Subject Support
+The API automatically detects and properly handles HTML content in subject lines:
+
+**Plain Text Subject:**
+```json
+{
+  "subject": "Simple notification"
+}
+```
+
+**HTML Subject:**
+```json
+{
+  "subject": "Important: <b>Meeting</b> at <i>3 PM</i> today"
+}
+```
+
+**Complex HTML Subject:**
+```json
+{
+  "subject": "Subject line for email<p class='leading-relaxed'><span style='color: rgb(13, 12, 12);'><strong>SMTP</strong></span></p>"
+}
+```
+
+The system will:
+- ✅ Detect HTML content automatically
+- ✅ Encode HTML subjects properly for email headers
+- ✅ Ensure subjects display correctly in all email clients
+- ✅ Maintain original subject in tracking data
+
 **Response:**
 ```json
 {
@@ -73,7 +104,30 @@ EMAIL_WEBHOOK_SECRET=your-webhook-secret-key
 }
 ```
 
-### 3. Check Tracking Status
+### 3. Test HTML Subject Encoding
+**POST** `/api/test-subject-encoding`
+
+```json
+{
+  "subject": "Important: <b>Meeting</b> at <i>3 PM</i> today"
+}
+```
+
+**Response:**
+```json
+{
+  "success": true,
+  "analysis": {
+    "originalSubject": "Important: <b>Meeting</b> at <i>3 PM</i> today",
+    "isHtml": true,
+    "encodedSubject": "=?UTF-8?B?SW1wb3J0YW50OiA8Yj5NZWV0aW5nPC9iPiBhdCA8aT4zIFBNPC9pPiB0b2RheQ==?=",
+    "needsEncoding": false,
+    "subjectLength": 42
+  }
+}
+```
+
+### 4. Check Tracking Status
 **GET** `/api/track/:trackingId`
 
 ```json

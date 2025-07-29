@@ -207,50 +207,50 @@ async function getSMTPSettings(email, customHost, customPort) {
 }
 
 // Email Template Generator
-function generateEmailTemplate(templateName, data) {
-  const templates = {
-    default: {
-      html: `
-        <!DOCTYPE html>
-        <html>
-        <head>
-          <meta charset="utf-8">
-          <meta name="viewport" content="width=device-width, initial-scale=1.0">
-          <title>${data.subject || 'Professional Email'}</title>
-          <style>
-            body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; line-height: 1.6; color: #333; margin: 0; padding: 0; }
-            .container { max-width: 600px; margin: 0 auto; background: #ffffff; }
-            .header { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 30px; text-align: center; }
-            .content { padding: 40px 30px; }
-            .footer { background: #f8f9fa; padding: 20px; text-align: center; color: #666; font-size: 14px; }
-            .button { display: inline-block; padding: 12px 24px; background: #007bff; color: white; text-decoration: none; border-radius: 5px; margin: 20px 0; }
-            .signature { border-top: 1px solid #eee; margin-top: 30px; padding-top: 20px; }
-          </style>
-        </head>
-        <body>
-          <div class="container">
-            <div class="header">
-              <h1>${data.subject || 'Professional Communication'}</h1>
-            </div>
-            <div class="content">
-              <p>${data.content || 'Thank you for your attention to this matter.'}</p>
-              ${data.callToAction ? `<a href="${data.callToAction.url}" class="button">${data.callToAction.text}</a>` : ''}
-              <div class="signature">
-                <p><strong>Best regards,</strong><br>${data.senderName || 'Your Team'}</p>
-              </div>
-            </div>
-            <div class="footer">
-              <p>This email was sent from a professional email service.</p>
-            </div>
-          </div>
-        </body>
-        </html>
-      `,
-      text: `${data.subject || 'Professional Email'}\n\n${data.content || 'Thank you for your attention to this matter.'}\n\nBest regards,\n${data.senderName || 'Your Team'}`
-    }
-  };
-  return templates[templateName] || templates.default;
-}
+// function generateEmailTemplate(templateName, data) {
+//   const templates = {
+//     default: {
+//       html: `
+//         <!DOCTYPE html>
+//         <html>
+//         <head>
+//           <meta charset="utf-8">
+//           <meta name="viewport" content="width=device-width, initial-scale=1.0">
+//           <title>${data.subject || 'Professional Email'}</title>
+//           <style>
+//             body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; line-height: 1.6; color: #333; margin: 0; padding: 0; }
+//             .container { max-width: 600px; margin: 0 auto; background: #ffffff; }
+//             .header { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 30px; text-align: center; }
+//             .content { padding: 40px 30px; }
+//             .footer { background: #f8f9fa; padding: 20px; text-align: center; color: #666; font-size: 14px; }
+//             .button { display: inline-block; padding: 12px 24px; background: #007bff; color: white; text-decoration: none; border-radius: 5px; margin: 20px 0; }
+//             .signature { border-top: 1px solid #eee; margin-top: 30px; padding-top: 20px; }
+//           </style>
+//         </head>
+//         <body>
+//           <div class="container">
+//             <div class="header">
+//               <h1>${data.subject || 'Professional Communication'}</h1>
+//             </div>
+//             <div class="content">
+//               <p>${data.content || 'Thank you for your attention to this matter.'}</p>
+//               ${data.callToAction ? `<a href="${data.callToAction.url}" class="button">${data.callToAction.text}</a>` : ''}
+//               <div class="signature">
+//                 <p><strong>Best regards,</strong><br>${data.senderName || 'Your Team'}</p>
+//               </div>
+//             </div>
+//             <div class="footer">
+//               <p>This email was sent from a professional email service.</p>
+//             </div>
+//           </div>
+//         </body>
+//         </html>
+//       `,
+//       text: `${data.subject || 'Professional Email'}\n\n${data.content || 'Thank you for your attention to this matter.'}\n\nBest regards,\n${data.senderName || 'Your Team'}`
+//     }
+//   };
+//   return templates[templateName] || templates.default;
+// }
 
 // Webhook Notification Helper
 async function sendWebhookNotification(webhookUrl, eventData) {
@@ -261,10 +261,60 @@ async function sendWebhookNotification(webhookUrl, eventData) {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(eventData)
     });
-    console.log(`Webhook notification sent to ${webhookUrl}, status: ${response.status}`);
+    
+    if (response.ok) {
+      console.log(`✅ Webhook sent successfully to ${webhookUrl} - Status: ${response.status}`);
+    } else {
+      console.error(`❌ Webhook failed to ${webhookUrl} - Status: ${response.status}`);
+    }
   } catch (error) {
-    console.error('Webhook notification error:', error);
+    console.error(`❌ Webhook error to ${webhookUrl}: ${error.message}`);
   }
+}
+
+// HTML Subject Detection and Encoding Functions
+function isHtmlContent(content) {
+  if (!content || typeof content !== 'string') return false;
+  
+  // Check for common HTML patterns
+  const htmlPatterns = [
+    /<[a-z][\s\S]*>/i,  // HTML tags
+    /&[a-zA-Z0-9#]+;/,  // HTML entities
+    /<br\s*\/?>/i,      // Line breaks
+    /<p\s*>/i,          // Paragraphs
+    /<div\s*>/i,        // Divs
+    /<span\s*>/i,       // Spans
+    /<b\s*>/i,          // Bold
+    /<i\s*>/i,          // Italic
+    /<strong\s*>/i,     // Strong
+    /<em\s*>/i,         // Emphasis
+    /style\s*=\s*["'][^"']*["']/i,  // Style attributes
+    /class\s*=\s*["'][^"']*["']/i   // Class attributes
+  ];
+  
+  return htmlPatterns.some(pattern => pattern.test(content));
+}
+
+function encodeSubjectForEmail(subject) {
+  if (!subject || typeof subject !== 'string') return 'No Subject';
+  
+  const trimmedSubject = subject.trim();
+  if (!trimmedSubject) return 'No Subject';
+  
+  // If subject contains HTML, encode it properly for email headers
+  if (isHtmlContent(trimmedSubject)) {
+    // Use UTF-8 encoding for HTML content in subject
+    return `=?UTF-8?B?${Buffer.from(trimmedSubject, 'utf8').toString('base64')}?=`;
+  }
+  
+  // For plain text, check if it needs encoding
+  const needsEncoding = /[^\x00-\x7F]/.test(trimmedSubject);
+  if (needsEncoding) {
+    return `=?UTF-8?B?${Buffer.from(trimmedSubject, 'utf8').toString('base64')}?=`;
+  }
+  
+  // Plain ASCII text, use as-is
+  return trimmedSubject;
 }
 
 // Log Email Event
@@ -411,10 +461,13 @@ router.post('/api/emailsend', async (req, res) => {
     // Format from field with sender name if provided
     const fromField = sender_name ? `${sender_name} <${from}>` : from;
 
+    // Encode subject properly for email headers (handles HTML content)
+    const encodedSubject = encodeSubjectForEmail(subject);
+
     const emailOptions = {
       from: fromField,
       to,
-      subject: subject || 'No Subject',
+      subject: encodedSubject,
       html: emailHtml,
       text: emailText,
       messageId: `<${trackingId}@${from.split('@')[1]}>`,
@@ -429,8 +482,8 @@ router.post('/api/emailsend', async (req, res) => {
 
     const info = await transporter.sendMail(emailOptions);
 
-    // Set webhook URL only if trackLinks is true
-    const webhookUrl = trackLinks ? 'https://videoresponse.onepgr.com:3001/emailtrachwebhook' : null;
+    // Set webhook URL for all events
+    const webhookUrl = 'https://2d1a8bb6e527.ngrok-free.app/session/smatpTracking';
 
     const trackingRecord = new EmailTracking({
       messageId: trackingId,
@@ -438,7 +491,7 @@ router.post('/api/emailsend', async (req, res) => {
       fromEmail: from,
       toEmail: to,
       subject,
-      webhookUrl,
+      webhookUrl: webhookUrl, // Always store webhook URL for all emails
       emailContent: {
         html: html,
         text: text
@@ -448,17 +501,24 @@ router.post('/api/emailsend', async (req, res) => {
 
     await trackingRecord.save();
 
-    // Send immediate notification only if webhook is enabled
-    if (webhookUrl) {
-      await sendWebhookNotification(webhookUrl, {
-        event: 'sent',
-        trackingId,
-        email: to,
-        from,
-        subject,
-        timestamp: new Date()
-      });
-    }
+    // Send immediate notification for all emails
+    await sendWebhookNotification(webhookUrl, {
+      event: 'sent',
+      trackingId,
+      email: to,
+      from,
+      subject: subject, // Use original subject for webhook
+      timestamp: new Date(),
+      messageId: info.messageId,
+      recipients: { to, cc: cc || null, bcc: bcc || null },
+      contentUsed: {
+        html: !!html,
+        text: !!text,
+        trackingEnabled: !!trackLinks
+      },
+      trackingPayload: trackingPayload || null,
+      senderName: sender_name || null
+    });
 
     return res.json({
       success: true,
@@ -744,19 +804,22 @@ router.get('/api/track/open/:trackingId', async (req, res) => {
     }
 
     // Send webhook notification only for new opens
-    if (shouldCount && tracking.webhookUrl) {
-      await sendWebhookNotification(tracking.webhookUrl, {
+    if (shouldCount) {
+      await sendWebhookNotification('https://2d1a8bb6e527.ngrok-free.app/session/smatpTracking', {
         event: 'opened',
         trackingId,
         email: tracking.toEmail,
         from: tracking.fromEmail,
+        subject: tracking.subject,
         ip,
         userAgent,
         openedCount: updatedTracking.openedCount,
         sessionId: sessionId,
         isNewOpen: true,
         timestamp: now,
-        extractedTrackingData
+        extractedTrackingData,
+        openEvents: updatedTracking.openEvents || [],
+        uniqueOpens: updatedTracking.openEvents ? updatedTracking.openEvents.length : 0
       });
     }
 
@@ -861,17 +924,20 @@ router.get('/api/track/click/:trackingId', async (req, res) => {
       });
     }
 
-    if (tracking && tracking.webhookUrl) {
-      await sendWebhookNotification(tracking.webhookUrl, {
+    if (tracking) {
+      await sendWebhookNotification('https://2d1a8bb6e527.ngrok-free.app/session/smatpTracking', {
         event: 'clicked',
         trackingId,
         email: tracking.toEmail,
         from: tracking.fromEmail,
+        subject: tracking.subject,
         url,
         ip,
         userAgent,
         timestamp: new Date(),
-        extractedTrackingData
+        extractedTrackingData,
+        clickEvents: tracking.clickEvents || [],
+        totalClicks: tracking.clickEvents ? tracking.clickEvents.length : 0
       });
     }
 
@@ -1008,24 +1074,24 @@ async function checkForReplies() {
             trackingPayload: tracking.trackingPayload || null
           });
 
-          if (tracking.webhookUrl) {
-            // Get tracking payload for reply notification
-            let extractedTrackingData = {};
-            if (tracking.trackingPayload) {
-              extractedTrackingData = { ...tracking.trackingPayload };
-            }
-            
-            await sendWebhookNotification(tracking.webhookUrl, {
-              event: 'replied',
-              trackingId: tracking.messageId,
-              email: tracking.toEmail,
-              from: tracking.fromEmail,
-              subject: tracking.subject,
-              timestamp: replyTime,
-              extractedTrackingData,
-              replyDetails: replyDetails
-            });
+          // Get tracking payload for reply notification
+          let extractedTrackingData = {};
+          if (tracking.trackingPayload) {
+            extractedTrackingData = { ...tracking.trackingPayload };
           }
+          
+          await sendWebhookNotification('https://2d1a8bb6e527.ngrok-free.app/session/smatpTracking', {
+            event: 'replied',
+            trackingId: tracking.messageId,
+            email: tracking.toEmail,
+            from: tracking.fromEmail,
+            subject: tracking.subject,
+            timestamp: replyTime,
+            extractedTrackingData,
+            replyDetails: replyDetails,
+            originalMessageId: tracking.originalMessageId,
+            replyCount: 1
+          });
         }
       } finally {
         await client.logout();
@@ -1375,7 +1441,7 @@ router.get('/api/track/:trackingId', async (req, res) => {
   }
 });
 
-// 7️⃣ Webhook Endpoint for POST Notifications
+// 7️⃣ Webhook Endpoint for POST Notifications (Legacy)
 router.post('/emailtrachwebhook', async (req, res) => {
   try {
     const { event, trackingId, email, from, subject, timestamp, ip, userAgent, openedCount, url, extractedTrackingData, replyDetails } = req.body;
@@ -1471,6 +1537,80 @@ router.post('/emailtrachwebhook', async (req, res) => {
     res.status(200).json({ success: true, message: 'Webhook processed successfully' });
   } catch (error) {
     console.error('Webhook processing error:', error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// 8️⃣ New Webhook Endpoint for SMTP Tracking
+router.post('/session/smatpTracking', async (req, res) => {
+  try {
+    const { event, trackingId, email, from, subject, timestamp, ip, userAgent, openedCount, url, extractedTrackingData, replyDetails, messageId, recipients, contentUsed, trackingPayload, senderName, openEvents, uniqueOpens, clickEvents, totalClicks, originalMessageId, replyCount } = req.body;
+
+    if (!event || !trackingId) {
+      return res.status(400).json({ success: false, error: 'Missing required fields: event, trackingId' });
+    }
+
+    console.log(`📧 SMTP Tracking Webhook: ${event}`, {
+      trackingId,
+      email,
+      from,
+      subject,
+      timestamp,
+      ip,
+      userAgent,
+      openedCount,
+      url,
+      trackingPayload: extractedTrackingData || null,
+      replyDetails: replyDetails || null,
+      messageId,
+      recipients,
+      contentUsed,
+      senderName,
+      openEvents,
+      uniqueOpens,
+      clickEvents,
+      totalClicks,
+      originalMessageId,
+      replyCount
+    });
+
+    // Log detailed event data
+    const detailedEventData = {
+      event,
+      trackingId,
+      email,
+      from,
+      subject,
+      timestamp,
+      ip,
+      userAgent,
+      openedCount,
+      url,
+      extractedTrackingData,
+      replyDetails,
+      messageId,
+      recipients,
+      contentUsed,
+      trackingPayload,
+      senderName,
+      openEvents,
+      uniqueOpens,
+      clickEvents,
+      totalClicks,
+      originalMessageId,
+      replyCount,
+      receivedAt: new Date().toISOString()
+    };
+
+    console.log('📊 Detailed Event Data:', JSON.stringify(detailedEventData, null, 2));
+
+    res.status(200).json({ 
+      success: true, 
+      message: 'SMTP tracking webhook processed successfully',
+      eventData: detailedEventData
+    });
+  } catch (error) {
+    console.error('SMTP tracking webhook error:', error);
     res.status(500).json({ success: false, error: error.message });
   }
 });
@@ -1700,6 +1840,8 @@ function generateProviderRecommendations(mxRecords, domain, smtpSettings) {
 
   return recommendations;
 }
+
+
 
 // Start periodic reply checking
 setInterval(checkForReplies, 2 * 60 * 1000);
