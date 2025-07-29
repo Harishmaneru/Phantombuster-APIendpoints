@@ -969,13 +969,20 @@ async function checkForReplies() {
           );
 
           if (tracking.webhookUrl) {
+            // Get tracking payload for reply notification
+            let extractedTrackingData = {};
+            if (tracking.trackingPayload) {
+              extractedTrackingData = { ...tracking.trackingPayload };
+            }
+            
             await sendWebhookNotification(tracking.webhookUrl, {
               event: 'replied',
               trackingId: tracking.messageId,
               email: tracking.toEmail,
               from: tracking.fromEmail,
               subject: tracking.subject,
-              timestamp: replyTime
+              timestamp: replyTime,
+              extractedTrackingData
             });
           }
         }
@@ -1318,7 +1325,7 @@ router.get('/api/track/:trackingId', async (req, res) => {
 // 7️⃣ Webhook Endpoint for POST Notifications
 router.post('/emailtrachwebhook', async (req, res) => {
   try {
-    const { event, trackingId, email, from, subject, timestamp, ip, userAgent, openedCount, url } = req.body;
+    const { event, trackingId, email, from, subject, timestamp, ip, userAgent, openedCount, url, extractedTrackingData } = req.body;
 
     if (!event || !trackingId) {
       return res.status(400).json({ success: false, error: 'Missing required fields: event, trackingId' });
@@ -1333,8 +1340,18 @@ router.post('/emailtrachwebhook', async (req, res) => {
       ip,
       userAgent,
       openedCount,
-      url
+      url,
+      trackingPayload: extractedTrackingData || null
     });
+
+    // Log tracking payload separately if present
+    if (extractedTrackingData && Object.keys(extractedTrackingData).length > 0) {
+      console.log('📊 Webhook Tracking Payload:', {
+        trackingId,
+        event,
+        trackingPayload: extractedTrackingData
+      });
+    }
 
     // Optionally, update your database or perform other actions based on the event
     const tracking = await EmailTracking.findOne({ messageId: trackingId });
