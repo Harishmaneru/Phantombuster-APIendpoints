@@ -353,7 +353,7 @@ router.post('/api/emailsend', async (req, res) => {
       text, 
       trackLinks, 
       sender_name,
-      Trackingpayload 
+      trackingPayload 
     } = req.body;
     
     if (!token || !from || !to) {
@@ -443,7 +443,7 @@ router.post('/api/emailsend', async (req, res) => {
         html: html,
         text: text
       },
-      trackingPayload: Trackingpayload || null
+      trackingPayload: trackingPayload || null
     });
 
     await trackingRecord.save();
@@ -470,7 +470,7 @@ router.post('/api/emailsend', async (req, res) => {
         text: !!text,
         trackingEnabled: !!trackLinks
       },
-      trackingPayload: Trackingpayload || null,
+      trackingPayload: trackingPayload || null,
       senderName: sender_name || null
     });
   } catch (err) {
