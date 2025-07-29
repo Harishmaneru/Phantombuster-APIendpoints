@@ -963,10 +963,50 @@ async function checkForReplies() {
 
         if (foundReplies) {
           const replyTime = new Date();
+          
+          // Get detailed reply information
+          let replyDetails = null;
+          try {
+            // Fetch the actual reply message to get details
+            const replyMessages = await client.search({
+              header: { 'In-Reply-To': tracking.originalMessageId }
+            });
+            
+            if (replyMessages.length > 0) {
+              for await (let msg of client.fetch(replyMessages.slice(0, 1), { 
+                envelope: true, 
+                source: true 
+              })) {
+                const parsed = await simpleParser(msg.source);
+                replyDetails = {
+                  replyFrom: msg.envelope.from ? msg.envelope.from.map(f => `${f.name || ''} <${f.address}>`).join(', ') : 'Unknown',
+                  replySubject: msg.envelope.subject || '(No Subject)',
+                  replyDate: msg.envelope.date,
+                  replyText: parsed.text || '',
+                  replyHtml: parsed.html || '',
+                  replyMessageId: parsed.messageId
+                };
+                break;
+              }
+            }
+          } catch (error) {
+            console.log(`Error fetching reply details for ${tracking.messageId}:`, error.message);
+          }
+          
           await EmailTracking.findOneAndUpdate(
             { messageId: tracking.messageId },
             { $set: { repliedAt: replyTime } }
           );
+
+          // Log reply detection with tracking payload
+          console.log('📧 Reply detected:', {
+            trackingId: tracking.messageId,
+            originalEmail: tracking.toEmail,
+            originalFrom: tracking.fromEmail,
+            replyTime: replyTime,
+            replyDetails: replyDetails,
+            trackingPayload: tracking.trackingPayload || null
+          });
 
           if (tracking.webhookUrl) {
             // Get tracking payload for reply notification
@@ -982,7 +1022,8 @@ async function checkForReplies() {
               from: tracking.fromEmail,
               subject: tracking.subject,
               timestamp: replyTime,
-              extractedTrackingData
+              extractedTrackingData,
+              replyDetails: replyDetails
             });
           }
         }
@@ -1112,12 +1153,24 @@ router.post('/api/check-replies', async (req, res) => {
     // Sort replies by date
     replies.sort((a, b) => new Date(a.date) - new Date(b.date));
 
+    // Get tracking payload if available
+    let trackingPayload = null;
+    try {
+      const tracking = await EmailTracking.findOne({ originalMessageId: messageId });
+      if (tracking && tracking.trackingPayload) {
+        trackingPayload = tracking.trackingPayload;
+      }
+    } catch (error) {
+      console.log('Error fetching tracking payload:', error.message);
+    }
+
     return res.json({
       success: true,
       originalMessageId: messageId,
       foundReplies: foundReplies,
       replies: replies,
-      totalReplies: replies.length
+      totalReplies: replies.length,
+      trackingPayload: trackingPayload
     });
   } catch (err) {
     console.error('Manual Reply Check Error:', err);
@@ -1325,7 +1378,7 @@ router.get('/api/track/:trackingId', async (req, res) => {
 // 7️⃣ Webhook Endpoint for POST Notifications
 router.post('/emailtrachwebhook', async (req, res) => {
   try {
-    const { event, trackingId, email, from, subject, timestamp, ip, userAgent, openedCount, url, extractedTrackingData } = req.body;
+    const { event, trackingId, email, from, subject, timestamp, ip, userAgent, openedCount, url, extractedTrackingData, replyDetails } = req.body;
 
     if (!event || !trackingId) {
       return res.status(400).json({ success: false, error: 'Missing required fields: event, trackingId' });
@@ -1341,7 +1394,8 @@ router.post('/emailtrachwebhook', async (req, res) => {
       userAgent,
       openedCount,
       url,
-      trackingPayload: extractedTrackingData || null
+      trackingPayload: extractedTrackingData || null,
+      replyDetails: replyDetails || null
     });
 
     // Log tracking payload separately if present
@@ -1350,6 +1404,15 @@ router.post('/emailtrachwebhook', async (req, res) => {
         trackingId,
         event,
         trackingPayload: extractedTrackingData
+      });
+    }
+
+    // Log reply details separately if present
+    if (replyDetails && event === 'replied') {
+      console.log('📧 Webhook Reply Details:', {
+        trackingId,
+        event,
+        replyDetails: replyDetails
       });
     }
 
