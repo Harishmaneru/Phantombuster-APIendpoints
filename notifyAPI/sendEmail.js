@@ -67,6 +67,11 @@ const emailTrackingSchema = new mongoose.Schema({
   lastOpenedIP: String,
   repliedAt: Date,
   webhookUrl: String,
+  // Store email content for tracking data extraction
+  emailContent: {
+    html: String,
+    text: String
+  },
   // Enhanced open tracking
   openEvents: [{
     openedAt: Date,
@@ -326,9 +331,17 @@ router.post('/api/senderemail/smtpauth', async (req, res) => {
 // 2️⃣ Send Email
 router.post('/api/emailsend', async (req, res) => {
   try {
-    const { token, from, to, cc, bcc, subject, html, text, template, templateData, trackLinks } = req.body;
+    const { token, from, to, cc, bcc, subject, html, text, trackLinks } = req.body;
     if (!token || !from || !to) {
       return res.status(400).json({ success: false, error: 'Missing required fields: token, from, to' });
+    }
+
+    // Validate that user provided email content
+    if (!html && !text) {
+      return res.status(400).json({ 
+        success: false, 
+        error: 'Email content is required. Please provide either html or text content.' 
+      });
     }
 
     const smtp = await SMTPAuth.findOne({ email: from, token });
@@ -351,25 +364,16 @@ router.post('/api/emailsend', async (req, res) => {
     const baseUrl = process.env.BASE_URL || 'https://videoresponse.onepgr.com:3001';
     const trackingPixelUrl = `${baseUrl}/api/track/open/${trackingId}`;
 
+    // Use exactly what user provided - no template processing
     let emailHtml = html;
     let emailText = text;
 
-    if (template) {
-      const templateContent = generateEmailTemplate(template, templateData || {});
-      emailHtml = templateContent.html;
-      emailText = templateContent.text;
-    } else if (!html && !text) {
-      const defaultTemplate = generateEmailTemplate('default', { subject, content: 'This is a professional email.' });
-      emailHtml = defaultTemplate.html;
-      emailText = defaultTemplate.text;
-    }
-
-    // Add tracking pixel
+    // Add tracking pixel only if HTML content exists
     if (emailHtml) {
       emailHtml += `<img src="${trackingPixelUrl}" width="1" height="1" style="display:none;border:0;" alt=""/>\n`;
     }
 
-    // Track links
+    // Track links only if requested and HTML content exists
     if (emailHtml && trackLinks) {
       emailHtml = emailHtml.replace(/href=["'](.*?)["']/g, (match, url) => {
         if (url.startsWith('http') && !url.includes(baseUrl)) {
@@ -407,7 +411,11 @@ router.post('/api/emailsend', async (req, res) => {
       fromEmail: from,
       toEmail: to,
       subject,
-      webhookUrl
+      webhookUrl,
+      emailContent: {
+        html: html,
+        text: text
+      }
     });
 
     await trackingRecord.save();
@@ -428,7 +436,12 @@ router.post('/api/emailsend', async (req, res) => {
       success: true,
       messageId: info.messageId,
       trackingId,
-      recipients: { to, cc: cc || null, bcc: bcc || null }
+      recipients: { to, cc: cc || null, bcc: bcc || null },
+      contentUsed: {
+        html: !!html,
+        text: !!text,
+        trackingEnabled: !!trackLinks
+      }
     });
   } catch (err) {
     console.error('Email Send Error:', err);
@@ -596,6 +609,61 @@ router.get('/api/track/open/:trackingId', async (req, res) => {
       return res.send(Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=', 'base64'));
     }
 
+    // Extract tracking payload data from email content
+    let extractedTrackingData = {};
+    
+    // Try to extract tracking data from the email content
+    try {
+      // Look for tracking data in HTML content (if available)
+      if (tracking.emailContent && tracking.emailContent.html) {
+        const htmlContent = tracking.emailContent.html;
+        
+        // Extract tracking payload using regex patterns
+        const trackingPatterns = {
+          email: /data-tracking-email=["']([^"']+)["']/i,
+          sender_user_id: /data-sender-user-id=["']([^"']+)["']/i,
+          object_type: /data-object-type=["']([^"']+)["']/i,
+          object_id: /data-object-id=["']([^"']+)["']/i,
+          contact_action_id: /data-contact-action-id=["']([^"']+)["']/i,
+          page_id: /data-page-id=["']([^"']+)["']/i,
+          sequence_id: /data-sequence-id=["']([^"']+)["']/i,
+          action_block_id: /data-action-block-id=["']([^"']+)["']/i
+        };
+
+        // Extract each tracking field
+        Object.keys(trackingPatterns).forEach(key => {
+          const match = htmlContent.match(trackingPatterns[key]);
+          if (match && match[1]) {
+            extractedTrackingData[key] = match[1];
+          }
+        });
+
+        // Also try to extract from URL parameters or hidden inputs
+        const urlPattern = /tracking-data=([^&\s]+)/i;
+        const urlMatch = htmlContent.match(urlPattern);
+        if (urlMatch && urlMatch[1]) {
+          try {
+            const decodedData = JSON.parse(decodeURIComponent(urlMatch[1]));
+            extractedTrackingData = { ...extractedTrackingData, ...decodedData };
+          } catch (e) {
+            console.log('Failed to parse URL tracking data');
+          }
+        }
+      }
+    } catch (extractError) {
+      console.log('Error extracting tracking data:', extractError.message);
+    }
+
+    // Log extracted tracking data
+    if (Object.keys(extractedTrackingData).length > 0) {
+      console.log('📊 Extracted Tracking Data:', {
+        trackingId,
+        email: tracking.toEmail,
+        extractedData: extractedTrackingData,
+        timestamp: now
+      });
+    }
+
     // Check if this is a duplicate open (same session within 1 hour)
     const oneHourAgo = new Date(now.getTime() - 60 * 60 * 1000);
     const recentOpen = tracking.openEvents && tracking.openEvents.find(event =>
@@ -642,13 +710,13 @@ router.get('/api/track/open/:trackingId', async (req, res) => {
         trackingId,
         email: tracking.toEmail,
         from: tracking.fromEmail,
-        subject: tracking.subject,
         ip,
         userAgent,
         openedCount: updatedTracking.openedCount,
         sessionId: sessionId,
         isNewOpen: true,
-        timestamp: now
+        timestamp: now,
+        extractedTrackingData
       });
     }
 
@@ -686,17 +754,71 @@ router.get('/api/track/click/:trackingId', async (req, res) => {
       { new: true }
     );
 
+    // Extract tracking payload data from email content
+    let extractedTrackingData = {};
+    
+    try {
+      if (tracking.emailContent && tracking.emailContent.html) {
+        const htmlContent = tracking.emailContent.html;
+        
+        // Extract tracking payload using regex patterns
+        const trackingPatterns = {
+          email: /data-tracking-email=["']([^"']+)["']/i,
+          sender_user_id: /data-sender-user-id=["']([^"']+)["']/i,
+          object_type: /data-object-type=["']([^"']+)["']/i,
+          object_id: /data-object-id=["']([^"']+)["']/i,
+          contact_action_id: /data-contact-action-id=["']([^"']+)["']/i,
+          page_id: /data-page-id=["']([^"']+)["']/i,
+          sequence_id: /data-sequence-id=["']([^"']+)["']/i,
+          action_block_id: /data-action-block-id=["']([^"']+)["']/i
+        };
+
+        // Extract each tracking field
+        Object.keys(trackingPatterns).forEach(key => {
+          const match = htmlContent.match(trackingPatterns[key]);
+          if (match && match[1]) {
+            extractedTrackingData[key] = match[1];
+          }
+        });
+
+        // Also try to extract from URL parameters
+        const urlPattern = /tracking-data=([^&\s]+)/i;
+        const urlMatch = htmlContent.match(urlPattern);
+        if (urlMatch && urlMatch[1]) {
+          try {
+            const decodedData = JSON.parse(decodeURIComponent(urlMatch[1]));
+            extractedTrackingData = { ...extractedTrackingData, ...decodedData };
+          } catch (e) {
+            console.log('Failed to parse URL tracking data');
+          }
+        }
+      }
+    } catch (extractError) {
+      console.log('Error extracting tracking data from click:', extractError.message);
+    }
+
+    // Log extracted tracking data
+    if (Object.keys(extractedTrackingData).length > 0) {
+      console.log('🔗 Click Tracking Data:', {
+        trackingId,
+        email: tracking.toEmail,
+        clickedUrl: url,
+        extractedData: extractedTrackingData,
+        timestamp: new Date()
+      });
+    }
+
     if (tracking && tracking.webhookUrl) {
       await sendWebhookNotification(tracking.webhookUrl, {
         event: 'clicked',
         trackingId,
         email: tracking.toEmail,
         from: tracking.fromEmail,
-        subject: tracking.subject,
         url,
         ip,
         userAgent,
-        timestamp: new Date()
+        timestamp: new Date(),
+        extractedTrackingData
       });
     }
 
