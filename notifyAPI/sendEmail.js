@@ -483,7 +483,7 @@ router.post('/api/emailsend', async (req, res) => {
     const info = await transporter.sendMail(emailOptions);
 
     // Set webhook URL for all events
-    const webhookUrl = 'https://2d1a8bb6e527.ngrok-free.app/session/smatpTracking';
+    const webhookUrl = 'https://meet.onepgr.com/session/smatpTracking';
 
     const trackingRecord = new EmailTracking({
       messageId: trackingId,
@@ -805,7 +805,7 @@ router.get('/api/track/open/:trackingId', async (req, res) => {
 
     // Send webhook notification only for new opens
     if (shouldCount) {
-      await sendWebhookNotification('https://2d1a8bb6e527.ngrok-free.app/session/smatpTracking', {
+      await sendWebhookNotification('https://meet.onepgr.com/session/smatpTracking', {
         event: 'opened',
         trackingId,
         email: tracking.toEmail,
@@ -925,7 +925,7 @@ router.get('/api/track/click/:trackingId', async (req, res) => {
     }
 
     if (tracking) {
-      await sendWebhookNotification('https://2d1a8bb6e527.ngrok-free.app/session/smatpTracking', {
+      await sendWebhookNotification('https://meet.onepgr.com/session/smatpTracking', {
         event: 'clicked',
         trackingId,
         email: tracking.toEmail,
@@ -1080,7 +1080,7 @@ async function checkForReplies() {
             extractedTrackingData = { ...tracking.trackingPayload };
           }
           
-          await sendWebhookNotification('https://2d1a8bb6e527.ngrok-free.app/session/smatpTracking', {
+          await sendWebhookNotification('https://meet.onepgr.com/session/smatpTracking', {
             event: 'replied',
             trackingId: tracking.messageId,
             email: tracking.toEmail,
