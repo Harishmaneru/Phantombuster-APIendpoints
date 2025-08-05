@@ -4,7 +4,7 @@ const router = express.Router();
 
 const getLinkedInProfileData = async (profileUrl) => {
     try {
-        const apiUrl = 'https://fresh-linkedin-profile-data.p.rapidapi.com/get-linkedin-profile';
+        const apiUrl = 'https://fresh-linkedin-profile-data.p.rapidapi.com/get-extra-profile-data';
 
         console.log('Requesting LinkedIn profile data for URL:', profileUrl);
 
