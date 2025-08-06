@@ -6,8 +6,9 @@ const mongoose = require('mongoose');
 // Import domain registration function from Namecheap API
 const { registerDomainWithNamecheap } = require('../domainManagementAPI/nameCheapDomainApi');
 
-// Import simple file logging system
+// Import logging systems
 const fileLogger = require('../loggingSystem/fileLogger');
+const PaymentLogger = require('../loggingSystem/paymentLogs');
 
 // Middleware to parse JSON for all routes except /webhook
 router.use((req, res, next) => {
@@ -113,8 +114,46 @@ router.post(
                         // This is a one-time payment (e.g., domain purchase)
                         console.log('[checkout.session.completed] One-time payment detected, skipping subscription processing');
 
-                        // You might want to store one-time payment records in a different collection
-                        // For now, we'll just log it and continue
+                        // Log one-time payment completion
+                        await PaymentLogger.logSubscriptionPayment({
+                            userId: userId,
+                            userEmail: metadata?.userEmail || 'unknown',
+                            paymentType: 'one_time_payment',
+                            stripeData: {
+                                sessionId: sessionId,
+                                paymentIntentId: session.payment_intent,
+                                customerId: customer,
+                                amount: amount_total / 100,
+                                currency: currency,
+                                paymentStatus: payment_status,
+                                paymentMethod: 'card',
+                                receiptUrl: session.receipt_url
+                            },
+                            systemInfo: {
+                                ipAddress: 'webhook',
+                                userAgent: 'stripe-webhook',
+                                apiEndpoint: '/webhook',
+                                requestMethod: 'POST'
+                            },
+                            status: 'completed',
+                            metadata: {
+                                purchaseType: metadata?.purchaseType || 'unknown',
+                                app: metadata?.app || 'unknown',
+                                eventId: event.id
+                            }
+                        });
+
+                        // Log to file system
+                        fileLogger.log('payment', `One-time payment completed for user ${userId}`, {
+                            userId,
+                            sessionId,
+                            amount: amount_total / 100,
+                            currency,
+                            paymentStatus: payment_status,
+                            purchaseType: metadata?.purchaseType || 'unknown',
+                            timestamp: new Date().toISOString()
+                        });
+
                         console.log('[checkout.session.completed] One-time payment details:', {
                             sessionId,
                             userId,
@@ -216,8 +255,90 @@ router.post(
                     try {
                         await Subscription.create(subscriptionData);
                         console.log(`[stripeRoutes.js] Subscription stored for user ${userId}`);
+
+                        // Log successful subscription payment completion
+                        await PaymentLogger.logSubscriptionPayment({
+                            userId: userId,
+                            userEmail: metadata?.userEmail || 'unknown',
+                            paymentType: 'subscription',
+                            stripeData: {
+                                sessionId: sessionId,
+                                paymentIntentId: session.payment_intent,
+                                customerId: customer,
+                                invoiceId: stripeSubscription.latest_invoice,
+                                hostedInvoiceUrl: null, // Will be available in invoice.payment_succeeded
+                                invoicePdf: null, // Will be available in invoice.payment_succeeded
+                                amount: amount_total / 100,
+                                currency: currency,
+                                paymentStatus: payment_status,
+                                paymentMethod: 'card',
+                                receiptUrl: session.receipt_url
+                            },
+                            systemInfo: {
+                                ipAddress: 'webhook',
+                                userAgent: 'stripe-webhook',
+                                apiEndpoint: '/webhook',
+                                requestMethod: 'POST'
+                            },
+                            status: 'completed',
+                            metadata: {
+                                app: metadata?.app || 'unknown',
+                                planName: planName,
+                                subscriptionId: subscriptionId,
+                                eventId: event.id,
+                                currentPeriodStart: currentPeriodStartFormatted,
+                                currentPeriodEnd: currentPeriodEndFormatted
+                            }
+                        });
+
+                        // Log to file system
+                        fileLogger.log('payment', `Subscription payment completed for user ${userId}`, {
+                            userId,
+                            sessionId,
+                            subscriptionId,
+                            amount: amount_total / 100,
+                            currency,
+                            paymentStatus: payment_status,
+                            planName,
+                            app: metadata?.app || 'unknown',
+                            timestamp: new Date().toISOString()
+                        });
+
                     } catch (dbError) {
                         console.error('[stripeRoutes.js] Database save error:', dbError);
+
+                        // Log database error
+                        await PaymentLogger.logFailedPayment({
+                            userId: userId,
+                            userEmail: metadata?.userEmail || 'unknown',
+                            paymentType: 'subscription',
+                            stripeData: {
+                                sessionId: sessionId,
+                                paymentIntentId: session.payment_intent,
+                                customerId: customer,
+                                amount: amount_total / 100,
+                                currency: currency,
+                                paymentStatus: payment_status
+                            },
+                            systemInfo: {
+                                ipAddress: 'webhook',
+                                userAgent: 'stripe-webhook',
+                                apiEndpoint: '/webhook',
+                                requestMethod: 'POST'
+                            },
+                            errorDetails: {
+                                errorMessage: dbError.message,
+                                errorCode: 'DATABASE_ERROR',
+                                errorStack: dbError.stack
+                            },
+                            metadata: {
+                                app: metadata?.app || 'unknown',
+                                planName: planName,
+                                subscriptionId: subscriptionId,
+                                eventId: event.id
+                            }
+                        });
+
                         // Continue processing even if database save fails.
                     }
                     break;
@@ -259,8 +380,84 @@ router.post(
                                 }
                             );
                             console.log(`[stripeRoutes.js] Updated subscription ${subscriptionId} for paid invoice`);
+
+                            // Log successful invoice payment
+                            await PaymentLogger.logSubscriptionPayment({
+                                userId: invoice.customer || 'unknown',
+                                userEmail: invoice.customer_email || 'unknown',
+                                paymentType: 'subscription',
+                                stripeData: {
+                                    sessionId: null,
+                                    paymentIntentId: invoice.payment_intent,
+                                    customerId: invoice.customer,
+                                    invoiceId: invoice.id,
+                                    hostedInvoiceUrl: invoice.hosted_invoice_url,
+                                    invoicePdf: invoice.invoice_pdf,
+                                    amount: invoice.amount_paid / 100,
+                                    currency: invoice.currency,
+                                    paymentStatus: 'paid',
+                                    paymentMethod: 'card',
+                                    receiptUrl: invoice.receipt_url
+                                },
+                                systemInfo: {
+                                    ipAddress: 'webhook',
+                                    userAgent: 'stripe-webhook',
+                                    apiEndpoint: '/webhook',
+                                    requestMethod: 'POST'
+                                },
+                                status: 'completed',
+                                metadata: {
+                                    subscriptionId: subscriptionId,
+                                    eventId: event.id,
+                                    currentPeriodStart: currentPeriodStartFormatted,
+                                    currentPeriodEnd: currentPeriodEndFormatted,
+                                    invoiceNumber: invoice.number
+                                }
+                            });
+
+                            // Log to file system
+                            fileLogger.log('payment', `Invoice payment succeeded for subscription ${subscriptionId}`, {
+                                subscriptionId,
+                                invoiceId: invoice.id,
+                                amount: invoice.amount_paid / 100,
+                                currency: invoice.currency,
+                                customerId: invoice.customer,
+                                timestamp: new Date().toISOString()
+                            });
+
                         } catch (dbError) {
                             console.error('[stripeRoutes.js] Database update error:', dbError);
+
+                            // Log database error
+                            await PaymentLogger.logFailedPayment({
+                                userId: invoice.customer || 'unknown',
+                                userEmail: invoice.customer_email || 'unknown',
+                                paymentType: 'subscription',
+                                stripeData: {
+                                    sessionId: null,
+                                    paymentIntentId: invoice.payment_intent,
+                                    customerId: invoice.customer,
+                                    invoiceId: invoice.id,
+                                    amount: invoice.amount_paid / 100,
+                                    currency: invoice.currency,
+                                    paymentStatus: 'paid'
+                                },
+                                systemInfo: {
+                                    ipAddress: 'webhook',
+                                    userAgent: 'stripe-webhook',
+                                    apiEndpoint: '/webhook',
+                                    requestMethod: 'POST'
+                                },
+                                errorDetails: {
+                                    errorMessage: dbError.message,
+                                    errorCode: 'DATABASE_ERROR',
+                                    errorStack: dbError.stack
+                                },
+                                metadata: {
+                                    subscriptionId: subscriptionId,
+                                    eventId: event.id
+                                }
+                            });
                         }
                     }
                     break;
@@ -281,8 +478,76 @@ router.post(
                             { status: 'canceled' }
                         );
                         console.log(`[stripeRoutes.js] Marked subscription ${subscription.id} as canceled`);
+
+                        // Log subscription cancellation
+                        await PaymentLogger.logSubscriptionPayment({
+                            userId: subscription.customer || 'unknown',
+                            userEmail: 'unknown', // Customer email not available in this event
+                            paymentType: 'subscription',
+                            stripeData: {
+                                sessionId: null,
+                                paymentIntentId: null,
+                                customerId: subscription.customer,
+                                amount: null,
+                                currency: null,
+                                paymentStatus: 'canceled'
+                            },
+                            systemInfo: {
+                                ipAddress: 'webhook',
+                                userAgent: 'stripe-webhook',
+                                apiEndpoint: '/webhook',
+                                requestMethod: 'POST'
+                            },
+                            status: 'cancelled',
+                            metadata: {
+                                subscriptionId: subscription.id,
+                                eventId: event.id,
+                                cancelReason: subscription.cancel_at_period_end ? 'period_end' : 'immediate',
+                                canceledAt: new Date(subscription.canceled_at * 1000).toISOString()
+                            }
+                        });
+
+                        // Log to file system
+                        fileLogger.log('payment', `Subscription canceled: ${subscription.id}`, {
+                            subscriptionId: subscription.id,
+                            customerId: subscription.customer,
+                            cancelReason: subscription.cancel_at_period_end ? 'period_end' : 'immediate',
+                            canceledAt: new Date(subscription.canceled_at * 1000).toISOString(),
+                            timestamp: new Date().toISOString()
+                        });
+
                     } catch (dbError) {
                         console.error('[stripeRoutes.js] Database update error:', dbError);
+
+                        // Log database error
+                        await PaymentLogger.logFailedPayment({
+                            userId: subscription.customer || 'unknown',
+                            userEmail: 'unknown',
+                            paymentType: 'subscription',
+                            stripeData: {
+                                sessionId: null,
+                                paymentIntentId: null,
+                                customerId: subscription.customer,
+                                amount: null,
+                                currency: null,
+                                paymentStatus: 'canceled'
+                            },
+                            systemInfo: {
+                                ipAddress: 'webhook',
+                                userAgent: 'stripe-webhook',
+                                apiEndpoint: '/webhook',
+                                requestMethod: 'POST'
+                            },
+                            errorDetails: {
+                                errorMessage: dbError.message,
+                                errorCode: 'DATABASE_ERROR',
+                                errorStack: dbError.stack
+                            },
+                            metadata: {
+                                subscriptionId: subscription.id,
+                                eventId: event.id
+                            }
+                        });
                     }
                     break;
                 }
@@ -1687,7 +1952,8 @@ router.get('/invoice/:paymentIntentId', async (req, res) => {
 
 router.post('/create-checkout-session-by-app', async (req, res) => {
     try {
-        const { userId, priceId, app, quantity = 1 } = req.body;
+        const { userId, priceId, app, quantity = 1, userEmail } = req.body;
+        const requestStartTime = new Date();
 
         // 1️⃣ Validate app URLs
         const appUrlMap = {
@@ -1698,12 +1964,72 @@ router.post('/create-checkout-session-by-app', async (req, res) => {
         };
 
         if (!app || !appUrlMap[app]) {
+            // Log validation error
+            await PaymentLogger.logFailedPayment({
+                userId: userId || 'unknown',
+                userEmail: userEmail || 'unknown',
+                paymentType: 'subscription',
+                stripeData: {
+                    sessionId: null,
+                    paymentIntentId: null,
+                    amount: null,
+                    currency: null,
+                    paymentStatus: 'validation_failed'
+                },
+                systemInfo: {
+                    ipAddress: req.ip,
+                    userAgent: req.get('User-Agent'),
+                    apiEndpoint: '/create-checkout-session-by-app',
+                    requestMethod: 'POST'
+                },
+                errorDetails: {
+                    errorMessage: 'Invalid or missing app parameter',
+                    errorCode: 'VALIDATION_ERROR',
+                    errorStack: null
+                },
+                metadata: { app, priceId, quantity }
+            });
+
             return res.status(400).json({ error: 'Invalid or missing app parameter' });
         }
 
         // 2️⃣ Validate quantity
         if (!quantity || quantity < 1) {
+            // Log validation error
+            await PaymentLogger.logFailedPayment({
+                userId: userId || 'unknown',
+                userEmail: userEmail || 'unknown',
+                paymentType: 'subscription',
+                stripeData: {
+                    sessionId: null,
+                    paymentIntentId: null,
+                    amount: null,
+                    currency: null,
+                    paymentStatus: 'validation_failed'
+                },
+                systemInfo: {
+                    ipAddress: req.ip,
+                    userAgent: req.get('User-Agent'),
+                    apiEndpoint: '/create-checkout-session-by-app',
+                    requestMethod: 'POST'
+                },
+                errorDetails: {
+                    errorMessage: 'Quantity must be at least 1',
+                    errorCode: 'VALIDATION_ERROR',
+                    errorStack: null
+                },
+                metadata: { app, priceId, quantity }
+            });
+
             return res.status(400).json({ error: 'Quantity must be at least 1' });
+        }
+
+        // 3️⃣ Get price details from Stripe for logging
+        let priceDetails = null;
+        try {
+            priceDetails = await stripe.prices.retrieve(priceId);
+        } catch (priceError) {
+            console.error('[PaymentLogger] Failed to retrieve price details:', priceError);
         }
 
         const sessionPayload = {
@@ -1716,10 +2042,85 @@ router.post('/create-checkout-session-by-app', async (req, res) => {
         };
 
         const session = await stripe.checkout.sessions.create(sessionPayload);
+
+        // 4️⃣ Log successful session creation
+        await PaymentLogger.logSubscriptionPayment({
+            userId: userId || 'unknown',
+            userEmail: userEmail || 'unknown',
+            paymentType: 'subscription',
+            stripeData: {
+                sessionId: session.id,
+                paymentIntentId: null, // Will be available after payment
+                customerId: null, // Will be available after payment
+                amount: priceDetails ? (priceDetails.unit_amount * quantity) / 100 : null,
+                currency: priceDetails ? priceDetails.currency : null,
+                paymentStatus: 'pending',
+                paymentMethod: 'card'
+            },
+            systemInfo: {
+                ipAddress: req.ip,
+                userAgent: req.get('User-Agent'),
+                apiEndpoint: '/create-checkout-session-by-app',
+                requestMethod: 'POST'
+            },
+            status: 'pending',
+            metadata: {
+                app,
+                priceId,
+                quantity,
+                planName: priceDetails?.nickname || 'Unknown Plan',
+                requestDuration: new Date() - requestStartTime
+            }
+        });
+
+        // 5️⃣ Log to file system as well
+        fileLogger.log('payment', `Checkout session created for user ${userId}`, {
+            userId,
+            userEmail,
+            sessionId: session.id,
+            app,
+            priceId,
+            quantity,
+            amount: priceDetails ? (priceDetails.unit_amount * quantity) / 100 : null,
+            currency: priceDetails ? priceDetails.currency : null,
+            timestamp: new Date().toISOString()
+        });
+
         res.json({ url: session.url });
 
     } catch (err) {
         console.error("Stripe error:", err);
+
+        // 6️⃣ Log payment creation error
+        await PaymentLogger.logFailedPayment({
+            userId: req.body.userId || 'unknown',
+            userEmail: req.body.userEmail || 'unknown',
+            paymentType: 'subscription',
+            stripeData: {
+                sessionId: null,
+                paymentIntentId: null,
+                amount: null,
+                currency: null,
+                paymentStatus: 'creation_failed'
+            },
+            systemInfo: {
+                ipAddress: req.ip,
+                userAgent: req.get('User-Agent'),
+                apiEndpoint: '/create-checkout-session-by-app',
+                requestMethod: 'POST'
+            },
+            errorDetails: {
+                errorMessage: err.message,
+                errorCode: err.code || 'STRIPE_ERROR',
+                errorStack: err.stack
+            },
+            metadata: {
+                app: req.body.app,
+                priceId: req.body.priceId,
+                quantity: req.body.quantity
+            }
+        });
+
         res.status(500).json({ error: err.message });
     }
 });
@@ -1772,7 +2173,5 @@ router.post('/create-billing-portal-session-by-app', async (req, res) => {
     }
 });
 //________________fetcing billing history API________________________
-
-
 
 module.exports = router;
