@@ -1,0 +1,52 @@
+[
+  {
+    "id": "1754473982351_2e9jxt0pq",
+    "timestamp": "2025-08-06T09:53:02.351Z",
+    "type": "email_creation",
+    "userId": "1486",
+    "userEmail": "sales@getkampaign.com",
+    "emailAddress": "sales@getkampaign.com",
+    "username": "sales",
+    "domain": "getkampaign.com",
+    "quota": 1024,
+    "storageUsed": 0,
+    "suspended": false,
+    "status": "completed",
+    "systemInfo": {
+      "ipAddress": "::1",
+      "userAgent": "PostmanRuntime/7.45.0",
+      "apiEndpoint": "/cpanel/create-email",
+      "requestMethod": "POST"
+    },
+    "metadata": {
+      "domainId": "6892e9066b36e04179080845",
+      "emailAccountsCount": 1,
+      "cpanelResponse": "sales+getkampaign.com"
+    }
+  },
+  {
+    "id": "1754478145934_0wh4aha8p",
+    "timestamp": "2025-08-06T11:02:25.934Z",
+    "type": "email_creation",
+    "userId": "1486",
+    "userEmail": "sales@getkampaign.com",
+    "emailAddress": "sales@getkampaign.com",
+    "username": "sales",
+    "domain": "getkampaign.com",
+    "quota": 1024,
+    "storageUsed": 0,
+    "suspended": false,
+    "status": "completed",
+    "systemInfo": {
+      "ipAddress": "::1",
+      "userAgent": "PostmanRuntime/7.45.0",
+      "apiEndpoint": "/cpanel/create-email",
+      "requestMethod": "POST"
+    },
+    "metadata": {
+      "domainId": "6892e9066b36e04179080845",
+      "emailAccountsCount": 1,
+      "cpanelResponse": "sales+getkampaign.com"
+    }
+  }
+]

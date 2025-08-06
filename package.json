@@ -52,6 +52,7 @@
     "puppeteer-extra": "^3.3.6",
     "puppeteer-extra-plugin-anonymize-ua": "^2.4.6",
     "puppeteer-extra-plugin-stealth": "^2.11.2",
+    "qs": "^6.11.2",
     "slack-block-builder": "^2.8.0",
     "stripe": "^18.0.0",
     "whisper-node": "^1.1.1",

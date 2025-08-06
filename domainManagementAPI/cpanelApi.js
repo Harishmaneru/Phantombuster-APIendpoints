@@ -3,6 +3,7 @@ const router = express.Router();
 const axios = require('axios');
 const https = require('https');
 const rateLimit = require('express-rate-limit');
+const qs = require('qs');
 
 // Import the NamecheapDomain model from the existing schema
 const { NamecheapDomain } = require('./nameCheapDomainApi.js');
@@ -200,6 +201,89 @@ async function addAddonDomain(domain) {
   }
 }
 
+/**
+ * Adds a domain as addon if not already added
+ * This function uses browser-style cPanel form requests to ensure compatibility
+ * with various cPanel configurations and hosting providers.
+ * 
+ * @param {string} domain - The domain to add
+ * @returns {Promise<{status: number, message?: string, error?: string}>}
+ *   - status: 1 for success, 0 for failure
+ *   - message: Success message or "Domain already exists in cPanel"
+ *   - error: Error message if domain addition failed
+ */
+async function addDomainIfNotExists(domain) {
+  // Step 1: Check if domain already exists using UAPI
+  try {
+    const checkRes = await axios.get(
+      `https://${WHM_HOST}:2083/execute/DomainInfo/domains_data`,
+      {
+        headers: {
+          Authorization: `cpanel ${MASTER_USER}:${CPANEL_TOKEN}`,
+        },
+        httpsAgent: new (require("https").Agent)({ rejectUnauthorized: false }),
+      }
+    );
+
+    const domainsList = checkRes.data?.data?.main_domain
+      ? [checkRes.data.data.main_domain, ...checkRes.data.data.addon_domains]
+      : [];
+
+    if (domainsList.includes(domain.toLowerCase())) {
+      return { status: 1, message: "Domain already exists in cPanel" };
+    }
+  } catch (checkErr) {
+    console.error("Domain check failed, continuing to add:", checkErr.message);
+  }
+
+  // Step 2: Try to add domain using browser-style form
+  const formData = qs.stringify({
+    cpanel_jsonapi_apiversion: "2",
+    cpanel_jsonapi_module: "AddonDomain",
+    cpanel_jsonapi_func: "addaddondomain",
+    newdomain: domain,
+    subdomain: domain,
+    ftp_is_optional: "1",
+    dir: domain,
+  });
+
+  try {
+    const response = await axios.post(
+      `https://${WHM_HOST}:2083/json-api/cpanel`,
+      formData,
+      {
+        headers: {
+          Authorization: `cpanel ${MASTER_USER}:${CPANEL_TOKEN}`,
+          "Content-Type": "application/x-www-form-urlencoded",
+        },
+        httpsAgent: new (require("https").Agent)({
+          rejectUnauthorized: false,
+        }),
+      }
+    );
+
+    const result = response.data;
+    const addonSuccess = result?.cpanelresult?.data?.[0]?.result === 1;
+
+    if (addonSuccess) {
+      return {
+        status: 1,
+        message: result.cpanelresult.data[0].reason,
+      };
+    } else {
+      return {
+        status: 0,
+        error: result.cpanelresult?.data?.[0]?.reason || "Addon domain creation failed",
+      };
+    }
+  } catch (err) {
+    return {
+      status: 0,
+      error: err.response?.data || err.message,
+    };
+  }
+}
+
 // Verify user owns domain in database
 async function userOwnsDomain(userId, domain) {
   try {
@@ -383,68 +467,33 @@ router.post('/cpanel/create-email', emailCreationLimiter, async (req, res) => {
       });
     }
 
-    // Step 2: Check domain ownership and existence
-    console.log(`Checking domain ${domain} ownership and existence...`);
-    const domainCpanelOwnership = await checkDomainOwnership(domain);
-    const domainExists = await checkAddonDomainExists(domain);
-    let domainAdded = false;
-    let domainAdditionAttempted = false;
+    // Step 2: Use the new addDomainIfNotExists function
+    console.log(`Checking and adding domain ${domain} if needed...`);
+    const domainCheck = await addDomainIfNotExists(domain);
     
-    console.log(`Domain ownership check:`, domainCpanelOwnership);
-    console.log(`Domain exists in cPanel:`, domainExists);
+    if (domainCheck.status !== 1) {
+      return res.status(500).json({
+        success: false,
+        error: `Failed to add domain: ${domainCheck.error}`,
+      });
+    }
+    console.log(`✅ Domain verified/added: ${domainCheck.message}`);
     
-    if (!domainExists) {
-      console.log(`Domain ${domain} not found in cPanel, attempting to add via WHM...`);
-      domainAdditionAttempted = true;
-      
-      // Try WHM API to add domain (more reliable than cPanel AddonDomain)
-      try {
-        console.log('Trying WHM API to add domain...');
-        const whmResult = await whmRequest('addaddondomain', {
-          domain: domain.toLowerCase(),
-          subdomain: `${domain.replace(/[^a-zA-Z0-9]/g, '_')}_addon`,
-          dir: `public_html/${domain}`,
-          newuser: MASTER_USER,
-          passwd: 'auto' // Let WHM generate password
-        });
-        console.log('WHM API result:', whmResult);
-        
-        if (whmResult.status === 1) {
-          domainAdded = true;
-          console.log(`Domain ${domain} successfully added via WHM API`);
-          
-          // Update domain record in database
-          await NamecheapDomain.findOneAndUpdate(
-            { userId, domain: domain.toLowerCase() },
-            {
-              $set: {
-                'cpanelConfiguration.domainAdded': true,
-                'cpanelConfiguration.domainAddedAt': new Date(),
-                'cpanelConfiguration.subdomain': `${domain.replace(/[^a-zA-Z0-9]/g, '_')}_addon`,
-                'cpanelConfiguration.directory': `public_html/${domain}`,
-                updatedAt: new Date()
-              }
-            },
-            { new: true }
-          );
-        } else {
-          console.log('WHM API failed, trying cPanel AddonDomain...');
-          const addonResult = await addAddonDomain(domain);
-          console.log('cPanel AddonDomain result:', addonResult);
-          
-          if (addonResult.status === 1) {
-            domainAdded = true;
-            console.log(`Domain ${domain} successfully added via cPanel`);
-          } else {
-            console.log('Both WHM and cPanel domain addition failed');
+    // Update domain record in database if domain was added
+    if (domainCheck.message && domainCheck.message !== "Domain already exists in cPanel") {
+      await NamecheapDomain.findOneAndUpdate(
+        { userId, domain: domain.toLowerCase() },
+        {
+          $set: {
+            'cpanelConfiguration.domainAdded': true,
+            'cpanelConfiguration.domainAddedAt': new Date(),
+            'cpanelConfiguration.subdomain': domain,
+            'cpanelConfiguration.directory': `public_html/${domain}`,
+            updatedAt: new Date()
           }
-        }
-      } catch (error) {
-        console.log('Domain addition failed:', error.message);
-      }
-    } else {
-      console.log(`Domain ${domain} already exists in cPanel (main or addon domain)`);
-      domainAdded = true;
+        },
+        { new: true }
+      );
     }
 
     // Step 3: Create email account
@@ -493,8 +542,7 @@ router.post('/cpanel/create-email', emailCreationLimiter, async (req, res) => {
         attemptedMethods: {
           whmApi: true,
           cpanelApi: true,
-          domainAdditionAttempted: domainAdditionAttempted,
-          domainAdded: domainAdded
+          domainCheck: domainCheck.message
         }
       });
       return;
@@ -575,16 +623,12 @@ router.post('/cpanel/create-email', emailCreationLimiter, async (req, res) => {
       },
       domainSetup: {
         domain: domain.toLowerCase(),
-        wasAddedToCpanel: domainAdded,
-        wasAlreadyInCpanel: domainExists,
-        additionAttempted: domainAdditionAttempted,
-        ownershipInfo: domainCpanelOwnership,
-        subdomain: `${domain.replace(/[^a-zA-Z0-9]/g, '_')}_addon`,
+        domainStatus: domainCheck.message,
+        subdomain: domain,
         directory: `public_html/${domain}`,
-        note: domainAdded ? 'Domain successfully added to cPanel' : 
-              domainExists ? 'Domain was already in cPanel' : 
-              domainAdditionAttempted ? 'Domain addition failed, but email creation succeeded. Domain may need manual setup.' :
-              'Domain was already available in cPanel'
+        note: domainCheck.message === "Domain already exists in cPanel" ? 
+              'Domain was already available in cPanel' : 
+              'Domain successfully added to cPanel'
       },
       data: emailResult.data,
       databaseRecord: {
@@ -2046,5 +2090,8 @@ async function getEmailCreationDate(email, domain, userId) {
     };
   }
 }
+
+
+
 
 module.exports = router;
