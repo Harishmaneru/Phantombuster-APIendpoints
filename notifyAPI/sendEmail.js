@@ -122,7 +122,7 @@ async function cachedMxLookup(domain) {
       return cached.records;
     }
   }
-  
+
   try {
     const records = await dns.resolveMx(domain);
     mxCache.set(domain, { records, timestamp: Date.now() });
@@ -134,13 +134,16 @@ async function cachedMxLookup(domain) {
 }
 
 // SMTP Settings Helper
+// Import cPanel API helper
+const { cpanelRequest } = require('../domainManagementAPI/cpanelApi.js');
+
 async function getSMTPSettings(email, customHost, customPort) {
   const domain = email.split('@')[1].toLowerCase();
-  
+
   // 1. Check for custom settings first
   if (customHost && customPort) return { host: customHost, port: customPort };
 
-  // 2. Check for known providers
+  // 2. Check for known providers (Gmail, Outlook, etc.)
   const providerSettings = {
     'gmail.com': { host: 'smtp.gmail.com', port: 587 },
     'outlook.com': { host: 'smtp-mail.outlook.com', port: 587 },
@@ -154,14 +157,45 @@ async function getSMTPSettings(email, customHost, customPort) {
 
   if (providerSettings[domain]) return providerSettings[domain];
 
-  // 3. Check MX records for provider detection
+  // 3. For custom domains, try cPanel API first
+  try {
+    console.log(`Attempting cPanel API lookup for domain: ${domain}`);
+    const cpanelResponse = await cpanelRequest('Email/get_client_settings', {
+      account: email
+    });
+
+    if (cpanelResponse && cpanelResponse.data) {
+      const smtpData = cpanelResponse.data;
+
+      // Validate that we have the required SMTP settings
+      if (smtpData.smtp_host && smtpData.smtp_port) {
+        console.log(`cPanel API success for ${email}:`, {
+          host: smtpData.smtp_host,
+          port: smtpData.smtp_port
+        });
+        return {
+          host: smtpData.smtp_host,
+          port: parseInt(smtpData.smtp_port) || 465
+        };
+      } else {
+        console.log(`cPanel API response missing SMTP settings for ${email}:`, smtpData);
+      }
+    } else {
+      console.log(`cPanel API response invalid for ${email}:`, cpanelResponse);
+    }
+  } catch (cpanelError) {
+    console.log(`cPanel API failed for ${email}:`, cpanelError.message);
+    // Continue to fallback logic
+  }
+
+  // 4. Fallback: Check MX records for provider detection
   try {
     const mxRecords = await cachedMxLookup(domain);
     const sorted = mxRecords.sort((a, b) => a.priority - b.priority);
-    
+
     // Detect Google Workspace
     const isGoogleWorkspace = sorted.some(mx =>
-      mx.exchange.includes('google') || 
+      mx.exchange.includes('google') ||
       mx.exchange.includes('aspmx.l.google.com') ||
       mx.exchange.includes('googlemail.com')
     );
@@ -169,30 +203,30 @@ async function getSMTPSettings(email, customHost, customPort) {
 
     // Detect Outlook/Microsoft
     const isOutlook = sorted.some(mx =>
-      mx.exchange.includes('outlook') || 
+      mx.exchange.includes('outlook') ||
       mx.exchange.includes('hotmail') ||
       mx.exchange.includes('microsoft')
     );
     if (isOutlook) return { host: 'smtp-mail.outlook.com', port: 587 };
 
     // Detect cPanel/WHM servers
-    const isCPanel = sorted.some(mx => 
-      mx.exchange.includes('cpanel') || 
+    const isCPanel = sorted.some(mx =>
+      mx.exchange.includes('cpanel') ||
       mx.exchange.includes('whm') ||
       mx.exchange === domain || // Self-hosted MX
       mx.exchange.endsWith(`.${domain}`) // Subdomain of the same domain
     );
-    
+
     if (isCPanel) {
       return { host: `mail.${domain}`, port: 465 };
     }
 
     // For other self-hosted domains, default to cPanel style
-    const isSelfHosted = sorted.some(mx => 
-      mx.exchange === domain || 
+    const isSelfHosted = sorted.some(mx =>
+      mx.exchange === domain ||
       mx.exchange.endsWith(`.${domain}`)
     );
-    
+
     if (isSelfHosted) {
       return { host: `mail.${domain}`, port: 465 };
     }
@@ -261,7 +295,7 @@ async function sendWebhookNotification(webhookUrl, eventData) {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(eventData)
     });
-    
+
     if (response.ok) {
       console.log(`✅ Webhook sent successfully to ${webhookUrl} - Status: ${response.status}`);
     } else {
@@ -275,7 +309,7 @@ async function sendWebhookNotification(webhookUrl, eventData) {
 // HTML Subject Detection and Encoding Functions
 function isHtmlContent(content) {
   if (!content || typeof content !== 'string') return false;
-  
+
   // Check for common HTML patterns
   const htmlPatterns = [
     /<[a-z][\s\S]*>/i,  // HTML tags
@@ -291,28 +325,28 @@ function isHtmlContent(content) {
     /style\s*=\s*["'][^"']*["']/i,  // Style attributes
     /class\s*=\s*["'][^"']*["']/i   // Class attributes
   ];
-  
+
   return htmlPatterns.some(pattern => pattern.test(content));
 }
 
 function encodeSubjectForEmail(subject) {
   if (!subject || typeof subject !== 'string') return 'No Subject';
-  
+
   const trimmedSubject = subject.trim();
   if (!trimmedSubject) return 'No Subject';
-  
+
   // If subject contains HTML, encode it properly for email headers
   if (isHtmlContent(trimmedSubject)) {
     // Use UTF-8 encoding for HTML content in subject
     return `=?UTF-8?B?${Buffer.from(trimmedSubject, 'utf8').toString('base64')}?=`;
   }
-  
+
   // For plain text, check if it needs encoding
   const needsEncoding = /[^\x00-\x7F]/.test(trimmedSubject);
   if (needsEncoding) {
     return `=?UTF-8?B?${Buffer.from(trimmedSubject, 'utf8').toString('base64')}?=`;
   }
-  
+
   // Plain ASCII text, use as-is
   return trimmedSubject;
 }
@@ -371,11 +405,19 @@ router.post('/api/senderemail/smtpauth', async (req, res) => {
       token
     });
 
+    // Determine detection method for better user feedback
+    const domain = email.split('@')[1].toLowerCase();
+    const knownProviders = ['gmail.com', 'outlook.com', 'hotmail.com', 'yahoo.com', 'icloud.com', 'protonmail.com', 'zoho.com', 'yandex.com'];
+    const detectionMethod = knownProviders.includes(domain) ? 'Known Provider' :
+      smtpSettings.host.includes('mail.') ? 'cPanel API' :
+        'DNS MX Lookup';
+
     return res.json({
       success: true,
       token,
       smtpSettings,
-      message: `New SMTP auth created for ${email}. Use token: ${token} to send and retrieve emails`
+      detectionMethod,
+      message: `New SMTP auth created for ${email} (${detectionMethod}). Use token: ${token} to send and retrieve emails`
     });
   } catch (error) {
     console.error('SMTP Auth Error:', error);
@@ -392,29 +434,29 @@ router.post('/api/senderemail/smtpauth', async (req, res) => {
 // 2️⃣ Send Email
 router.post('/api/emailsend', async (req, res) => {
   try {
-    const { 
-      token, 
-      from, 
-      to, 
-      cc, 
-      bcc, 
-      subject, 
-      html, 
-      text, 
-      trackLinks, 
+    const {
+      token,
+      from,
+      to,
+      cc,
+      bcc,
+      subject,
+      html,
+      text,
+      trackLinks,
       sender_name,
-      trackingPayload 
+      trackingPayload
     } = req.body;
-    
+
     if (!token || !from || !to) {
       return res.status(400).json({ success: false, error: 'Missing required fields: token, from, to' });
     }
 
     // Validate that user provided email content
     if (!html && !text) {
-      return res.status(400).json({ 
-        success: false, 
-        error: 'Email content is required. Please provide either html or text content.' 
+      return res.status(400).json({
+        success: false,
+        error: 'Email content is required. Please provide either html or text content.'
       });
     }
 
@@ -613,29 +655,29 @@ router.get('/api/get-host', async (req, res) => {
 
     // Detect provider type based on MX records
     const isGoogleWorkspace = sorted.some(mx => mx.exchange.includes('google'));
-    const isOutlook = sorted.some(mx => 
-      mx.exchange.includes('outlook') || 
+    const isOutlook = sorted.some(mx =>
+      mx.exchange.includes('outlook') ||
       mx.exchange.includes('hotmail') ||
       mx.exchange.includes('microsoft')
     );
     const isYahoo = sorted.some(mx => mx.exchange.includes('yahoo'));
-    const isCPanel = sorted.some(mx => 
-      mx.exchange.includes('cpanel') || 
+    const isCPanel = sorted.some(mx =>
+      mx.exchange.includes('cpanel') ||
       mx.exchange.includes('whm') ||
       mx.exchange === domain ||
       mx.exchange.endsWith(`.${domain}`)
     );
-    const isSelfHosted = sorted.some(mx => 
-      mx.exchange === domain || 
+    const isSelfHosted = sorted.some(mx =>
+      mx.exchange === domain ||
       mx.exchange.endsWith(`.${domain}`)
     );
 
     // Override suggestions for self-hosted domains
-    const isSelfHostedDomain = !smtpSettings.host.includes('gmail') && 
-                               !smtpSettings.host.includes('outlook') &&
-                               !smtpSettings.host.includes('yahoo') &&
-                               !smtpSettings.host.includes('zoho') &&
-                               !smtpSettings.host.includes('yandex');
+    const isSelfHostedDomain = !smtpSettings.host.includes('gmail') &&
+      !smtpSettings.host.includes('outlook') &&
+      !smtpSettings.host.includes('yahoo') &&
+      !smtpSettings.host.includes('zoho') &&
+      !smtpSettings.host.includes('yandex');
 
     const suggestedSmtp = isSelfHostedDomain ? `mail.${domain}` : smtpSettings.host;
     const suggestedImap = isSelfHostedDomain ? `mail.${domain}` : smtpSettings.host.replace('smtp.', 'imap.');
@@ -655,11 +697,11 @@ router.get('/api/get-host', async (req, res) => {
         is_yahoo: domain.includes('yahoo') || isYahoo,
         is_cpanel: isCPanel,
         is_self_hosted: isSelfHosted,
-        provider_type: isGoogleWorkspace ? 'google_workspace' : 
-                      isOutlook ? 'outlook' : 
-                      isYahoo ? 'yahoo' : 
-                      isCPanel ? 'cpanel' : 
-                      isSelfHosted ? 'self_hosted' : 'unknown'
+        provider_type: isGoogleWorkspace ? 'google_workspace' :
+          isOutlook ? 'outlook' :
+            isYahoo ? 'yahoo' :
+              isCPanel ? 'cpanel' :
+                isSelfHosted ? 'self_hosted' : 'unknown'
       },
       detection_notes: {
         mx_analysis: `Analyzed ${sorted.length} MX records`,
@@ -701,7 +743,7 @@ router.get('/api/track/open/:trackingId', async (req, res) => {
 
     // Get tracking payload data (directly stored or extracted from content)
     let extractedTrackingData = {};
-    
+
     // First, check if tracking payload was directly stored
     if (tracking.trackingPayload) {
       extractedTrackingData = { ...tracking.trackingPayload };
@@ -716,7 +758,7 @@ router.get('/api/track/open/:trackingId', async (req, res) => {
       try {
         if (tracking.emailContent && tracking.emailContent.html) {
           const htmlContent = tracking.emailContent.html;
-          
+
           // Extract tracking payload using regex patterns
           const trackingPatterns = {
             email: /data-tracking-email=["']([^"']+)["']/i,
@@ -859,7 +901,7 @@ router.get('/api/track/click/:trackingId', async (req, res) => {
 
     // Get tracking payload data (directly stored or extracted from content)
     let extractedTrackingData = {};
-    
+
     // First, check if tracking payload was directly stored
     if (tracking.trackingPayload) {
       extractedTrackingData = { ...tracking.trackingPayload };
@@ -875,7 +917,7 @@ router.get('/api/track/click/:trackingId', async (req, res) => {
       try {
         if (tracking.emailContent && tracking.emailContent.html) {
           const htmlContent = tracking.emailContent.html;
-          
+
           // Extract tracking payload using regex patterns
           const trackingPatterns = {
             email: /data-tracking-email=["']([^"']+)["']/i,
@@ -960,24 +1002,57 @@ async function checkForReplies() {
       const smtp = await SMTPAuth.findOne({ email: tracking.fromEmail });
       if (!smtp) continue;
 
-      const decryptedPass = decrypt(smtp.pass);
-      const client = new ImapFlow({
-        host: smtp.host.replace('smtp.', 'imap.'),
-        port: 993,
-        secure: true,
-        auth: { user: tracking.fromEmail, pass: decryptedPass },
-        logger: false
-      });
-
+      let client;
       try {
-        await client.connect();
-        await client.mailboxOpen('INBOX');
+        const decryptedPass = decrypt(smtp.pass);
+        client = new ImapFlow({
+          host: smtp.host.replace('smtp.', 'imap.'),
+          port: 993,
+          secure: true,
+          auth: { user: tracking.fromEmail, pass: decryptedPass },
+          logger: false,
+          timeout: 60000, // 60 second timeout (increased for safety)
+          keepalive: true,
+          maxRetries: 1 // Limit retry attempts
+        });
+
+        // Add connection event listeners
+        client.on('error', err => console.error(`IMAP error for ${tracking.fromEmail}:`, err.message));
+        client.on('close', () => console.log(`Connection closed for ${tracking.fromEmail}`));
+
+        // Add connection timeout
+        await Promise.race([
+          client.connect(),
+          new Promise((_, reject) =>
+            setTimeout(() => reject(new Error('Connection timeout')), 30000)
+          )
+        ]);
+
+        await Promise.race([
+          client.mailboxOpen('INBOX'),
+          new Promise((_, reject) =>
+            setTimeout(() => reject(new Error('Mailbox open timeout')), 15000)
+          )
+        ]);
+
+        // Send NOOP to keep connection alive
+        await client.run('NOOP');
+
+        // Check connection state before proceeding
+        if (!client.connection || client.connection.state !== 'authenticated') {
+          throw new Error('Connection not properly authenticated');
+        }
 
         // Search for replies using multiple methods
         let foundReplies = false;
 
         // Method 1: Search by In-Reply-To header
         try {
+          // Check connection before search
+          if (!client.connection || client.connection.state !== 'authenticated') {
+            throw new Error('Connection lost during search');
+          }
+
           const inReplyToMessages = await client.search({
             header: { 'In-Reply-To': tracking.originalMessageId }
           });
@@ -988,11 +1063,20 @@ async function checkForReplies() {
           }
         } catch (error) {
           console.log(`In-Reply-To search failed for ${tracking.messageId}:`, error.message);
+          // If connection is lost, break out of the search loop
+          if (error.message.includes('Connection') || error.message.includes('timeout')) {
+            break;
+          }
         }
 
         // Method 2: Search by References header
         if (!foundReplies) {
           try {
+            // Check connection before search
+            if (!client.connection || client.connection.state !== 'authenticated') {
+              throw new Error('Connection lost during search');
+            }
+
             const referencesMessages = await client.search({
               header: { 'References': tracking.originalMessageId }
             });
@@ -1003,12 +1087,21 @@ async function checkForReplies() {
             }
           } catch (error) {
             console.log(`References search failed for ${tracking.messageId}:`, error.message);
+            // If connection is lost, break out of the search loop
+            if (error.message.includes('Connection') || error.message.includes('timeout')) {
+              break;
+            }
           }
         }
 
         // Method 3: Search by subject line containing "Re:" and from the recipient
         if (!foundReplies) {
           try {
+            // Check connection before search
+            if (!client.connection || client.connection.state !== 'authenticated') {
+              throw new Error('Connection lost during search');
+            }
+
             const subjectReplies = await client.search({
               from: tracking.toEmail,
               subject: 'Re:'
@@ -1024,24 +1117,33 @@ async function checkForReplies() {
             }
           } catch (error) {
             console.log(`Subject search failed for ${tracking.messageId}:`, error.message);
+            // If connection is lost, break out of the search loop
+            if (error.message.includes('Connection') || error.message.includes('timeout')) {
+              break;
+            }
           }
         }
 
         if (foundReplies) {
           const replyTime = new Date();
-          
+
           // Get detailed reply information
           let replyDetails = null;
           try {
+            // Check connection before fetching reply details
+            if (!client.connection || client.connection.state !== 'authenticated') {
+              throw new Error('Connection lost during reply details fetch');
+            }
+
             // Fetch the actual reply message to get details
             const replyMessages = await client.search({
               header: { 'In-Reply-To': tracking.originalMessageId }
             });
-            
+
             if (replyMessages.length > 0) {
-              for await (let msg of client.fetch(replyMessages.slice(0, 1), { 
-                envelope: true, 
-                source: true 
+              for await (let msg of client.fetch(replyMessages.slice(0, 1), {
+                envelope: true,
+                source: true
               })) {
                 const parsed = await simpleParser(msg.source);
                 replyDetails = {
@@ -1057,8 +1159,9 @@ async function checkForReplies() {
             }
           } catch (error) {
             console.log(`Error fetching reply details for ${tracking.messageId}:`, error.message);
+            // Continue with basic reply detection even if details fetch fails
           }
-          
+
           await EmailTracking.findOneAndUpdate(
             { messageId: tracking.messageId },
             { $set: { repliedAt: replyTime } }
@@ -1079,7 +1182,7 @@ async function checkForReplies() {
           if (tracking.trackingPayload) {
             extractedTrackingData = { ...tracking.trackingPayload };
           }
-          
+
           await sendWebhookNotification('https://meet.onepgr.com/session/smatpTracking', {
             event: 'replied',
             trackingId: tracking.messageId,
@@ -1093,8 +1196,18 @@ async function checkForReplies() {
             replyCount: 1
           });
         }
+      } catch (connError) {
+        console.error(`Connection error for ${tracking.fromEmail}:`, connError.message);
+        continue; // Skip to next tracking record
       } finally {
-        await client.logout();
+        try {
+          if (client && typeof client.logout === 'function') {
+            await client.logout().catch(e =>
+              console.error('Logout error:', e.message));
+          }
+        } catch (logoutError) {
+          console.error('Final logout error:', logoutError.message);
+        }
       }
     }
   } catch (error) {
@@ -1604,8 +1717,8 @@ router.post('/session/smatpTracking', async (req, res) => {
 
     console.log('📊 Detailed Event Data:', JSON.stringify(detailedEventData, null, 2));
 
-    res.status(200).json({ 
-      success: true, 
+    res.status(200).json({
+      success: true,
       message: 'SMTP tracking webhook processed successfully',
       eventData: detailedEventData
     });
@@ -1625,7 +1738,7 @@ router.get('/api/email-provider', async (req, res) => {
 
     const domain = email.split('@')[1];
     const smtpSettings = await getSMTPSettings(email);
-    
+
     // Get detailed MX analysis
     const mxRecords = await cachedMxLookup(domain);
     const sorted = mxRecords.sort((a, b) => a.priority - b.priority);
@@ -1642,23 +1755,23 @@ router.get('/api/email-provider', async (req, res) => {
         is_yahoo: mx.exchange.includes('yahoo'),
         is_cpanel: mx.exchange.includes('cpanel') || mx.exchange.includes('whm')
       })),
-      
+
       provider_detection: {
         is_google_workspace: sorted.some(mx => mx.exchange.includes('google')),
-        is_outlook: sorted.some(mx => 
-          mx.exchange.includes('outlook') || 
+        is_outlook: sorted.some(mx =>
+          mx.exchange.includes('outlook') ||
           mx.exchange.includes('hotmail') ||
           mx.exchange.includes('microsoft')
         ),
         is_yahoo: sorted.some(mx => mx.exchange.includes('yahoo')),
-        is_cpanel: sorted.some(mx => 
-          mx.exchange.includes('cpanel') || 
+        is_cpanel: sorted.some(mx =>
+          mx.exchange.includes('cpanel') ||
           mx.exchange.includes('whm') ||
           mx.exchange === domain ||
           mx.exchange.endsWith(`.${domain}`)
         ),
-        is_self_hosted: sorted.some(mx => 
-          mx.exchange === domain || 
+        is_self_hosted: sorted.some(mx =>
+          mx.exchange === domain ||
           mx.exchange.endsWith(`.${domain}`)
         ),
         is_known_provider: ['gmail.com', 'outlook.com', 'hotmail.com', 'yahoo.com', 'zoho.com'].includes(domain)
@@ -1700,10 +1813,10 @@ router.get('/api/email-provider', async (req, res) => {
 
   } catch (error) {
     console.error('Provider detection error:', error);
-    return res.status(500).json({ 
-      success: false, 
+    return res.status(500).json({
+      success: false,
       error: 'Failed to analyze email provider',
-      details: error.message 
+      details: error.message
     });
   }
 });
@@ -1717,14 +1830,14 @@ function calculateConfidenceScore(mxRecords, domain) {
 
   // Check for known providers
   const hasGoogle = mxRecords.some(mx => mx.exchange.includes('google'));
-  const hasMicrosoft = mxRecords.some(mx => 
-    mx.exchange.includes('outlook') || 
+  const hasMicrosoft = mxRecords.some(mx =>
+    mx.exchange.includes('outlook') ||
     mx.exchange.includes('hotmail') ||
     mx.exchange.includes('microsoft')
   );
   const hasYahoo = mxRecords.some(mx => mx.exchange.includes('yahoo'));
-  const isSelfHosted = mxRecords.some(mx => 
-    mx.exchange === domain || 
+  const isSelfHosted = mxRecords.some(mx =>
+    mx.exchange === domain ||
     mx.exchange.endsWith(`.${domain}`)
   );
 
@@ -1734,7 +1847,7 @@ function calculateConfidenceScore(mxRecords, domain) {
   if (isSelfHosted) score += 30;
 
   // Bonus for multiple matching records
-  const matchingRecords = mxRecords.filter(mx => 
+  const matchingRecords = mxRecords.filter(mx =>
     mx.exchange.includes('google') ||
     mx.exchange.includes('outlook') ||
     mx.exchange.includes('hotmail') ||
@@ -1754,13 +1867,13 @@ function generateProviderRecommendations(mxRecords, domain, smtpSettings) {
   const recommendations = [];
 
   const isGoogle = mxRecords.some(mx => mx.exchange.includes('google'));
-  const isMicrosoft = mxRecords.some(mx => 
-    mx.exchange.includes('outlook') || 
+  const isMicrosoft = mxRecords.some(mx =>
+    mx.exchange.includes('outlook') ||
     mx.exchange.includes('hotmail') ||
     mx.exchange.includes('microsoft')
   );
-  const isSelfHosted = mxRecords.some(mx => 
-    mx.exchange === domain || 
+  const isSelfHosted = mxRecords.some(mx =>
+    mx.exchange === domain ||
     mx.exchange.endsWith(`.${domain}`)
   );
 
@@ -1841,12 +1954,117 @@ function generateProviderRecommendations(mxRecords, domain, smtpSettings) {
   return recommendations;
 }
 
+/**
+ * Reusable function to get SMTP settings for an email
+ * @param {string} email - The email address to get SMTP settings for
+ * @returns {Promise<Object>} - SMTP settings object
+ */
+async function getSMTPSettingsForEmail(email) {
+  if (!email) {
+    throw new Error('Email is required');
+  }
 
+  console.log(`🔍 Getting SMTP settings for: ${email}`);
+  
+  // Try cPanel API first
+  try {
+    const cpanelResponse = await cpanelRequest('Email/get_client_settings', {
+      account: email
+    });
+
+    if (cpanelResponse && cpanelResponse.data && cpanelResponse.data.smtp_host && cpanelResponse.data.smtp_port) {
+      const smtpData = cpanelResponse.data;
+      
+      console.log(`✅ cPanel API success for ${email}:`, {
+        host: smtpData.smtp_host,
+        port: smtpData.smtp_port
+      });
+
+      return {
+        success: true,
+        email: email,
+        smtp: {
+          smtp_host: smtpData.smtp_host,
+          smtp_port: parseInt(smtpData.smtp_port) || 465,
+          smtp_username: smtpData.smtp_username
+        },
+        imap: {
+          inbox_host: smtpData.inbox_host,
+          inbox_port: smtpData.inbox_port,
+          inbox_username: smtpData.inbox_username,
+          inbox_service: smtpData.inbox_service,
+          mail_domain: smtpData.mail_domain
+        },
+        domain: smtpData.domain,
+        account: smtpData.account,
+        display: smtpData.display,
+        source: 'cPanel API'
+      };
+    } else {
+      console.log(`❌ cPanel API response missing SMTP settings for ${email}:`, cpanelResponse);
+    }
+  } catch (cpanelError) {
+    console.log(`❌ cPanel API failed for ${email}:`, cpanelError.message);
+  }
+
+  // Fallback to DNS lookup
+  try {
+    const domain = email.split('@')[1].toLowerCase();
+    const mxRecords = await cachedMxLookup(domain);
+    
+    console.log(`🔍 DNS MX lookup for domain: ${domain}`);
+    
+    // Use existing logic to determine SMTP settings
+    const smtpSettings = await getSMTPSettings(email);
+    
+    return {
+      success: true,
+      email: email,
+      host: smtpSettings.host,
+      port: smtpSettings.port,
+      source: 'DNS MX Lookup'
+    };
+    
+  } catch (dnsError) {
+    console.log(`❌ DNS lookup failed for ${email}:`, dnsError.message);
+    
+    throw new Error('Could not determine SMTP settings');
+  }
+}
 
 // Start periodic reply checking
 setInterval(checkForReplies, 2 * 60 * 1000);
 
 
+//___________________get smpt host & port cpanl API_____
 
+// New API endpoint to get SMTP settings from cPanel API
+router.post('/api/get-smtphost', async (req, res) => {
+  try {
+    const { email } = req.body;
+    
+    if (!email) {
+      return res.status(400).json({ 
+        success: false, 
+        error: 'Email is required' 
+      });
+    }
 
-module.exports = router;
+    const smtpSettings = await getSMTPSettingsForEmail(email);
+    
+    return res.json(smtpSettings);
+
+  } catch (error) {
+    console.error('Get SMTP Settings Error:', error);
+    return res.status(500).json({ 
+      success: false, 
+      error: error.message 
+    });
+  }
+});
+
+module.exports = {
+  router,
+  getSMTPSettings,
+  getSMTPSettingsForEmail
+};

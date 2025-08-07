@@ -2094,4 +2094,7 @@ async function getEmailCreationDate(email, domain, userId) {
 
 
 
-module.exports = router;
+module.exports = {
+  router,
+  cpanelRequest
+};

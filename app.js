@@ -168,7 +168,7 @@ app.use(express.json());
 // Mount domain management routes
 
 
-app.use(cpanelApi);
+app.use(cpanelApi.router);
 app.use(nameCheapDomainApi.router);
 
 app.use(accountScraper);
@@ -226,7 +226,7 @@ app.use(businessesAPI.router);
 app.use(signupApi.router);
 app.use(manageSubscriptions.router);
 app.use(linkedinMessaging);
-app.use(notifyAPI);
+app.use(notifyAPI.router);
 
 
 

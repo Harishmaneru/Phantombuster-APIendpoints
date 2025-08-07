@@ -3,6 +3,9 @@ const axios = require('axios');
 const mongoose = require('mongoose');
 const router = express.Router();
 
+// Import the SMTP settings function
+const { getSMTPSettingsForEmail } = require('../notifyAPI/sendEmail.js');
+
 // MongoDB connection
 const connectToMongoDB = async () => {
   if (mongoose.connection.readyState === 1) {
@@ -238,7 +241,22 @@ const getInboxIdFromDB = async (userId, email) => {
 
 
 router.post('/api/warmup/add-inbox', async (req, res) => {
-  const { userId, email, password, sender_first, sender_last } = req.body;
+  const {
+    userId,
+    email,
+    password,
+    sender_first,
+    sender_last,
+    // Optional SMTP/IMAP settings
+    smtp_host,
+    smtp_port,
+    smtp_username,
+    smtp_tls,
+    imap_host,
+    imap_port,
+    imap_username,
+    imap_tls
+  } = req.body;
 
   // Validation - According to API docs
   if (!userId || !email || !password || !sender_first || !sender_last) {
@@ -274,9 +292,86 @@ router.post('/api/warmup/add-inbox', async (req, res) => {
       });
     }
 
-    // Extract domain from email to determine mail server
-    const domain = email.split('@')[1];
-    const mailServer = `mail.${domain}`;
+    // Check if custom SMTP/IMAP settings are provided
+    const hasCustomSettings = smtp_host || smtp_port || smtp_username !== undefined ||
+      imap_host || imap_port || imap_username !== undefined;
+
+    let smtpConfig, imapConfig;
+
+    if (hasCustomSettings) {
+      // Use provided SMTP/IMAP settings
+      const domain = email.split('@')[1];
+      const mailServer = `mail.${domain}`;
+
+      smtpConfig = {
+        host: smtp_host || mailServer,
+        port: parseInt(smtp_port) || 465,
+        username: smtp_username || email,
+        password: password,
+        tls: smtp_tls !== undefined ? smtp_tls : true
+      };
+
+      imapConfig = {
+        host: imap_host || mailServer,
+        port: parseInt(imap_port) || 993,
+        username: imap_username || email,
+        password: password,
+        tls: imap_tls !== undefined ? imap_tls : true
+      };
+    } else {
+      // Automatically get SMTP/IMAP settings from cPanel API
+      console.log('🔍 No custom SMTP/IMAP settings provided, fetching from cPanel API...');
+
+      try {
+        const smtpSettings = await getSMTPSettingsForEmail(email);
+        console.log('✅ SMTP settings retrieved from cPanel API:', JSON.stringify(smtpSettings, null, 2));
+
+        smtpConfig = {
+          host: smtpSettings.smtp?.smtp_host || smtpSettings.host,
+          port: parseInt(smtpSettings.smtp?.smtp_port || smtpSettings.port || 465),
+          username: email, // Always use email as username
+          password: password,
+          tls: true
+        };
+
+        imapConfig = {
+          host: smtpSettings.imap?.inbox_host || smtpSettings.host,
+          port: parseInt(smtpSettings.imap?.inbox_port || 993),
+          username: email, // Always use email as username
+          password: password,
+          tls: true
+        };
+
+        console.log('✅ Using cPanel API settings:', {
+          smtp: { host: smtpConfig.host, port: smtpConfig.port, username: smtpConfig.username },
+          imap: { host: imapConfig.host, port: imapConfig.port, username: imapConfig.username },
+          source: smtpSettings.source
+        });
+
+      } catch (cpanelError) {
+        console.log('❌ cPanel API failed, using fallback settings:', cpanelError.message);
+
+        // Fallback to domain-based settings
+        const domain = email.split('@')[1];
+        const mailServer = `mail.${domain}`;
+
+        smtpConfig = {
+          host: mailServer,
+          port: 465,
+          username: email,
+          password: password,
+          tls: true
+        };
+
+        imapConfig = {
+          host: mailServer,
+          port: 993,
+          username: email,
+          password: password,
+          tls: true
+        };
+      }
+    }
 
     // Build payload for ADVANCED endpoint with explicit SMTP/IMAP settings
     const payload = {
@@ -292,21 +387,9 @@ router.post('/api/warmup/add-inbox', async (req, res) => {
         strategy: "progressive"   // Required field per docs
       },
       // Explicit SMTP configuration
-      smtp: {
-        host: mailServer,         // mail.engagegptapp.com
-        port: 465,                // SSL port
-        username: email,          // Full email as username
-        password: password,
-        tls: true                 // Use TLS/SSL for secure connection
-      },
+      smtp: smtpConfig,
       // Explicit IMAP configuration
-      imap: {
-        host: mailServer,         // mail.engagegptapp.com
-        port: 993,                // IMAP SSL port
-        username: email,          // Full email as username
-        password: password,
-        tls: true                 // Use TLS/SSL for secure connection
-      },
+      imap: imapConfig,
       // Optional but recommended:
       extended_reply: true,       // For more natural conversations
       esp_priority: {             // ESP targeting
@@ -327,14 +410,16 @@ router.post('/api/warmup/add-inbox', async (req, res) => {
         port: payload.smtp.port,
         username: payload.smtp.username,
         tls: payload.smtp.tls,
-        hasPassword: !!payload.smtp.password
+        hasPassword: !!payload.smtp.password,
+        custom: hasCustomSettings
       },
       imap: {
         host: payload.imap.host,
         port: payload.imap.port,
         username: payload.imap.username,
         tls: payload.imap.tls,
-        hasPassword: !!payload.imap.password
+        hasPassword: !!payload.imap.password,
+        custom: hasCustomSettings
       },
       extended_reply: payload.extended_reply,
       esp_priority: payload.esp_priority
@@ -343,6 +428,7 @@ router.post('/api/warmup/add-inbox', async (req, res) => {
     // Make API call to ADVANCED endpoint
     const response = await axiosInstance.post('/inboxes/advanced', payload);
     console.log('Warmup Inbox API Response:', response.data);
+
     // Handle response according to API docs
     if (response.data.code === 'created') {
       // Store the response in MongoDB
@@ -382,9 +468,193 @@ router.post('/api/warmup/add-inbox', async (req, res) => {
     }
 
   } catch (error) {
-    console.error('Warmup Inbox API Error:', error.response?.data || error.message);
+    console.error('Warmup Inbox API Error:', {
+      status: error.response?.status,
+      data: error.response?.data,
+      message: error.message,
+      error: error.response?.data?.error
+    });
 
-    // Handle specific error cases from API docs
+    // If it's a configuration error (422, 400 with SMTP/IMAP issues), try with getSMTPSettingsForEmail
+    const shouldTryFallback = error.response?.status === 422 ||
+      (error.response?.status === 400 &&
+        (error.response?.data?.message?.includes('SMTP') ||
+          error.response?.data?.message?.includes('IMAP') ||
+          error.response?.data?.message?.includes('connect') ||
+          error.response?.data?.message?.includes('ENOTFOUND')));
+
+    if (shouldTryFallback) {
+      console.log('🔄 First attempt failed, trying with getSMTPSettingsForEmail...');
+
+      try {
+        // Get SMTP/IMAP settings using the function
+        const smtpSettings = await getSMTPSettingsForEmail(email);
+        console.log('✅ SMTP settings retrieved:', JSON.stringify(smtpSettings, null, 2));
+
+        // Build payload with correct SMTP/IMAP settings
+        // Handle both cPanel API format and DNS fallback format
+        const fallbackPayload = {
+          email: email,
+          sender_first: sender_first,
+          sender_last: sender_last,
+          plan: "basic",
+          smtp: {
+            username: smtpSettings.smtp?.smtp_username || smtpSettings.imap?.inbox_username || email,
+            password: password,
+            host: smtpSettings.smtp?.smtp_host || smtpSettings.host,
+            port: parseInt(smtpSettings.smtp?.smtp_port || smtpSettings.port || 465),
+            tls: true
+          },
+          imap: {
+            username: smtpSettings.imap?.inbox_username || smtpSettings.smtp?.smtp_username || email,
+            password: password,
+            host: smtpSettings.imap?.inbox_host || smtpSettings.host,
+            port: parseInt(smtpSettings.imap?.inbox_port || 993),
+            tls: true
+          },
+          frequency: {
+            starting_baseline: 2,
+            increase_per_day: 2,
+            max_sends_per_day: 5,
+            reply_rate: 9,
+            strategy: "progressive"
+          },
+          extended_reply: true,
+          esp_priority: {
+            google: true,
+            outlook: false,
+            all_other: false
+          }
+        };
+
+        console.log('🔄 Retrying with correct SMTP settings:', {
+          email: fallbackPayload.email,
+          smtp_host: fallbackPayload.smtp.host,
+          smtp_port: fallbackPayload.smtp.port,
+          imap_host: fallbackPayload.imap.host,
+          imap_port: fallbackPayload.imap.port,
+          source: smtpSettings.source
+        });
+
+        // Try multiple SMTP configurations if the first one fails
+        let fallbackResponse;
+        let lastError;
+
+        // Try the settings from getSMTPSettingsForEmail first
+        try {
+          fallbackResponse = await axiosInstance.post('/inboxes/advanced', fallbackPayload);
+          console.log('✅ Fallback API Response:', fallbackResponse.data);
+        } catch (firstFallbackError) {
+          console.log('❌ First fallback attempt failed:', firstFallbackError.response?.data?.message);
+          lastError = firstFallbackError;
+
+          // Try alternative SMTP configurations
+          const domain = email.split('@')[1];
+          const alternativeConfigs = [
+            { host: `smtp.${domain}`, port: 587, tls: false },
+            { host: `smtp.${domain}`, port: 465, tls: true },
+            { host: `mail.${domain}`, port: 587, tls: false },
+            { host: `mail.${domain}`, port: 465, tls: true },
+            { host: domain, port: 587, tls: false },
+            { host: domain, port: 465, tls: true }
+          ];
+
+          for (const config of alternativeConfigs) {
+            try {
+              console.log(`🔄 Trying alternative SMTP config: ${config.host}:${config.port} (TLS: ${config.tls})`);
+
+              const alternativePayload = {
+                ...fallbackPayload,
+                smtp: {
+                  ...fallbackPayload.smtp,
+                  host: config.host,
+                  port: config.port,
+                  tls: config.tls
+                },
+                imap: {
+                  ...fallbackPayload.imap,
+                  host: config.host.replace('smtp.', 'imap.').replace('mail.', 'imap.'),
+                  port: 993,
+                  tls: true
+                }
+              };
+
+              fallbackResponse = await axiosInstance.post('/inboxes/advanced', alternativePayload);
+              console.log('✅ Alternative SMTP config succeeded:', config);
+              break;
+            } catch (altError) {
+              console.log(`❌ Alternative config failed (${config.host}:${config.port}):`, altError.response?.data?.message);
+              lastError = altError;
+            }
+          }
+        }
+
+        if (fallbackResponse && fallbackResponse.data.code === 'created') {
+          // Store the response in MongoDB
+          const warmupInboxData = new WarmupInbox({
+            userId,
+            email,
+            inbox_id: fallbackResponse.data.inbox_id,
+            password,
+            sender_first,
+            sender_last,
+            status: fallbackResponse.data.code || 'created',
+            plan: fallbackPayload.plan,
+            frequency: fallbackPayload.frequency,
+            smtp_settings: fallbackPayload.smtp,
+            imap_settings: fallbackPayload.imap,
+            warmup_response: fallbackResponse.data,
+            smtp_source: smtpSettings.source,
+            created_at: new Date(),
+            updated_at: new Date()
+          });
+
+          await warmupInboxData.save();
+
+          return res.status(201).json({
+            status: "1",
+            message: "Inbox successfully added to warmup (with fallback SMTP settings)",
+            data: {
+              inbox_id: fallbackResponse.data.inbox_id,
+              status: "pending_activation",
+              userId,
+              email: email,
+              plan: fallbackPayload.plan,
+              smtp_configured: true,
+              imap_configured: true,
+              smtp_source: smtpSettings.source,
+              next_steps: [
+                "Configure email client filters using filter_id",
+                "Verify DNS records (MX, SPF, DKIM)",
+                "Test SMTP/IMAP connectivity",
+                "Start the warmup process"
+              ],
+              stored_in_db: true
+            }
+          });
+        } else {
+          // All fallback attempts failed
+          throw lastError || new Error('All SMTP configuration attempts failed');
+        }
+
+      } catch (fallbackError) {
+        console.error('All fallback attempts failed:', fallbackError.response?.data || fallbackError.message);
+
+        // Return detailed error for fallback failure
+        return res.status(422).json({
+          status: "-1",
+          error: "all_attempts_failed",
+          message: "All SMTP configuration attempts failed",
+          details: {
+            original_error: error.response?.data?.message || error.message,
+            fallback_error: fallbackError.response?.data?.message || fallbackError.message,
+            suggestion: "Please verify email credentials and SMTP/IMAP settings manually. Common issues: incorrect password, disabled SMTP/IMAP, or wrong server settings."
+          }
+        });
+      }
+    }
+
+    // Handle other error cases
     const apiError = error.response?.data?.error || "unknown_error";
     const statusCode = error.response?.status || 500;
 
@@ -401,22 +671,7 @@ router.post('/api/warmup/add-inbox', async (req, res) => {
     // More detailed error handling for common issues
     let errorMessage = error.response?.data?.message || error.message;
 
-    if (error.response?.status === 422) {
-      // Check if it's SMTP/IMAP connection error
-      if (error.response?.data?.details?.includes('SMTP') ||
-        error.response?.data?.details?.includes('IMAP')) {
-        errorMessage = "Email server connection failed. Please verify: " +
-          "1) Email credentials are correct\n" +
-          "2) SMTP/IMAP is enabled for the email account\n" +
-          "3) Mail server hostname is accessible: mail." + email.split('@')[1] + "\n" +
-          "4) Firewall allows connections on ports 465 (SMTP) and 993 (IMAP)";
-      } else {
-        errorMessage = "Domain configuration error. Please verify: " +
-          "1) MX records are properly configured\n" +
-          "2) SPF record includes: v=spf1 a mx include:_spf.warmupinbox.com ~all\n" +
-          "3) Email credentials are correct and SMTP/IMAP is enabled";
-      }
-    } else if (error.response?.status === 409) {
+    if (error.response?.status === 409) {
       errorMessage = "Inbox already exists in Warmup Inbox service";
     } else if (error.response?.status === 401) {
       errorMessage = "Invalid API key. Please check your WARMUPINBOX_API_KEY configuration";
@@ -684,30 +939,7 @@ router.post('/api/warmup/inbox-metrics', async (req, res) => {
   }
 });
 
-/**
- * 5. Get detailed information for a specific inbox
- *
- *    GET /api/warmup/inbox-details/:userId/:email
- *    OR
- *    POST /api/warmup/inbox-details
- *
- *    Body JSON (for POST):
- *      {
- *        "userId": "user123",
- *        "email": "sales@testgpt.com"
- *      }
- *
- *    → Returns comprehensive inbox information including:
- *      - Basic info (id, status, email, etc.)
- *      - Frequency settings
- *      - Reputation scores
- *      - Schedule configuration
- *      - Health check results
- *      - And more...
- *
- *    Endpoint hit: GET /v1/inboxes/{id}
- *    Documentation: https://docs.warmupinbox.com/
- */
+
 
 router.get('/api/warmup/inbox-details/:userId/:email', async (req, res) => {
   const { userId, email } = req.params;
@@ -869,9 +1101,9 @@ router.post('/api/warmup/inbox-status/bulk', async (req, res) => {
     await connectToMongoDB();
 
     // 1. Fetch all matching inboxes from MongoDB
-    const inboxes = await WarmupInbox.find({ 
-      userId, 
-      email: { $in: emails } 
+    const inboxes = await WarmupInbox.find({
+      userId,
+      email: { $in: emails }
     }).select('-password -__v');
 
     if (!inboxes.length) {
@@ -885,8 +1117,8 @@ router.post('/api/warmup/inbox-status/bulk', async (req, res) => {
     // 2. Fetch real-time status for each inbox with proper error handling
     const statusPromises = inboxes.map(async (inbox) => {
       try {
-        const response = await warmupAxios.get(`/inboxes/${inbox.inbox_id}`);
-        
+        const response = await axiosInstance.get(`/inboxes/${inbox.inbox_id}`);
+
         // Map API status to consistent values
         const statusMap = {
           running: "running",
@@ -1175,5 +1407,9 @@ router.get('/api/warmup/account-usage', async (req, res) => {
     });
   }
 });
+
+
+
+
 
 module.exports = router;
