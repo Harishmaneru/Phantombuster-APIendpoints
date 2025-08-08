@@ -467,36 +467,9 @@ router.post('/cpanel/create-email', emailCreationLimiter, async (req, res) => {
       });
     }
 
-    // Step 2: Use the new addDomainIfNotExists function
-    console.log(`Checking and adding domain ${domain} if needed...`);
-    const domainCheck = await addDomainIfNotExists(domain);
+    // Step 2: Try to create email account FIRST (before parking domain)
+    console.log(`🔍 STEP 1: Attempting to create email account for domain ${domain} FIRST...`);
     
-    if (domainCheck.status !== 1) {
-      return res.status(500).json({
-        success: false,
-        error: `Failed to add domain: ${domainCheck.error}`,
-      });
-    }
-    console.log(`✅ Domain verified/added: ${domainCheck.message}`);
-    
-    // Update domain record in database if domain was added
-    if (domainCheck.message && domainCheck.message !== "Domain already exists in cPanel") {
-      await NamecheapDomain.findOneAndUpdate(
-        { userId, domain: domain.toLowerCase() },
-        {
-          $set: {
-            'cpanelConfiguration.domainAdded': true,
-            'cpanelConfiguration.domainAddedAt': new Date(),
-            'cpanelConfiguration.subdomain': domain,
-            'cpanelConfiguration.directory': `public_html/${domain}`,
-            updatedAt: new Date()
-          }
-        },
-        { new: true }
-      );
-    }
-
-    // Step 3: Create email account
     const emailParams = {
       email: username.toLowerCase(),
       password: password,
@@ -510,8 +483,11 @@ router.post('/cpanel/create-email', emailCreationLimiter, async (req, res) => {
 
     // Try WHM API first, then fall back to cPanel API
     let emailResult;
+    let domainCheck = null;
+    let domainWasAdded = false;
+    
     try {
-      console.log('Trying WHM API for email creation...');
+      console.log(' Trying WHM API for email creation...');
       emailResult = await whmRequest('add_pop', {
         email: `${username.toLowerCase()}@${domain.toLowerCase()}`,
         password: password,
@@ -528,7 +504,69 @@ router.post('/cpanel/create-email', emailCreationLimiter, async (req, res) => {
       emailResult = await cpanelRequest('Email/add_pop', emailParams, 'POST');
     }
 
-    console.log('Email creation result:', emailResult);
+    console.log('📊 FIRST EMAIL CREATION RESULT:', JSON.stringify(emailResult, null, 2));
+
+    // If email creation failed, THEN try to add domain and retry
+    if (emailResult.status !== 1) {
+      console.log(' Email creation failed, NOW attempting to add domain...');
+      
+      // Try to add domain as addon domain
+      domainCheck = await addDomainIfNotExists(domain);
+      
+      if (domainCheck.status !== 1) {
+        return res.status(500).json({
+          success: false,
+          error: `Failed to add domain: ${domainCheck.error}`,
+        });
+      }
+      console.log(`✅Domain verified/added: ${domainCheck.message}`);
+      
+      // Update domain record in database if domain was added
+      if (domainCheck.message && domainCheck.message !== "Domain already exists in cPanel") {
+        domainWasAdded = true;
+        await NamecheapDomain.findOneAndUpdate(
+          { userId, domain: domain.toLowerCase() },
+          {
+            $set: {
+              'cpanelConfiguration.domainAdded': true,
+              'cpanelConfiguration.domainAddedAt': new Date(),
+              'cpanelConfiguration.subdomain': domain,
+              'cpanelConfiguration.directory': `public_html/${domain}`,
+              updatedAt: new Date()
+            }
+          },
+          { new: true }
+        );
+      }
+      
+      // Retry email creation after domain is added
+      console.log('Retrying email creation after domain addition...');
+      try {
+        console.log('Trying WHM API for email creation (retry)...');
+        emailResult = await whmRequest('add_pop', {
+          email: `${username.toLowerCase()}@${domain.toLowerCase()}`,
+          password: password,
+          quota: storage
+        });
+        // WHM API returns different format, normalize it
+        if (emailResult.status === 1) {
+          emailResult = { status: 1, data: emailResult.data };
+        } else {
+          throw new Error(emailResult.error || 'WHM API email creation failed');
+        }
+      } catch (whmError) {
+        console.log(' WHM API failed, trying cPanel API (retry)...', whmError.message);
+        emailResult = await cpanelRequest('Email/add_pop', emailParams, 'POST');
+      }
+      
+      console.log(' RETRY EMAIL CREATION RESULT:', JSON.stringify(emailResult, null, 2));
+    } else {
+      // Email creation succeeded on first try, set default domain status
+      console.log('✅ Email creation succeeded on FIRST attempt!');
+      domainCheck = { message: "Domain already exists in cPanel" };
+    }
+
+    // Step 3: Handle email creation result
 
     if (emailResult.status !== 1) {
       const errorMsg = (emailResult.errors && emailResult.errors[0]) || 'Unknown error from cPanel';
@@ -2090,8 +2128,6 @@ async function getEmailCreationDate(email, domain, userId) {
     };
   }
 }
-
-
 
 
 module.exports = {
