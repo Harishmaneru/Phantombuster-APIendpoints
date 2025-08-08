@@ -1848,8 +1848,8 @@ router.post('/create-checkout-session-by-app', async (req, res) => {
 
         // 1️⃣ Validate app URLs
         const appUrlMap = {
-            // kampaignai: 'https://kampaign.onepgr.com',
-            kampaignai: 'http://localhost:4200',
+            kampaignai: 'https://kampaign.onepgr.com',
+            // kampaignai: 'http://localhost:4200',
             gps: 'https://gps.onepgr.com',
             getsalesgpt: 'https://sales.onepgr.com',
         };
