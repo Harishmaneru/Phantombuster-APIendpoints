@@ -2,6 +2,7 @@
 node_modules/
 package-lock.json
 loggingSystem/logs
+loggingSystem/logs/payment_logs.json
 # Environment files (contain sensitive data)
 .env
 *.key
