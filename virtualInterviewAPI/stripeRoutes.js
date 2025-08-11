@@ -1902,7 +1902,7 @@ router.post('/create-payment-intent', async (req, res) => {
             postalCode,
             years = '1',
             enablePrivacy = false,
-            quantity = 1
+            // quantity = 1
         } = req.body;
 
         console.log('Domain payment intent request received:', {
