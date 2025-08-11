@@ -586,7 +586,7 @@ router.post('/get-subscription-from-session', async (req, res) => {
                     userId: session.metadata.userId,
                     message: 'This is a domain purchase.'
                 });
-                
+
                 // Log the domain purchase response
                 try {
                     fileLogger.logDomainPurchase({
@@ -654,7 +654,7 @@ router.post('/get-subscription-from-session', async (req, res) => {
                 } catch (logError) {
                     console.error('[get-subscription-from-session] Error logging one-time payment data:', logError);
                 }
-                
+
                 return res.status(400).json({
                     error: 'This session is for a one-time payment, not a subscription',
                     sessionType: 'one-time-payment',
@@ -672,7 +672,7 @@ router.post('/get-subscription-from-session', async (req, res) => {
 
         if (!session.subscription) {
             console.log('[get-subscription-from-session] No subscription found in session');
-            
+
             // Log the no subscription found response
             try {
                 fileLogger.logFailedPayment({
@@ -700,7 +700,7 @@ router.post('/get-subscription-from-session', async (req, res) => {
             } catch (logError) {
                 console.error('[get-subscription-from-session] Error logging no subscription data:', logError);
             }
-            
+
             return res.status(404).json({
                 error: 'No subscription found in this session',
                 sessionData: {
@@ -952,7 +952,7 @@ router.post('/get-subscription-from-session', async (req, res) => {
         };
 
         console.log('[get-subscription-from-session] Successfully returning subscription data');
-        
+
         // Log the subscription retrieval response
         try {
             fileLogger.logSubscriptionPayment({
@@ -984,7 +984,7 @@ router.post('/get-subscription-from-session', async (req, res) => {
         } catch (logError) {
             console.error('[get-subscription-from-session] Error logging subscription data:', logError);
         }
-        
+
         res.json(response);
 
     } catch (error) {
@@ -1881,6 +1881,152 @@ router.post('/create-checkout-session-by-app', async (req, res) => {
     }
 });
 
+
+router.post('/create-payment-intent', async (req, res) => {
+    try {
+        const {
+            userId,
+            domainName,
+            unitPrice,
+            currency,
+            // Contact information for registration
+            firstName,
+            lastName,
+            email,
+            phone,
+            address1,
+            address2 = '',
+            city,
+            stateProvince,
+            country,
+            postalCode,
+            years = '1',
+            enablePrivacy = false,
+            quantity = 1
+        } = req.body;
+
+        console.log('Domain payment intent request received:', {
+            userId: userId,
+            domainName: domainName,
+            unitPrice: unitPrice,
+            currency: currency,
+            hasContactInfo: !!(firstName && lastName && email),
+            timestamp: new Date().toISOString()
+        });
+
+        // Validate inputs
+        if (!userId || !domainName || !unitPrice) {
+            return res.status(400).json({ error: 'userId, domainName, and unitPrice are required' });
+        }
+
+        // Validate contact information
+        if (!firstName || !lastName || !email || !phone || !address1 || !city || !stateProvince || !country || !postalCode) {
+            return res.status(400).json({
+                error: 'Complete contact information is required for domain registration',
+                required: ['firstName', 'lastName', 'email', 'phone', 'address1', 'city', 'stateProvince', 'country', 'postalCode']
+            });
+        }
+
+        const price = Number(unitPrice);
+        if (isNaN(price) || price <= 0) {
+            return res.status(400).json({ error: 'Invalid price amount' });
+        }
+
+        // Store all metadata (including contact info)
+        const metadata = {
+            userId,
+            domainName,
+            purchaseType: 'domain',
+            years: years.toString(),
+            enablePrivacy: enablePrivacy.toString(),
+            // Contact information
+            firstName,
+            lastName,
+            email,
+            phone,
+            address1,
+            address2,
+            city,
+            stateProvince,
+            country,
+            postalCode
+        };
+
+                // Create a dynamic product for this domain
+        const product = await stripe.products.create({
+            name: `Domain: ${domainName}`,
+            description: `Registration for ${domainName}`,
+            metadata: { type: 'domain', userId, domainName }
+        });
+
+        // Create Checkout Session (same as old API)
+        const session = await stripe.checkout.sessions.create({
+            payment_method_types: ['card'],
+            mode: 'payment',
+            line_items: [{
+                price_data: {
+                    currency: currency || 'usd',
+                    product_data: {
+                        name: `Domain: ${domainName}`,
+                        description: `Registration for ${domainName}`,
+                        metadata: { type: 'domain', userId, domainName }
+                    },
+                    unit_amount: Math.round(price * 100),
+                },
+                quantity: quantity,
+            }],
+            success_url: 'https://kampaign.onepgr.com/domain-success?session_id={CHECKOUT_SESSION_ID}',
+            cancel_url: 'https://kampaign.onepgr.com/cancel',
+            metadata: metadata,
+            customer_creation: 'always'
+        });
+
+        // Log the domain purchase initiation
+        try {
+            fileLogger.logDomainPurchase({
+                userId: userId,
+                userEmail: email,
+                domainName: domainName,
+                amount: price,
+                currency: currency || 'usd',
+                status: 'pending',
+                stripeSessionId: session.id,
+                registrationYears: parseInt(years),
+                enablePrivacy: enablePrivacy,
+                contactInfo: {
+                    firstName,
+                    lastName,
+                    email,
+                    phone,
+                    address1,
+                    address2,
+                    city,
+                    stateProvince,
+                    country,
+                    postalCode
+                },
+                ipAddress: req.ip,
+                userAgent: req.get('User-Agent'),
+                apiEndpoint: '/create-payment-intent',
+                requestMethod: 'POST',
+                metadata: {
+                    productId: product.id,
+                    years: years.toString(),
+                    enablePrivacy: enablePrivacy.toString()
+                }
+            });
+        } catch (logError) {
+            console.error('Error logging domain purchase initiation:', logError);
+            // Don't fail the request if logging fails
+        }
+
+        res.json({ url: session.url, sessionId: session.id });
+
+    } catch (err) {
+        console.error("Stripe error:", err);
+        res.status(500).json({ error: "Payment failed. Please try again." });
+    }
+});
 
 
 // Create a Billing Portal session to manage subscription
