@@ -7,6 +7,7 @@ const cors = require('cors');
 
 
 const { router: slackRouter } = require('./webhooks/slackEvents');
+const { router: slackLoggerRouter } = require('./webhooks/slackLogger');
 
 // Domain Management API
 
@@ -161,6 +162,9 @@ app.use(
   '/slack/rb2b-ri-visitors',
   slackRouter
 );
+
+// Mount Slack Logger webhook routes
+app.use('/webhooks/slackLogger', slackLoggerRouter);
 
 // Global middleware for parsing JSON (after webhook route)
 app.use(express.json());
