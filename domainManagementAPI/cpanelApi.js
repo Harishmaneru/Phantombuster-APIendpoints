@@ -1307,7 +1307,7 @@ router.delete('/cpanel/delete-email', async (req, res) => {
 
     // Step 5: Log email deletion to Slack
     try {
-      await slackLogger.logEmailOperation({
+      await slackLogger.log({
         id: Date.now().toString(),
         operation: 'email_deletion',
         emailAddress: emailAddress,
@@ -1326,6 +1326,10 @@ router.delete('/cpanel/delete-email', async (req, res) => {
           provider: 'cPanel',
           cpanelResponse: deleteResult.data
         }
+      }, {
+        service: 'domain',
+        customTitle: `🗑️ Email Deleted: ${emailAddress}`,
+        customIcon: ':wastebasket:'
       });
     } catch (logError) {
       console.error('Error logging email deletion to Slack:', logError);
@@ -1356,7 +1360,7 @@ router.delete('/cpanel/delete-email', async (req, res) => {
     
     // Log email deletion failure to Slack
     try {
-      await slackLogger.logEmailOperation({
+      await slackLogger.log({
         id: Date.now().toString(),
         operation: 'email_deletion',
         emailAddress: emailAddress || 'unknown',
@@ -1374,6 +1378,10 @@ router.delete('/cpanel/delete-email', async (req, res) => {
           preserveDirectory: flags === 'passwd',
           skipQuotaModification: skip_quota === 1
         }
+      }, {
+        service: 'domain',
+        customTitle: `❌ Email Deletion Failed: ${emailAddress || 'unknown'}`,
+        customIcon: ':x:'
       });
     } catch (logError) {
       console.error('Error logging email deletion failure to Slack:', logError);
