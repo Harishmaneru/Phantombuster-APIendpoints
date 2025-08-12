@@ -11,6 +11,9 @@ const { NamecheapDomain } = require('./nameCheapDomainApi.js');
 // Import simple file logging system
 const fileLogger = require('../loggingSystem/fileLogger');
 
+// Import Slack logger for webhook logging
+const { slackLogger } = require('../webhooks/slackLogger');
+
 // Configuration - USE IP ADDRESS HERE
 const WHM_HOST = process.env.WHM_HOST;
 const MASTER_USER = process.env.CPANEL_MASTER_USER;
@@ -617,6 +620,7 @@ router.post('/cpanel/create-email', emailCreationLimiter, async (req, res) => {
 
     // Step 5: Log email creation
     try {
+      // Log to file system (existing functionality)
       fileLogger.logEmailCreation({
         userId: userId,
         userEmail: `${username.toLowerCase()}@${domain.toLowerCase()}`,
@@ -635,6 +639,30 @@ router.post('/cpanel/create-email', emailCreationLimiter, async (req, res) => {
           domainId: updatedDomain?._id,
           emailAccountsCount: updatedDomain?.emailAccounts?.length || 0,
           cpanelResponse: emailResult.data
+        }
+      });
+
+      // Log to Slack via webhook (new functionality)
+      await slackLogger.logEmailCreation({
+        id: Date.now().toString(),
+        status: 'completed',
+        emailAddress: emailAddress,
+        username: username.toLowerCase(),
+        domain: domain.toLowerCase(),
+        quota: storage,
+        storageUsed: 0,
+        suspended: false,
+        userId: userId,
+        userEmail: `${username.toLowerCase()}@${domain.toLowerCase()}`,
+        ipAddress: req.ip,
+        endpoint: '/cpanel/create-email',
+        method: 'POST',
+        metadata: {
+          domainId: updatedDomain?._id,
+          emailAccountsCount: updatedDomain?.emailAccounts?.length || 0,
+          cpanelResponse: emailResult.data,
+          provider: 'cPanel',
+          operation: 'email_creation'
         }
       });
     } catch (logError) {
@@ -680,6 +708,7 @@ router.post('/cpanel/create-email', emailCreationLimiter, async (req, res) => {
 
     // Log failed email creation
     try {
+      // Log to file system (existing functionality)
       fileLogger.logEmailCreation({
         userId: userId,
         userEmail: `${username.toLowerCase()}@${domain.toLowerCase()}`,
@@ -703,6 +732,32 @@ router.post('/cpanel/create-email', emailCreationLimiter, async (req, res) => {
           domain: domain.toLowerCase(),
           username: username.toLowerCase(),
           quota: storage
+        }
+      });
+
+      // Log to Slack via webhook (new functionality)
+      await slackLogger.logEmailCreation({
+        id: Date.now().toString(),
+        status: 'failed',
+        emailAddress: `${username.toLowerCase()}@${domain.toLowerCase()}`,
+        username: username.toLowerCase(),
+        domain: domain.toLowerCase(),
+        quota: storage,
+        storageUsed: 0,
+        suspended: false,
+        userId: userId,
+        userEmail: `${username.toLowerCase()}@${domain.toLowerCase()}`,
+        ipAddress: req.ip,
+        endpoint: '/cpanel/create-email',
+        method: 'POST',
+        metadata: {
+          domain: domain.toLowerCase(),
+          username: username.toLowerCase(),
+          quota: storage,
+          provider: 'cPanel',
+          operation: 'email_creation',
+          error: err.message,
+          errorCode: err.response?.status || 'EMAIL_CREATION_FAILED'
         }
       });
     } catch (logError) {
@@ -1250,7 +1305,34 @@ router.delete('/cpanel/delete-email', async (req, res) => {
       { new: true }
     );
 
-    // Step 5: Return success response
+    // Step 5: Log email deletion to Slack
+    try {
+      await slackLogger.logEmailOperation({
+        id: Date.now().toString(),
+        operation: 'email_deletion',
+        emailAddress: emailAddress,
+        domain: emailDomain.toLowerCase(),
+        status: 'completed',
+        userId: userId,
+        userEmail: emailAddress,
+        ipAddress: req.ip,
+        endpoint: '/cpanel/delete-email',
+        method: 'DELETE',
+        metadata: {
+          domainId: updatedDomain?._id,
+          remainingEmailAccounts: updatedDomain?.emailAccounts?.length || 0,
+          preserveDirectory: flags === 'passwd',
+          skipQuotaModification: skip_quota === 1,
+          provider: 'cPanel',
+          cpanelResponse: deleteResult.data
+        }
+      });
+    } catch (logError) {
+      console.error('Error logging email deletion to Slack:', logError);
+      // Don't fail the request if Slack logging fails
+    }
+
+    // Step 6: Return success response
     res.json({
       success: true,
       message: 'Email account deleted successfully',
@@ -1271,6 +1353,33 @@ router.delete('/cpanel/delete-email', async (req, res) => {
 
   } catch (err) {
     console.error('Email deletion failed:', err.message);
+    
+    // Log email deletion failure to Slack
+    try {
+      await slackLogger.logEmailOperation({
+        id: Date.now().toString(),
+        operation: 'email_deletion',
+        emailAddress: emailAddress || 'unknown',
+        domain: emailDomain?.toLowerCase() || 'unknown',
+        status: 'failed',
+        userId: userId,
+        userEmail: emailAddress || 'unknown',
+        ipAddress: req.ip,
+        endpoint: '/cpanel/delete-email',
+        method: 'DELETE',
+        metadata: {
+          error: err.message,
+          errorCode: err.response?.status || 'EMAIL_DELETION_FAILED',
+          provider: 'cPanel',
+          preserveDirectory: flags === 'passwd',
+          skipQuotaModification: skip_quota === 1
+        }
+      });
+    } catch (logError) {
+      console.error('Error logging email deletion failure to Slack:', logError);
+      // Don't fail the request if Slack logging fails
+    }
+    
     res.status(500).json({
       success: false,
       error: err.message,
