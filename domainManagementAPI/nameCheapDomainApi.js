@@ -5341,6 +5341,30 @@ router.get('/namecheap/domain/:domain/nameservers', validateUserId, async (req, 
 
 //_______________API for setup costum nameservers____
 
+
+router.get('/namecheap/health', async (req, res) => {
+    try {
+        // Test API connectivity with a simple call
+        const response = await namecheapRequest('namecheap.users.getBalances');
+        
+        res.json({
+            success: true,
+            status: 'healthy',
+            apiKey: 'valid',
+            apiMode: NAMECHEAP_SANDBOX === 'true' ? 'sandbox' : 'production',
+            timestamp: new Date().toISOString()
+        });
+    } catch (error) {
+        res.status(401).json({
+            success: false,
+            status: 'unhealthy',
+            apiKey: 'invalid',
+            error: error.message,
+            timestamp: new Date().toISOString()
+        });
+    }
+});
+
 module.exports = {
     router,
     registerDomainWithNamecheap,

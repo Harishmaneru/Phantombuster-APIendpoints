@@ -1973,7 +1973,7 @@ router.post('/create-payment-intent', async (req, res) => {
                     },
                     unit_amount: Math.round(price * 100),
                 },
-                quantity: quantity,
+                quantity: 1
             }],
             success_url: 'https://kampaign.onepgr.com/domain-success?session_id={CHECKOUT_SESSION_ID}',
             cancel_url: 'https://kampaign.onepgr.com/cancel',
