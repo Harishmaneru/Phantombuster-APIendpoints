@@ -133,6 +133,7 @@ app.use(
       "http://localhost:4000",
       "http://localhost:3000",
       "http://localhost:4200",
+      "http://localhost:4200/",
       "http://localhost:4201",
       /\.onepgr\.com$/,
       "https://videoresponse.onepgr.com",
