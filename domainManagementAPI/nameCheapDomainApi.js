@@ -5079,27 +5079,41 @@ async function whmRequest(apiFunction, params) {
             throw new Error('WHM_HOST and WHM_TOKEN environment variables are required');
         }
 
-        const whmUrl = `https://${whmHost}:2087/json-api/${apiFunction}?api.version=1&${new URLSearchParams(params).toString()}`;
+        // Build URL with parameters - WHM API uses GET with URL parameters
+        const queryParams = new URLSearchParams({
+            'api.version': '1',
+            ...params
+        });
+        
+        const whmUrl = `https://${whmHost}:2087/json-api/${apiFunction}?${queryParams.toString()}`;
+        
+        console.log(`[WHM API] Calling: ${whmUrl}`);
         
         const response = await axios.get(whmUrl, {
             headers: {
                 'Authorization': `whm root:${whmToken}`,
-                'Content-Type': 'application/json'
+                // Remove Content-Type header for GET requests
             },
-            timeout: 30000
+            timeout: 30000,
+            // Add these for SSL issues if needed
+            httpsAgent: new (require('https').Agent)({
+                rejectUnauthorized: false
+            })
         });
 
         return response.data;
     } catch (error) {
         console.error('[WHM API] Request failed:', error.message);
+        if (error.response) {
+            console.error('[WHM API] Response data:', error.response.data);
+            console.error('[WHM API] Response status:', error.response.status);
+        }
         throw error;
     }
 }
 
 router.post('/whm/domain/get-ip', validateUserId, async (req, res) => {
-    const {
-        domain
-    } = req.body;
+    const { domain } = req.body;
     const userId = req.userId;
 
     // Validate required fields
@@ -5121,10 +5135,6 @@ router.post('/whm/domain/get-ip', validateUserId, async (req, res) => {
     }
 
     try {
-        // You might still want to verify if the userId is authorized to query this domain
-        // (e.g., if it's hosted on a cPanel account they own on this WHM server)
-        // This would involve checking your own database for user/domain associations.
-
         console.log(`[WHM Domain IP Lookup API] Getting IP for ${domain} (User: ${userId})`);
 
         // Use WHM API to resolve the domain's IP address
@@ -5132,8 +5142,10 @@ router.post('/whm/domain/get-ip', validateUserId, async (req, res) => {
             domain: domain
         });
 
+        console.log('[WHM API Response]:', JSON.stringify(resolveResult, null, 2));
+
         // Parse the response from WHM API using the correct structure
-        if (resolveResult && resolveResult.metadata && resolveResult.metadata.result === 1 && resolveResult.data && resolveResult.data.ip) {
+        if (resolveResult && resolveResult.metadata && resolveResult.metadata.result === 1) {
             return res.json({
                 success: true,
                 message: 'Domain IP address retrieved successfully via WHM API',
@@ -5162,7 +5174,7 @@ router.post('/whm/domain/get-ip', validateUserId, async (req, res) => {
             userId,
             error: `Failed to retrieve domain IP via WHM API: ${error.message}`,
             domain: domain.toLowerCase(),
-            details: error.response?.data || null,
+            details: error.response?.data || error.message,
             timestamp: new Date().toISOString()
         });
     }
