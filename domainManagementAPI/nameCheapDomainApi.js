@@ -5069,7 +5069,34 @@ router.post('/namecheap/domain/nameserver/create', validateUserId, async (req, r
 
 
 
-router.post('/namecheap/domain/get-ip', validateUserId, async (req, res) => {
+// WHM API request function
+async function whmRequest(apiFunction, params) {
+    try {
+        const whmHost = process.env.WHM_HOST;
+        const whmToken = process.env.WHM_TOKEN;
+        
+        if (!whmHost || !whmToken) {
+            throw new Error('WHM_HOST and WHM_TOKEN environment variables are required');
+        }
+
+        const whmUrl = `https://${whmHost}:2087/json-api/${apiFunction}?api.version=1&${new URLSearchParams(params).toString()}`;
+        
+        const response = await axios.get(whmUrl, {
+            headers: {
+                'Authorization': `whm root:${whmToken}`,
+                'Content-Type': 'application/json'
+            },
+            timeout: 30000
+        });
+
+        return response.data;
+    } catch (error) {
+        console.error('[WHM API] Request failed:', error.message);
+        throw error;
+    }
+}
+
+router.post('/whm/domain/get-ip', validateUserId, async (req, res) => {
     const {
         domain
     } = req.body;
@@ -5094,78 +5121,51 @@ router.post('/namecheap/domain/get-ip', validateUserId, async (req, res) => {
     }
 
     try {
-        // 1. Verify domain ownership through database (optional but recommended)
-        const userDomain = await NamecheapDomain.findOne({
-            userId,
-            domain: domain.toLowerCase()
+        // You might still want to verify if the userId is authorized to query this domain
+        // (e.g., if it's hosted on a cPanel account they own on this WHM server)
+        // This would involve checking your own database for user/domain associations.
+
+        console.log(`[WHM Domain IP Lookup API] Getting IP for ${domain} (User: ${userId})`);
+
+        // Use WHM API to resolve the domain's IP address
+        const resolveResult = await whmRequest('resolvedomainname', {
+            domain: domain
         });
 
-        if (!userDomain) {
-            return res.status(404).json({
-                success: false,
-                error: 'Domain not found for this user',
-                details: 'Please ensure the domain is registered under your account'
-            });
-        }
-
-        console.log(`[Domain IP Lookup API] Getting IP for ${domain} (User: ${userId})`);
-
-        // 2. Split domain into SLD and TLD
-        const [sld, tld] = domain.split('.');
-
-        // 3. Get host records (including A records) via Namecheap API
-        const getHostsParams = {
-            SLD: sld,
-            TLD: tld,
-        };
-
-        const getHostsResult = await namecheapRequest('namecheap.domains.dns.getHosts', getHostsParams);
-
-        // Namecheap API responses are typically XML, so you'll need to parse it.
-        // Assuming 'namecheapRequest' handles XML parsing and returns a structured object.
-        const hosts = getHostsResult.ApiResponse.CommandResponse.DomainDNSGetHostsResult.Host;
-
-        // Find the A record for the root domain or 'www' subdomain
-        let ipAddress = null;
-        if (hosts && Array.isArray(hosts)) {
-            const rootARecord = hosts.find(host => host.$.Type === 'A' && host.$.HostName === '@');
-            const wwwARecord = hosts.find(host => host.$.Type === 'A' && host.$.HostName === 'www');
-
-            if (rootARecord) {
-                ipAddress = rootARecord.$.Address;
-            } else if (wwwARecord) { // Fallback to www if no root A record found
-                ipAddress = wwwARecord.$.Address;
-            }
-        }
-
-        if (ipAddress) {
+        // Parse the response from WHM API
+        // The structure might vary slightly, but generally you'd look for 'data.ip'
+        if (resolveResult && resolveResult.status === 1 && resolveResult.data && resolveResult.data.ip) {
             return res.json({
                 success: true,
-                message: 'Domain IP address retrieved successfully',
+                message: 'Domain IP address retrieved successfully via WHM API',
                 domain: domain.toLowerCase(),
-                ipAddress: ipAddress,
+                ipAddress: resolveResult.data.ip,
+                details: resolveResult // Include full API response for debugging
             });
         } else {
+            // WHM API might return success but no IP if the domain isn't resolved or hosted there
             return res.status(404).json({
                 success: false,
-                error: 'No A record found for the domain',
-                details: 'Could not find a valid A record for the root domain or www subdomain.',
+                error: 'Could not resolve domain IP via WHM API',
+                details: resolveResult || 'Unknown API response structure',
+                domain: domain.toLowerCase()
             });
         }
 
     } catch (error) {
-        console.error('[Domain IP Lookup API] Error getting domain IP:', error.message);
+        console.error('[WHM Domain IP Lookup API] Error getting domain IP:', error.message);
 
         return res.status(500).json({
             success: false,
             userId,
-            error: `Failed to retrieve domain IP: ${error.message}`,
+            error: `Failed to retrieve domain IP via WHM API: ${error.message}`,
             domain: domain.toLowerCase(),
             details: error.response?.data || null,
             timestamp: new Date().toISOString()
         });
     }
 });
+
 
 
 module.exports = {
