@@ -5068,9 +5068,21 @@ router.post('/namecheap/domain/nameserver/create', validateUserId, async (req, r
 
 
 
-router.get('/namecheap/getIP/:domain', validateUserId, async (req, res) => {
-    const { domain } = req.params;
+
+router.post('/namecheap/domain/get-ip', validateUserId, async (req, res) => {
+    const {
+        domain
+    } = req.body;
     const userId = req.userId;
+
+    // Validate required fields
+    if (!domain) {
+        return res.status(400).json({
+            success: false,
+            error: 'Missing required fields',
+            details: 'domain is required'
+        });
+    }
 
     // Validate domain format
     if (!isValidDomain(domain)) {
@@ -5082,7 +5094,7 @@ router.get('/namecheap/getIP/:domain', validateUserId, async (req, res) => {
     }
 
     try {
-        // 1. Verify domain ownership through database
+        // 1. Verify domain ownership through database (optional but recommended)
         const userDomain = await NamecheapDomain.findOne({
             userId,
             domain: domain.toLowerCase()
@@ -5096,60 +5108,65 @@ router.get('/namecheap/getIP/:domain', validateUserId, async (req, res) => {
             });
         }
 
-        console.log(`[DNS Hosts API] Getting DNS hosts for ${domain} (User: ${userId})`);
+        console.log(`[Domain IP Lookup API] Getting IP for ${domain} (User: ${userId})`);
 
         // 2. Split domain into SLD and TLD
         const [sld, tld] = domain.split('.');
 
-        // 3. Get DNS hosts via Namecheap API
-        const hostsResult = await namecheapRequest('namecheap.domains.dns.getHosts', {
+        // 3. Get host records (including A records) via Namecheap API
+        const getHostsParams = {
             SLD: sld,
-            TLD: tld
-        });
+            TLD: tld,
+        };
 
-        const result = hostsResult.ApiResponse.CommandResponse.DomainDNSGetHostsResult;
+        const getHostsResult = await namecheapRequest('namecheap.domains.dns.getHosts', getHostsParams);
 
-        if (result) {
-            // Extract host records
-            const hosts = result.Host || [];
-            const hostsArray = Array.isArray(hosts) ? hosts : [hosts];
+        // Namecheap API responses are typically XML, so you'll need to parse it.
+        // Assuming 'namecheapRequest' handles XML parsing and returns a structured object.
+        const hosts = getHostsResult.ApiResponse.CommandResponse.DomainDNSGetHostsResult.Host;
 
-            // Format host records
-            const formattedHosts = hostsArray.map(host => ({
-                hostId: host.$.HostId,
-                name: host.$.Name,
-                type: host.$.Type,
-                address: host.$.Address,
-                mxPref: host.$.MXPref || null,
-                ttl: host.$.TTL
-            }));
+        // Find the A record for the root domain or 'www' subdomain
+        let ipAddress = null;
+        if (hosts && Array.isArray(hosts)) {
+            const rootARecord = hosts.find(host => host.$.Type === 'A' && host.$.HostName === '@');
+            const wwwARecord = hosts.find(host => host.$.Type === 'A' && host.$.HostName === 'www');
 
+            if (rootARecord) {
+                ipAddress = rootARecord.$.Address;
+            } else if (wwwARecord) { // Fallback to www if no root A record found
+                ipAddress = wwwARecord.$.Address;
+            }
+        }
+
+        if (ipAddress) {
             return res.json({
                 success: true,
-                message: 'DNS hosts retrieved successfully',
+                message: 'Domain IP address retrieved successfully',
                 domain: domain.toLowerCase(),
-                isUsingOurDNS: result.$.IsUsingOurDNS === 'true',
-                hosts: formattedHosts,
-                totalRecords: formattedHosts.length,
-                data: result
+                ipAddress: ipAddress,
             });
         } else {
-            throw new Error('No DNS hosts found for this domain');
+            return res.status(404).json({
+                success: false,
+                error: 'No A record found for the domain',
+                details: 'Could not find a valid A record for the root domain or www subdomain.',
+            });
         }
 
     } catch (error) {
-        console.error('[DNS Hosts API] Error getting DNS hosts:', error.message);
-        
+        console.error('[Domain IP Lookup API] Error getting domain IP:', error.message);
+
         return res.status(500).json({
             success: false,
             userId,
-            error: `Failed to get DNS hosts: ${error.message}`,
+            error: `Failed to retrieve domain IP: ${error.message}`,
             domain: domain.toLowerCase(),
             details: error.response?.data || null,
             timestamp: new Date().toISOString()
         });
     }
 });
+
 
 module.exports = {
     router,
