@@ -5132,23 +5132,25 @@ router.post('/whm/domain/get-ip', validateUserId, async (req, res) => {
             domain: domain
         });
 
-        // Parse the response from WHM API
-        // The structure might vary slightly, but generally you'd look for 'data.ip'
-        if (resolveResult && resolveResult.status === 1 && resolveResult.data && resolveResult.data.ip) {
+        // Parse the response from WHM API using the correct structure
+        if (resolveResult && resolveResult.metadata && resolveResult.metadata.result === 1 && resolveResult.data && resolveResult.data.ip) {
             return res.json({
                 success: true,
                 message: 'Domain IP address retrieved successfully via WHM API',
                 domain: domain.toLowerCase(),
                 ipAddress: resolveResult.data.ip,
-                details: resolveResult // Include full API response for debugging
+                metadata: resolveResult.metadata,
+                details: resolveResult
             });
         } else {
-            // WHM API might return success but no IP if the domain isn't resolved or hosted there
+            // WHM API returned failure or no IP
+            const reason = resolveResult?.metadata?.reason || 'Unknown error';
             return res.status(404).json({
                 success: false,
                 error: 'Could not resolve domain IP via WHM API',
-                details: resolveResult || 'Unknown API response structure',
-                domain: domain.toLowerCase()
+                details: reason,
+                domain: domain.toLowerCase(),
+                metadata: resolveResult?.metadata || null
             });
         }
 
