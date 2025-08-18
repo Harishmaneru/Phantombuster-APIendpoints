@@ -127,6 +127,45 @@ const { Http2ServerRequest } = require('http2');
 const app = express();
 const port = 3001;
 
+// Add CORS preflight handling
+app.options('*', cors());
+
+// Add additional CORS headers for all responses
+app.use((req, res, next) => {
+  const allowedOrigins = [
+    "http://localhost:4000",
+    "http://localhost:3000",
+    "http://localhost:4200",
+    "http://localhost:4200/",
+    "http://localhost:4201",
+    "https://videoresponse.onepgr.com",
+    "https://www.recordedinterview.com",
+    "https://www.app.recordedinterview.com",
+    "https://app.recordedinterview.com",
+    "https://www.getprospectsignals.com",
+    "https://getprospectsignals.com",
+    "https://record.onepgr.com/",
+    "https://record.onepgr.com",
+    "https://kampaign.onepgr.com",
+    "https://kampaign.onepgr.com/"
+  ];
+  
+  const origin = req.headers.origin;
+  if (allowedOrigins.includes(origin) || /\.onepgr\.com$/.test(origin)) {
+    res.header('Access-Control-Allow-Origin', origin);
+  }
+  
+  res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
+  res.header('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept, Authorization, X-User-Id, User-Agent, Referer, sec-ch-ua, sec-ch-ua-mobile, sec-ch-ua-platform');
+  res.header('Access-Control-Allow-Credentials', 'true');
+  
+  if (req.method === 'OPTIONS') {
+    res.sendStatus(200);
+  } else {
+    next();
+  }
+});
+
 app.use(
   cors({
     origin: [
@@ -149,8 +188,23 @@ app.use(
       "https://kampaign.onepgr.com/"
     ],
     methods: ["GET", "PUT", "POST", "DELETE", "OPTIONS"],
-    allowedHeaders: ["Content-Type", "Authorization", "X-Requested-With", "stripe-signature"],
+    allowedHeaders: [
+      "Content-Type", 
+      "Authorization", 
+      "X-Requested-With", 
+      "stripe-signature",
+      "X-User-Id",
+      "User-Agent",
+      "Referer",
+      "sec-ch-ua",
+      "sec-ch-ua-mobile",
+      "sec-ch-ua-platform",
+      "Origin"
+    ],
+    exposedHeaders: ["Content-Type", "Authorization"],
     credentials: true,
+    preflightContinue: false,
+    optionsSuccessStatus: 204
   })
 );
 
