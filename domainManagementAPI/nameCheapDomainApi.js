@@ -4874,7 +4874,7 @@ router.post('/namecheap/domain/nameserver/create', validateUserId, async (req, r
         const createResult = await namecheapRequest('namecheap.domains.ns.create', createParams);
 
         const result = createResult.ApiResponse.CommandResponse.DomainNSCreateResult;
-
+        console.log("nameservers create result",result);
         if (result.$.IsSuccess === 'true') {
             // 4. Update database with new nameserver info
             await updateDomainInDatabase(userId, domain, {
