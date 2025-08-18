@@ -4910,7 +4910,7 @@ router.get('/namecheap/domain/:domain/nameservers', validateUserId, async (req, 
 
 //_______________API for get getHosts IP____
 
-// Get DNS host records for a domain
+
 
 router.post('/namecheap/domain/nameserver/create', validateUserId, async (req, res) => {
     const {
@@ -5069,118 +5069,6 @@ router.post('/namecheap/domain/nameserver/create', validateUserId, async (req, r
 
 
 
-// WHM API request function
-// async function whmRequest(apiFunction, params) {
-//     try {
-//         const whmHost = process.env.WHM_HOST;
-//         const whmToken = process.env.WHM_TOKEN;
-        
-//         if (!whmHost || !whmToken) {
-//             throw new Error('WHM_HOST and WHM_TOKEN environment variables are required');
-//         }
-
-//         // Build URL with parameters - WHM API uses GET with URL parameters
-//         const queryParams = new URLSearchParams({
-//             'api.version': '1',
-//             ...params
-//         });
-        
-//         const whmUrl = `https://${whmHost}:2087/json-api/${apiFunction}?${queryParams.toString()}`;
-        
-//         console.log(`[WHM API] Calling: ${whmUrl}`);
-        
-//         const response = await axios.get(whmUrl, {
-//             headers: {
-//                 'Authorization': `whm root:${whmToken}`,
-//                 // Remove Content-Type header for GET requests
-//             },
-//             timeout: 30000,
-//             // Add these for SSL issues if needed
-//             httpsAgent: new (require('https').Agent)({
-//                 rejectUnauthorized: false
-//             })
-//         });
-
-//         return response.data;
-//     } catch (error) {
-//         console.error('[WHM API] Request failed:', error.message);
-//         if (error.response) {
-//             console.error('[WHM API] Response data:', error.response.data);
-//             console.error('[WHM API] Response status:', error.response.status);
-//         }
-//         throw error;
-//     }
-// }
-
-// router.post('/whm/domain/get-ip', validateUserId, async (req, res) => {
-//     const { domain } = req.body;
-//     const userId = req.userId;
-
-//     // Validate required fields
-//     if (!domain) {
-//         return res.status(400).json({
-//             success: false,
-//             error: 'Missing required fields',
-//             details: 'domain is required'
-//         });
-//     }
-
-//     // Validate domain format
-//     if (!isValidDomain(domain)) {
-//         return res.status(400).json({
-//             success: false,
-//             error: 'Invalid domain format',
-//             details: 'Please provide a valid domain name'
-//         });
-//     }
-
-//     try {
-//         console.log(`[WHM Domain IP Lookup API] Getting IP for ${domain} (User: ${userId})`);
-
-//         // Use WHM API to resolve the domain's IP address
-//         const resolveResult = await whmRequest('resolvedomainname', {
-//             domain: domain
-//         });
-
-//         console.log('[WHM API Response]:', JSON.stringify(resolveResult, null, 2));
-
-//         // Parse the response from WHM API using the correct structure
-//         if (resolveResult && resolveResult.metadata && resolveResult.metadata.result === 1) {
-//             return res.json({
-//                 success: true,
-//                 message: 'Domain IP address retrieved successfully via WHM API',
-//                 domain: domain.toLowerCase(),
-//                 ipAddress: resolveResult.data.ip,
-//                 metadata: resolveResult.metadata,
-//                 details: resolveResult
-//             });
-//         } else {
-//             // WHM API returned failure or no IP
-//             const reason = resolveResult?.metadata?.reason || 'Unknown error';
-//             return res.status(404).json({
-//                 success: false,
-//                 error: 'Could not resolve domain IP via WHM API',
-//                 details: reason,
-//                 domain: domain.toLowerCase(),
-//                 metadata: resolveResult?.metadata || null
-//             });
-//         }
-
-//     } catch (error) {
-//         console.error('[WHM Domain IP Lookup API] Error getting domain IP:', error.message);
-
-//         return res.status(500).json({
-//             success: false,
-//             userId,
-//             error: `Failed to retrieve domain IP via WHM API: ${error.message}`,
-//             domain: domain.toLowerCase(),
-//             details: error.response?.data || error.message,
-//             timestamp: new Date().toISOString()
-//         });
-//     }
-// });
-
-
 async function whmRequest(apiFunction, params) {
     try {
         const whmHost = process.env.WHM_HOST;
@@ -5286,6 +5174,118 @@ router.post('/whm/domain/get-ip', validateUserId, async (req, res) => {
             error: `Failed to retrieve domain IP via WHM API: ${error.message}`,
             domain: domain.toLowerCase(),
             details: error.response?.data || error.message,
+            timestamp: new Date().toISOString()
+        });
+    }
+});
+
+// Set custom nameservers for a domain
+router.post('/namecheap/domain/nameserver/set-custom', validateUserId, async (req, res) => {
+    const {
+        domain,
+        nameservers
+    } = req.body;
+
+    const userId = req.userId;
+
+    // Validate required fields
+    if (!domain || !nameservers) {
+        return res.status(400).json({
+            success: false,
+            error: 'Missing required fields',
+            details: 'domain and nameservers are required'
+        });
+    }
+
+    // Validate domain format
+    if (!isValidDomain(domain)) {
+        return res.status(400).json({
+            success: false,
+            error: 'Invalid domain format',
+            details: 'Please provide a valid domain name'
+        });
+    }
+
+    // Validate nameservers format
+    const nameserverArray = Array.isArray(nameservers) ? nameservers : nameservers.split(',');
+    if (nameserverArray.length < 2) {
+        return res.status(400).json({
+            success: false,
+            error: 'Invalid nameservers format',
+            details: 'At least 2 nameservers are required'
+        });
+    }
+
+    // Validate each nameserver format
+    for (const ns of nameserverArray) {
+        if (!isValidDomain(ns.trim())) {
+            return res.status(400).json({
+                success: false,
+                error: 'Invalid nameserver format',
+                details: `Nameserver "${ns}" must be a valid hostname`
+            });
+        }
+    }
+
+    try {
+        // 1. Verify domain ownership through database
+        const userDomain = await NamecheapDomain.findOne({
+            userId,
+            domain: domain.toLowerCase()
+        });
+
+        if (!userDomain) {
+            return res.status(404).json({
+                success: false,
+                error: 'Domain not found for this user',
+                details: 'Please ensure the domain is registered under your account'
+            });
+        }
+
+        console.log(`[Set Custom Nameservers API] Setting custom nameservers for ${domain} (User: ${userId}):`, nameserverArray);
+
+        // 2. Split domain into SLD and TLD
+        const [sld, tld] = domain.split('.');
+
+        // 3. Set custom nameservers via Namecheap API
+        const nameserverString = nameserverArray.join(',');
+        const response = await namecheapRequest('namecheap.domains.dns.setCustom', {
+            SLD: sld,
+            TLD: tld,
+            NameServers: nameserverString
+        });
+
+        const result = response.ApiResponse.CommandResponse.DomainDNSSetCustomResult;
+        console.log("Set custom nameservers result:", result);
+        
+        if (result.$.Updated === 'true') {
+            // 4. Update database with custom nameserver info
+            await updateDomainInDatabase(userId, domain, {
+                'dnsConfiguration.customNameservers': true,
+                'dnsConfiguration.nameservers': nameserverArray,
+                'dnsConfiguration.lastDNSUpdate': new Date()
+            });
+
+            return res.json({
+                success: true,
+                message: 'Custom nameservers set successfully',
+                domain: domain.toLowerCase(),
+                nameservers: nameserverArray,
+                data: result
+            });
+        } else {
+            throw new Error('Failed to set custom nameservers');
+        }
+
+    } catch (error) {
+        console.error('[Set Custom Nameservers API] Error setting custom nameservers:', error.message);
+        
+        return res.status(500).json({
+            success: false,
+            userId,
+            error: `Failed to set custom nameservers: ${error.message}`,
+            domain: domain.toLowerCase(),
+            details: error.response?.data || null,
             timestamp: new Date().toISOString()
         });
     }
