@@ -1017,8 +1017,8 @@ async function checkForReplies() {
         });
 
         // Add connection event listeners
-        client.on('error', err => console.error(`IMAP error for ${tracking.fromEmail}:`, err.message));
-        client.on('close', () => console.log(`Connection closed for ${tracking.fromEmail}`));
+        // client.on('error', err => console.error(`IMAP error for ${tracking.fromEmail}:`, err.message));
+        // client.on('close', () => console.log(`Connection closed for ${tracking.fromEmail}`));
 
         // Add connection timeout
         await Promise.race([
@@ -1197,16 +1197,17 @@ async function checkForReplies() {
           });
         }
       } catch (connError) {
-        console.error(`Connection error for ${tracking.fromEmail}:`, connError.message);
+        // console.error(`Connection error for ${tracking.fromEmail}:`, connError.message);
         continue; // Skip to next tracking record
       } finally {
         try {
           if (client && typeof client.logout === 'function') {
             await client.logout().catch(e =>
-              console.error('Logout error:', e.message));
+              // console.error('Logout error:', e.message)); // Commented out to reduce log spam
+              null);
           }
         } catch (logoutError) {
-          console.error('Final logout error:', logoutError.message);
+          // console.error('Final logout error:', logoutError.message); // Commented out to reduce log spam
         }
       }
     }
@@ -1965,7 +1966,7 @@ async function getSMTPSettingsForEmail(email) {
   }
 
   console.log(`🔍 Getting SMTP settings for: ${email}`);
-  
+
   // Try cPanel API first
   try {
     const cpanelResponse = await cpanelRequest('Email/get_client_settings', {
@@ -1974,7 +1975,7 @@ async function getSMTPSettingsForEmail(email) {
 
     if (cpanelResponse && cpanelResponse.data && cpanelResponse.data.smtp_host && cpanelResponse.data.smtp_port) {
       const smtpData = cpanelResponse.data;
-      
+
       console.log(`✅ cPanel API success for ${email}:`, {
         host: smtpData.smtp_host,
         port: smtpData.smtp_port
@@ -2011,12 +2012,12 @@ async function getSMTPSettingsForEmail(email) {
   try {
     const domain = email.split('@')[1].toLowerCase();
     const mxRecords = await cachedMxLookup(domain);
-    
+
     console.log(`🔍 DNS MX lookup for domain: ${domain}`);
-    
+
     // Use existing logic to determine SMTP settings
     const smtpSettings = await getSMTPSettings(email);
-    
+
     return {
       success: true,
       email: email,
@@ -2024,10 +2025,10 @@ async function getSMTPSettingsForEmail(email) {
       port: smtpSettings.port,
       source: 'DNS MX Lookup'
     };
-    
+
   } catch (dnsError) {
     console.log(`❌ DNS lookup failed for ${email}:`, dnsError.message);
-    
+
     throw new Error('Could not determine SMTP settings');
   }
 }
@@ -2042,23 +2043,23 @@ setInterval(checkForReplies, 2 * 60 * 1000);
 router.post('/api/get-smtphost', async (req, res) => {
   try {
     const { email } = req.body;
-    
+
     if (!email) {
-      return res.status(400).json({ 
-        success: false, 
-        error: 'Email is required' 
+      return res.status(400).json({
+        success: false,
+        error: 'Email is required'
       });
     }
 
     const smtpSettings = await getSMTPSettingsForEmail(email);
-    
+
     return res.json(smtpSettings);
 
   } catch (error) {
     console.error('Get SMTP Settings Error:', error);
-    return res.status(500).json({ 
-      success: false, 
-      error: error.message 
+    return res.status(500).json({
+      success: false,
+      error: error.message
     });
   }
 });

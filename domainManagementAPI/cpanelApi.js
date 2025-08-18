@@ -9,7 +9,7 @@ const qs = require('qs');
 // - WHM_HOST: IP address or hostname of your WHM server
 // - CPANEL_MASTER_USER: Master cPanel username
 // - CPANEL_TOKEN: cPanel API token for the master user
-// - WHM_TOKEN: WHM API token for root-level access (required for DMARC operations)
+// Note: DMARC operations now use cPanel UAPI (same as email operations) instead of WHM API
 
 // Import the NamecheapDomain model from the existing schema
 const { NamecheapDomain } = require('./nameCheapDomainApi.js');
@@ -24,7 +24,6 @@ const { slackLogger } = require('../webhooks/slackLogger');
 const WHM_HOST = process.env.WHM_HOST;
 const MASTER_USER = process.env.CPANEL_MASTER_USER;
 const CPANEL_TOKEN = process.env.CPANEL_TOKEN;
-const WHM_TOKEN = process.env.WHM_TOKEN; // Add WHM token for root-level access
 
 // Create custom HTTPS agent
 const agent = new https.Agent({
@@ -34,8 +33,8 @@ const agent = new https.Agent({
 });
 
 // Validate environment variables
-if (!WHM_HOST || !MASTER_USER || !CPANEL_TOKEN || !WHM_TOKEN) {
-  console.error('Missing environment variables:', { WHM_HOST, MASTER_USER, CPANEL_TOKEN, WHM_TOKEN });
+if (!WHM_HOST || !MASTER_USER || !CPANEL_TOKEN) {
+  console.error('Missing environment variables:', { WHM_HOST, MASTER_USER, CPANEL_TOKEN });
   throw new Error('Missing required environment variables');
 }
 
@@ -2323,13 +2322,12 @@ router.get('/cpanel/apply-dmarc', async (req, res) => {
     // Log the request
     console.log('Applying DMARC record with params:', params);
 
-    // Call WHM API (not cPanel user API)
-    // You need to use WHM API call here, not cPanel's ZoneEdit
-    // The correct endpoint is apply_dmarc
-    const result = await whmApiRequest('apply_dmarc', params);
+    // Use cPanel UAPI (same as email creation APIs) instead of WHM API
+    // This approach works because it uses the master user credentials
+    const result = await cpanelRequest('EmailAuth/apply_dmarc', params, 'POST');
 
-    // Alternative: If you're using cPanel's UAPI instead of WHM API:
-    // const result = await cpanelUAPIRequest('EmailAuth', 'apply_dmarc', params);
+    // Alternative: If you need to use WHM API, use the working whmRequest function
+    // const result = await whmRequest('apply_dmarc', params);
 
     // Check if the operation was successful
     if (result.metadata && result.metadata.result === 1) {
@@ -2393,101 +2391,36 @@ router.get('/cpanel/apply-dmarc', async (req, res) => {
   }
 });
 
-// Helper function for WHM API requests
-async function whmApiRequest(func, params) {
-  // This function should make the actual WHM API call
-  // The implementation depends on how you're connecting to WHM
 
-  // Example using axios with WHM API token:
-  const axios = require('axios');
-
-  const whmHost = process.env.WHM_HOST;
-  const whmToken = process.env.WHM_TOKEN; // Your WHM API token
-
-  const url = `https://${whmHost}:2087/json-api/${func}`;
-
-  try {
-    const response = await axios.get(url, {
-      params: {
-        "api.version": "1",
-        ...params
-      },
-      headers: {
-        'Authorization': `whm root:${whmToken}`
-      },
-      httpsAgent: new (require('https').Agent)({
-        rejectUnauthorized: false // Only for self-signed certificates
-      })
-    });
-
-    return response.data;
-  } catch (error) {
-    console.error('WHM API Error:', error.response?.data || error.message);
-    throw error;
-  }
-}
-
-// Alternative: If using cPanel UAPI (for non-root access)
-async function cpanelUAPIRequest(module, func, params) {
-  const axios = require('axios');
-
-  const cpanelHost = process.env.CPANEL_HOST;
-  const cpanelUser = process.env.CPANEL_MASTER_USER;
-  const cpanelToken = process.env.CPANEL_TOKEN;
-
-  const url = `https://${cpanelHost}:2083/execute/${module}/${func}`;
-
-  try {
-    const response = await axios.get(url, {
-      params: params,
-      headers: {
-        'Authorization': `cpanel ${cpanelUser}:${cpanelToken}`
-      },
-      httpsAgent: new (require('https').Agent)({
-        rejectUnauthorized: false // Only for self-signed certificates
-      })
-    });
-
-    return response.data;
-  } catch (error) {
-    console.error('cPanel UAPI Error:', error.response?.data || error.message);
-    throw error;
-  }
-}
-
-/**
- * Validate DMARC records for a domain
- * This function checks if a domain has valid DMARC records
- */
 async function validateDMARCRecords(domain) {
   try {
-    // Check if domain has DMARC record using DNS API (more commonly available)
-    const dmarcRecord = await cpanelRequest('DNS/parse_zone_file', {
-      domain: domain
+    // Use WHM API to validate DMARC records
+    const dmarcRecord = await whmRequest('validate_current_dmarcs', {
+      domain: `domain=${domain}` // Note the format change
     });
 
-    if (dmarcRecord.status === 1 && dmarcRecord.data) {
-      // Parse zone file to find DMARC record
-      const zoneData = dmarcRecord.data;
-      const dmarcRecordEntry = zoneData.find(record =>
-        record.name === `_dmarc.${domain}` && record.type === 'TXT'
+    // Check response structure
+    if (dmarcRecord.success && dmarcRecord.data) {
+      // Find the DMARC record for this specific domain in the payload array
+      const domainRecord = dmarcRecord.data.payload.find(record => 
+        record.domain === domain
       );
 
-      if (dmarcRecordEntry && dmarcRecordEntry.txtdata) {
-        // Basic DMARC validation
-        if (dmarcRecordEntry.txtdata.includes('v=DMARC1')) {
+      if (domainRecord) {
+        // Check record state
+        if (domainRecord.state === "VALID" && domainRecord.record.includes('v=DMARC1')) {
           return {
             isValid: true,
-            record: dmarcRecordEntry.txtdata,
+            record: domainRecord.record,
             domain: domain,
             message: 'Valid DMARC record found'
           };
         } else {
           return {
             isValid: false,
-            record: dmarcRecordEntry.txtdata,
+            record: domainRecord.record || null,
             domain: domain,
-            message: 'DMARC record found but format is invalid'
+            message: domainRecord.error || 'DMARC record is invalid'
           };
         }
       } else {
@@ -2495,7 +2428,7 @@ async function validateDMARCRecords(domain) {
           isValid: false,
           record: null,
           domain: domain,
-          message: 'No DMARC record found for domain'
+          message: 'Domain not found in WHM response'
         };
       }
     } else {
@@ -2503,25 +2436,25 @@ async function validateDMARCRecords(domain) {
         isValid: false,
         record: null,
         domain: domain,
-        message: 'No DMARC record found for domain'
+        message: dmarcRecord.metadata?.reason || 'WHM API returned error or no data'
       };
     }
   } catch (error) {
-    console.error(`Error validating DMARC records for ${domain}:`, error.message);
-
+    console.error(`Error validating DMARC records for ${domain}:`, error);
+    
     // Handle specific error types
     let errorMessage = `Error validating DMARC record: ${error.message}`;
     let errorType = 'UNKNOWN_ERROR';
 
-    if (error.code === 'ETIMEDOUT' || error.message.includes('ETIMEDOUT')) {
-      errorMessage = 'Connection timeout to cPanel server';
+    if (error.response?.status === 404) {
+      errorMessage = 'WHM API endpoint not found';
+      errorType = 'ENDPOINT_NOT_FOUND';
+    } else if (error.code === 'ETIMEDOUT') {
+      errorMessage = 'Connection timeout to WHM server';
       errorType = 'CONNECTION_TIMEOUT';
-    } else if (error.code === 'ECONNREFUSED' || error.message.includes('ECONNREFUSED')) {
-      errorMessage = 'Connection refused by cPanel server';
+    } else if (error.code === 'ECONNREFUSED') {
+      errorMessage = 'Connection refused by WHM server';
       errorType = 'CONNECTION_REFUSED';
-    } else if (error.code === 'ENOTFOUND' || error.message.includes('ENOTFOUND')) {
-      errorMessage = 'cPanel server not found';
-      errorType = 'SERVER_NOT_FOUND';
     }
 
     return {
@@ -2537,8 +2470,8 @@ async function validateDMARCRecords(domain) {
 
 /**
  * Validate DMARC records for domain(s)
- * This endpoint validates DMARC records for specified domains using cPanel's validate_current_dmarcs API
- * Based on the official cPanel API documentation
+ * This endpoint validates DMARC records for specified domains using WHM's validate_current_dmarcs API
+ * Based on the official WHM API documentation
  */
 router.get('/cpanel/validate-dmarc', async (req, res) => {
   try {
@@ -2560,15 +2493,16 @@ router.get('/cpanel/validate-dmarc', async (req, res) => {
       });
     }
 
-    // Log the request
-    console.log('Validating DMARC record for domain:', domain);
-    console.log('DMARC validation requested:', {
-      domain: domain,
-      timestamp: new Date().toISOString()
-    });
-
-    // Call the reusable function to validate DMARC records
     const dmarcInfo = await validateDMARCRecords(domain);
+
+    // Handle 404 specifically
+    if (dmarcInfo.errorType === 'ENDPOINT_NOT_FOUND') {
+      return res.status(404).json({
+        success: false,
+        error: 'WHM API endpoint not found',
+        details: dmarcInfo.message
+      });
+    }
 
     // Format response to match the API documentation structure
     const response = {

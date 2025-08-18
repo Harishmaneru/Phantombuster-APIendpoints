@@ -4671,7 +4671,7 @@ router.get('/transfer/:domain/status', apiLimiter, asyncHandler(async (req, res)
 
 //_______________API for setup costum nameservers____
 
-router.post('/namecheap/domain/nameservers', validateUserId, async (req, res) => {
+router.post('/namecheap/nameservers/create', validateUserId, async (req, res) => {
     const {
         domain,
         customNameservers = null,
@@ -4875,7 +4875,7 @@ router.post('/namecheap/domain/nameservers', validateUserId, async (req, res) =>
                 },
                 propagation: {
                     status: 'pending',
-                    estimatedTime: '5-30 minutes',
+                    estimatedTime: 'It may take up to 24 hours (in rare cases more) for the DNS changes to take effect.',
                     note: 'DNS changes may take time to propagate globally',
                     checkEndpoint: `/namecheap/domain/${domain}/dns-status?userId=${userId}`
                 },
@@ -5260,58 +5260,15 @@ router.get('/namecheap/domain/:domain/nameservers', validateUserId, async (req, 
                     isUsingNamecheapDNS: isUsingNamecheapDNS,
                     customNameservers: !isUsingNamecheapDNS
                 },
-                dnsRecords: isUsingNamecheapDNS ? {
-                    count: dnsRecords.length,
-                    records: dnsRecords,
-                    error: dnsError
-                } : {
-                    note: 'DNS records not available - domain uses external nameservers',
-                    externalProvider: 'Manage DNS records through your external DNS provider'
-                },
                 databaseRecord: {
                     nameservers: userDomain.dnsConfiguration.nameservers,
                     isUsingNamecheapDNS: userDomain.dnsConfiguration.isUsingNamecheapDNS,
                     customNameservers: userDomain.dnsConfiguration.customNameservers,
                     lastDNSUpdate: userDomain.dnsConfiguration.lastDNSUpdate
                 },
-                recommendations: {
-                    ifUsingNamecheapDNS: [
-                        'Use Namecheap DNS management for easy record management',
-                        'Email accounts can be created through cPanel',
-                        'URL forwarding available through Namecheap'
-                    ],
-                    ifUsingCustomNameservers: [
-                        'Manage DNS records through your external provider',
-                        'Email setup requires external email service',
-                        'Consider DNS propagation time for changes'
-                    ]
-                },
                 timestamp: new Date().toISOString()
             }
         };
-
-        // 5. Add configuration options
-        response.data.configurationOptions = {
-            switchToNamecheapDNS: {
-                endpoint: `/namecheap/domain/nameservers`,
-                method: 'POST',
-                body: {
-                    domain: domain,
-                    useNamecheapDNS: true
-                },
-                description: 'Switch to Namecheap DNS servers for easier management'
-            },
-            switchToCustomNameservers: {
-                endpoint: `/namecheap/domain/nameservers`,
-                method: 'POST',
-                body: {
-                    domain: domain,
-                    customNameservers: ['ns1.example.com', 'ns2.example.com']
-                },
-                description: 'Switch to custom nameservers (provide valid nameserver addresses)'
-            }
-        };
-
         res.json(response);
 
     } catch (error) {
@@ -5342,28 +5299,6 @@ router.get('/namecheap/domain/:domain/nameservers', validateUserId, async (req, 
 //_______________API for setup costum nameservers____
 
 
-router.get('/namecheap/health', async (req, res) => {
-    try {
-        // Test API connectivity with a simple call
-        const response = await namecheapRequest('namecheap.users.getBalances');
-        
-        res.json({
-            success: true,
-            status: 'healthy',
-            apiKey: 'valid',
-            apiMode: NAMECHEAP_SANDBOX === 'true' ? 'sandbox' : 'production',
-            timestamp: new Date().toISOString()
-        });
-    } catch (error) {
-        res.status(401).json({
-            success: false,
-            status: 'unhealthy',
-            apiKey: 'invalid',
-            error: error.message,
-            timestamp: new Date().toISOString()
-        });
-    }
-});
 
 module.exports = {
     router,
