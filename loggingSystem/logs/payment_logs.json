@@ -1,0 +1,374 @@
+[
+  {
+    "id": "1755603496926_2r1wt04kt",
+    "timestamp": "2025-08-19T11:38:16.926Z",
+    "type": "subscription",
+    "userId": "4991",
+    "userEmail": "unknown",
+    "amount": 38,
+    "currency": "usd",
+    "status": "completed",
+    "stripeSessionId": "cs_test_a1mfbtwbDuXVxRmYepitx1YCZcAYw23WiWHsrw9IUgF3SljEu0ZzGqLvWs",
+    "paymentIntentId": null,
+    "customerId": "cus_SpTVUBKf3hlUJn",
+    "invoiceId": "in_1RtoY24CXyekys3eaF9sjo6z",
+    "hostedInvoiceUrl": "https://invoice.stripe.com/i/acct_1RBTlb4CXyekys3e/test_YWNjdF8xUkJUbGI0Q1h5ZWt5czNlLF9TcFRWTXhvWldnVWJydUNBQ3c4THFzMnZ0Q042QjlSLDE0NjE0NDI5Nw020028ifCldD?s=ap",
+    "invoicePdf": "https://pay.stripe.com/invoice/acct_1RBTlb4CXyekys3e/test_YWNjdF8xUkJUbGI0Q1h5ZWt5czNlLF9TcFRWTXhvWldnVWJydUNBQ3c4THFzMnZ0Q042QjlSLDE0NjE0NDI5Nw020028ifCldD/pdf?s=ap",
+    "subscriptionId": "sub_1RtoY44CXyekys3esZTxfzfC",
+    "systemInfo": {
+      "ipAddress": "::1",
+      "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/139.0.0.0 Safari/537.36",
+      "apiEndpoint": "/get-subscription-from-session",
+      "requestMethod": "POST"
+    },
+    "metadata": {
+      "sessionType": "subscription",
+      "subscriptionStatus": "active",
+      "paymentStatus": "paid",
+      "planName": "Email Accounts+Warmup inbox",
+      "interval": "1 month",
+      "refundInfo": null
+    }
+  },
+  {
+    "id": "1755603496938_7ektdl94a",
+    "timestamp": "2025-08-19T11:38:16.938Z",
+    "type": "subscription",
+    "userId": "4991",
+    "userEmail": "unknown",
+    "amount": 38,
+    "currency": "usd",
+    "status": "completed",
+    "stripeSessionId": "cs_test_a1mfbtwbDuXVxRmYepitx1YCZcAYw23WiWHsrw9IUgF3SljEu0ZzGqLvWs",
+    "paymentIntentId": null,
+    "customerId": "cus_SpTVUBKf3hlUJn",
+    "invoiceId": "in_1RtoY24CXyekys3eaF9sjo6z",
+    "hostedInvoiceUrl": "https://invoice.stripe.com/i/acct_1RBTlb4CXyekys3e/test_YWNjdF8xUkJUbGI0Q1h5ZWt5czNlLF9TcFRWTXhvWldnVWJydUNBQ3c4THFzMnZ0Q042QjlSLDE0NjE0NDI5Nw020028ifCldD?s=ap",
+    "invoicePdf": "https://pay.stripe.com/invoice/acct_1RBTlb4CXyekys3e/test_YWNjdF8xUkJUbGI0Q1h5ZWt5czNlLF9TcFRWTXhvWldnVWJydUNBQ3c4THFzMnZ0Q042QjlSLDE0NjE0NDI5Nw020028ifCldD/pdf?s=ap",
+    "subscriptionId": "sub_1RtoY44CXyekys3esZTxfzfC",
+    "systemInfo": {
+      "ipAddress": "::1",
+      "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/139.0.0.0 Safari/537.36",
+      "apiEndpoint": "/get-subscription-from-session",
+      "requestMethod": "POST"
+    },
+    "metadata": {
+      "sessionType": "subscription",
+      "subscriptionStatus": "active",
+      "paymentStatus": "paid",
+      "planName": "Email Accounts+Warmup inbox",
+      "interval": "1 month",
+      "refundInfo": null
+    }
+  },
+  {
+    "id": "1755604993604_nb33gkm5r",
+    "timestamp": "2025-08-19T12:03:13.604Z",
+    "type": "subscription",
+    "userId": "4991",
+    "userEmail": "unknown",
+    "amount": 8,
+    "currency": "usd",
+    "status": "completed",
+    "stripeSessionId": "cs_test_b1EEZiiUYSzyrPOaolWUz22GMgXnqtAsdfN5lBijyfBJmZ7Oahx33xXIBL",
+    "paymentIntentId": null,
+    "customerId": "cus_SQMdurIBvGej52",
+    "invoiceId": "in_1RxoFk4CXyekys3eMM5JMddy",
+    "hostedInvoiceUrl": "https://invoice.stripe.com/i/acct_1RBTlb4CXyekys3e/test_YWNjdF8xUkJUbGI0Q1h5ZWt5czNlLF9TdGJTbnExalVrbjZwdlEwSjRrdDZpcXp6ekU4a0N4LDE0NjE0NTc5NA0200ubQopWwQ?s=ap",
+    "invoicePdf": "https://pay.stripe.com/invoice/acct_1RBTlb4CXyekys3e/test_YWNjdF8xUkJUbGI0Q1h5ZWt5czNlLF9TdGJTbnExalVrbjZwdlEwSjRrdDZpcXp6ekU4a0N4LDE0NjE0NTc5NA0200ubQopWwQ/pdf?s=ap",
+    "subscriptionId": "sub_1RxoFm4CXyekys3epDc8jzxr",
+    "systemInfo": {
+      "ipAddress": "::1",
+      "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/139.0.0.0 Safari/537.36",
+      "apiEndpoint": "/get-subscription-from-session",
+      "requestMethod": "POST"
+    },
+    "metadata": {
+      "sessionType": "subscription",
+      "subscriptionStatus": "active",
+      "paymentStatus": "paid",
+      "planName": "Email Accounts+Warmup inbox",
+      "interval": "1 month",
+      "refundInfo": null
+    }
+  },
+  {
+    "id": "1755604993690_9xgzd22rt",
+    "timestamp": "2025-08-19T12:03:13.690Z",
+    "type": "subscription",
+    "userId": "4991",
+    "userEmail": "unknown",
+    "amount": 8,
+    "currency": "usd",
+    "status": "completed",
+    "stripeSessionId": "cs_test_b1EEZiiUYSzyrPOaolWUz22GMgXnqtAsdfN5lBijyfBJmZ7Oahx33xXIBL",
+    "paymentIntentId": null,
+    "customerId": "cus_SQMdurIBvGej52",
+    "invoiceId": "in_1RxoFk4CXyekys3eMM5JMddy",
+    "hostedInvoiceUrl": "https://invoice.stripe.com/i/acct_1RBTlb4CXyekys3e/test_YWNjdF8xUkJUbGI0Q1h5ZWt5czNlLF9TdGJTbnExalVrbjZwdlEwSjRrdDZpcXp6ekU4a0N4LDE0NjE0NTc5NA0200ubQopWwQ?s=ap",
+    "invoicePdf": "https://pay.stripe.com/invoice/acct_1RBTlb4CXyekys3e/test_YWNjdF8xUkJUbGI0Q1h5ZWt5czNlLF9TdGJTbnExalVrbjZwdlEwSjRrdDZpcXp6ekU4a0N4LDE0NjE0NTc5NA0200ubQopWwQ/pdf?s=ap",
+    "subscriptionId": "sub_1RxoFm4CXyekys3epDc8jzxr",
+    "systemInfo": {
+      "ipAddress": "::1",
+      "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/139.0.0.0 Safari/537.36",
+      "apiEndpoint": "/get-subscription-from-session",
+      "requestMethod": "POST"
+    },
+    "metadata": {
+      "sessionType": "subscription",
+      "subscriptionStatus": "active",
+      "paymentStatus": "paid",
+      "planName": "Email Accounts+Warmup inbox",
+      "interval": "1 month",
+      "refundInfo": null
+    }
+  },
+  {
+    "id": "1755698975172_8f3w9fe1d",
+    "timestamp": "2025-08-20T14:09:35.172Z",
+    "type": "subscription",
+    "userId": "4991",
+    "userEmail": "unknown",
+    "amount": 8,
+    "currency": "usd",
+    "status": "completed",
+    "stripeSessionId": "cs_test_b15AaAfZMvHxHGocrY8RP3sszbFnjwvrzequPQwZdZMkTwYkEdaHkrLoUz",
+    "paymentIntentId": null,
+    "customerId": "cus_Su0aiIykeDji1p",
+    "invoiceId": "in_1RyChV4CXyekys3ecLzpG8Bd",
+    "hostedInvoiceUrl": "https://invoice.stripe.com/i/acct_1RBTlb4CXyekys3e/test_YWNjdF8xUkJUbGI0Q1h5ZWt5czNlLF9TdTBpelJ0emFiUVVDSjh0RUYwVEMwVU4xcmxnbzJYLDE0NjIzOTc3NA0200eU6Royij?s=ap",
+    "invoicePdf": "https://pay.stripe.com/invoice/acct_1RBTlb4CXyekys3e/test_YWNjdF8xUkJUbGI0Q1h5ZWt5czNlLF9TdTBpelJ0emFiUVVDSjh0RUYwVEMwVU4xcmxnbzJYLDE0NjIzOTc3NA0200eU6Royij/pdf?s=ap",
+    "subscriptionId": "sub_1RyChX4CXyekys3e2kyHyYQk",
+    "systemInfo": {
+      "ipAddress": "::1",
+      "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/139.0.0.0 Safari/537.36",
+      "apiEndpoint": "/get-subscription-from-session",
+      "requestMethod": "POST"
+    },
+    "metadata": {
+      "sessionType": "subscription",
+      "subscriptionStatus": "active",
+      "paymentStatus": "paid",
+      "planName": "Email Accounts+Warmup inbox",
+      "interval": "1 month",
+      "refundInfo": null
+    }
+  },
+  {
+    "id": "1755698975203_ajlg51n7g",
+    "timestamp": "2025-08-20T14:09:35.203Z",
+    "type": "subscription",
+    "userId": "4991",
+    "userEmail": "unknown",
+    "amount": 8,
+    "currency": "usd",
+    "status": "completed",
+    "stripeSessionId": "cs_test_b15AaAfZMvHxHGocrY8RP3sszbFnjwvrzequPQwZdZMkTwYkEdaHkrLoUz",
+    "paymentIntentId": null,
+    "customerId": "cus_Su0aiIykeDji1p",
+    "invoiceId": "in_1RyChV4CXyekys3ecLzpG8Bd",
+    "hostedInvoiceUrl": "https://invoice.stripe.com/i/acct_1RBTlb4CXyekys3e/test_YWNjdF8xUkJUbGI0Q1h5ZWt5czNlLF9TdTBpelJ0emFiUVVDSjh0RUYwVEMwVU4xcmxnbzJYLDE0NjIzOTc3NQ0200feMG04oD?s=ap",
+    "invoicePdf": "https://pay.stripe.com/invoice/acct_1RBTlb4CXyekys3e/test_YWNjdF8xUkJUbGI0Q1h5ZWt5czNlLF9TdTBpelJ0emFiUVVDSjh0RUYwVEMwVU4xcmxnbzJYLDE0NjIzOTc3NQ0200feMG04oD/pdf?s=ap",
+    "subscriptionId": "sub_1RyChX4CXyekys3e2kyHyYQk",
+    "systemInfo": {
+      "ipAddress": "::1",
+      "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/139.0.0.0 Safari/537.36",
+      "apiEndpoint": "/get-subscription-from-session",
+      "requestMethod": "POST"
+    },
+    "metadata": {
+      "sessionType": "subscription",
+      "subscriptionStatus": "active",
+      "paymentStatus": "paid",
+      "planName": "Email Accounts+Warmup inbox",
+      "interval": "1 month",
+      "refundInfo": null
+    }
+  },
+  {
+    "id": "1755699743333_olc0lq6ys",
+    "timestamp": "2025-08-20T14:22:23.333Z",
+    "type": "subscription",
+    "userId": "4991",
+    "userEmail": "unknown",
+    "amount": 8,
+    "currency": "usd",
+    "status": "completed",
+    "stripeSessionId": "cs_test_b1QYkUDt5udkQZj4ymQPkd95zZgdufd5oKZLiQ3FwCfySuUZYNFRRqIKcP",
+    "paymentIntentId": null,
+    "customerId": "cus_Su0aiIykeDji1p",
+    "invoiceId": "in_1RyCu44CXyekys3ea6RyxdPS",
+    "hostedInvoiceUrl": "https://invoice.stripe.com/i/acct_1RBTlb4CXyekys3e/test_YWNjdF8xUkJUbGI0Q1h5ZWt5czNlLF9TdTB2bjdTY1ZRbjhWOVRld054dm9ZSk1tQ3JFU0lRLDE0NjI0MDU0Mw0200aJHItLyJ?s=ap",
+    "invoicePdf": "https://pay.stripe.com/invoice/acct_1RBTlb4CXyekys3e/test_YWNjdF8xUkJUbGI0Q1h5ZWt5czNlLF9TdTB2bjdTY1ZRbjhWOVRld054dm9ZSk1tQ3JFU0lRLDE0NjI0MDU0Mw0200aJHItLyJ/pdf?s=ap",
+    "subscriptionId": "sub_1RyCu64CXyekys3eIklHe8Rj",
+    "systemInfo": {
+      "ipAddress": "::1",
+      "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/139.0.0.0 Safari/537.36",
+      "apiEndpoint": "/get-subscription-from-session",
+      "requestMethod": "POST"
+    },
+    "metadata": {
+      "sessionType": "subscription",
+      "subscriptionStatus": "active",
+      "paymentStatus": "paid",
+      "planName": "Email Accounts+Warmup inbox",
+      "interval": "1 month",
+      "refundInfo": null
+    }
+  },
+  {
+    "id": "1755699744287_wmib3g2dh",
+    "timestamp": "2025-08-20T14:22:24.287Z",
+    "type": "subscription",
+    "userId": "4991",
+    "userEmail": "unknown",
+    "amount": 8,
+    "currency": "usd",
+    "status": "completed",
+    "stripeSessionId": "cs_test_b1QYkUDt5udkQZj4ymQPkd95zZgdufd5oKZLiQ3FwCfySuUZYNFRRqIKcP",
+    "paymentIntentId": null,
+    "customerId": "cus_Su0aiIykeDji1p",
+    "invoiceId": "in_1RyCu44CXyekys3ea6RyxdPS",
+    "hostedInvoiceUrl": "https://invoice.stripe.com/i/acct_1RBTlb4CXyekys3e/test_YWNjdF8xUkJUbGI0Q1h5ZWt5czNlLF9TdTB2bjdTY1ZRbjhWOVRld054dm9ZSk1tQ3JFU0lRLDE0NjI0MDU0Mw0200aJHItLyJ?s=ap",
+    "invoicePdf": "https://pay.stripe.com/invoice/acct_1RBTlb4CXyekys3e/test_YWNjdF8xUkJUbGI0Q1h5ZWt5czNlLF9TdTB2bjdTY1ZRbjhWOVRld054dm9ZSk1tQ3JFU0lRLDE0NjI0MDU0Mw0200aJHItLyJ/pdf?s=ap",
+    "subscriptionId": "sub_1RyCu64CXyekys3eIklHe8Rj",
+    "systemInfo": {
+      "ipAddress": "::1",
+      "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/139.0.0.0 Safari/537.36",
+      "apiEndpoint": "/get-subscription-from-session",
+      "requestMethod": "POST"
+    },
+    "metadata": {
+      "sessionType": "subscription",
+      "subscriptionStatus": "active",
+      "paymentStatus": "paid",
+      "planName": "Email Accounts+Warmup inbox",
+      "interval": "1 month",
+      "refundInfo": null
+    }
+  },
+  {
+    "id": "1755704950550_f88xmlm32",
+    "timestamp": "2025-08-20T15:49:10.550Z",
+    "type": "subscription",
+    "userId": "4991",
+    "userEmail": "unknown",
+    "amount": 8,
+    "currency": "usd",
+    "status": "completed",
+    "stripeSessionId": "cs_test_b1xAEdJqoUHnL4urcwtTszcUGxzHEVI5WZh0oDFi9vHSZ9VRA9BAUFu3yW",
+    "paymentIntentId": null,
+    "customerId": "cus_Su2JNSlbFeogZr",
+    "invoiceId": "in_1RyEFe4CXyekys3ebmT0ie6E",
+    "hostedInvoiceUrl": "https://invoice.stripe.com/i/acct_1RBTlb4CXyekys3e/test_YWNjdF8xUkJUbGI0Q1h5ZWt5czNlLF9TdTJLa0ljWjd6THgxVDlEakVoRmo5RkFta1lpd0N4LDE0NjI0NTc1MA0200pB0dytRN?s=ap",
+    "invoicePdf": "https://pay.stripe.com/invoice/acct_1RBTlb4CXyekys3e/test_YWNjdF8xUkJUbGI0Q1h5ZWt5czNlLF9TdTJLa0ljWjd6THgxVDlEakVoRmo5RkFta1lpd0N4LDE0NjI0NTc1MA0200pB0dytRN/pdf?s=ap",
+    "subscriptionId": "sub_1RyEFg4CXyekys3e9rBwC34h",
+    "systemInfo": {
+      "ipAddress": "::1",
+      "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/139.0.0.0 Safari/537.36",
+      "apiEndpoint": "/get-subscription-from-session",
+      "requestMethod": "POST"
+    },
+    "metadata": {
+      "sessionType": "subscription",
+      "subscriptionStatus": "active",
+      "paymentStatus": "paid",
+      "planName": "Email Accounts+Warmup inbox",
+      "interval": "1 month",
+      "refundInfo": null
+    }
+  },
+  {
+    "id": "1755704950589_95s55q7gg",
+    "timestamp": "2025-08-20T15:49:10.589Z",
+    "type": "subscription",
+    "userId": "4991",
+    "userEmail": "unknown",
+    "amount": 8,
+    "currency": "usd",
+    "status": "completed",
+    "stripeSessionId": "cs_test_b1xAEdJqoUHnL4urcwtTszcUGxzHEVI5WZh0oDFi9vHSZ9VRA9BAUFu3yW",
+    "paymentIntentId": null,
+    "customerId": "cus_Su2JNSlbFeogZr",
+    "invoiceId": "in_1RyEFe4CXyekys3ebmT0ie6E",
+    "hostedInvoiceUrl": "https://invoice.stripe.com/i/acct_1RBTlb4CXyekys3e/test_YWNjdF8xUkJUbGI0Q1h5ZWt5czNlLF9TdTJLa0ljWjd6THgxVDlEakVoRmo5RkFta1lpd0N4LDE0NjI0NTc1MA0200pB0dytRN?s=ap",
+    "invoicePdf": "https://pay.stripe.com/invoice/acct_1RBTlb4CXyekys3e/test_YWNjdF8xUkJUbGI0Q1h5ZWt5czNlLF9TdTJLa0ljWjd6THgxVDlEakVoRmo5RkFta1lpd0N4LDE0NjI0NTc1MA0200pB0dytRN/pdf?s=ap",
+    "subscriptionId": "sub_1RyEFg4CXyekys3e9rBwC34h",
+    "systemInfo": {
+      "ipAddress": "::1",
+      "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/139.0.0.0 Safari/537.36",
+      "apiEndpoint": "/get-subscription-from-session",
+      "requestMethod": "POST"
+    },
+    "metadata": {
+      "sessionType": "subscription",
+      "subscriptionStatus": "active",
+      "paymentStatus": "paid",
+      "planName": "Email Accounts+Warmup inbox",
+      "interval": "1 month",
+      "refundInfo": null
+    }
+  },
+  {
+    "id": "1755705271667_nwilbfrgu",
+    "timestamp": "2025-08-20T15:54:31.667Z",
+    "type": "subscription",
+    "userId": "4991",
+    "userEmail": "unknown",
+    "amount": 12,
+    "currency": "usd",
+    "status": "completed",
+    "stripeSessionId": "cs_test_b1bLmPUmoWY8AARwHZPnqJysFa3kbE8bptptSQJS113c1YU91tXDAZtWqe",
+    "paymentIntentId": null,
+    "customerId": "cus_Su2JNSlbFeogZr",
+    "invoiceId": "in_1RyELD4CXyekys3eNB5jD2zs",
+    "hostedInvoiceUrl": "https://invoice.stripe.com/i/acct_1RBTlb4CXyekys3e/test_YWNjdF8xUkJUbGI0Q1h5ZWt5czNlLF9TdTJRcGlEbDY4WTNUZ2cyTFRxWjhzWkozMjl0OUZBLDE0NjI0NjA3MQ0200wUjRRQyE?s=ap",
+    "invoicePdf": "https://pay.stripe.com/invoice/acct_1RBTlb4CXyekys3e/test_YWNjdF8xUkJUbGI0Q1h5ZWt5czNlLF9TdTJRcGlEbDY4WTNUZ2cyTFRxWjhzWkozMjl0OUZBLDE0NjI0NjA3MQ0200wUjRRQyE/pdf?s=ap",
+    "subscriptionId": "sub_1RyELF4CXyekys3eOBYAEIuQ",
+    "systemInfo": {
+      "ipAddress": "::1",
+      "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/139.0.0.0 Safari/537.36",
+      "apiEndpoint": "/get-subscription-from-session",
+      "requestMethod": "POST"
+    },
+    "metadata": {
+      "sessionType": "subscription",
+      "subscriptionStatus": "active",
+      "paymentStatus": "paid",
+      "planName": "Email Accounts+Warmup inbox",
+      "interval": "1 month",
+      "refundInfo": null
+    }
+  },
+  {
+    "id": "1755705271688_3i4f6f9qf",
+    "timestamp": "2025-08-20T15:54:31.688Z",
+    "type": "subscription",
+    "userId": "4991",
+    "userEmail": "unknown",
+    "amount": 12,
+    "currency": "usd",
+    "status": "completed",
+    "stripeSessionId": "cs_test_b1bLmPUmoWY8AARwHZPnqJysFa3kbE8bptptSQJS113c1YU91tXDAZtWqe",
+    "paymentIntentId": null,
+    "customerId": "cus_Su2JNSlbFeogZr",
+    "invoiceId": "in_1RyELD4CXyekys3eNB5jD2zs",
+    "hostedInvoiceUrl": "https://invoice.stripe.com/i/acct_1RBTlb4CXyekys3e/test_YWNjdF8xUkJUbGI0Q1h5ZWt5czNlLF9TdTJRcGlEbDY4WTNUZ2cyTFRxWjhzWkozMjl0OUZBLDE0NjI0NjA3MQ0200wUjRRQyE?s=ap",
+    "invoicePdf": "https://pay.stripe.com/invoice/acct_1RBTlb4CXyekys3e/test_YWNjdF8xUkJUbGI0Q1h5ZWt5czNlLF9TdTJRcGlEbDY4WTNUZ2cyTFRxWjhzWkozMjl0OUZBLDE0NjI0NjA3MQ0200wUjRRQyE/pdf?s=ap",
+    "subscriptionId": "sub_1RyELF4CXyekys3eOBYAEIuQ",
+    "systemInfo": {
+      "ipAddress": "::1",
+      "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/139.0.0.0 Safari/537.36",
+      "apiEndpoint": "/get-subscription-from-session",
+      "requestMethod": "POST"
+    },
+    "metadata": {
+      "sessionType": "subscription",
+      "subscriptionStatus": "active",
+      "paymentStatus": "paid",
+      "planName": "Email Accounts+Warmup inbox",
+      "interval": "1 month",
+      "refundInfo": null
+    }
+  }
+]

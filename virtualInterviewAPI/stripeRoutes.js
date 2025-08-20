@@ -52,11 +52,24 @@ const subscriptionSchema = new mongoose.Schema({
     currentPeriodEnd: { type: Date, required: true },
     refundAmount: { type: Number, default: 0 },
     refundDate: { type: Date, default: null },
+    defaultPaymentMethodId: { type: String, default: null },
     createdAt: { type: Date, default: Date.now }
 }, { collection: 'user_subscriptions' });
 
 
 const Subscription = mongoose.model('Subscription', subscriptionSchema);
+
+// Customer model for managing users who have cards but no subscriptions yet
+const customerSchema = new mongoose.Schema({
+    userId: { type: String, required: true, unique: true },
+    customerId: { type: String, required: true },
+    app: { type: String, default: 'default' },
+    email: { type: String, required: true },
+    defaultPaymentMethodId: { type: String, default: null },
+    createdAt: { type: Date, default: Date.now }
+}, { collection: 'customers' });
+
+const Customer = mongoose.model('Customer', customerSchema);
 
 
 
@@ -108,72 +121,32 @@ router.post(
 
                     await connectToMongoDB();
 
-                    // Check if this is a subscription payment or one-time payment
+                    // Skip one-time payments
                     if (!subscriptionId) {
-                        // This is a one-time payment (e.g., domain purchase)
-                        console.log('[checkout.session.completed] One-time payment detected, skipping subscription processing');
-
-                        // You might want to store one-time payment records in a different collection
-                        // For now, we'll just log it and continue
-                        console.log('[checkout.session.completed] One-time payment details:', {
-                            sessionId,
-                            userId,
-                            amount: amount_total / 100,
-                            currency,
-                            paymentStatus: payment_status,
-                            purchaseType: metadata?.purchaseType || 'unknown'
-                        });
+                        console.log('[checkout.session.completed] One-time payment detected');
                         break;
                     }
 
-                    // Retrieve the complete subscription object from Stripe
+                    // Retrieve full subscription object
                     let stripeSubscription;
                     try {
                         stripeSubscription = await stripe.subscriptions.retrieve(subscriptionId);
-                        console.log('checkout.session.completed event data:', stripeSubscription);
                     } catch (subscriptionError) {
                         console.error(`[stripeRoutes.js] Failed to retrieve subscription ${subscriptionId}:`, subscriptionError.message);
-                        // Log the error but don't fail the webhook - this could be a temporary Stripe issue
-                        console.log('[stripeRoutes.js] Webhook will continue processing other events');
                         break;
                     }
 
                     // Compute current period dates
-                    let startUnix =
-                        stripeSubscription.current_period_start || stripeSubscription.start_date;
-                    let endUnix = stripeSubscription.current_period_end;
-                    if (!endUnix && startUnix) {
-                        // Fallback computation based on plan interval if needed
-                        const subscriptionItem = stripeSubscription.items.data[0];
-                        const recurring = subscriptionItem.price.recurring;
-                        const interval = recurring?.interval || 'month';
-                        const intervalCount = recurring?.interval_count || 1;
-                        let startDate = new Date(startUnix * 1000);
-                        if (interval === 'year') {
-                            startDate.setFullYear(startDate.getFullYear() + intervalCount);
-                        } else if (interval === 'month') {
-                            startDate.setMonth(startDate.getMonth() + intervalCount);
-                        } else if (interval === 'week') {
-                            startDate.setDate(startDate.getDate() + 7 * intervalCount);
-                        } else if (interval === 'day') {
-                            startDate.setDate(startDate.getDate() + intervalCount);
-                        } else {
-                            // Fallback: add 30 days
-                            startDate = new Date(startDate.getTime() + 30 * 24 * 60 * 60 * 1000);
-                        }
-                        endUnix = Math.floor(startDate.getTime() / 1000);
-                    }
+                    const startUnix = stripeSubscription.current_period_start || stripeSubscription.start_date;
+                    const endUnix = stripeSubscription.current_period_end;
 
-                    // Convert Unix timestamps to US-formatted date strings
                     const currentPeriodStartFormatted = new Date(startUnix * 1000).toLocaleString('en-US');
                     const currentPeriodEndFormatted = new Date(endUnix * 1000).toLocaleString('en-US');
 
-                    // Retrieve plan details from subscription items
                     const price = stripeSubscription.items.data[0]?.price;
                     const product = price && (await stripe.products.retrieve(price.product));
                     const planName = (product && product.name) || price.nickname || 'Unknown Plan';
 
-                    // Build a comprehensive data object to store—all fields as desired
                     const subscriptionData = {
                         userId,
                         customerId: customer,
@@ -201,41 +174,101 @@ router.post(
                         interval: price?.recurring?.interval || null,
                         intervalCount: price?.recurring?.interval_count || null,
                         lastInvoice: stripeSubscription.latest_invoice || null,
-                        // Add any additional metadata if necessary (e.g., discount details, custom fields, etc.)
                         metadata: stripeSubscription.metadata
                     };
 
-                    console.log('[checkout.session.completed] Raw Stripe period dates:', {
-                        current_period_start: startUnix,
-                        current_period_end: endUnix,
-                        subscriptionId: stripeSubscription.id,
-                        customerId: customer,
-                        eventId: event.id
-                    });
-
+                    // ✅ Upsert instead of insert
                     try {
-                        await Subscription.create(subscriptionData);
-                        console.log(`[stripeRoutes.js] Subscription stored for user ${userId}`);
+                        await Subscription.updateOne(
+                            { subscriptionId },
+                            { $set: subscriptionData },
+                            { upsert: true }
+                        );
+                        console.log(`[stripeRoutes.js] Subscription upserted for user ${userId}`);
                     } catch (dbError) {
                         console.error('[stripeRoutes.js] Database save error:', dbError);
-                        // Continue processing even if database save fails.
                     }
                     break;
                 }
 
-                // In your invoice.payment_succeeded and customer.subscription.updated cases,
-                // you can likewise extract additional fields from the event data and update your document.
-                // For example, for invoice.payment_succeeded you could extract:
-                // - The invoice's effective period (start and end)
-                // - The hosted_invoice_url
-                // - Payment details from the invoice lines.
-                // And then update the Subscription record accordingly.
+                // case 'invoice.payment_succeeded': {
+                //     const invoice = event.data.object;
+                //     const subscriptionId = invoice.subscription;
+                //     if (subscriptionId) {
+                //         await connectToMongoDB();
+
+                //         const lineItem = invoice.lines.data[0];
+                //         let startUnix = lineItem?.period?.start;
+                //         let endUnix = lineItem?.period?.end;
+                //         const currentPeriodStartFormatted = startUnix
+                //             ? new Date(startUnix * 1000).toLocaleString('en-US')
+                //             : new Date().toLocaleString('en-US');
+                //         const currentPeriodEndFormatted = endUnix
+                //             ? new Date(endUnix * 1000).toLocaleString('en-US')
+                //             : new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toLocaleString('en-US');
+
+                //         try {
+                //             await Subscription.updateOne(
+                //                 { subscriptionId },
+                //                 {
+                //                     paymentStatus: 'paid',
+                //                     currentPeriodStart: currentPeriodStartFormatted,
+                //                     currentPeriodEnd: currentPeriodEndFormatted,
+                //                     // You might also store invoice-related data here:
+                //                     lastInvoice: invoice.id,
+                //                     hostedInvoiceUrl: invoice.hosted_invoice_url
+                //                 }
+                //             );
+                //             console.log(`[stripeRoutes.js] Updated subscription ${subscriptionId} for paid invoice`);
+                //         } catch (dbError) {
+                //             console.error('[stripeRoutes.js] Database update error:', dbError);
+                //         }
+                //     }
+                //     break;
+                // }
                 case 'invoice.payment_succeeded': {
                     const invoice = event.data.object;
                     const subscriptionId = invoice.subscription;
+
                     if (subscriptionId) {
                         await connectToMongoDB();
 
+                        // Retrieve subscription with metadata
+                        const subscription = await stripe.subscriptions.retrieve(subscriptionId, {
+                            expand: ['items.data.price.product'],
+                        });
+                        const currentPriceId = subscription.items.data[0]?.price?.id;
+                        const appFromMetadata = subscription.metadata?.app;
+
+                        // Define your combo and $4 plan price IDs
+                        const COMBO_MONTHLY_PRICE_ID = process.env.STRIPE_COMBO_MONTHLY; // $19
+                        const EMAIL_MONTHLY_PRICE_ID = process.env.STRIPE_EMAIL_MONTHLY; // $4
+
+                        const COMBO_YEARLY_PRICE_ID = process.env.STRIPE_COMBO_YEARLY; // $55
+                        const EMAIL_YEARLY_PRICE_ID = process.env.STRIPE_EMAIL_YEARLY; // $40
+
+                        if (appFromMetadata === "kampaignai") {
+                            // monthly downgrade
+                            if (currentPriceId === COMBO_MONTHLY_PRICE_ID) {
+                                await stripe.subscriptions.update(subscriptionId, {
+                                    items: [{ id: subscription.items.data[0].id, price: EMAIL_MONTHLY_PRICE_ID }],
+                                    billing_cycle_anchor: 'unchanged',
+                                    proration_behavior: 'none',
+                                });
+                            }
+
+                            // yearly downgrade
+                            if (currentPriceId === COMBO_YEARLY_PRICE_ID) {
+                                await stripe.subscriptions.update(subscriptionId, {
+                                    items: [{ id: subscription.items.data[0].id, price: EMAIL_YEARLY_PRICE_ID }],
+                                    billing_cycle_anchor: 'unchanged',
+                                    proration_behavior: 'none',
+                                });
+                            }
+                        }
+
+
+                        // Your existing DB update logic (unaffected)
                         const lineItem = invoice.lines.data[0];
                         let startUnix = lineItem?.period?.start;
                         let endUnix = lineItem?.period?.end;
@@ -246,32 +279,23 @@ router.post(
                             ? new Date(endUnix * 1000).toLocaleString('en-US')
                             : new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toLocaleString('en-US');
 
-                        try {
-                            await Subscription.updateOne(
-                                { subscriptionId },
-                                {
-                                    paymentStatus: 'paid',
-                                    currentPeriodStart: currentPeriodStartFormatted,
-                                    currentPeriodEnd: currentPeriodEndFormatted,
-                                    // You might also store invoice-related data here:
-                                    lastInvoice: invoice.id,
-                                    hostedInvoiceUrl: invoice.hosted_invoice_url
-                                }
-                            );
-                            console.log(`[stripeRoutes.js] Updated subscription ${subscriptionId} for paid invoice`);
-                        } catch (dbError) {
-                            console.error('[stripeRoutes.js] Database update error:', dbError);
-                        }
+                        await Subscription.updateOne(
+                            { subscriptionId },
+                            {
+                                paymentStatus: 'paid',
+                                currentPeriodStart: currentPeriodStartFormatted,
+                                currentPeriodEnd: currentPeriodEndFormatted,
+                                lastInvoice: invoice.id,
+                                hostedInvoiceUrl: invoice.hosted_invoice_url,
+                            }
+                        );
+
+                        console.log(`[stripeRoutes.js] Updated subscription ${subscriptionId} for paid invoice`);
                     }
                     break;
                 }
 
-                // Other event types remain similar – extend them as needed:
-                case 'customer.subscription.updated': {
-                    // Extract and update additional fields as shown above.
-                    // ...
-                    break;
-                }
+
                 case 'customer.subscription.deleted': {
                     const subscription = event.data.object;
                     try {
@@ -300,13 +324,85 @@ router.post(
                                     $set: {
                                         paymentStatus: 'refunded',
                                         refundAmount: refund.amount / 100,
-                                        refundDate: new Date(refund.created * 1000)
+                                        refundDate: new Date(refund.created * 1000),
+                                        refundReason: refund.reason || null
                                     }
                                 }
                             );
+
                             console.log(`[stripeRoutes.js] Refund recorded for subscription ${subscriptionId}`);
                         }
                     }
+                    break;
+                }
+
+                case 'customer.subscription.created': {
+                    const subscription = event.data.object;
+                    await connectToMongoDB();
+
+                    const price = subscription.items.data[0]?.price;
+                    const product = price && (await stripe.products.retrieve(price.product));
+                    const planName = (product && product.name) || price.nickname || 'Unknown Plan';
+
+                    const subscriptionData = {
+                        userId: subscription.metadata?.userId || 'unknown',
+                        customerId: subscription.customer,
+                        subscriptionId: subscription.id,
+                        status: subscription.status,
+                        amount: price?.unit_amount ? price.unit_amount / 100 : null,
+                        currency: price?.currency,
+                        planName,
+                        currentPeriodStart: new Date(subscription.current_period_start * 1000).toLocaleString('en-US'),
+                        currentPeriodEnd: new Date(subscription.current_period_end * 1000).toLocaleString('en-US'),
+                        planId: price?.id || null,
+                        productId: price?.product || null,
+                        interval: price?.recurring?.interval || null,
+                        intervalCount: price?.recurring?.interval_count || null,
+                        created: new Date(subscription.created * 1000).toLocaleString('en-US'),
+                        trialStart: subscription.trial_start ? new Date(subscription.trial_start * 1000).toLocaleString('en-US') : null,
+                        trialEnd: subscription.trial_end ? new Date(subscription.trial_end * 1000).toLocaleString('en-US') : null,
+                        metadata: subscription.metadata
+                    };
+
+                    await Subscription.updateOne(
+                        { subscriptionId: subscription.id },
+                        { $set: subscriptionData },
+                        { upsert: true }
+                    );
+
+                    console.log(`[stripeRoutes.js] Subscription created: ${subscription.id}`);
+                    break;
+                }
+
+                case 'customer.subscription.updated': {
+                    const subscription = event.data.object;
+                    await connectToMongoDB();
+
+                    const price = subscription.items.data[0]?.price;
+                    const product = price && (await stripe.products.retrieve(price.product));
+                    const planName = (product && product.name) || price.nickname || 'Unknown Plan';
+
+                    const updateData = {
+                        status: subscription.status,
+                        currentPeriodStart: new Date(subscription.current_period_start * 1000).toLocaleString('en-US'),
+                        currentPeriodEnd: new Date(subscription.current_period_end * 1000).toLocaleString('en-US'),
+                        planName,
+                        planId: price?.id || null,
+                        productId: price?.product || null,
+                        interval: price?.recurring?.interval || null,
+                        intervalCount: price?.recurring?.interval_count || null,
+                        trialStart: subscription.trial_start ? new Date(subscription.trial_start * 1000).toLocaleString('en-US') : null,
+                        trialEnd: subscription.trial_end ? new Date(subscription.trial_end * 1000).toLocaleString('en-US') : null,
+                        metadata: subscription.metadata
+                    };
+
+                    await Subscription.updateOne(
+                        { subscriptionId: subscription.id },
+                        { $set: updateData },
+                        { upsert: true }
+                    );
+
+                    console.log(`[stripeRoutes.js] Subscription updated: ${subscription.id}`);
                     break;
                 }
 
@@ -323,7 +419,151 @@ router.post(
     }
 );
 
+router.post('/create-payment-intent', async (req, res) => {
+    try {
+        const {
+            userId,
+            domainName,
+            unitPrice,
+            currency,
+            // Contact information for registration
+            firstName,
+            lastName,
+            email,
+            phone,
+            address1,
+            address2 = '',
+            city,
+            stateProvince,
+            country,
+            postalCode,
+            years = '1',
+            enablePrivacy = false,
+            // quantity = 1
+        } = req.body;
 
+        console.log('Domain payment intent request received:', {
+            userId: userId,
+            domainName: domainName,
+            unitPrice: unitPrice,
+            currency: currency,
+            hasContactInfo: !!(firstName && lastName && email),
+            timestamp: new Date().toISOString()
+        });
+
+        // Validate inputs
+        if (!userId || !domainName || !unitPrice) {
+            return res.status(400).json({ error: 'userId, domainName, and unitPrice are required' });
+        }
+
+        // Validate contact information
+        if (!firstName || !lastName || !email || !phone || !address1 || !city || !stateProvince || !country || !postalCode) {
+            return res.status(400).json({
+                error: 'Complete contact information is required for domain registration',
+                required: ['firstName', 'lastName', 'email', 'phone', 'address1', 'city', 'stateProvince', 'country', 'postalCode']
+            });
+        }
+
+        const price = Number(unitPrice);
+        if (isNaN(price) || price <= 0) {
+            return res.status(400).json({ error: 'Invalid price amount' });
+        }
+
+        // Store all metadata (including contact info)
+        const metadata = {
+            userId,
+            domainName,
+            purchaseType: 'domain',
+            years: years.toString(),
+            enablePrivacy: enablePrivacy.toString(),
+            // Contact information
+            firstName,
+            lastName,
+            email,
+            phone,
+            address1,
+            address2,
+            city,
+            stateProvince,
+            country,
+            postalCode
+        };
+
+        // Create a dynamic product for this domain
+        const product = await stripe.products.create({
+            name: `Domain: ${domainName}`,
+            description: `Registration for ${domainName}`,
+            metadata: { type: 'domain', userId, domainName }
+        });
+
+        // Create Checkout Session (same as old API)
+        const session = await stripe.checkout.sessions.create({
+            payment_method_types: ['card'],
+            mode: 'payment',
+            line_items: [{
+                price_data: {
+                    currency: currency || 'usd',
+                    product_data: {
+                        name: `Domain: ${domainName}`,
+                        description: `Registration for ${domainName}`,
+                        metadata: { type: 'domain', userId, domainName }
+                    },
+                    unit_amount: Math.round(price * 100),
+                },
+                quantity: 1
+            }],
+            success_url: 'https://kampaign.onepgr.com/domain-success?session_id={CHECKOUT_SESSION_ID}',
+            cancel_url: 'https://kampaign.onepgr.com/cancel',
+            metadata: metadata,
+            customer_creation: 'always'
+        });
+
+        // Log the domain purchase initiation
+        try {
+            fileLogger.logDomainPurchase({
+                userId: userId,
+                userEmail: email,
+                domainName: domainName,
+                amount: price,
+                currency: currency || 'usd',
+                status: 'pending',
+                stripeSessionId: session.id,
+                registrationYears: parseInt(years),
+                enablePrivacy: enablePrivacy,
+                contactInfo: {
+                    firstName,
+                    lastName,
+                    email,
+                    phone,
+                    address1,
+                    address2,
+                    city,
+                    stateProvince,
+                    country,
+                    postalCode
+                },
+                ipAddress: req.ip,
+                userAgent: req.get('User-Agent'),
+                apiEndpoint: '/create-payment-intent',
+                requestMethod: 'POST',
+                metadata: {
+                    productId: product.id,
+                    years: years.toString(),
+                    enablePrivacy: enablePrivacy.toString()
+                }
+            });
+        } catch (logError) {
+            console.error('Error logging domain purchase initiation:', logError);
+            // Don't fail the request if logging fails
+        }
+
+        res.json({ url: session.url, sessionId: session.id });
+
+    } catch (err) {
+        console.error("Stripe error:", err);
+        res.status(500).json({ error: "Payment failed. Please try again." });
+    }
+});
 
 router.post('/create-checkout-session', async (req, res) => {
     try {
@@ -1165,6 +1405,7 @@ router.get('/users/:userId/subscriptions', async (req, res) => {
                 // Build and return the formatted subscription details
                 return {
                     id: stripeSub.id,
+                    customerId: stripeSub.customer.id,
                     status: stripeSub.status,
                     plan: {
                         id: price.id,
@@ -1174,7 +1415,9 @@ router.get('/users/:userId/subscriptions', async (req, res) => {
                         interval: price.recurring
                             ? `${price.recurring.interval_count} ${price.recurring.interval}`
                             : 'one-time',
-                        planType: price.metadata["Plan"] || price.metadata["plan"] || "standard"
+                        planType: price.metadata["Plan"] || price.metadata["plan"] || "standard",
+                        quantity: priceItem.quantity || 1,
+                        totalAmount: (price.unit_amount / 100) * (priceItem.quantity || 1)
                     },
                     billing: {
                         nextBillingDate: safeDateConvert(currentPeriodEnd),
@@ -1842,14 +2085,54 @@ router.get('/invoice/:paymentIntentId', async (req, res) => {
 
 
 
+// router.post('/create-checkout-session-by-app', async (req, res) => {
+//     try {
+//         const { userId, priceId, app, quantity = 1 } = req.body;
+
+//         // 1️⃣ Validate app URLs
+//         const appUrlMap = {
+//             kampaignai: 'https://kampaign.onepgr.com',
+//             // kampaignai: 'http://localhost:4200',
+//             gps: 'https://gps.onepgr.com',
+//             getsalesgpt: 'https://sales.onepgr.com',
+//         };
+
+//         if (!app || !appUrlMap[app]) {
+//             return res.status(400).json({ error: 'Invalid or missing app parameter' });
+//         }
+
+//         // 2️⃣ Validate quantity
+//         if (!quantity || quantity < 1) {
+//             return res.status(400).json({ error: 'Quantity must be at least 1' });
+//         }
+
+//         const sessionPayload = {
+//             mode: 'subscription',
+//             payment_method_types: ['card'],
+//             line_items: [{ price: priceId, quantity: quantity }],
+//             success_url: `${appUrlMap[app]}/success?session_id={CHECKOUT_SESSION_ID}`,
+//             cancel_url: `${appUrlMap[app]}/cancel`,
+//             metadata: { userId, app }
+//         };
+
+//         const session = await stripe.checkout.sessions.create(sessionPayload);
+//         res.json({ url: session.url });
+
+//     } catch (err) {
+//         console.error("Stripe error:", err);
+//         res.status(500).json({ error: err.message });
+//     }
+// });
+
+// Buy/subscribe using saved card if available, otherwise fall back to Checkout
 router.post('/create-checkout-session-by-app', async (req, res) => {
     try {
         const { userId, priceId, app, quantity = 1 } = req.body;
 
-        // 1️⃣ Validate app URLs
+        // 1) App URL map + validation
         const appUrlMap = {
-            kampaignai: 'https://kampaign.onepgr.com',
-            // kampaignai: 'http://localhost:4200',
+            // kampaignai: 'https://kampaign.onepgr.com',
+            kampaignai: 'http://localhost:4200',
             gps: 'https://gps.onepgr.com',
             getsalesgpt: 'https://sales.onepgr.com',
         };
@@ -1857,177 +2140,114 @@ router.post('/create-checkout-session-by-app', async (req, res) => {
         if (!app || !appUrlMap[app]) {
             return res.status(400).json({ error: 'Invalid or missing app parameter' });
         }
-
-        // 2️⃣ Validate quantity
+        if (!priceId) {
+            return res.status(400).json({ error: 'Missing priceId' });
+        }
         if (!quantity || quantity < 1) {
             return res.status(400).json({ error: 'Quantity must be at least 1' });
         }
 
+        await connectToMongoDB();
+
+        // 2) Find customer record for user (separate from subscriptions)
+        let customerRecord = await Customer.findOne({ userId });
+
+        if (!customerRecord) {
+            console.log(`No customer record found for user ${userId} - will create new customer during checkout`);
+        } else {
+            console.log(`Found existing customer ${customerRecord.customerId} for user ${userId}`);
+        }
+
+        const customerId = customerRecord?.customerId || null;
+
+        // Log for debugging
+        if (customerId) {
+            console.log(`Found existing customer ${customerId} for user ${userId}`);
+        } else {
+            console.log(`No existing customer found for user ${userId}, will create new one`);
+        }
+
+        // No need for auto-consolidation with separate customer management
+
+        // 3) Always create Checkout session
         const sessionPayload = {
             mode: 'subscription',
             payment_method_types: ['card'],
-            line_items: [{ price: priceId, quantity: quantity }],
+            line_items: [{ price: priceId, quantity }],
             success_url: `${appUrlMap[app]}/success?session_id={CHECKOUT_SESSION_ID}`,
             cancel_url: `${appUrlMap[app]}/cancel`,
-            metadata: { userId, app }
+            metadata: { userId, app },
+            allow_promotion_codes: true, // optional
         };
 
-        const session = await stripe.checkout.sessions.create(sessionPayload);
-        res.json({ url: session.url });
+        // If returning customer, attach them so saved cards show up
+        if (customerId) {
+            sessionPayload.customer = customerId;
+        }
 
+        const session = await stripe.checkout.sessions.create(sessionPayload);
+
+        // Store checkout session info for tracking
+        if (customerId) {
+            await Customer.updateOne(
+                { userId },
+                { $set: { lastCheckoutSessionId: session.id } }
+            );
+        }
+
+        return res.json({
+            mode: 'checkout',
+            url: session.url,
+        });
     } catch (err) {
-        console.error("Stripe error:", err);
+        console.error('Stripe error:', err);
         res.status(500).json({ error: err.message });
     }
 });
 
-
-router.post('/create-payment-intent', async (req, res) => {
+// Utility function to consolidate duplicate customer IDs for a user
+async function consolidateCustomerIds(userId) {
     try {
-        const {
-            userId,
-            domainName,
-            unitPrice,
-            currency,
-            // Contact information for registration
-            firstName,
-            lastName,
-            email,
-            phone,
-            address1,
-            address2 = '',
-            city,
-            stateProvince,
-            country,
-            postalCode,
-            years = '1',
-            enablePrivacy = false,
-            // quantity = 1
-        } = req.body;
+        const allUserRecords = await Subscription.find({ userId });
 
-        console.log('Domain payment intent request received:', {
-            userId: userId,
-            domainName: domainName,
-            unitPrice: unitPrice,
-            currency: currency,
-            hasContactInfo: !!(firstName && lastName && email),
-            timestamp: new Date().toISOString()
-        });
-
-        // Validate inputs
-        if (!userId || !domainName || !unitPrice) {
-            return res.status(400).json({ error: 'userId, domainName, and unitPrice are required' });
+        if (allUserRecords.length <= 1) {
+            return { message: 'No duplicates found' };
         }
 
-        // Validate contact information
-        if (!firstName || !lastName || !email || !phone || !address1 || !city || !stateProvince || !country || !postalCode) {
-            return res.status(400).json({
-                error: 'Complete contact information is required for domain registration',
-                required: ['firstName', 'lastName', 'email', 'phone', 'address1', 'city', 'stateProvince', 'country', 'postalCode']
-            });
+        // Find the record with the most recent customerId (or any valid customerId)
+        const recordsWithCustomerId = allUserRecords.filter(record => record.customerId);
+
+        if (recordsWithCustomerId.length === 0) {
+            return { message: 'No records with customerId found' };
         }
 
-        const price = Number(unitPrice);
-        if (isNaN(price) || price <= 0) {
-            return res.status(400).json({ error: 'Invalid price amount' });
-        }
+        // Use the most recent record with customerId as the primary
+        const primaryRecord = recordsWithCustomerId.sort((a, b) =>
+            new Date(b.createdAt) - new Date(a.createdAt)
+        )[0];
 
-        // Store all metadata (including contact info)
-        const metadata = {
-            userId,
-            domainName,
-            purchaseType: 'domain',
-            years: years.toString(),
-            enablePrivacy: enablePrivacy.toString(),
-            // Contact information
-            firstName,
-            lastName,
-            email,
-            phone,
-            address1,
-            address2,
-            city,
-            stateProvince,
-            country,
-            postalCode
+        const primaryCustomerId = primaryRecord.customerId;
+
+        // Update all other records to use the primary customerId
+        const updateResult = await Subscription.updateMany(
+            { userId, customerId: { $ne: primaryCustomerId } },
+            { $set: { customerId: primaryCustomerId } }
+        );
+
+        console.log(`Consolidated ${updateResult.modifiedCount} records for user ${userId} to use customerId: ${primaryCustomerId}`);
+
+        return {
+            message: 'Customer IDs consolidated successfully',
+            primaryCustomerId,
+            updatedRecords: updateResult.modifiedCount,
+            totalRecords: allUserRecords.length
         };
 
-                // Create a dynamic product for this domain
-        const product = await stripe.products.create({
-            name: `Domain: ${domainName}`,
-            description: `Registration for ${domainName}`,
-            metadata: { type: 'domain', userId, domainName }
-        });
-
-        // Create Checkout Session (same as old API)
-        const session = await stripe.checkout.sessions.create({
-            payment_method_types: ['card'],
-            mode: 'payment',
-            line_items: [{
-                price_data: {
-                    currency: currency || 'usd',
-                    product_data: {
-                        name: `Domain: ${domainName}`,
-                        description: `Registration for ${domainName}`,
-                        metadata: { type: 'domain', userId, domainName }
-                    },
-                    unit_amount: Math.round(price * 100),
-                },
-                quantity: 1
-            }],
-            success_url: 'https://kampaign.onepgr.com/domain-success?session_id={CHECKOUT_SESSION_ID}',
-            cancel_url: 'https://kampaign.onepgr.com/cancel',
-            metadata: metadata,
-            customer_creation: 'always'
-        });
-
-        // Log the domain purchase initiation
-        try {
-            fileLogger.logDomainPurchase({
-                userId: userId,
-                userEmail: email,
-                domainName: domainName,
-                amount: price,
-                currency: currency || 'usd',
-                status: 'pending',
-                stripeSessionId: session.id,
-                registrationYears: parseInt(years),
-                enablePrivacy: enablePrivacy,
-                contactInfo: {
-                    firstName,
-                    lastName,
-                    email,
-                    phone,
-                    address1,
-                    address2,
-                    city,
-                    stateProvince,
-                    country,
-                    postalCode
-                },
-                ipAddress: req.ip,
-                userAgent: req.get('User-Agent'),
-                apiEndpoint: '/create-payment-intent',
-                requestMethod: 'POST',
-                metadata: {
-                    productId: product.id,
-                    years: years.toString(),
-                    enablePrivacy: enablePrivacy.toString()
-                }
-            });
-        } catch (logError) {
-            console.error('Error logging domain purchase initiation:', logError);
-            // Don't fail the request if logging fails
-        }
-
-        res.json({ url: session.url, sessionId: session.id });
-
-    } catch (err) {
-        console.error("Stripe error:", err);
-        res.status(500).json({ error: "Payment failed. Please try again." });
+    } catch (error) {
+        console.error('Error consolidating customer IDs:', error);
+        throw error;
     }
-});
-
+}
 
 // Create a Billing Portal session to manage subscription
 router.post('/create-billing-portal-session-by-app', async (req, res) => {
@@ -2074,8 +2294,832 @@ router.post('/create-billing-portal-session-by-app', async (req, res) => {
         res.status(500).json({ error: error.message });
     }
 });
-//________________fetcing billing history API________________________
 
+
+//________________saved card with payment method API and auto debit monthly/yearly________________________
+
+// Sync endpoint for direct Stripe usage - keeps database and Stripe in sync
+router.post('/sync-payment-method', async (req, res) => {
+    try {
+        const { userId, paymentMethodId, email, app = 'default' } = req.body;
+
+        if (!userId || !paymentMethodId || !email) {
+            return res.status(400).json({
+                error: 'Missing required parameters: userId, paymentMethodId, and email'
+            });
+        }
+
+        await connectToMongoDB();
+
+        // Find or create customer record (separate from subscriptions)
+        let customerRecord = await Customer.findOne({ userId });
+        let customerId;
+
+        if (!customerRecord) {
+            // Create new customer in Stripe
+            const customer = await stripe.customers.create({
+                email,
+                metadata: { userId, app }
+            });
+            customerId = customer.id;
+
+            // Create customer record (NOT subscription record)
+            customerRecord = await Customer.create({
+                userId,
+                app,
+                customerId,
+                email,
+                createdAt: new Date()
+            });
+
+            console.log(`🆕 Created new customer ${customerId} for user ${userId}`);
+        } else {
+            customerId = customerRecord.customerId;
+            console.log(`✅ Found existing customer ${customerId} for user ${userId}`);
+        }
+
+        // Verify the payment method exists and belongs to this customer
+        let paymentMethod;
+        try {
+            paymentMethod = await stripe.paymentMethods.retrieve(paymentMethodId);
+
+            if (paymentMethod.customer && paymentMethod.customer !== customerId) {
+                // Payment method belongs to different customer, attach it to this customer
+                await stripe.paymentMethods.attach(paymentMethodId, {
+                    customer: customerId
+                });
+                console.log(`🔗 Attached payment method ${paymentMethodId} to customer ${customerId}`);
+            } else if (!paymentMethod.customer) {
+                // Payment method not attached to any customer, attach it
+                await stripe.paymentMethods.attach(paymentMethodId, {
+                    customer: customerId
+                });
+                console.log(`🔗 Attached payment method ${paymentMethodId} to customer ${customerId}`);
+            }
+        } catch (error) {
+            return res.status(400).json({
+                error: 'Invalid payment method ID or payment method not found'
+            });
+        }
+
+        // Check if this is the user's first card
+        const existingPaymentMethods = await stripe.paymentMethods.list({
+            customer: customerId,
+            type: 'card'
+        });
+
+        const isFirstCard = existingPaymentMethods.data.length === 1; // This card only
+
+        if (isFirstCard) {
+            console.log(`🆕 First card detected - auto-setting as default`);
+
+            // Set as default in Stripe
+            await stripe.customers.update(customerId, {
+                invoice_settings: { default_payment_method: paymentMethodId }
+            });
+
+            // Update database
+            customerRecord.defaultPaymentMethodId = paymentMethodId;
+            await customerRecord.save();
+
+            console.log(`✅ Payment method ${paymentMethodId} set as default for customer ${customerId}`);
+        }
+
+        // Get updated payment method details
+        const updatedPM = await stripe.paymentMethods.retrieve(paymentMethodId);
+
+        res.json({
+            success: true,
+            message: "Payment method synced successfully",
+            customerId: customerId,
+            isNewUser: true, // Customer record exists, so user has added payment method
+            isFirstCard: isFirstCard,
+            autoSetAsDefault: isFirstCard,
+            card: {
+                id: updatedPM.id,
+                brand: updatedPM.card.brand,
+                last4: updatedPM.card.last4,
+                expMonth: updatedPM.card.exp_month,
+                expYear: updatedPM.card.exp_year,
+                isDefault: isFirstCard
+            },
+            syncDetails: {
+                customerAttached: true,
+                defaultSet: isFirstCard,
+                totalCards: existingPaymentMethods.data.length
+            }
+        });
+
+    } catch (err) {
+        console.error("Error syncing payment method:", err);
+        res.status(500).json({ error: err.message });
+    }
+});
+
+
+
+
+
+
+// Get customer information for a user
+router.get('/customer/:userId', async (req, res) => {
+    try {
+        const { userId } = req.params;
+
+        if (!userId) {
+            return res.status(400).json({ error: 'userId is required' });
+        }
+
+        await connectToMongoDB();
+
+        // Find customer record
+        const customerRecord = await Customer.findOne({ userId });
+
+        if (!customerRecord) {
+            return res.status(404).json({
+                error: 'No customer found for this user',
+                hasCustomer: false
+            });
+        }
+
+        // Get customer details from Stripe
+        const stripeCustomer = await stripe.customers.retrieve(customerRecord.customerId);
+
+        // Get payment methods count
+        const paymentMethods = await stripe.paymentMethods.list({
+            customer: customerRecord.customerId,
+            type: 'card'
+        });
+
+        res.json({
+            success: true,
+            hasCustomer: true,
+            customer: {
+                id: customerRecord.customerId,
+                userId: customerRecord.userId,
+                email: customerRecord.email,
+                app: customerRecord.app,
+                defaultPaymentMethodId: customerRecord.defaultPaymentMethodId,
+                createdAt: customerRecord.createdAt,
+                stripeCustomer: {
+                    id: stripeCustomer.id,
+                    email: stripeCustomer.email,
+                    name: stripeCustomer.name,
+                    phone: stripeCustomer.phone,
+                    defaultPaymentMethod: stripeCustomer.invoice_settings?.default_payment_method,
+                    metadata: stripeCustomer.metadata
+                },
+                paymentMethods: {
+                    count: paymentMethods.data.length,
+                    hasDefault: !!customerRecord.defaultPaymentMethodId
+                }
+            }
+        });
+
+    } catch (error) {
+        console.error('Error fetching customer info:', error);
+        res.status(500).json({
+            error: error.message,
+            details: process.env.NODE_ENV === 'development' ? error.stack : undefined
+        });
+    }
+});
+
+// Check if user has customer record (lightweight check)
+router.post('/check-customer', async (req, res) => {
+    try {
+        const { userId } = req.body;
+
+        if (!userId) {
+            return res.status(400).json({ error: 'userId is required' });
+        }
+
+        await connectToMongoDB();
+
+        const customerRecord = await Customer.findOne({ userId });
+
+        res.json({
+            hasCustomer: !!customerRecord,
+            customerId: customerRecord?.customerId || null,
+            email: customerRecord?.email || null,
+            hasDefaultPaymentMethod: !!customerRecord?.defaultPaymentMethodId
+        });
+
+    } catch (error) {
+        console.error('Error checking customer:', error);
+        res.status(500).json({ error: error.message });
+    }
+});
+
+// ___________Fetch User Payment Info (Cards + Billing History + Next Billing+manageSubscription)______________
+router.post('/get-subscription-info-by-app', async (req, res) => {
+    try {
+        const { userId, app, features = [] } = req.body;
+
+        await connectToMongoDB();
+
+        // Find customer record for this user (separate from subscriptions)
+        const customerRecord = await Customer.findOne({ userId });
+        if (!customerRecord) {
+            return res.status(200).json({
+                error: 'No customer found for this user',
+                hasCustomer: false,
+                message: 'User has not added any payment methods yet'
+            });
+        }
+
+        const customerId = customerRecord.customerId;
+
+        let result = {};
+
+        // 1️⃣ Saved Cards
+        if (features.includes('cards')) {
+            // Get customer's default payment method
+            const customer = await stripe.customers.retrieve(customerId);
+            const defaultPmId = customer.invoice_settings?.default_payment_method;
+            
+            const paymentMethods = await stripe.paymentMethods.list({
+                customer: customerId,
+                type: 'card',
+            });
+
+            result.cards = paymentMethods.data.map(pm => ({
+                id: pm.id,
+                brand: pm.card.brand,
+                last4: pm.card.last4,
+                exp_month: pm.card.exp_month,
+                exp_year: pm.card.exp_year,
+                isDefault: pm.id === defaultPmId,
+            }));
+        }
+
+        // 2️⃣ Billing History (Invoices)
+        if (features.includes('billingHistory')) {
+            const invoices = await stripe.invoices.list({
+                customer: customerId,
+                limit: 10,
+            });
+
+            result.billingHistory = invoices.data.map(inv => ({
+                id: inv.id,
+                amount: inv.amount_paid / 100,
+                currency: inv.currency,
+                status: inv.status,
+                date: new Date(inv.created * 1000),
+            }));
+        }
+
+        // 3️⃣ Next Billing Info
+        if (features.includes('nextBilling')) {
+            // Get active subscriptions for this customer
+            const subscriptions = await stripe.subscriptions.list({
+                customer: customerId,
+                status: 'active',
+                limit: 1
+            });
+            
+            if (subscriptions.data.length > 0) {
+                const subscription = subscriptions.data[0];
+                result.nextBilling = {
+                    subscriptionId: subscription.id,
+                    customerId: customerId,
+                    status: subscription.status,
+                    currentPeriodStart: subscription.current_period_start,
+                    currentPeriodEnd: subscription.current_period_end,
+                    nextInvoiceDate: subscription.current_period_end,
+                    plan: subscription.items.data.map(i => ({
+                        priceId: i.price.id,
+                        interval: i.price.recurring.interval,
+                        amount: i.price.unit_amount / 100,
+                        currency: i.price.currency,
+                        quantity: i.quantity || 1,
+                        totalAmount: (i.price.unit_amount / 100) * (i.quantity || 1)
+                    })),
+                };
+            }
+        }
+
+        // 4️⃣ Manage Subscription (Billing Portal)
+        if (features.includes('manageSubscription')) {
+            const appUrlMap = {
+                kampaignai: 'https://kampaign.onepgr.com',
+                kampaignai: 'http://localhost:4200',
+                gps: 'https://gps.onepgr.com',
+                getsalesgpt: 'https://sales.onepgr.com',
+            };
+
+            let returnUrl = appUrlMap[app] ? `${appUrlMap[app]}/profile` : 'https://onepgr.com';
+
+            const portalSession = await stripe.billingPortal.sessions.create({
+                customer: customerId,
+                return_url: returnUrl,
+            });
+
+            result.manageSubscription = {
+                portalUrl: portalSession.url,
+                returnUrl,
+            };
+        }
+
+        res.json(result);
+
+    } catch (err) {
+        console.error("Error fetching subscription info:", err);
+        res.status(500).json({ error: err.message });
+    }
+});
+
+
+
+// Fetch user payment info (cards, billing history, next billing, subscription)
+
+// Fetch user payment info (cards, billing history, next billing, subscription)
+router.post('/get-user-payment-info', async (req, res) => {
+    try {
+        const { userId, features } = req.body;
+
+        if (!userId || !features || !Array.isArray(features)) {
+            return res.status(400).json({ error: 'Missing required parameters: userId and features array' });
+        }
+
+        await connectToMongoDB();
+
+        // Find customer record for this user (separate from subscriptions)
+        const customerRecord = await Customer.findOne({ userId });
+        if (!customerRecord) {
+            return res.status(200).json({
+                error: 'No customer found for this user',
+                hasCustomer: false,
+                message: 'User has not added any payment methods yet'
+            });
+        }
+
+        const customerId = customerRecord.customerId;
+        let response = {
+            customerId: customerId, // Include customerId in response for clarity
+            userId: userId // Include userId for reference
+        };
+
+        // Fetch customer & ALL active subscriptions with expanded data
+        const customer = await stripe.customers.retrieve(customerId);
+        const subscriptions = await stripe.subscriptions.list({
+            customer: customerId,
+            status: 'active',
+            limit: 100,
+            expand: ['data.latest_invoice', 'data.default_payment_method']
+        });
+
+        // Helper function to safely format dates from Stripe timestamps
+        const formatStripeDate = (timestamp) => {
+            if (!timestamp) return null;
+            try {
+                const date = new Date(timestamp * 1000);
+                return date.toLocaleDateString("en-US", {
+                    month: "short",
+                    day: "2-digit",
+                    year: "numeric"
+                });
+            } catch (error) {
+                console.error('Date formatting error:', error);
+                return null;
+            }
+        };
+
+        // Get the primary subscription (most recent active subscription)
+        const primarySub = subscriptions.data.sort((a, b) => b.created - a.created)[0];
+
+        // Figure out default payment method
+        let defaultPmId = customerRecord.defaultPaymentMethodId ||
+            (primarySub?.default_payment_method ?
+                (typeof primarySub.default_payment_method === "string" ?
+                    primarySub.default_payment_method :
+                    primarySub.default_payment_method.id) : null) ||
+            customer.invoice_settings?.default_payment_method;
+
+        // 🪪 Fetch Cards
+        if (features.includes("cards")) {
+            const paymentMethods = await stripe.paymentMethods.list({
+                customer: customerId,
+                type: 'card'
+            });
+
+            response.cards = paymentMethods.data.map(pm => ({
+                id: pm.id,
+                brand: pm.card.brand,
+                last4: pm.card.last4,
+                expMonth: pm.card.exp_month,
+                expYear: pm.card.exp_year,
+                isDefault: pm.id === defaultPmId
+            }));
+        }
+
+        // 📜 Fetch Billing History
+        if (features.includes("billingHistory")) {
+            const invoices = await stripe.invoices.list({
+                customer: customerId,
+                limit: 10,
+                status: 'paid'
+            });
+
+            response.billingHistory = invoices.data.map(inv => ({
+                id: inv.id,
+                amount: inv.amount_paid / 100,
+                currency: inv.currency.toUpperCase(),
+                status: inv.status,
+                date: formatStripeDate(inv.created),
+                invoiceUrl: inv.hosted_invoice_url,
+                description: inv.lines?.data[0]?.description || 'Subscription payment'
+            }));
+        }
+
+        // Function to get accurate subscription period dates
+        const getSubscriptionPeriodDates = async (subscription) => {
+            let currentPeriodStart = subscription.current_period_start;
+            let currentPeriodEnd = subscription.current_period_end;
+
+            // If period dates are missing, try to calculate them from billing cycle anchor
+            if (!currentPeriodStart || !currentPeriodEnd) {
+                console.log(`Subscription ${subscription.id} missing period dates, calculating...`);
+
+                if (subscription.billing_cycle_anchor) {
+                    const plan = subscription.items.data[0].price;
+                    const anchorDate = new Date(subscription.billing_cycle_anchor * 1000);
+                    const now = new Date();
+
+                    // Calculate current period based on billing cycle anchor and interval
+                    if (plan.recurring.interval === 'month') {
+                        const intervalCount = plan.recurring.interval_count || 1;
+
+                        // Find the most recent period start before now
+                        let periodStart = new Date(anchorDate);
+                        let periodEnd = new Date(periodStart);
+                        periodEnd.setMonth(periodEnd.getMonth() + intervalCount);
+
+                        while (periodEnd <= now) {
+                            periodStart = new Date(periodEnd);
+                            periodEnd.setMonth(periodEnd.getMonth() + intervalCount);
+                        }
+
+                        currentPeriodStart = Math.floor(periodStart.getTime() / 1000);
+                        currentPeriodEnd = Math.floor(periodEnd.getTime() / 1000);
+                    }
+                }
+            }
+
+            return { currentPeriodStart, currentPeriodEnd };
+        };
+
+        // 📅 Next Billing + Subscription Info
+        if (features.includes("nextBilling") || features.includes("subscription")) {
+            if (primarySub) {
+                const plan = primarySub.items.data[0].price;
+
+                // Get accurate period dates
+                const { currentPeriodStart, currentPeriodEnd } = await getSubscriptionPeriodDates(primarySub);
+
+                // Get next payment date - use current_period_end if available
+                let nextPaymentDate = currentPeriodEnd ? formatStripeDate(currentPeriodEnd) : null;
+                let nextPaymentAmount = plan.unit_amount / 100;
+
+                // Try to get upcoming invoice for more accurate next payment info
+                try {
+                    const upcomingInvoices = await stripe.invoices.list({
+                        customer: customerId,
+                        status: 'open',
+                        limit: 1
+                    });
+
+                    if (upcomingInvoices.data.length > 0) {
+                        const upcomingInvoice = upcomingInvoices.data[0];
+                        if (upcomingInvoice.due_date) {
+                            nextPaymentDate = formatStripeDate(upcomingInvoice.due_date);
+                            nextPaymentAmount = upcomingInvoice.amount_due / 100;
+                        } else if (upcomingInvoice.period_end) {
+                            nextPaymentDate = formatStripeDate(upcomingInvoice.period_end);
+                            nextPaymentAmount = upcomingInvoice.amount_due / 100;
+                        }
+                    }
+                } catch (err) {
+                    console.log("No upcoming invoices found:", err.message);
+                }
+
+                response.nextBilling = {
+                    status: primarySub.status,
+                    nextPaymentDate,
+                    nextPaymentAmount,
+                    plan: {
+                        priceId: plan.id,
+                        productId: plan.product,
+                        name: plan.nickname || `$${plan.unit_amount / 100}/${plan.recurring.interval}`,
+                        interval: plan.recurring.interval,
+                        intervalCount: plan.recurring.interval_count || 1,
+                        amount: plan.unit_amount / 100,
+                        currency: plan.currency.toUpperCase(),
+                        quantity: primarySub.items.data[0].quantity || 1,
+                        totalAmount: (plan.unit_amount / 100) * (primarySub.items.data[0].quantity || 1)
+                    }
+                };
+
+                response.subscription = {
+                    subscriptionId: primarySub.id,
+                    customerId: customerId,
+                    status: primarySub.status,
+                    startDate: formatStripeDate(primarySub.start_date),
+                    currentPeriodEnd: formatStripeDate(currentPeriodEnd),
+                    currentPeriodStart: formatStripeDate(currentPeriodStart),
+                    trialEnd: formatStripeDate(primarySub.trial_end),
+                    cancelAtPeriodEnd: primarySub.cancel_at_period_end || false,
+                    canceledAt: primarySub.canceled_at ? formatStripeDate(primarySub.canceled_at) : null,
+                    endedAt: primarySub.ended_at ? formatStripeDate(primarySub.ended_at) : null,
+                    created: formatStripeDate(primarySub.created),
+                    billingCycleAnchor: formatStripeDate(primarySub.billing_cycle_anchor),
+                    plan: {
+                        priceId: plan.id,
+                        productId: plan.product,
+                        name: plan.nickname || `$${plan.unit_amount / 100}/${plan.recurring.interval}`,
+                        interval: plan.recurring.interval,
+                        intervalCount: plan.recurring.interval_count || 1,
+                        amount: plan.unit_amount / 100,
+                        currency: plan.currency.toUpperCase(),
+                        quantity: primarySub.items.data[0].quantity || 1,
+                        totalAmount: (plan.unit_amount / 100) * (primarySub.items.data[0].quantity || 1)
+                    }
+                };
+            }
+
+            // Add ALL active subscriptions if requested
+            if (features.includes("allSubscriptions") || subscriptions.data.length > 1) {
+                response.allSubscriptions = await Promise.all(
+                    subscriptions.data.map(async (sub) => {
+                        const plan = sub.items.data[0].price;
+
+                        // Get accurate period dates for each subscription
+                        const { currentPeriodStart, currentPeriodEnd } = await getSubscriptionPeriodDates(sub);
+
+                        return {
+                            subscriptionId: sub.id,
+                            customerId: customerId,
+                            status: sub.status,
+                            startDate: formatStripeDate(sub.start_date),
+                            currentPeriodStart: formatStripeDate(currentPeriodStart),
+                            currentPeriodEnd: formatStripeDate(currentPeriodEnd),
+                            trialEnd: formatStripeDate(sub.trial_end),
+                            cancelAtPeriodEnd: sub.cancel_at_period_end || false,
+                            canceledAt: sub.canceled_at ? formatStripeDate(sub.canceled_at) : null,
+                            endedAt: sub.ended_at ? formatStripeDate(sub.ended_at) : null,
+                            plan: {
+                                priceId: plan.id,
+                                productId: plan.product,
+                                name: plan.nickname || `$${plan.unit_amount / 100}/${plan.recurring.interval}`,
+                                interval: plan.recurring.interval,
+                                intervalCount: plan.recurring.interval_count || 1,
+                                amount: plan.unit_amount / 100,
+                                currency: plan.currency.toUpperCase(),
+                                quantity: sub.items.data[0].quantity || 1,
+                                totalAmount: (plan.unit_amount / 100) * (sub.items.data[0].quantity || 1)
+                            }
+                        };
+                    })
+                );
+            }
+        }
+
+        // Add summary with total amounts across all subscriptions
+        if (subscriptions.data.length > 0) {
+            const totalMonthlyAmount = subscriptions.data.reduce((total, sub) => {
+                const item = sub.items.data[0];
+                return total + ((item.price.unit_amount / 100) * (item.quantity || 1));
+            }, 0);
+
+            response.summary = {
+                totalActiveSubscriptions: subscriptions.data.length,
+                totalMonthlyAmount: Math.round(totalMonthlyAmount * 100) / 100, // Round to 2 decimal places
+                currency: subscriptions.data[0]?.items.data[0]?.price.currency?.toUpperCase() || 'USD'
+            };
+        }
+
+        res.json(response);
+
+    } catch (err) {
+        console.error("Error fetching user payment info:", err);
+        res.status(500).json({
+            error: 'Internal server error',
+            message: err.message
+        });
+    }
+});
+
+
+// Set default payment method for customer + subscription
+router.post('/set-default-card', async (req, res) => {
+    try {
+        const { userId, paymentMethodId } = req.body;
+
+        await connectToMongoDB();
+
+        // Find customer record for this user
+        const customerRecord = await Customer.findOne({ userId });
+        if (!customerRecord) {
+            return res.status(400).json({ error: 'No customer found for this user' });
+        }
+
+        const customerId = customerRecord.customerId;
+
+        // 🔹 1. Attach the card to customer (safety check, in case it's not already attached)
+        await stripe.paymentMethods.attach(paymentMethodId, { customer: customerId }).catch(err => {
+            if (err.code !== 'resource_already_exists') throw err;
+        });
+
+        // 🔹 2. Update customer's default
+        await stripe.customers.update(customerId, {
+            invoice_settings: { default_payment_method: paymentMethodId }
+        });
+
+        // 🔹 3. Update subscription's default only if user has active subscriptions
+        const subscriptions = await stripe.subscriptions.list({
+            customer: customerId,
+            status: 'active',
+            limit: 1
+        });
+
+        if (subscriptions.data.length > 0) {
+            try {
+                const updatedSub = await stripe.subscriptions.update(subscriptions.data[0].id, {
+                    default_payment_method: paymentMethodId
+                });
+                console.log(`✅ Updated subscription ${subscriptions.data[0].id} default payment method`);
+            } catch (subError) {
+                console.warn("Could not update subscription default PM:", subError.message);
+            }
+        }
+
+        // 🔹 4. Save in DB so you can fetch faster
+        customerRecord.defaultPaymentMethodId = paymentMethodId;
+        await customerRecord.save();
+
+        res.json({ success: true, message: "Default card updated successfully" });
+
+    } catch (err) {
+        console.error("Error setting default card:", err);
+        res.status(500).json({ error: err.message });
+    }
+});
+
+
+
+// Delete a card
+router.post('/delete-card', async (req, res) => {
+    try {
+        const { userId, paymentMethodId } = req.body;
+
+        await connectToMongoDB();
+
+        // Find customer record for this user
+        const customerRecord = await Customer.findOne({ userId });
+        if (!customerRecord) {
+            return res.status(400).json({ error: 'No customer found for this user' });
+        }
+
+        const customerId = customerRecord.customerId;
+
+        // Verify the payment method belongs to this customer
+        const paymentMethod = await stripe.paymentMethods.retrieve(paymentMethodId);
+        if (paymentMethod.customer !== customerId) {
+            return res.status(403).json({ error: 'Payment method does not belong to this customer' });
+        }
+
+        // Check if this is the default payment method
+        const customer = await stripe.customers.retrieve(customerId);
+        const defaultPmId = customer.invoice_settings?.default_payment_method || null;
+        const isDefaultCard = defaultPmId === paymentMethodId;
+
+        // Don't allow deletion of the only/default card
+        if (isDefaultCard) {
+            // Check if customer has other cards
+            const paymentMethods = await stripe.paymentMethods.list({
+                customer: customerId,
+                type: 'card'
+            });
+
+            if (paymentMethods.data.length <= 1) {
+                return res.status(400).json({
+                    error: 'Cannot delete the only payment method. Please add another card first.'
+                });
+            }
+
+            // If there are other cards, set a new default before deleting
+            const otherCard = paymentMethods.data.find(pm => pm.id !== paymentMethodId);
+            if (otherCard) {
+                // Update customer default
+                await stripe.customers.update(customerId, {
+                    invoice_settings: { default_payment_method: otherCard.id }
+                });
+
+                // Update database
+                customerRecord.defaultPaymentMethodId = otherCard.id;
+                await customerRecord.save();
+
+                console.log(`🔄 Auto-switched default to: ${otherCard.id}`);
+            }
+        }
+
+        // Detach (delete) the payment method
+        await stripe.paymentMethods.detach(paymentMethodId);
+
+        res.json({
+            success: true,
+            message: "Card deleted successfully",
+            ...(isDefaultCard && { newDefault: defaultPmId !== paymentMethodId ? defaultPmId : null })
+        });
+
+    } catch (err) {
+        console.error("Error deleting card:", err);
+        res.status(500).json({ error: err.message });
+    }
+});
+
+
+
+// Cancel subscription
+router.post('/cancel-subscription', async (req, res) => {
+    try {
+        const { userId, subscriptionId, cancelAtPeriodEnd = true } = req.body;
+
+        await connectToMongoDB();
+
+        // Find subscription for this user
+        const subscriptionRecord = await Subscription.findOne({
+            userId,
+            subscriptionId
+        });
+
+        if (!subscriptionRecord) {
+            return res.status(400).json({
+                error: 'No subscription found for this user and subscription ID'
+            });
+        }
+
+        // Check current subscription status
+        const subscription = await stripe.subscriptions.retrieve(subscriptionId);
+
+        if (subscription.status === 'canceled') {
+            return res.status(400).json({ error: 'Subscription is already canceled' });
+        }
+
+        if (subscription.status === 'past_due' || subscription.status === 'unpaid') {
+            return res.status(400).json({
+                error: 'Cannot cancel subscription in past_due or unpaid status'
+            });
+        }
+
+        let cancelResult;
+
+        if (cancelAtPeriodEnd) {
+            // Cancel at the end of the current billing period
+            cancelResult = await stripe.subscriptions.update(subscriptionId, {
+                cancel_at_period_end: true
+            });
+
+            // Update database
+            subscriptionRecord.status = 'canceled';
+            await subscriptionRecord.save();
+
+            res.json({
+                success: true,
+                message: "Subscription will be canceled at the end of the current billing period",
+                subscription: {
+                    id: cancelResult.id,
+                    status: cancelResult.status,
+                    cancelAtPeriodEnd: cancelResult.cancel_at_period_end,
+                    currentPeriodEnd: new Date(cancelResult.current_period_end * 1000).toLocaleDateString("en-US"),
+                    cancelAt: new Date(cancelResult.cancel_at * 1000).toLocaleDateString("en-US")
+                }
+            });
+        } else {
+            // Cancel immediately
+            cancelResult = await stripe.subscriptions.cancel(subscriptionId);
+
+            // Update database
+            subscriptionRecord.status = 'canceled';
+            await subscriptionRecord.save();
+
+            res.json({
+                success: true,
+                message: "Subscription canceled immediately",
+                subscription: {
+                    id: cancelResult.id,
+                    status: cancelResult.status,
+                    cancelAtPeriodEnd: cancelResult.cancel_at_period_end,
+                    canceledAt: new Date(cancelResult.canceled_at * 1000).toLocaleDateString("en-US")
+                }
+            });
+        }
+
+    } catch (err) {
+        console.error("Error canceling subscription:", err);
+        res.status(500).json({ error: err.message });
+    }
+});
 
 
 module.exports = router;
