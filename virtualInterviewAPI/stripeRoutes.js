@@ -2779,7 +2779,7 @@ router.post('/get-user-payment-info', async (req, res) => {
 
                 // Get next payment date - use current_period_end if available
                 let nextPaymentDate = currentPeriodEnd ? formatStripeDate(currentPeriodEnd) : null;
-                let nextPaymentAmount = plan.unit_amount / 100;
+                let nextPaymentAmount = (plan.unit_amount / 100) * (primarySub.items.data[0].quantity || 1);
 
                 // Try to get upcoming invoice for more accurate next payment info
                 try {
@@ -2797,6 +2797,11 @@ router.post('/get-user-payment-info', async (req, res) => {
                         } else if (upcomingInvoice.period_end) {
                             nextPaymentDate = formatStripeDate(upcomingInvoice.period_end);
                             nextPaymentAmount = upcomingInvoice.amount_due / 100;
+                        }
+                        
+                        // Ensure nextPaymentAmount accounts for quantity if not from upcoming invoice
+                        if (!nextPaymentAmount || nextPaymentAmount === 0) {
+                            nextPaymentAmount = (plan.unit_amount / 100) * (primarySub.items.data[0].quantity || 1);
                         }
                     }
                 } catch (err) {
