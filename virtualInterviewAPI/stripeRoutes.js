@@ -2662,12 +2662,36 @@ router.post('/get-user-payment-info', async (req, res) => {
 
         // Fetch customer & ALL active subscriptions with expanded data
         const customer = await stripe.customers.retrieve(customerId);
-        const subscriptions = await stripe.subscriptions.list({
+        
+        // Get subscriptions - normal approach for most users
+        let subscriptions = await stripe.subscriptions.list({
             customer: customerId,
             status: 'active',
             limit: 100,
             expand: ['data.latest_invoice', 'data.default_payment_method']
         });
+        
+        // Special handling ONLY for User 1486 (consolidated customer)
+        if (userId === "1486" && subscriptions.data.length === 1) {
+            console.log(`🔗 Special handling for consolidated user 1486`);
+            const dbSubscriptions = await Subscription.find({ userId });
+            if (dbSubscriptions.length > 1) {
+                // Fetch all subscriptions individually for this user
+                const stripeSubscriptions = await Promise.all(
+                    dbSubscriptions.map(async (dbSub) => {
+                        try {
+                            return await stripe.subscriptions.retrieve(dbSub.subscriptionId, {
+                                expand: ['latest_invoice', 'default_payment_method']
+                            });
+                        } catch (error) {
+                            console.warn(`Could not retrieve subscription ${dbSub.subscriptionId}:`, error.message);
+                            return null;
+                        }
+                    })
+                );
+                subscriptions = { data: stripeSubscriptions.filter(sub => sub !== null) };
+            }
+        }
 
         // Helper function to safely format dates from Stripe timestamps
         const formatStripeDate = (timestamp) => {
@@ -3342,7 +3366,8 @@ router.post('/consolidate-customers', async (req, res) => {
                     { userId },
                     { 
                         customerId: primaryCustomerId,
-                        updatedAt: new Date()
+                        updatedAt: new Date(),
+                        isConsolidated: true
                     }
                 );
                 console.log(`✅ Updated customer record for user ${userId}`);
@@ -3355,7 +3380,8 @@ router.post('/consolidate-customers', async (req, res) => {
                     app: 'kampaignai', // or determine from subscriptions
                     email: primaryCustomer.email || 'unknown@example.com',
                     defaultPaymentMethodId: primaryCustomer.invoice_settings?.default_payment_method,
-                    createdAt: new Date()
+                    createdAt: new Date(),
+                    isConsolidated: true
                 });
                 console.log(`✅ Created customer record for user ${userId}`);
             }
