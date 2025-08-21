@@ -140,8 +140,8 @@ router.post(
                     const startUnix = stripeSubscription.current_period_start || stripeSubscription.start_date;
                     const endUnix = stripeSubscription.current_period_end;
 
-                    const currentPeriodStartFormatted = new Date(startUnix * 1000).toLocaleString('en-US');
-                    const currentPeriodEndFormatted = new Date(endUnix * 1000).toLocaleString('en-US');
+                    const currentPeriodStartFormatted = new Date(startUnix * 1000);
+                    const currentPeriodEndFormatted = new Date(endUnix * 1000);
 
                     const price = stripeSubscription.items.data[0]?.price;
                     const product = price && (await stripe.products.retrieve(price.product));
@@ -2537,7 +2537,7 @@ router.post('/get-subscription-info-by-app', async (req, res) => {
             // Get customer's default payment method
             const customer = await stripe.customers.retrieve(customerId);
             const defaultPmId = customer.invoice_settings?.default_payment_method;
-            
+
             const paymentMethods = await stripe.paymentMethods.list({
                 customer: customerId,
                 type: 'card',
@@ -2577,7 +2577,7 @@ router.post('/get-subscription-info-by-app', async (req, res) => {
                 status: 'active',
                 limit: 1
             });
-            
+
             if (subscriptions.data.length > 0) {
                 const subscription = subscriptions.data[0];
                 result.nextBilling = {
@@ -3047,20 +3047,35 @@ router.post('/cancel-subscription', async (req, res) => {
 
         await connectToMongoDB();
 
-        // Find subscription for this user
-        const subscriptionRecord = await Subscription.findOne({
-            userId,
-            subscriptionId
+        // Find customer record for this user
+        const customerRecord = await Customer.findOne({
+            userId
         });
 
-        if (!subscriptionRecord) {
+        if (!customerRecord) {
             return res.status(400).json({
-                error: 'No subscription found for this user and subscription ID'
+                error: 'No customer found for this user'
+            });
+        }
+
+        // Verify the subscription exists in Stripe
+        let subscription;
+        try {
+            subscription = await stripe.subscriptions.retrieve(subscriptionId);
+        } catch (stripeError) {
+            return res.status(400).json({
+                error: 'Invalid subscription ID or subscription not found in Stripe'
+            });
+        }
+
+        // Verify the subscription belongs to this customer
+        if (subscription.customer !== customerRecord.customerId) {
+            return res.status(400).json({
+                error: 'Subscription does not belong to this customer'
             });
         }
 
         // Check current subscription status
-        const subscription = await stripe.subscriptions.retrieve(subscriptionId);
 
         if (subscription.status === 'canceled') {
             return res.status(400).json({ error: 'Subscription is already canceled' });
@@ -3080,37 +3095,53 @@ router.post('/cancel-subscription', async (req, res) => {
                 cancel_at_period_end: true
             });
 
-            // Update database
-            subscriptionRecord.status = 'canceled';
-            await subscriptionRecord.save();
+            // Update database - update subscription status in Subscription collection if it exists
+            try {
+                await Subscription.updateOne(
+                    { subscriptionId },
+                    { status: 'canceled' }
+                );
+            } catch (dbError) {
+                console.warn('Could not update subscription record in database:', dbError.message);
+            }
 
             res.json({
                 success: true,
                 message: "Subscription will be canceled at the end of the current billing period",
+                userMessage: `Your subscription will remain active until ${new Date(cancelResult.current_period_end * 1000).toLocaleDateString("en-US")}. You will continue to have access to all features until then.`,
                 subscription: {
                     id: cancelResult.id,
                     status: cancelResult.status,
                     cancelAtPeriodEnd: cancelResult.cancel_at_period_end,
                     currentPeriodEnd: new Date(cancelResult.current_period_end * 1000).toLocaleDateString("en-US"),
-                    cancelAt: new Date(cancelResult.cancel_at * 1000).toLocaleDateString("en-US")
+                    cancelAt: new Date(cancelResult.cancel_at * 1000).toLocaleDateString("en-US"),
+                    nextBillingDate: new Date(cancelResult.current_period_end * 1000).toLocaleDateString("en-US")
                 }
             });
         } else {
             // Cancel immediately
             cancelResult = await stripe.subscriptions.cancel(subscriptionId);
 
-            // Update database
-            subscriptionRecord.status = 'canceled';
-            await subscriptionRecord.save();
+            // Update database - update subscription status in Subscription collection if it exists
+            try {
+                await Subscription.updateOne(
+                    { subscriptionId },
+                    { status: 'canceled' }
+                );
+            } catch (dbError) {
+                console.warn('Could not update subscription record in database:', dbError.message);
+            }
 
             res.json({
                 success: true,
                 message: "Subscription canceled immediately",
+                userMessage: "Your subscription has been canceled immediately. You will lose access to all features right away.",
                 subscription: {
                     id: cancelResult.id,
                     status: cancelResult.status,
                     cancelAtPeriodEnd: cancelResult.cancel_at_period_end,
-                    canceledAt: new Date(cancelResult.canceled_at * 1000).toLocaleDateString("en-US")
+                    canceledAt: new Date(cancelResult.canceled_at * 1000).toLocaleDateString("en-US"),
+                    immediateCancellation: true
                 }
             });
         }
