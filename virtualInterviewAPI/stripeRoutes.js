@@ -2902,8 +2902,8 @@ router.post('/get-user-payment-info', async (req, res) => {
 
     } catch (err) {
         console.error("Error fetching user payment info:", err);
-        res.status(500).json({
-            error: 'Internal server error',
+        res.status(200).json({
+            // error: 'Internal server error',
             message: err.message
         });
     }
