@@ -2739,13 +2739,46 @@ router.post('/get-user-payment-info', async (req, res) => {
 
         // 📜 Fetch Billing History
         if (features.includes("billingHistory")) {
-            const invoices = await stripe.invoices.list({
-                customer: customerId,
-                limit: 10,
-                status: 'paid'
-            });
+            let invoices = [];
+            
+            // For consolidated customers, get invoices from all related customers
+            if (userId === "1486") {
+                console.log(`🔗 Fetching billing history for consolidated user 1486`);
+                
+                // Get all customer IDs from database
+                const dbSubscriptions = await Subscription.find({ userId });
+                const allCustomerIds = [...new Set(dbSubscriptions.map(sub => sub.customerId))];
+                
+                // Fetch invoices from all customers
+                for (const custId of allCustomerIds) {
+                    try {
+                        const customerInvoices = await stripe.invoices.list({
+                            customer: custId,
+                            limit: 10,
+                            status: 'paid'
+                        });
+                        invoices = invoices.concat(customerInvoices.data);
+                    } catch (error) {
+                        console.warn(`Could not fetch invoices for customer ${custId}:`, error.message);
+                    }
+                }
+                
+                // Remove duplicates and sort by date
+                invoices = invoices.filter((inv, index, self) => 
+                    index === self.findIndex(t => t.id === inv.id)
+                ).sort((a, b) => b.created - a.created);
+                
+            } else {
+                // Normal flow for other users
+                const customerInvoices = await stripe.invoices.list({
+                    customer: customerId,
+                    limit: 10,
+                    status: 'paid'
+                });
+                invoices = customerInvoices.data;
+            }
 
-            response.billingHistory = invoices.data.map(inv => ({
+            response.billingHistory = invoices.map(inv => ({
                 id: inv.id,
                 amount: inv.amount_paid / 100,
                 currency: inv.currency.toUpperCase(),
