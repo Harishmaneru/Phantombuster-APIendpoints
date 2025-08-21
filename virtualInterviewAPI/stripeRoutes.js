@@ -3161,7 +3161,7 @@ router.post('/cancel-subscription', async (req, res) => {
 
 
 
-//temp API's for merge customers
+//temp API's for merge customers IDs
 
 // Consolidate multiple customer IDs for a user (merge old API customers)
 router.post('/consolidate-customers', async (req, res) => {
@@ -3224,18 +3224,42 @@ router.post('/consolidate-customers', async (req, res) => {
                 
                 for (const subscription of customerSubscriptions) {
                     try {
-                        // Update subscription in Stripe to use primary customer
-                        await stripe.subscriptions.update(subscription.subscriptionId, {
-                            customer: primaryCustomerId
-                        });
-
-                        // Update subscription record in database
+                        // Note: Stripe doesn't allow changing customer field directly
+                        // We'll update the database to reflect the consolidation
+                        // The actual Stripe subscriptions will remain under their original customers
+                        // but our system will treat them as consolidated
+                        
+                        // Update subscription record in database to use primary customer ID
                         await Subscription.updateOne(
                             { subscriptionId: subscription.subscriptionId },
                             { customerId: primaryCustomerId }
                         );
+                        
+                        // Copy payment methods from old customer to primary customer
+                        try {
+                            const oldCustomerPaymentMethods = await stripe.paymentMethods.list({
+                                customer: customerId,
+                                type: 'card'
+                            });
+                            
+                            for (const pm of oldCustomerPaymentMethods.data) {
+                                try {
+                                    // Attach payment method to primary customer
+                                    await stripe.paymentMethods.attach(pm.id, {
+                                        customer: primaryCustomerId
+                                    });
+                                    console.log(`✅ Copied payment method ${pm.id} to primary customer`);
+                                } catch (attachError) {
+                                    if (attachError.code !== 'resource_already_exists') {
+                                        console.warn(`⚠️ Could not copy payment method ${pm.id}:`, attachError.message);
+                                    }
+                                }
+                            }
+                        } catch (pmError) {
+                            console.warn(`⚠️ Could not copy payment methods from ${customerId}:`, pmError.message);
+                        }
 
-                        console.log(`✅ Moved subscription ${subscription.subscriptionId} from ${customerId} to ${primaryCustomerId}`);
+                        console.log(`✅ Updated database record for subscription ${subscription.subscriptionId} to use primary customer ${primaryCustomerId}`);
                         successCount++;
                         
                         consolidationResults.push({
@@ -3243,7 +3267,8 @@ router.post('/consolidate-customers', async (req, res) => {
                             oldCustomerId: customerId,
                             newCustomerId: primaryCustomerId,
                             status: 'success',
-                            planName: subscription.planName
+                            planName: subscription.planName,
+                            note: 'Database updated - Stripe subscription remains under original customer'
                         });
 
                     } catch (subscriptionError) {
@@ -3338,13 +3363,16 @@ router.post('/consolidate-customers', async (req, res) => {
             console.error(`❌ Error updating customer record:`, dbError.message);
         }
 
-        // Get final consolidated data
+        // Get final consolidated data (after database updates)
         const finalSubscriptions = await Subscription.find({ userId });
         const finalCustomerIds = [...new Set(finalSubscriptions.map(sub => sub.customerId))];
+        
+        // Note: Stripe subscriptions remain under original customers, but our database shows them as consolidated
+        // This means billing portal access needs special handling for consolidated customers
 
         res.json({
             success: true,
-            message: `Customer consolidation completed for user ${userId}`,
+            message: `Customer consolidation completed for user ${userId} (database updated)`,
             summary: {
                 totalSubscriptions: finalSubscriptions.length,
                 uniqueCustomerIds: finalCustomerIds.length,
