@@ -3158,4 +3158,316 @@ router.post('/cancel-subscription', async (req, res) => {
 });
 
 
+
+
+
+//temp API's for merge customers
+
+// Consolidate multiple customer IDs for a user (merge old API customers)
+router.post('/consolidate-customers', async (req, res) => {
+    try {
+        const { userId, primaryCustomerId } = req.body;
+
+        if (!userId || !primaryCustomerId) {
+            return res.status(400).json({ 
+                error: 'userId and primaryCustomerId are required' 
+            });
+        }
+
+        await connectToMongoDB();
+
+        // Find all subscriptions for this user
+        const allSubscriptions = await Subscription.find({ userId });
+        
+        if (allSubscriptions.length === 0) {
+            return res.status(404).json({ 
+                error: 'No subscriptions found for this user' 
+            });
+        }
+
+        // Verify the primary customer exists in Stripe
+        try {
+            const primaryCustomer = await stripe.customers.retrieve(primaryCustomerId);
+            console.log(`✅ Primary customer ${primaryCustomerId} verified in Stripe`);
+        } catch (stripeError) {
+            return res.status(400).json({ 
+                error: 'Primary customer ID is invalid or not found in Stripe',
+                details: stripeError.message 
+            });
+        }
+
+        // Get all unique customer IDs for this user
+        const customerIds = [...new Set(allSubscriptions.map(sub => sub.customerId))];
+        console.log(`Found ${customerIds.length} unique customer IDs for user ${userId}:`, customerIds);
+
+        if (customerIds.length <= 1) {
+            return res.json({ 
+                message: 'User already has only one customer ID',
+                customerIds 
+            });
+        }
+
+        // Consolidate all subscriptions under the primary customer
+        const consolidationResults = [];
+        let successCount = 0;
+        let errorCount = 0;
+
+        for (const customerId of customerIds) {
+            if (customerId === primaryCustomerId) {
+                console.log(`Skipping primary customer ${customerId}`);
+                continue;
+            }
+
+            try {
+                // Find subscriptions for this customer
+                const customerSubscriptions = allSubscriptions.filter(sub => sub.customerId === customerId);
+                
+                for (const subscription of customerSubscriptions) {
+                    try {
+                        // Update subscription in Stripe to use primary customer
+                        await stripe.subscriptions.update(subscription.subscriptionId, {
+                            customer: primaryCustomerId
+                        });
+
+                        // Update subscription record in database
+                        await Subscription.updateOne(
+                            { subscriptionId: subscription.subscriptionId },
+                            { customerId: primaryCustomerId }
+                        );
+
+                        console.log(`✅ Moved subscription ${subscription.subscriptionId} from ${customerId} to ${primaryCustomerId}`);
+                        successCount++;
+                        
+                        consolidationResults.push({
+                            subscriptionId: subscription.subscriptionId,
+                            oldCustomerId: customerId,
+                            newCustomerId: primaryCustomerId,
+                            status: 'success',
+                            planName: subscription.planName
+                        });
+
+                    } catch (subscriptionError) {
+                        console.error(`❌ Failed to move subscription ${subscription.subscriptionId}:`, subscriptionError.message);
+                        errorCount++;
+                        
+                        consolidationResults.push({
+                            subscriptionId: subscription.subscriptionId,
+                            oldCustomerId: customerId,
+                            newCustomerId: primaryCustomerId,
+                            status: 'failed',
+                            error: subscriptionError.message,
+                            planName: subscription.planName
+                        });
+                    }
+                }
+
+                // Try to delete the old customer if it has no more subscriptions
+                try {
+                    const remainingSubscriptions = await stripe.subscriptions.list({
+                        customer: customerId,
+                        status: 'active',
+                        limit: 1
+                    });
+
+                    if (remainingSubscriptions.data.length === 0) {
+                        // No active subscriptions, can delete customer
+                        await stripe.customers.del(customerId);
+                        console.log(`🗑️ Deleted old customer ${customerId} (no active subscriptions)`);
+                        
+                        consolidationResults.push({
+                            customerId: customerId,
+                            action: 'deleted',
+                            status: 'success',
+                            reason: 'No active subscriptions'
+                        });
+                    } else {
+                        console.log(`⚠️ Customer ${customerId} still has active subscriptions, cannot delete`);
+                        
+                        consolidationResults.push({
+                            customerId: customerId,
+                            action: 'kept',
+                            status: 'warning',
+                            reason: 'Still has active subscriptions'
+                        });
+                    }
+                } catch (deleteError) {
+                    console.warn(`⚠️ Could not delete customer ${customerId}:`, deleteError.message);
+                    
+                    consolidationResults.push({
+                        customerId: customerId,
+                        action: 'delete_failed',
+                        status: 'warning',
+                        reason: deleteError.message
+                    });
+                }
+
+            } catch (customerError) {
+                console.error(`❌ Error processing customer ${customerId}:`, customerError.message);
+                errorCount++;
+            }
+        }
+
+        // Create or update customer record in Customer collection
+        try {
+            const existingCustomer = await Customer.findOne({ userId });
+            
+            if (existingCustomer) {
+                // Update existing customer record
+                await Customer.updateOne(
+                    { userId },
+                    { 
+                        customerId: primaryCustomerId,
+                        updatedAt: new Date()
+                    }
+                );
+                console.log(`✅ Updated customer record for user ${userId}`);
+            } else {
+                // Create new customer record
+                const primaryCustomer = await stripe.customers.retrieve(primaryCustomerId);
+                await Customer.create({
+                    userId,
+                    customerId: primaryCustomerId,
+                    app: 'kampaignai', // or determine from subscriptions
+                    email: primaryCustomer.email || 'unknown@example.com',
+                    defaultPaymentMethodId: primaryCustomer.invoice_settings?.default_payment_method,
+                    createdAt: new Date()
+                });
+                console.log(`✅ Created customer record for user ${userId}`);
+            }
+        } catch (dbError) {
+            console.error(`❌ Error updating customer record:`, dbError.message);
+        }
+
+        // Get final consolidated data
+        const finalSubscriptions = await Subscription.find({ userId });
+        const finalCustomerIds = [...new Set(finalSubscriptions.map(sub => sub.customerId))];
+
+        res.json({
+            success: true,
+            message: `Customer consolidation completed for user ${userId}`,
+            summary: {
+                totalSubscriptions: finalSubscriptions.length,
+                uniqueCustomerIds: finalCustomerIds.length,
+                primaryCustomerId: primaryCustomerId,
+                successCount,
+                errorCount
+            },
+            consolidationResults,
+            finalState: {
+                customerIds: finalCustomerIds,
+                subscriptions: finalSubscriptions.map(sub => ({
+                    subscriptionId: sub.subscriptionId,
+                    customerId: sub.customerId,
+                    planName: sub.planName,
+                    status: sub.status
+                }))
+            }
+        });
+
+    } catch (error) {
+        console.error('Error consolidating customers:', error);
+        res.status(500).json({ 
+            error: 'Failed to consolidate customers',
+            details: error.message 
+        });
+    }
+});
+
+// Check customer consolidation status for a user
+router.get('/customer-consolidation-status/:userId', async (req, res) => {
+    try {
+        const { userId } = req.params;
+
+        if (!userId) {
+            return res.status(400).json({ error: 'userId is required' });
+        }
+
+        await connectToMongoDB();
+
+        // Find all subscriptions for this user
+        const allSubscriptions = await Subscription.find({ userId });
+        
+        if (allSubscriptions.length === 0) {
+            return res.json({ 
+                userId,
+                hasSubscriptions: false,
+                message: 'No subscriptions found for this user'
+            });
+        }
+
+        // Get all unique customer IDs
+        const customerIds = [...new Set(allSubscriptions.map(sub => sub.customerId))];
+        
+        // Group subscriptions by customer ID
+        const customerGroups = {};
+        for (const customerId of customerIds) {
+            customerGroups[customerId] = allSubscriptions.filter(sub => sub.customerId === customerId);
+        }
+
+        // Get customer details from Stripe
+        const customerDetails = {};
+        for (const customerId of customerIds) {
+            try {
+                const customer = await stripe.customers.retrieve(customerId);
+                customerDetails[customerId] = {
+                    email: customer.email,
+                    name: customer.name,
+                    created: new Date(customer.created * 1000).toISOString(),
+                    hasDefaultPaymentMethod: !!customer.invoice_settings?.default_payment_method,
+                    defaultPaymentMethodId: customer.invoice_settings?.default_payment_method
+                };
+            } catch (error) {
+                customerDetails[customerId] = {
+                    error: 'Could not retrieve customer from Stripe',
+                    details: error.message
+                };
+            }
+        }
+
+        // Determine if consolidation is needed
+        const needsConsolidation = customerIds.length > 1;
+        const recommendedPrimaryCustomer = needsConsolidation ? 
+            customerIds.sort((a, b) => 
+                new Date(customerDetails[b]?.created || 0) - new Date(customerDetails[a]?.created || 0)
+            )[0] : null;
+
+        res.json({
+            userId,
+            hasSubscriptions: true,
+            needsConsolidation,
+            currentState: {
+                totalSubscriptions: allSubscriptions.length,
+                uniqueCustomerIds: customerIds.length,
+                customerIds: customerIds
+            },
+            customerGroups: Object.keys(customerGroups).map(customerId => ({
+                customerId,
+                subscriptionCount: customerGroups[customerId].length,
+                subscriptions: customerGroups[customerId].map(sub => ({
+                    subscriptionId: sub.subscriptionId,
+                    planName: sub.planName,
+                    status: sub.status,
+                    amount: sub.amount,
+                    currentPeriodEnd: sub.currentPeriodEnd
+                })),
+                customerDetails: customerDetails[customerId]
+            })),
+            recommendations: needsConsolidation ? {
+                primaryCustomerId: recommendedPrimaryCustomer,
+                reason: 'Most recently created customer',
+                action: 'Use /consolidate-customers endpoint to merge all subscriptions under this customer ID'
+            } : {
+                message: 'No consolidation needed - user already has single customer ID'
+            }
+        });
+
+    } catch (error) {
+        console.error('Error checking customer consolidation status:', error);
+        res.status(500).json({ 
+            error: 'Failed to check customer consolidation status',
+            details: error.message 
+        });
+    }
+});
+
 module.exports = router;
