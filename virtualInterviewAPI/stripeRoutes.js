@@ -2741,25 +2741,31 @@ router.post('/get-user-payment-info', async (req, res) => {
         if (features.includes("billingHistory")) {
             let invoices = [];
             
-            // For consolidated customers, get invoices from all related customers
+            // For consolidated customers, get invoices by subscription IDs
             if (userId === "1486") {
                 console.log(`🔗 Fetching billing history for consolidated user 1486`);
                 
-                // Get all customer IDs from database
+                // Get all subscription IDs for this user
                 const dbSubscriptions = await Subscription.find({ userId });
-                const allCustomerIds = [...new Set(dbSubscriptions.map(sub => sub.customerId))];
+                const subscriptionIds = dbSubscriptions.map(sub => sub.subscriptionId);
                 
-                // Fetch invoices from all customers
-                for (const custId of allCustomerIds) {
+                console.log(`🔗 Found ${subscriptionIds.length} subscriptions:`, subscriptionIds);
+                
+                // Fetch invoices for each subscription
+                for (const subId of subscriptionIds) {
                     try {
-                        const customerInvoices = await stripe.invoices.list({
-                            customer: custId,
-                            limit: 10,
-                            status: 'paid'
+                        const subscriptionInvoices = await stripe.invoices.list({
+                            subscription: subId,
+                            status: 'paid',
+                            limit: 5
                         });
-                        invoices = invoices.concat(customerInvoices.data);
+                        
+                        if (subscriptionInvoices.data.length > 0) {
+                            invoices = invoices.concat(subscriptionInvoices.data);
+                            console.log(`✅ Fetched ${subscriptionInvoices.data.length} invoices for subscription ${subId}`);
+                        }
                     } catch (error) {
-                        console.warn(`Could not fetch invoices for customer ${custId}:`, error.message);
+                        console.warn(`Could not fetch invoices for subscription ${subId}:`, error.message);
                     }
                 }
                 
@@ -2767,6 +2773,8 @@ router.post('/get-user-payment-info', async (req, res) => {
                 invoices = invoices.filter((inv, index, self) => 
                     index === self.findIndex(t => t.id === inv.id)
                 ).sort((a, b) => b.created - a.created);
+                
+                console.log(`🔗 Total invoices found: ${invoices.length}`);
                 
             } else {
                 // Normal flow for other users
