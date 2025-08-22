@@ -2486,8 +2486,8 @@ router.post('/create-checkout-session-by-app', async (req, res) => {
 
         // 1) App URL map + validation
         const appUrlMap = {
-            // kampaignai: 'https://kampaign.onepgr.com',
-            kampaignai: 'http://localhost:4200',
+            kampaignai: 'https://kampaign.onepgr.com',
+            // kampaignai: 'http://localhost:4200',
             gps: 'https://gps.onepgr.com',
             getsalesgpt: 'https://sales.onepgr.com',
         };
@@ -2916,7 +2916,7 @@ router.post('/get-subscription-info-by-app', async (req, res) => {
         if (features.includes('manageSubscription')) {
             const appUrlMap = {
                 kampaignai: 'https://kampaign.onepgr.com',
-                kampaignai: 'http://localhost:4200',
+                // kampaignai: 'http://localhost:4200',
                 gps: 'https://gps.onepgr.com',
                 getsalesgpt: 'https://sales.onepgr.com',
             };
