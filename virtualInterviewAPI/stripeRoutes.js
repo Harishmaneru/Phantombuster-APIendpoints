@@ -105,6 +105,17 @@ router.post(
 
         try {
             switch (event.type) {
+                case 'invoice.created': {
+                    const invoice = event.data.object;
+
+                    // Check if this is for a domain purchase (not subscription)
+                    if (!invoice.subscription && invoice.metadata?.purchaseType === 'domain') {
+                        console.log('[stripeRoutes.js] Domain purchase invoice created:', invoice.id);
+
+                    }
+                    break;
+                }
+
                 case 'checkout.session.completed': {
                     const session = event.data.object;
                     const {
@@ -114,19 +125,19 @@ router.post(
                         id: sessionId,
                         payment_status,
                         amount_total,
-                        currency
+                        currency,
+                        invoice // This will now contain the invoice ID for domain purchases
                     } = session;
                     const userId = metadata?.userId || 'unknown';
                     const subscriptionStatus = session.status || 'active';
 
                     await connectToMongoDB();
 
-                    // Skip one-time payments
+                    // Skip one-time payments (domain purchases are handled in /domain/process-success-payment endpoint)
                     if (!subscriptionId) {
-                        console.log('[checkout.session.completed] One-time payment detected');
+                        console.log('[checkout.session.completed] One-time payment detected (non-domain)');
                         break;
                     }
-
                     // Retrieve full subscription object
                     let stripeSubscription;
                     try {
@@ -191,41 +202,6 @@ router.post(
                     break;
                 }
 
-                // case 'invoice.payment_succeeded': {
-                //     const invoice = event.data.object;
-                //     const subscriptionId = invoice.subscription;
-                //     if (subscriptionId) {
-                //         await connectToMongoDB();
-
-                //         const lineItem = invoice.lines.data[0];
-                //         let startUnix = lineItem?.period?.start;
-                //         let endUnix = lineItem?.period?.end;
-                //         const currentPeriodStartFormatted = startUnix
-                //             ? new Date(startUnix * 1000).toLocaleString('en-US')
-                //             : new Date().toLocaleString('en-US');
-                //         const currentPeriodEndFormatted = endUnix
-                //             ? new Date(endUnix * 1000).toLocaleString('en-US')
-                //             : new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toLocaleString('en-US');
-
-                //         try {
-                //             await Subscription.updateOne(
-                //                 { subscriptionId },
-                //                 {
-                //                     paymentStatus: 'paid',
-                //                     currentPeriodStart: currentPeriodStartFormatted,
-                //                     currentPeriodEnd: currentPeriodEndFormatted,
-                //                     // You might also store invoice-related data here:
-                //                     lastInvoice: invoice.id,
-                //                     hostedInvoiceUrl: invoice.hosted_invoice_url
-                //                 }
-                //             );
-                //             console.log(`[stripeRoutes.js] Updated subscription ${subscriptionId} for paid invoice`);
-                //         } catch (dbError) {
-                //             console.error('[stripeRoutes.js] Database update error:', dbError);
-                //         }
-                //     }
-                //     break;
-                // }
                 case 'invoice.payment_succeeded': {
                     const invoice = event.data.object;
                     const subscriptionId = invoice.subscription;
@@ -489,14 +465,26 @@ router.post('/create-payment-intent', async (req, res) => {
             postalCode
         };
 
-        // Create a dynamic product for this domain
-        const product = await stripe.products.create({
-            name: `Domain: ${domainName}`,
-            description: `Registration for ${domainName}`,
-            metadata: { type: 'domain', userId, domainName }
+        // Create a customer first (required for invoices)
+        const customer = await stripe.customers.create({
+            email: email,
+            name: `${firstName} ${lastName}`,
+            phone: phone,
+            metadata: {
+                userId: userId,
+                domainName: domainName
+            },
+            address: {
+                line1: address1,
+                line2: address2,
+                city: city,
+                state: stateProvince,
+                postal_code: postalCode,
+                country: country
+            }
         });
 
-        // Create Checkout Session (same as old API)
+        // Create Checkout Session WITH invoice creation
         const session = await stripe.checkout.sessions.create({
             payment_method_types: ['card'],
             mode: 'payment',
@@ -504,9 +492,13 @@ router.post('/create-payment-intent', async (req, res) => {
                 price_data: {
                     currency: currency || 'usd',
                     product_data: {
-                        name: `Domain: ${domainName}`,
+                        name: 'Domain Registration Service',
                         description: `Registration for ${domainName}`,
-                        metadata: { type: 'domain', userId, domainName }
+                        metadata: {
+                            type: 'domain_service',
+                            actualDomain: domainName,
+                            userId: userId
+                        }
                     },
                     unit_amount: Math.round(price * 100),
                 },
@@ -515,7 +507,24 @@ router.post('/create-payment-intent', async (req, res) => {
             success_url: 'https://kampaign.onepgr.com/domain-success?session_id={CHECKOUT_SESSION_ID}',
             cancel_url: 'https://kampaign.onepgr.com/cancel',
             metadata: metadata,
-            customer_creation: 'always'
+            customer: customer.id, // Use the created customer
+            invoice_creation: {
+                enabled: true, // This enables invoice generation
+                invoice_data: {
+                    metadata: metadata,
+                    footer: `Thank you for registering ${domainName}`,
+                    custom_fields: [
+                        {
+                            name: 'Domain Name',
+                            value: domainName
+                        },
+                        {
+                            name: 'Registration Period',
+                            value: `${years} year(s)`
+                        }
+                    ]
+                }
+            }
         });
 
         // Log the domain purchase initiation
@@ -528,6 +537,7 @@ router.post('/create-payment-intent', async (req, res) => {
                 currency: currency || 'usd',
                 status: 'pending',
                 stripeSessionId: session.id,
+                stripeCustomerId: customer.id, // Store customer ID
                 registrationYears: parseInt(years),
                 enablePrivacy: enablePrivacy,
                 contactInfo: {
@@ -547,7 +557,6 @@ router.post('/create-payment-intent', async (req, res) => {
                 apiEndpoint: '/create-payment-intent',
                 requestMethod: 'POST',
                 metadata: {
-                    productId: product.id,
                     years: years.toString(),
                     enablePrivacy: enablePrivacy.toString()
                 }
@@ -557,7 +566,11 @@ router.post('/create-payment-intent', async (req, res) => {
             // Don't fail the request if logging fails
         }
 
-        res.json({ url: session.url, sessionId: session.id });
+        res.json({
+            url: session.url,
+            sessionId: session.id
+
+        });
 
     } catch (err) {
         console.error("Stripe error:", err);
@@ -686,7 +699,26 @@ router.post('/domain/create-checkout-session', async (req, res) => {
             postalCode
         };
 
-        // Stripe Checkout Session
+        // Create a customer first (required for invoices)
+        const customer = await stripe.customers.create({
+            email: email,
+            name: `${firstName} ${lastName}`,
+            phone: phone,
+            metadata: {
+                userId: userId,
+                domainName: domainName
+            },
+            address: {
+                line1: address1,
+                line2: address2,
+                city: city,
+                state: stateProvince,
+                postal_code: postalCode,
+                country: country
+            }
+        });
+
+        // Stripe Checkout Session WITH invoice creation
         const session = await stripe.checkout.sessions.create({
             payment_method_types: ['card'],
             mode: 'payment',
@@ -705,7 +737,24 @@ router.post('/domain/create-checkout-session', async (req, res) => {
             success_url: 'https://kampaign.onepgr.com//domain-success?session_id={CHECKOUT_SESSION_ID}',
             cancel_url: 'https://kampaign.onepgr.com//cancel',
             metadata: metadata,
-            customer_creation: 'always'
+            customer: customer.id, // Use the created customer
+            invoice_creation: {
+                enabled: true, // This enables invoice generation
+                invoice_data: {
+                    metadata: metadata,
+                    footer: `Thank you for registering ${domainName}`,
+                    custom_fields: [
+                        {
+                            name: 'Domain Name',
+                            value: domainName
+                        },
+                        {
+                            name: 'Registration Period',
+                            value: `${years} year(s)`
+                        }
+                    ]
+                }
+            }
         });
 
         // Log the domain purchase initiation
@@ -718,6 +767,7 @@ router.post('/domain/create-checkout-session', async (req, res) => {
                 currency: currency || 'usd',
                 status: 'pending',
                 stripeSessionId: session.id,
+                stripeCustomerId: customer.id, // Store customer ID
                 registrationYears: parseInt(years),
                 enablePrivacy: enablePrivacy,
                 contactInfo: {
@@ -747,7 +797,10 @@ router.post('/domain/create-checkout-session', async (req, res) => {
             // Don't fail the request if logging fails
         }
 
-        res.json({ url: session.url, sessionId: session.id });
+        res.json({
+            url: session.url,
+            sessionId: session.id
+        });
 
     } catch (err) {
         console.error("Stripe error:", err);
@@ -1623,6 +1676,323 @@ router.post('/check-refund-status', async (req, res) => {
 
 
 
+// Get invoice by session ID (for any type of purchase)
+router.get('/invoice/session/:sessionId', async (req, res) => {
+    const { sessionId } = req.params;
+
+    if (!sessionId) {
+        return res.status(400).json({ error: 'sessionId is required' });
+    }
+
+    try {
+        // Retrieve the session with expanded invoice data
+        const session = await stripe.checkout.sessions.retrieve(sessionId, {
+            expand: ['invoice', 'customer']
+        });
+
+        if (!session) {
+            return res.status(404).json({ error: 'Session not found' });
+        }
+
+        let invoiceData = null;
+        let customerData = null;
+
+        // Extract customer information
+        if (session.customer && typeof session.customer === 'object') {
+            customerData = {
+                id: session.customer.id,
+                email: session.customer.email,
+                name: session.customer.name
+            };
+        }
+
+        // Handle invoice data
+        if (session.invoice && typeof session.invoice === 'object') {
+            // Use expanded invoice data
+            invoiceData = {
+                id: session.invoice.id,
+                hostedInvoiceUrl: session.invoice.hosted_invoice_url,
+                invoicePdf: session.invoice.invoice_pdf,
+                receiptUrl: session.invoice.receipt_url,
+                status: session.invoice.status,
+                amount: session.invoice.amount_paid ? session.invoice.amount_paid / 100 : null,
+                currency: session.invoice.currency
+            };
+        } else if (session.invoice && typeof session.invoice === 'string') {
+            // Fetch invoice by ID
+            try {
+                const invoice = await stripe.invoices.retrieve(session.invoice);
+                invoiceData = {
+                    id: invoice.id,
+                    hostedInvoiceUrl: invoice.hosted_invoice_url,
+                    invoicePdf: invoice.invoice_pdf,
+                    receiptUrl: invoice.receipt_url,
+                    status: invoice.status,
+                    amount: invoice.amount_paid ? invoice.amount_paid / 100 : null,
+                    currency: invoice.currency
+                };
+            } catch (invoiceError) {
+                console.warn(`Could not retrieve invoice ${session.invoice}:`, invoiceError.message);
+            }
+        }
+
+        // Determine purchase type from metadata
+        const purchaseType = session.metadata?.purchaseType || 'unknown';
+        const isDomainPurchase = purchaseType === 'domain';
+
+        res.json({
+            sessionId: session.id,
+            status: session.status,
+            paymentStatus: session.payment_status,
+            amount: session.amount_total ? session.amount_total / 100 : null,
+            currency: session.currency,
+            purchaseType: purchaseType,
+            isDomainPurchase: isDomainPurchase,
+            customer: customerData,
+            invoice: invoiceData,
+            metadata: session.metadata,
+            createdAt: new Date(session.created * 1000).toISOString()
+        });
+
+    } catch (error) {
+        console.error(`Error retrieving invoice for session ${sessionId}:`, error);
+        res.status(500).json({
+            error: 'Failed to retrieve invoice',
+            sessionId,
+            details: process.env.NODE_ENV === 'development' ? error.message : undefined
+        });
+    }
+});
+
+// Get all invoices for a user (any type of purchase)
+router.get('/invoices/user/:userId', async (req, res) => {
+    const { userId } = req.params;
+    const { limit = 50, offset = 0 } = req.query;
+
+    if (!userId) {
+        return res.status(400).json({ error: 'userId is required' });
+    }
+
+    try {
+        // Get all checkout sessions for this user
+        const sessions = await stripe.checkout.sessions.list({
+            limit: parseInt(limit),
+            starting_after: offset > 0 ? offset : undefined,
+            expand: ['data.invoice', 'data.customer']
+        });
+
+        // Filter sessions for this user
+        const userSessions = sessions.data.filter(session =>
+            session.metadata?.userId === userId
+        );
+
+        if (!userSessions || userSessions.length === 0) {
+            return res.json({
+                userId,
+                totalSessions: 0,
+                sessions: [],
+                message: 'No sessions found for this user'
+            });
+        }
+
+        // Process each session to get invoice information
+        const sessionInvoices = await Promise.all(userSessions.map(async (session) => {
+            let invoiceData = null;
+            let customerData = null;
+
+            // Extract customer information
+            if (session.customer && typeof session.customer === 'object') {
+                customerData = {
+                    id: session.customer.id,
+                    email: session.customer.email,
+                    name: session.customer.name
+                };
+            }
+
+            // Handle invoice data
+            if (session.invoice && typeof session.invoice === 'object') {
+                invoiceData = {
+                    id: session.invoice.id,
+                    hostedInvoiceUrl: session.invoice.hosted_invoice_url,
+                    invoicePdf: session.invoice.invoice_pdf,
+                    receiptUrl: session.invoice.receipt_url,
+                    status: session.invoice.status,
+                    amount: session.invoice.amount_paid ? session.invoice.amount_paid / 100 : null,
+                    currency: session.invoice.currency
+                };
+            } else if (session.invoice && typeof session.invoice === 'string') {
+                try {
+                    const invoice = await stripe.invoices.retrieve(session.invoice);
+                    invoiceData = {
+                        id: invoice.id,
+                        hostedInvoiceUrl: invoice.hosted_invoice_url,
+                        invoicePdf: invoice.invoice_pdf,
+                        receiptUrl: invoice.receipt_url,
+                        status: invoice.status,
+                        amount: invoice.amount_paid ? invoice.amount_paid / 100 : null,
+                        currency: invoice.currency
+                    };
+                } catch (invoiceError) {
+                    console.warn(`Could not retrieve invoice ${session.invoice}:`, invoiceError.message);
+                }
+            }
+
+            return {
+                sessionId: session.id,
+                status: session.status,
+                paymentStatus: session.payment_status,
+                amount: session.amount_total ? session.amount_total / 100 : null,
+                currency: session.currency,
+                purchaseType: session.metadata?.purchaseType || 'unknown',
+                isDomainPurchase: session.metadata?.purchaseType === 'domain',
+                customer: customerData,
+                invoice: invoiceData,
+                metadata: session.metadata,
+                createdAt: new Date(session.created * 1000).toISOString()
+            };
+        }));
+
+        res.json({
+            userId,
+            totalSessions: userSessions.length,
+            sessions: sessionInvoices
+        });
+
+    } catch (error) {
+        console.error(`Error retrieving invoices for user ${userId}:`, error);
+        res.status(500).json({
+            error: 'Failed to retrieve invoices',
+            userId,
+            details: process.env.NODE_ENV === 'development' ? error.message : undefined
+        });
+    }
+});
+
+// Get domain invoices for a user
+router.get('/users/:userId/domain-invoices', async (req, res) => {
+    const { userId } = req.params;
+    const { limit = 50, offset = 0 } = req.query;
+
+    if (!userId) {
+        return res.status(400).json({ error: 'userId is required' });
+    }
+
+    try {
+        await connectToMongoDB();
+
+        // Find domain purchases in your database
+        const DomainCollection = mongoose.connection.db.collection('domains'); // Adjust collection name
+        const userDomains = await DomainCollection.find({ userId }).limit(parseInt(limit)).skip(parseInt(offset)).toArray();
+
+        if (!userDomains || userDomains.length === 0) {
+            return res.json({
+                userId,
+                totalDomains: 0,
+                domains: [],
+                message: 'No domains found for this user'
+            });
+        }
+
+        // Process each domain to get invoice information
+        const domainInvoices = await Promise.all(userDomains.map(async (domain) => {
+            try {
+                let invoiceData = null;
+
+                // If we already have invoice data stored, use it
+                if (domain.invoiceId || domain.hostedInvoiceUrl) {
+                    invoiceData = {
+                        id: domain.invoiceId || 'stored_invoice',
+                        hosted_invoice_url: domain.hostedInvoiceUrl,
+                        invoice_pdf: domain.invoicePdf,
+                        receipt_url: domain.receiptUrl,
+                        status: domain.paymentStatus || 'paid'
+                    };
+                }
+                // If no stored invoice data, try to retrieve from Stripe
+                else if (domain.sessionId) {
+                    try {
+                        const session = await stripe.checkout.sessions.retrieve(domain.sessionId, {
+                            expand: ['invoice']
+                        });
+
+                        if (session.invoice) {
+                            const invoice = await stripe.invoices.retrieve(session.invoice);
+                            invoiceData = {
+                                id: invoice.id,
+                                hosted_invoice_url: invoice.hosted_invoice_url,
+                                invoice_pdf: invoice.invoice_pdf,
+                                receipt_url: invoice.receipt_url,
+                                status: invoice.status
+                            };
+
+                            // Update the database with invoice info for future requests
+                            await DomainCollection.updateOne(
+                                { _id: domain._id },
+                                {
+                                    $set: {
+                                        invoiceId: invoice.id,
+                                        hostedInvoiceUrl: invoice.hosted_invoice_url,
+                                        invoicePdf: invoice.invoice_pdf,
+                                        receiptUrl: invoice.receipt_url
+                                    }
+                                }
+                            );
+                        }
+                    } catch (stripeError) {
+                        console.warn(`Could not retrieve invoice for session ${domain.sessionId}:`, stripeError.message);
+                    }
+                }
+
+                return {
+                    domainName: domain.domainName,
+                    amount: domain.amount || 0,
+                    currency: domain.currency || 'usd',
+                    purchaseDate: domain.purchaseDate || domain.createdAt,
+                    invoice: invoiceData ? {
+                        id: invoiceData.id,
+                        hostedInvoiceUrl: invoiceData.hosted_invoice_url,
+                        invoicePdf: invoiceData.invoice_pdf,
+                        receiptUrl: invoiceData.receipt_url,
+                        status: invoiceData.status
+                    } : null,
+                    paymentStatus: domain.paymentStatus || 'unknown',
+                    paymentMethod: 'card' // Assuming card for domain purchases
+                };
+
+            } catch (error) {
+                console.error(`Error processing domain ${domain.domainName}:`, error.message);
+                return {
+                    domainName: domain.domainName,
+                    amount: domain.amount || 0,
+                    currency: domain.currency || 'usd',
+                    purchaseDate: domain.purchaseDate || domain.createdAt,
+                    invoice: null,
+                    paymentStatus: domain.paymentStatus || 'error',
+                    paymentMethod: 'unknown',
+                    error: error.message
+                };
+            }
+        }));
+
+        // Get total count for pagination
+        const totalDomains = await DomainCollection.countDocuments({ userId });
+
+        res.json({
+            userId,
+            totalDomains,
+            domains: domainInvoices
+        });
+
+    } catch (error) {
+        console.error(`Error retrieving domain invoices for user ${userId}:`, error);
+        res.status(500).json({
+            error: 'Failed to retrieve domain invoices',
+            userId,
+            details: process.env.NODE_ENV === 'development' ? error.message : undefined
+        });
+    }
+});
+
 // Get all domain purchases for a user
 router.get('/users/:userId/domain-purchases', async (req, res) => {
     const { userId } = req.params;
@@ -1770,7 +2140,7 @@ router.post('/domain/process-success-payment', async (req, res) => {
 
         // Step 1: Verify payment and extract data in parallel
         const session = await stripe.checkout.sessions.retrieve(sessionId, {
-            expand: ['line_items', 'customer']
+            expand: ['line_items', 'customer', 'invoice']
         });
 
         if (!session) {
@@ -1846,35 +2216,52 @@ router.post('/domain/process-success-payment', async (req, res) => {
             });
         }
 
-        // Step 2: Optimized invoice processing - simplified approach
+        // Step 2: Enhanced invoice processing with expanded data
         let hostedInvoiceUrl = null;
         let invoicePdf = null;
         let invoiceId = null;
+        let receiptUrl = null;
 
-        // Quick invoice lookup - try the most common methods first
-        if (session.invoice) {
-            invoiceId = session.invoice;
-        } else if (session.payment_intent) {
-            try {
-                const paymentIntent = await stripe.paymentIntents.retrieve(session.payment_intent);
-                invoiceId = paymentIntent.invoice;
-            } catch (error) {
-                // Continue without invoice if payment intent retrieval fails
-            }
+        // Use expanded invoice data if available (new invoice-enabled sessions)
+        if (session.invoice && typeof session.invoice === 'object') {
+            const invoice = session.invoice;
+            invoiceId = invoice.id;
+            hostedInvoiceUrl = invoice.hosted_invoice_url || null;
+            invoicePdf = invoice.invoice_pdf || null;
+            receiptUrl = invoice.receipt_url || null;
+            console.log(`[process-success-payment] Using expanded invoice data: ${invoiceId}`);
         }
-
-        // Fetch invoice details if we have an invoice ID
-        if (invoiceId) {
+        // Fallback to invoice ID lookup (legacy sessions)
+        else if (session.invoice && typeof session.invoice === 'string') {
+            invoiceId = session.invoice;
             try {
                 const invoice = await stripe.invoices.retrieve(invoiceId);
                 hostedInvoiceUrl = invoice.hosted_invoice_url || null;
                 invoicePdf = invoice.invoice_pdf || null;
+                receiptUrl = invoice.receipt_url || null;
+                console.log(`[process-success-payment] Retrieved invoice from ID: ${invoiceId}`);
             } catch (error) {
-                // Continue without invoice details if retrieval fails
+                console.warn(`[process-success-payment] Could not retrieve invoice ${invoiceId}:`, error.message);
+            }
+        }
+        // Last resort: try payment intent (very old sessions)
+        else if (session.payment_intent) {
+            try {
+                const paymentIntent = await stripe.paymentIntents.retrieve(session.payment_intent);
+                if (paymentIntent.invoice) {
+                    invoiceId = paymentIntent.invoice;
+                    const invoice = await stripe.invoices.retrieve(invoiceId);
+                    hostedInvoiceUrl = invoice.hosted_invoice_url || null;
+                    invoicePdf = invoice.invoice_pdf || null;
+                    receiptUrl = invoice.receipt_url || null;
+                    console.log(`[process-success-payment] Retrieved invoice from payment intent: ${invoiceId}`);
+                }
+            } catch (error) {
+                console.warn(`[process-success-payment] Could not retrieve invoice from payment intent:`, error.message);
             }
         }
 
-        // Fallback receipt URL
+        // Fallback receipt URL if no invoice URL available
         if (!hostedInvoiceUrl && session.payment_intent) {
             hostedInvoiceUrl = `https://dashboard.stripe.com/payments/${session.payment_intent}`;
         }
@@ -1884,6 +2271,7 @@ router.post('/domain/process-success-payment', async (req, res) => {
             subscriptionId: session.subscription || null,
             hostedInvoiceUrl: hostedInvoiceUrl,
             invoicePdf: invoicePdf,
+            receiptUrl: receiptUrl, // Use the retrieved receipt URL
             paymentIntentId: session.payment_intent || null,
             customerId: session.customer ? (typeof session.customer === 'object' ? session.customer.id : session.customer) : null,
             paymentStatus: session.payment_status || 'unknown',
@@ -1891,7 +2279,6 @@ router.post('/domain/process-success-payment', async (req, res) => {
             currency: session.currency || 'usd',
             paymentMethod: session.payment_method_types?.[0] || 'card',
             paymentDate: new Date(session.created * 1000),
-            receiptUrl: session.receipt_email ? `Receipt sent to ${session.receipt_email}` : null,
             invoiceId: invoiceId
         };
 
@@ -1933,6 +2320,7 @@ router.post('/domain/process-success-payment', async (req, res) => {
                     invoiceId: stripePaymentInfo.invoiceId,
                     hostedInvoiceUrl: stripePaymentInfo.hostedInvoiceUrl,
                     invoicePdf: stripePaymentInfo.invoicePdf,
+                    receiptUrl: stripePaymentInfo.receiptUrl,
                     registrationYears: parseInt(session.metadata.years || '1'),
                     enablePrivacy: session.metadata.enablePrivacy === 'true',
                     domainId: registrationResult.data?.registration?.domainId,
@@ -1990,6 +2378,12 @@ router.post('/domain/process-success-payment', async (req, res) => {
                 domain: domainName,
                 registrationYears: session.metadata.years,
                 userId: userId,
+                invoice: {
+                    id: stripePaymentInfo.invoiceId,
+                    hostedUrl: stripePaymentInfo.hostedInvoiceUrl,
+                    pdfUrl: stripePaymentInfo.invoicePdf,
+                    receiptUrl: stripePaymentInfo.receiptUrl
+                },
                 combinedRecord: {
                     stripePaymentStored: true,
                     domainRegistered: true,
@@ -2085,45 +2479,6 @@ router.get('/invoice/:paymentIntentId', async (req, res) => {
 
 
 
-// router.post('/create-checkout-session-by-app', async (req, res) => {
-//     try {
-//         const { userId, priceId, app, quantity = 1 } = req.body;
-
-//         // 1️⃣ Validate app URLs
-//         const appUrlMap = {
-//             kampaignai: 'https://kampaign.onepgr.com',
-//             // kampaignai: 'http://localhost:4200',
-//             gps: 'https://gps.onepgr.com',
-//             getsalesgpt: 'https://sales.onepgr.com',
-//         };
-
-//         if (!app || !appUrlMap[app]) {
-//             return res.status(400).json({ error: 'Invalid or missing app parameter' });
-//         }
-
-//         // 2️⃣ Validate quantity
-//         if (!quantity || quantity < 1) {
-//             return res.status(400).json({ error: 'Quantity must be at least 1' });
-//         }
-
-//         const sessionPayload = {
-//             mode: 'subscription',
-//             payment_method_types: ['card'],
-//             line_items: [{ price: priceId, quantity: quantity }],
-//             success_url: `${appUrlMap[app]}/success?session_id={CHECKOUT_SESSION_ID}`,
-//             cancel_url: `${appUrlMap[app]}/cancel`,
-//             metadata: { userId, app }
-//         };
-
-//         const session = await stripe.checkout.sessions.create(sessionPayload);
-//         res.json({ url: session.url });
-
-//     } catch (err) {
-//         console.error("Stripe error:", err);
-//         res.status(500).json({ error: err.message });
-//     }
-// });
-
 // Buy/subscribe using saved card if available, otherwise fall back to Checkout
 router.post('/create-checkout-session-by-app', async (req, res) => {
     try {
@@ -2205,49 +2560,7 @@ router.post('/create-checkout-session-by-app', async (req, res) => {
     }
 });
 
-// Utility function to consolidate duplicate customer IDs for a user
-async function consolidateCustomerIds(userId) {
-    try {
-        const allUserRecords = await Subscription.find({ userId });
 
-        if (allUserRecords.length <= 1) {
-            return { message: 'No duplicates found' };
-        }
-
-        // Find the record with the most recent customerId (or any valid customerId)
-        const recordsWithCustomerId = allUserRecords.filter(record => record.customerId);
-
-        if (recordsWithCustomerId.length === 0) {
-            return { message: 'No records with customerId found' };
-        }
-
-        // Use the most recent record with customerId as the primary
-        const primaryRecord = recordsWithCustomerId.sort((a, b) =>
-            new Date(b.createdAt) - new Date(a.createdAt)
-        )[0];
-
-        const primaryCustomerId = primaryRecord.customerId;
-
-        // Update all other records to use the primary customerId
-        const updateResult = await Subscription.updateMany(
-            { userId, customerId: { $ne: primaryCustomerId } },
-            { $set: { customerId: primaryCustomerId } }
-        );
-
-        console.log(`Consolidated ${updateResult.modifiedCount} records for user ${userId} to use customerId: ${primaryCustomerId}`);
-
-        return {
-            message: 'Customer IDs consolidated successfully',
-            primaryCustomerId,
-            updatedRecords: updateResult.modifiedCount,
-            totalRecords: allUserRecords.length
-        };
-
-    } catch (error) {
-        console.error('Error consolidating customer IDs:', error);
-        throw error;
-    }
-}
 
 // Create a Billing Portal session to manage subscription
 router.post('/create-billing-portal-session-by-app', async (req, res) => {
@@ -2662,7 +2975,7 @@ router.post('/get-user-payment-info', async (req, res) => {
 
         // Fetch customer & ALL active subscriptions with expanded data
         const customer = await stripe.customers.retrieve(customerId);
-        
+
         // Get subscriptions - normal approach for most users
         let subscriptions = await stripe.subscriptions.list({
             customer: customerId,
@@ -2670,7 +2983,7 @@ router.post('/get-user-payment-info', async (req, res) => {
             limit: 100,
             expand: ['data.latest_invoice', 'data.default_payment_method']
         });
-        
+
         // Special handling ONLY for User 1486 (consolidated customer)
         if (userId === "1486" && subscriptions.data.length === 1) {
             console.log(`🔗 Special handling for consolidated user 1486`);
@@ -2740,17 +3053,17 @@ router.post('/get-user-payment-info', async (req, res) => {
         // 📜 Fetch Billing History
         if (features.includes("billingHistory")) {
             let invoices = [];
-            
+
             // For consolidated customers, get invoices by subscription IDs
             if (userId === "1486") {
                 console.log(`🔗 Fetching billing history for consolidated user 1486`);
-                
+
                 // Get all subscription IDs for this user
                 const dbSubscriptions = await Subscription.find({ userId });
                 const subscriptionIds = dbSubscriptions.map(sub => sub.subscriptionId);
-                
+
                 console.log(`🔗 Found ${subscriptionIds.length} subscriptions:`, subscriptionIds);
-                
+
                 // Fetch invoices for each subscription
                 for (const subId of subscriptionIds) {
                     try {
@@ -2759,7 +3072,7 @@ router.post('/get-user-payment-info', async (req, res) => {
                             status: 'paid',
                             limit: 5
                         });
-                        
+
                         if (subscriptionInvoices.data.length > 0) {
                             invoices = invoices.concat(subscriptionInvoices.data);
                             console.log(`✅ Fetched ${subscriptionInvoices.data.length} invoices for subscription ${subId}`);
@@ -2768,14 +3081,14 @@ router.post('/get-user-payment-info', async (req, res) => {
                         console.warn(`Could not fetch invoices for subscription ${subId}:`, error.message);
                     }
                 }
-                
+
                 // Remove duplicates and sort by date
-                invoices = invoices.filter((inv, index, self) => 
+                invoices = invoices.filter((inv, index, self) =>
                     index === self.findIndex(t => t.id === inv.id)
                 ).sort((a, b) => b.created - a.created);
-                
+
                 console.log(`🔗 Total invoices found: ${invoices.length}`);
-                
+
             } else {
                 // Normal flow for other users
                 const customerInvoices = await stripe.invoices.list({
@@ -2863,7 +3176,7 @@ router.post('/get-user-payment-info', async (req, res) => {
                             nextPaymentDate = formatStripeDate(upcomingInvoice.period_end);
                             nextPaymentAmount = upcomingInvoice.amount_due / 100;
                         }
-                        
+
                         // Ensure nextPaymentAmount accounts for quantity if not from upcoming invoice
                         if (!nextPaymentAmount || nextPaymentAmount === 0) {
                             nextPaymentAmount = (plan.unit_amount / 100) * (primarySub.items.data[0].quantity || 1);
@@ -3223,346 +3536,47 @@ router.post('/cancel-subscription', async (req, res) => {
 });
 
 
+//domain invoise API
 
 
 
-//temp API's for merge customers IDs
 
-// Consolidate multiple customer IDs for a user (merge old API customers)
-router.post('/consolidate-customers', async (req, res) => {
-    try {
-        const { userId, primaryCustomerId } = req.body;
 
-        if (!userId || !primaryCustomerId) {
-            return res.status(400).json({ 
-                error: 'userId and primaryCustomerId are required' 
-            });
-        }
 
-        await connectToMongoDB();
 
-        // Find all subscriptions for this user
-        const allSubscriptions = await Subscription.find({ userId });
-        
-        if (allSubscriptions.length === 0) {
-            return res.status(404).json({ 
-                error: 'No subscriptions found for this user' 
-            });
-        }
 
-        // Verify the primary customer exists in Stripe
-        try {
-            const primaryCustomer = await stripe.customers.retrieve(primaryCustomerId);
-            console.log(`✅ Primary customer ${primaryCustomerId} verified in Stripe`);
-        } catch (stripeError) {
-            return res.status(400).json({ 
-                error: 'Primary customer ID is invalid or not found in Stripe',
-                details: stripeError.message 
-            });
-        }
 
-        // Get all unique customer IDs for this user
-        const customerIds = [...new Set(allSubscriptions.map(sub => sub.customerId))];
-        console.log(`Found ${customerIds.length} unique customer IDs for user ${userId}:`, customerIds);
 
-        if (customerIds.length <= 1) {
-            return res.json({ 
-                message: 'User already has only one customer ID',
-                customerIds 
-            });
-        }
 
-        // Consolidate all subscriptions under the primary customer
-        const consolidationResults = [];
-        let successCount = 0;
-        let errorCount = 0;
 
-        for (const customerId of customerIds) {
-            if (customerId === primaryCustomerId) {
-                console.log(`Skipping primary customer ${customerId}`);
-                continue;
-            }
 
-            try {
-                // Find subscriptions for this customer
-                const customerSubscriptions = allSubscriptions.filter(sub => sub.customerId === customerId);
-                
-                for (const subscription of customerSubscriptions) {
-                    try {
-                        // Note: Stripe doesn't allow changing customer field directly
-                        // We'll update the database to reflect the consolidation
-                        // The actual Stripe subscriptions will remain under their original customers
-                        // but our system will treat them as consolidated
-                        
-                        // Update subscription record in database to use primary customer ID
-                        await Subscription.updateOne(
-                            { subscriptionId: subscription.subscriptionId },
-                            { customerId: primaryCustomerId }
-                        );
-                        
-                        // Copy payment methods from old customer to primary customer
-                        try {
-                            const oldCustomerPaymentMethods = await stripe.paymentMethods.list({
-                                customer: customerId,
-                                type: 'card'
-                            });
-                            
-                            for (const pm of oldCustomerPaymentMethods.data) {
-                                try {
-                                    // Attach payment method to primary customer
-                                    await stripe.paymentMethods.attach(pm.id, {
-                                        customer: primaryCustomerId
-                                    });
-                                    console.log(`✅ Copied payment method ${pm.id} to primary customer`);
-                                } catch (attachError) {
-                                    if (attachError.code !== 'resource_already_exists') {
-                                        console.warn(`⚠️ Could not copy payment method ${pm.id}:`, attachError.message);
-                                    }
-                                }
-                            }
-                        } catch (pmError) {
-                            console.warn(`⚠️ Could not copy payment methods from ${customerId}:`, pmError.message);
-                        }
 
-                        console.log(`✅ Updated database record for subscription ${subscription.subscriptionId} to use primary customer ${primaryCustomerId}`);
-                        successCount++;
-                        
-                        consolidationResults.push({
-                            subscriptionId: subscription.subscriptionId,
-                            oldCustomerId: customerId,
-                            newCustomerId: primaryCustomerId,
-                            status: 'success',
-                            planName: subscription.planName,
-                            note: 'Database updated - Stripe subscription remains under original customer'
-                        });
 
-                    } catch (subscriptionError) {
-                        console.error(`❌ Failed to move subscription ${subscription.subscriptionId}:`, subscriptionError.message);
-                        errorCount++;
-                        
-                        consolidationResults.push({
-                            subscriptionId: subscription.subscriptionId,
-                            oldCustomerId: customerId,
-                            newCustomerId: primaryCustomerId,
-                            status: 'failed',
-                            error: subscriptionError.message,
-                            planName: subscription.planName
-                        });
-                    }
-                }
 
-                // Try to delete the old customer if it has no more subscriptions
-                try {
-                    const remainingSubscriptions = await stripe.subscriptions.list({
-                        customer: customerId,
-                        status: 'active',
-                        limit: 1
-                    });
 
-                    if (remainingSubscriptions.data.length === 0) {
-                        // No active subscriptions, can delete customer
-                        await stripe.customers.del(customerId);
-                        console.log(`🗑️ Deleted old customer ${customerId} (no active subscriptions)`);
-                        
-                        consolidationResults.push({
-                            customerId: customerId,
-                            action: 'deleted',
-                            status: 'success',
-                            reason: 'No active subscriptions'
-                        });
-                    } else {
-                        console.log(`⚠️ Customer ${customerId} still has active subscriptions, cannot delete`);
-                        
-                        consolidationResults.push({
-                            customerId: customerId,
-                            action: 'kept',
-                            status: 'warning',
-                            reason: 'Still has active subscriptions'
-                        });
-                    }
-                } catch (deleteError) {
-                    console.warn(`⚠️ Could not delete customer ${customerId}:`, deleteError.message);
-                    
-                    consolidationResults.push({
-                        customerId: customerId,
-                        action: 'delete_failed',
-                        status: 'warning',
-                        reason: deleteError.message
-                    });
-                }
 
-            } catch (customerError) {
-                console.error(`❌ Error processing customer ${customerId}:`, customerError.message);
-                errorCount++;
-            }
-        }
 
-        // Create or update customer record in Customer collection
-        try {
-            const existingCustomer = await Customer.findOne({ userId });
-            
-            if (existingCustomer) {
-                // Update existing customer record
-                await Customer.updateOne(
-                    { userId },
-                    { 
-                        customerId: primaryCustomerId,
-                        updatedAt: new Date(),
-                        isConsolidated: true
-                    }
-                );
-                console.log(`✅ Updated customer record for user ${userId}`);
-            } else {
-                // Create new customer record
-                const primaryCustomer = await stripe.customers.retrieve(primaryCustomerId);
-                await Customer.create({
-                    userId,
-                    customerId: primaryCustomerId,
-                    app: 'kampaignai', // or determine from subscriptions
-                    email: primaryCustomer.email || 'unknown@example.com',
-                    defaultPaymentMethodId: primaryCustomer.invoice_settings?.default_payment_method,
-                    createdAt: new Date(),
-                    isConsolidated: true
-                });
-                console.log(`✅ Created customer record for user ${userId}`);
-            }
-        } catch (dbError) {
-            console.error(`❌ Error updating customer record:`, dbError.message);
-        }
 
-        // Get final consolidated data (after database updates)
-        const finalSubscriptions = await Subscription.find({ userId });
-        const finalCustomerIds = [...new Set(finalSubscriptions.map(sub => sub.customerId))];
-        
-        // Note: Stripe subscriptions remain under original customers, but our database shows them as consolidated
-        // This means billing portal access needs special handling for consolidated customers
 
-        res.json({
-            success: true,
-            message: `Customer consolidation completed for user ${userId} (database updated)`,
-            summary: {
-                totalSubscriptions: finalSubscriptions.length,
-                uniqueCustomerIds: finalCustomerIds.length,
-                primaryCustomerId: primaryCustomerId,
-                successCount,
-                errorCount
-            },
-            consolidationResults,
-            finalState: {
-                customerIds: finalCustomerIds,
-                subscriptions: finalSubscriptions.map(sub => ({
-                    subscriptionId: sub.subscriptionId,
-                    customerId: sub.customerId,
-                    planName: sub.planName,
-                    status: sub.status
-                }))
-            }
-        });
 
-    } catch (error) {
-        console.error('Error consolidating customers:', error);
-        res.status(500).json({ 
-            error: 'Failed to consolidate customers',
-            details: error.message 
-        });
-    }
-});
 
-// Check customer consolidation status for a user
-router.get('/customer-consolidation-status/:userId', async (req, res) => {
-    try {
-        const { userId } = req.params;
 
-        if (!userId) {
-            return res.status(400).json({ error: 'userId is required' });
-        }
 
-        await connectToMongoDB();
 
-        // Find all subscriptions for this user
-        const allSubscriptions = await Subscription.find({ userId });
-        
-        if (allSubscriptions.length === 0) {
-            return res.json({ 
-                userId,
-                hasSubscriptions: false,
-                message: 'No subscriptions found for this user'
-            });
-        }
 
-        // Get all unique customer IDs
-        const customerIds = [...new Set(allSubscriptions.map(sub => sub.customerId))];
-        
-        // Group subscriptions by customer ID
-        const customerGroups = {};
-        for (const customerId of customerIds) {
-            customerGroups[customerId] = allSubscriptions.filter(sub => sub.customerId === customerId);
-        }
 
-        // Get customer details from Stripe
-        const customerDetails = {};
-        for (const customerId of customerIds) {
-            try {
-                const customer = await stripe.customers.retrieve(customerId);
-                customerDetails[customerId] = {
-                    email: customer.email,
-                    name: customer.name,
-                    created: new Date(customer.created * 1000).toISOString(),
-                    hasDefaultPaymentMethod: !!customer.invoice_settings?.default_payment_method,
-                    defaultPaymentMethodId: customer.invoice_settings?.default_payment_method
-                };
-            } catch (error) {
-                customerDetails[customerId] = {
-                    error: 'Could not retrieve customer from Stripe',
-                    details: error.message
-                };
-            }
-        }
 
-        // Determine if consolidation is needed
-        const needsConsolidation = customerIds.length > 1;
-        const recommendedPrimaryCustomer = needsConsolidation ? 
-            customerIds.sort((a, b) => 
-                new Date(customerDetails[b]?.created || 0) - new Date(customerDetails[a]?.created || 0)
-            )[0] : null;
 
-        res.json({
-            userId,
-            hasSubscriptions: true,
-            needsConsolidation,
-            currentState: {
-                totalSubscriptions: allSubscriptions.length,
-                uniqueCustomerIds: customerIds.length,
-                customerIds: customerIds
-            },
-            customerGroups: Object.keys(customerGroups).map(customerId => ({
-                customerId,
-                subscriptionCount: customerGroups[customerId].length,
-                subscriptions: customerGroups[customerId].map(sub => ({
-                    subscriptionId: sub.subscriptionId,
-                    planName: sub.planName,
-                    status: sub.status,
-                    amount: sub.amount,
-                    currentPeriodEnd: sub.currentPeriodEnd
-                })),
-                customerDetails: customerDetails[customerId]
-            })),
-            recommendations: needsConsolidation ? {
-                primaryCustomerId: recommendedPrimaryCustomer,
-                reason: 'Most recently created customer',
-                action: 'Use /consolidate-customers endpoint to merge all subscriptions under this customer ID'
-            } : {
-                message: 'No consolidation needed - user already has single customer ID'
-            }
-        });
 
-    } catch (error) {
-        console.error('Error checking customer consolidation status:', error);
-        res.status(500).json({ 
-            error: 'Failed to check customer consolidation status',
-            details: error.message 
-        });
-    }
-});
+
+
+
+
+
+
+
+
+
+
 
 module.exports = router;
