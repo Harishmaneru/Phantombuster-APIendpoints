@@ -1868,7 +1868,7 @@ router.get('/invoices/user/:userId', async (req, res) => {
     }
 });
 
-// Get domain invoices for a user
+// Get domain invoices for a user from namecheap_domains collection
 router.get('/users/:userId/domain-invoices', async (req, res) => {
     const { userId } = req.params;
     const { limit = 50, offset = 0 } = req.query;
@@ -1880,115 +1880,58 @@ router.get('/users/:userId/domain-invoices', async (req, res) => {
     try {
         await connectToMongoDB();
 
-        // Find domain purchases in your database
-        const DomainCollection = mongoose.connection.db.collection('domains'); // Adjust collection name
-        const userDomains = await DomainCollection.find({ userId }).limit(parseInt(limit)).skip(parseInt(offset)).toArray();
+        // Import the NamecheapDomain model to query the correct collection
+        const { NamecheapDomain } = require('../domainManagementAPI/nameCheapDomainApi');
+
+        // Query the namecheap_domains collection for this user
+        const userDomains = await NamecheapDomain.find({ userId })
+            .limit(parseInt(limit))
+            .skip(parseInt(offset))
+            .lean();
 
         if (!userDomains || userDomains.length === 0) {
             return res.json({
+                success: true,
                 userId,
-                totalDomains: 0,
-                domains: [],
+                data: [],
                 message: 'No domains found for this user'
             });
         }
 
-        // Process each domain to get invoice information
-        const domainInvoices = await Promise.all(userDomains.map(async (domain) => {
-            try {
-                let invoiceData = null;
-
-                // If we already have invoice data stored, use it
-                if (domain.invoiceId || domain.hostedInvoiceUrl) {
-                    invoiceData = {
-                        id: domain.invoiceId || 'stored_invoice',
-                        hosted_invoice_url: domain.hostedInvoiceUrl,
-                        invoice_pdf: domain.invoicePdf,
-                        receipt_url: domain.receiptUrl,
-                        status: domain.paymentStatus || 'paid'
-                    };
-                }
-                // If no stored invoice data, try to retrieve from Stripe
-                else if (domain.sessionId) {
-                    try {
-                        const session = await stripe.checkout.sessions.retrieve(domain.sessionId, {
-                            expand: ['invoice']
-                        });
-
-                        if (session.invoice) {
-                            const invoice = await stripe.invoices.retrieve(session.invoice);
-                            invoiceData = {
-                                id: invoice.id,
-                                hosted_invoice_url: invoice.hosted_invoice_url,
-                                invoice_pdf: invoice.invoice_pdf,
-                                receipt_url: invoice.receipt_url,
-                                status: invoice.status
-                            };
-
-                            // Update the database with invoice info for future requests
-                            await DomainCollection.updateOne(
-                                { _id: domain._id },
-                                {
-                                    $set: {
-                                        invoiceId: invoice.id,
-                                        hostedInvoiceUrl: invoice.hosted_invoice_url,
-                                        invoicePdf: invoice.invoice_pdf,
-                                        receiptUrl: invoice.receipt_url
-                                    }
-                                }
-                            );
-                        }
-                    } catch (stripeError) {
-                        console.warn(`Could not retrieve invoice for session ${domain.sessionId}:`, stripeError.message);
-                    }
-                }
-
-                return {
-                    domainName: domain.domainName,
-                    amount: domain.amount || 0,
-                    currency: domain.currency || 'usd',
-                    purchaseDate: domain.purchaseDate || domain.createdAt,
-                    invoice: invoiceData ? {
-                        id: invoiceData.id,
-                        hostedInvoiceUrl: invoiceData.hosted_invoice_url,
-                        invoicePdf: invoiceData.invoice_pdf,
-                        receiptUrl: invoiceData.receipt_url,
-                        status: invoiceData.status
-                    } : null,
-                    paymentStatus: domain.paymentStatus || 'unknown',
-                    paymentMethod: 'card' // Assuming card for domain purchases
-                };
-
-            } catch (error) {
-                console.error(`Error processing domain ${domain.domainName}:`, error.message);
-                return {
-                    domainName: domain.domainName,
-                    amount: domain.amount || 0,
-                    currency: domain.currency || 'usd',
-                    purchaseDate: domain.purchaseDate || domain.createdAt,
-                    invoice: null,
-                    paymentStatus: domain.paymentStatus || 'error',
-                    paymentMethod: 'unknown',
-                    error: error.message
-                };
-            }
-        }));
-
-        // Get total count for pagination
-        const totalDomains = await DomainCollection.countDocuments({ userId });
+        // Extract only the required information
+        const domainInvoices = userDomains
+            .filter(domain => domain.stripePayment && domain.stripePayment.invoiceId)
+            .map(domain => ({
+                domain_name: domain.domain,
+                charged_amount: domain.registrationData?.chargedAmount || 0,
+                invoice_details: {
+                    id: domain.stripePayment.invoiceId,
+                    hosted_invoice_url: domain.stripePayment.hostedInvoiceUrl,
+                    invoice_pdf: domain.stripePayment.invoicePdf,
+                    receipt_url: domain.stripePayment.receiptUrl,
+                    status: domain.stripePayment.paymentStatus || 'paid'
+                },
+                date_of_purchase: domain.registrationData?.registrationDate || domain.createdAt
+            }));
 
         res.json({
+            success: true,
             userId,
-            totalDomains,
-            domains: domainInvoices
+            data: domainInvoices
         });
 
     } catch (error) {
-        console.error(`Error retrieving domain invoices for user ${userId}:`, error);
-        res.status(500).json({
-            error: 'Failed to retrieve domain invoices',
+        console.error('[Domain Invoices API] Error fetching user domain invoices:', {
+            error: error.message,
             userId,
-            details: process.env.NODE_ENV === 'development' ? error.message : undefined
+            stack: error.stack
+        });
+
+        res.status(500).json({
+            success: false,
+            userId,
+            error: error.message,
+            details: 'Failed to fetch user domain invoices'
         });
     }
 });
