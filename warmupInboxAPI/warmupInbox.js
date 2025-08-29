@@ -3,8 +3,8 @@ const axios = require('axios');
 const mongoose = require('mongoose');
 const router = express.Router();
 
-// Import the SMTP settings function
-const { getSMTPSettingsForEmail } = require('../notifyAPI/sendEmail.js');
+// COMMENTED OUT: Import the SMTP settings function (no longer used)
+// const { getSMTPSettingsForEmail } = require('../notifyAPI/sendEmail.js');
 
 // MongoDB connection
 const connectToMongoDB = async () => {
@@ -223,6 +223,9 @@ router.post('/api/warmup/add-inbox', async (req, res) => {
       error: error.response?.data?.error
     });
 
+    // COMMENTED OUT: Fallback logic that tries to fetch SMTP settings from cPanel
+    // This was causing delays and timeouts, so we're returning the original error immediately
+    /*
     // If it's a configuration error (422, 400 with SMTP/IMAP issues), try with getSMTPSettingsForEmail
     const shouldTryFallback = error.response?.status === 422 ||
       (error.response?.status === 400 &&
@@ -401,6 +404,7 @@ router.post('/api/warmup/add-inbox', async (req, res) => {
         });
       }
     }
+    */
 
     // Handle other error cases
     const apiError = error.response?.data?.error || "unknown_error";
@@ -1187,255 +1191,255 @@ router.get('/api/warmup/account-usage', async (req, res) => {
  *    Endpoint hit: POST /v1/inboxes/advanced
  *    Documentation: https://docs.warmupinbox.com/
  */
-// router.post('/api/warmup/create-inbox-advanced', async (req, res) => {
-//   const {
-//     userId,
-//     email,
-//     sender_first,
-//     sender_last,
-//     plan = "basic",
-//     smtp,
-//     imap,
-//     tags = []
-//   } = req.body;
+router.post('/api/warmup/create-inbox-advanced', async (req, res) => {
+  const {
+    userId,
+    email,
+    sender_first,
+    sender_last,
+    plan = "basic",
+    smtp,
+    imap,
+    tags = []
+  } = req.body;
 
-//   // Validation - According to API docs
-//   if (!userId || !email || !sender_first || !sender_last) {
-//     return res.status(400).json({
-//       status: "-1",
-//       message: "Missing required fields",
-//       details: {
-//         required_fields: {
-//           userId: "string",
-//           email: "valid email address",
-//           sender_first: "string",
-//           sender_last: "string"
-//         }
-//       }
-//     });
-//   }
+  // Validation - According to API docs
+  if (!userId || !email || !sender_first || !sender_last) {
+    return res.status(400).json({
+      status: "-1",
+      message: "Missing required fields",
+      details: {
+        required_fields: {
+          userId: "string",
+          email: "valid email address",
+          sender_first: "string",
+          sender_last: "string"
+        }
+      }
+    });
+  }
 
-//   // Validate SMTP configuration
-//   if (!smtp || !smtp.username || !smtp.password || !smtp.host || !smtp.port) {
-//     return res.status(400).json({
-//       status: "-1",
-//       message: "Invalid SMTP configuration",
-//       details: {
-//         required_smtp_fields: {
-//           username: "string",
-//           password: "string",
-//           host: "string",
-//           port: "number"
-//         }
-//       }
-//     });
-//   }
+  // Validate SMTP configuration
+  if (!smtp || !smtp.username || !smtp.password || !smtp.host || !smtp.port) {
+    return res.status(400).json({
+      status: "-1",
+      message: "Invalid SMTP configuration",
+      details: {
+        required_smtp_fields: {
+          username: "string",
+          password: "string",
+          host: "string",
+          port: "number"
+        }
+      }
+    });
+  }
 
-//   // Validate IMAP configuration
-//   if (!imap || !imap.username || !imap.password || !imap.host || !imap.port) {
-//     return res.status(400).json({
-//       status: "-1",
-//       message: "Invalid IMAP configuration",
-//       details: {
-//         required_imap_fields: {
-//           username: "string",
-//           password: "string",
-//           host: "string",
-//           port: "number"
-//         }
-//       }
-//     });
-//   }
+  // Validate IMAP configuration
+  if (!imap || !imap.username || !imap.password || !imap.host || !imap.port) {
+    return res.status(400).json({
+      status: "-1",
+      message: "Invalid IMAP configuration",
+      details: {
+        required_imap_fields: {
+          username: "string",
+          password: "string",
+          host: "string",
+          port: "number"
+        }
+      }
+    });
+  }
 
-//   try {
-//     await connectToMongoDB();
+  try {
+    await connectToMongoDB();
 
-//     // Check if inbox already exists for this user and email
-//     const existingInbox = await WarmupInbox.findOne({ userId, email });
-//     if (existingInbox) {
-//       return res.status(409).json({
-//         status: "-1",
-//         message: "Inbox already exists for this userId and email",
-//         data: {
-//           inbox_id: existingInbox.inbox_id,
-//           email: existingInbox.email,
-//           status: existingInbox.status
-//         }
-//       });
-//     }
+    // Check if inbox already exists for this user and email
+    const existingInbox = await WarmupInbox.findOne({ userId, email });
+    if (existingInbox) {
+      return res.status(409).json({
+        status: "-1",
+        message: "Inbox already exists for this userId and email",
+        data: {
+          inbox_id: existingInbox.inbox_id,
+          email: existingInbox.email,
+          status: existingInbox.status
+        }
+      });
+    }
 
-//     // Build payload following exact API documentation structure
-//     const payload = {
-//       email: email,
-//       sender_first: sender_first,
-//       sender_last: sender_last,
-//       plan: plan,
-//       tags: tags,
-//       // SMTP configuration
-//       smtp: {
-//         username: smtp.username,
-//         password: smtp.password,
-//         host: smtp.host,
-//         port: parseInt(smtp.port),
-//         tls: smtp.tls !== undefined ? smtp.tls : true
-//       },
-//       // IMAP configuration
-//       imap: {
-//         username: imap.username,
-//         password: imap.password,
-//         host: imap.host,
-//         port: parseInt(imap.port),
-//         tls: imap.tls !== undefined ? imap.tls : true
-//       },
-//       // Hardcoded frequency settings as requested
-//       frequency: {
-//         starting_baseline: 2,    // Must be ≤4 for basic plan
-//         increase_per_day: 2,      // Must be ≤4 for basic plan
-//         max_sends_per_day: 15,    // Must be ≤20 for basic plan
-//         reply_rate: 9,           // Must be ≤25 for basic plan
-//         strategy: "progressive"   // Required field per docs
-//       }
-//     };
+    // Build payload following exact API documentation structure
+    const payload = {
+      email: email,
+      sender_first: sender_first,
+      sender_last: sender_last,
+      plan: plan,
+      tags: tags,
+      // SMTP configuration
+      smtp: {
+        username: smtp.username,
+        password: smtp.password,
+        host: smtp.host,
+        port: parseInt(smtp.port),
+        tls: smtp.tls !== undefined ? smtp.tls : true
+      },
+      // IMAP configuration
+      imap: {
+        username: imap.username,
+        password: imap.password,
+        host: imap.host,
+        port: parseInt(imap.port),
+        tls: imap.tls !== undefined ? imap.tls : true
+      },
+      // Hardcoded frequency settings as requested
+      frequency: {
+        starting_baseline: 2,    // Must be ≤4 for basic plan
+        increase_per_day: 2,      // Must be ≤4 for basic plan
+        max_sends_per_day: 15,    // Must be ≤20 for basic plan
+        reply_rate: 9,           // Must be ≤25 for basic plan
+        strategy: "progressive"   // Required field per docs
+      }
+    };
 
-//     console.log('Creating inbox with advanced endpoint:', {
-//       email: payload.email,
-//       sender_first: payload.sender_first,
-//       sender_last: payload.sender_last,
-//       plan: payload.plan,
-//       smtp: {
-//         host: payload.smtp.host,
-//         port: payload.smtp.port,
-//         username: payload.smtp.username,
-//         tls: payload.smtp.tls,
-//         hasPassword: !!payload.smtp.password
-//       },
-//       imap: {
-//         host: payload.imap.host,
-//         port: payload.imap.port,
-//         username: payload.imap.username,
-//         tls: payload.imap.tls,
-//         hasPassword: !!payload.imap.password
-//       },
-//       frequency: payload.frequency
-//     });
+    console.log('Creating inbox with advanced endpoint:', {
+      email: payload.email,
+      sender_first: payload.sender_first,
+      sender_last: payload.sender_last,
+      plan: payload.plan,
+      smtp: {
+        host: payload.smtp.host,
+        port: payload.smtp.port,
+        username: payload.smtp.username,
+        tls: payload.smtp.tls,
+        hasPassword: !!payload.smtp.password
+      },
+      imap: {
+        host: payload.imap.host,
+        port: payload.imap.port,
+        username: payload.imap.username,
+        tls: payload.imap.tls,
+        hasPassword: !!payload.imap.password
+      },
+      frequency: payload.frequency
+    });
 
-//     // Make API call to ADVANCED endpoint
-//     const response = await axiosInstance.post('/inboxes/advanced', payload);
+    // Make API call to ADVANCED endpoint
+    const response = await axiosInstance.post('/inboxes/advanced', payload);
 
-//     // Log raw full response for debugging
-//     console.log('=== WARMUP INBOX ADVANCED API - RAW FULL RESPONSE ===');
-//     console.log('Response Status:', response.status);
-//     console.log('Response Status Text:', response.statusText);
-//     console.log('Response Headers:', JSON.stringify(response.headers, null, 2));
-//     console.log('Response Data:', JSON.stringify(response.data, null, 2));
-//     console.log('Full Response Object Keys:', Object.keys(response));
-//     console.log('Response Config:', JSON.stringify(response.config, null, 2));
-//     console.log('=== END RAW RESPONSE LOG ===');
+    // Log raw full response for debugging
+    console.log('=== WARMUP INBOX ADVANCED API - RAW FULL RESPONSE ===');
+    console.log('Response Status:', response.status);
+    console.log('Response Status Text:', response.statusText);
+    console.log('Response Headers:', JSON.stringify(response.headers, null, 2));
+    console.log('Response Data:', JSON.stringify(response.data, null, 2));
+    console.log('Full Response Object Keys:', Object.keys(response));
+    console.log('Response Config:', JSON.stringify(response.config, null, 2));
+    console.log('=== END RAW RESPONSE LOG ===');
 
-//     // Keep existing log for backward compatibility
-//     console.log('Warmup Inbox Advanced API Response:', response.data);
+    // Keep existing log for backward compatibility
+    console.log('Warmup Inbox Advanced API Response:', response.data);
 
-//     // Handle response according to API docs
-//     if (response.data.code === 'created') {
-//       // Store the response in MongoDB
-//       const warmupInboxData = new WarmupInbox({
-//         userId: userId,
-//         email,
-//         inbox_id: response.data.inbox_id,
-//         password: smtp.password, // Store SMTP password
-//         sender_first,
-//         sender_last,
-//         status: response.data.code || 'created',
-//         plan: payload.plan,
-//         frequency: payload.frequency,
-//         smtp_settings: payload.smtp,
-//         imap_settings: payload.imap,
-//         warmup_response: response.data,
-//         created_at: new Date(),
-//         updated_at: new Date()
-//       });
+    // Handle response according to API docs
+    if (response.data.code === 'created') {
+      // Store the response in MongoDB
+      const warmupInboxData = new WarmupInbox({
+        userId: userId,
+        email,
+        inbox_id: response.data.inbox_id,
+        password: smtp.password, // Store SMTP password
+        sender_first,
+        sender_last,
+        status: response.data.code || 'created',
+        plan: payload.plan,
+        frequency: payload.frequency,
+        smtp_settings: payload.smtp,
+        imap_settings: payload.imap,
+        warmup_response: response.data,
+        created_at: new Date(),
+        updated_at: new Date()
+      });
 
-//       await warmupInboxData.save();
+      await warmupInboxData.save();
 
-//       return res.status(201).json({
-//         status: "1",
-//         message: "Inbox successfully created using advanced endpoint",
-//         data: {
-//           inbox_id: response.data.inbox_id,
-//           status: "pending_activation",
-//           userId: userId,
-//           email: email,
-//           plan: payload.plan,
-//           smtp_configured: true,
-//           imap_configured: true,
-//           frequency: payload.frequency,
-//           next_steps: [
-//             "Configure email client filters using filter_id",
-//             "Verify DNS records (MX, SPF, DKIM)",
-//             "Test SMTP/IMAP connectivity",
-//             "Start the warmup process"
-//           ],
-//           stored_in_db: true
-//         }
-//       });
-//     }
+      return res.status(201).json({
+        status: "1",
+        message: "Inbox successfully created using advanced endpoint",
+        data: {
+          inbox_id: response.data.inbox_id,
+          status: "pending_activation",
+          userId: userId,
+          email: email,
+          plan: payload.plan,
+          smtp_configured: true,
+          imap_configured: true,
+          frequency: payload.frequency,
+          next_steps: [
+            "Configure email client filters using filter_id",
+            "Verify DNS records (MX, SPF, DKIM)",
+            "Test SMTP/IMAP connectivity",
+            "Start the warmup process"
+          ],
+          stored_in_db: true
+        }
+      });
+    }
 
-//   } catch (error) {
-//     // Log raw full error response for debugging
-//     console.log('=== WARMUP INBOX ADVANCED API - RAW FULL ERROR RESPONSE ===');
-//     if (error.response) {
-//       console.log('Error Response Status:', error.response.status);
-//       console.log('Error Response Status Text:', error.response.statusText);
-//       console.log('Error Response Headers:', JSON.stringify(error.response.headers, null, 2));
-//       console.log('Error Response Data:', JSON.stringify(error.response.data, null, 2));
-//       console.log('Error Response Config:', JSON.stringify(error.response.config, null, 2));
-//     }
-//     console.log('Error Object Keys:', Object.keys(error));
-//     console.log('Error Message:', error.message);
-//     console.log('Error Code:', error.code);
-//     console.log('Error Stack:', error.stack);
-//     console.log('=== END RAW ERROR RESPONSE LOG ===');
+  } catch (error) {
+    // Log raw full error response for debugging
+    console.log('=== WARMUP INBOX ADVANCED API - RAW FULL ERROR RESPONSE ===');
+    if (error.response) {
+      console.log('Error Response Status:', error.response.status);
+      console.log('Error Response Status Text:', error.response.statusText);
+      console.log('Error Response Headers:', JSON.stringify(error.response.headers, null, 2));
+      console.log('Error Response Data:', JSON.stringify(error.response.data, null, 2));
+      console.log('Error Response Config:', JSON.stringify(error.response.config, null, 2));
+    }
+    console.log('Error Object Keys:', Object.keys(error));
+    console.log('Error Message:', error.message);
+    console.log('Error Code:', error.code);
+    console.log('Error Stack:', error.stack);
+    console.log('=== END RAW ERROR RESPONSE LOG ===');
 
-//     // Keep existing error log for backward compatibility
-//     console.error('Warmup Inbox Advanced API Error:', {
-//       status: error.response?.status,
-//       data: error.response?.data,
-//       message: error.message,
-//       error: error.response?.data?.error
-//     });
+    // Keep existing error log for backward compatibility
+    console.error('Warmup Inbox Advanced API Error:', {
+      status: error.response?.status,
+      data: error.response?.data,
+      message: error.message,
+      error: error.response?.data?.error
+    });
 
-//     // Handle specific error cases
-//     const apiError = error.response?.data?.error || "unknown_error";
-//     const statusCode = error.response?.status || 500;
+    // Handle specific error cases
+    const apiError = error.response?.data?.error || "unknown_error";
+    const statusCode = error.response?.status || 500;
 
-//     const errorMap = {
-//       'invalid_api_key': 401,
-//       'missing_api_key': 401,
-//       'invalid_request': 400,
-//       'inbox_already_exists': 409,
-//       'domain_not_configured': 422,
-//       'smtp_connection_failed': 422,
-//       'imap_connection_failed': 422
-//     };
+    const errorMap = {
+      'invalid_api_key': 401,
+      'missing_api_key': 401,
+      'invalid_request': 400,
+      'inbox_already_exists': 409,
+      'domain_not_configured': 422,
+      'smtp_connection_failed': 422,
+      'imap_connection_failed': 422
+    };
 
-//     let errorMessage = error.response?.data?.message || error.message;
+    let errorMessage = error.response?.data?.message || error.message;
 
-//     if (error.response?.status === 409) {
-//       errorMessage = "Inbox already exists in Warmup Inbox service";
-//     } else if (error.response?.status === 401) {
-//       errorMessage = "Invalid API key. Please check your WARMUPINBOX_API_KEY configuration";
-//     } else if (error.response?.status === 422) {
-//       errorMessage = "SMTP/IMAP configuration error. Please verify your server settings and credentials";
-//     }
+    if (error.response?.status === 409) {
+      errorMessage = "Inbox already exists in Warmup Inbox service";
+    } else if (error.response?.status === 401) {
+      errorMessage = "Invalid API key. Please check your WARMUPINBOX_API_KEY configuration";
+    } else if (error.response?.status === 422) {
+      errorMessage = "SMTP/IMAP configuration error. Please verify your server settings and credentials";
+    }
 
-//     return res.status(errorMap[apiError] || statusCode).json({
-//       status: "-1",
-//       error: apiError,
-//       message: errorMessage,
-//       details: error.response?.data?.details || undefined
-//     });
-//   }
-// });
+    return res.status(errorMap[apiError] || statusCode).json({
+      status: "-1",
+      error: apiError,
+      message: errorMessage,
+      details: error.response?.data?.details || undefined
+    });
+  }
+});
 
 
  
