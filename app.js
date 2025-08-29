@@ -120,7 +120,7 @@ const linkedinMessaging = require('./uniplieApi/linkedinMessaging.js');
 
 const notifyAPI = require('./notifyAPI/sendEmail.js');
 
-
+const subscriptionManageAPI = require('./subscriptionController/subscriptionManageAPI.js');
 
 const { Http2ServerRequest } = require('http2');
 
@@ -249,6 +249,7 @@ app.use(signupApi.router);
 app.use(manageSubscriptions.router);
 app.use(linkedinMessaging);
 app.use(notifyAPI.router);
+app.use(subscriptionManageAPI.router);
 
 
 
