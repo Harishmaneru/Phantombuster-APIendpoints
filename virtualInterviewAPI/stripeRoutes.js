@@ -188,7 +188,7 @@ router.post(
                         metadata: stripeSubscription.metadata
                     };
 
-                    // ✅ Upsert instead of insert
+                    // ✅ Upsert subscription record
                     try {
                         await Subscription.updateOne(
                             { subscriptionId },
@@ -198,6 +198,63 @@ router.post(
                         console.log(`[stripeRoutes.js] Subscription upserted for user ${userId}`);
                     } catch (dbError) {
                         console.error('[stripeRoutes.js] Database save error:', dbError);
+                    }
+
+                    // ✅ Create or update customer record for subscription purchases
+                    try {
+                        if (customer && userId && userId !== 'unknown') {
+                            // Get customer details from Stripe
+                            const stripeCustomer = await stripe.customers.retrieve(customer);
+
+                            await Customer.updateOne(
+                                { userId },
+                                {
+                                    $set: {
+                                        customerId: customer,
+                                        app: metadata?.app || 'default',
+                                        email: stripeCustomer.email || `user-${userId}@onepgr.com`,
+                                        updatedAt: new Date()
+                                    }
+                                },
+                                { upsert: true }
+                            );
+                            console.log(`[stripeRoutes.js] Customer record created/updated for subscription user ${userId}`);
+                        }
+                    } catch (customerError) {
+                        console.error('[stripeRoutes.js] Customer record creation error:', customerError);
+                    }
+                    break;
+                }
+
+                case 'customer.created': {
+                    const customer = event.data.object;
+                    await connectToMongoDB();
+
+                    // Extract userId from metadata if available
+                    const userId = customer.metadata?.userId;
+                    const app = customer.metadata?.app || 'default';
+                    const createdVia = customer.metadata?.createdVia;
+
+                    if (userId) {
+                        try {
+                            await Customer.updateOne(
+                                { userId },
+                                {
+                                    $set: {
+                                        customerId: customer.id,
+                                        app: app,
+                                        email: customer.email || `user-${userId}@onepgr.com`,
+                                        createdAt: new Date()
+                                    }
+                                },
+                                { upsert: true }
+                            );
+                            console.log(`[stripeRoutes.js] Customer record created for user ${userId} via ${createdVia || 'unknown'}`);
+                        } catch (dbError) {
+                            console.error('[stripeRoutes.js] Customer record creation error:', dbError);
+                        }
+                    } else {
+                        console.log(`[stripeRoutes.js] Customer created without userId in metadata: ${customer.id}`);
                     }
                     break;
                 }
@@ -465,24 +522,81 @@ router.post('/create-payment-intent', async (req, res) => {
             postalCode
         };
 
-        // Create a customer first (required for invoices)
-        const customer = await stripe.customers.create({
-            email: email,
-            name: `${firstName} ${lastName}`,
-            phone: phone,
-            metadata: {
-                userId: userId,
-                domainName: domainName
-            },
-            address: {
-                line1: address1,
-                line2: address2,
-                city: city,
-                state: stateProvince,
-                postal_code: postalCode,
-                country: country
+        // Check for existing customer in database by userId, create new one if not found
+        let customer;
+        try {
+            await connectToMongoDB();
+            const existingCustomerRecord = await Customer.findOne({ userId });
+            
+            if (existingCustomerRecord && existingCustomerRecord.customerId) {
+                // User has existing customer record, verify it still exists in Stripe
+                try {
+                    customer = await stripe.customers.retrieve(existingCustomerRecord.customerId);
+                    console.log(`✅ Reusing existing customer ${customer.id} for userId ${userId}`);
+                    
+                    // Update customer metadata and address if needed
+                    await stripe.customers.update(customer.id, {
+                        metadata: {
+                            ...customer.metadata,
+                            userId: userId,
+                            lastDomainPurchase: domainName,
+                            lastUpdated: new Date().toISOString()
+                        },
+                        address: {
+                            line1: address1,
+                            line2: address2,
+                            city: city,
+                            state: stateProvince,
+                            postal_code: postalCode,
+                            country: country
+                        }
+                    });
+                } catch (stripeError) {
+                    console.log(`⚠️ Existing customer ${existingCustomerRecord.customerId} not found in Stripe, will create new one`);
+                    // Customer doesn't exist in Stripe anymore, will create new one below
+                }
             }
-        });
+            
+            // If no existing customer found, create new one
+            if (!customer) {
+                customer = await stripe.customers.create({
+                    email: email,
+                    name: `${firstName} ${lastName}`,
+                    phone: phone,
+                    metadata: {
+                        userId: userId,
+                        domainName: domainName,
+                        createdAt: new Date().toISOString()
+                    },
+                    address: {
+                        line1: address1,
+                        line2: address2,
+                        city: city,
+                        state: stateProvince,
+                        postal_code: postalCode,
+                        country: country
+                    }
+                });
+                console.log(`🆕 Created new customer ${customer.id} for email ${email}`);
+                
+                // Create customer record in our database
+                await Customer.updateOne(
+                    { userId },
+                    {
+                        $set: {
+                            customerId: customer.id,
+                            app: 'default',
+                            email: email,
+                            createdAt: new Date()
+                        }
+                    },
+                    { upsert: true }
+                );
+            }
+        } catch (error) {
+            console.error('Error handling customer creation/lookup:', error);
+            return res.status(500).json({ error: 'Failed to process customer information' });
+        }
 
         // Create Checkout Session WITH invoice creation
         const session = await stripe.checkout.sessions.create({
@@ -2447,27 +2561,52 @@ router.post('/create-checkout-session-by-app', async (req, res) => {
 
         await connectToMongoDB();
 
-        // 2) Find customer record for user (separate from subscriptions)
+        // 2) Find or create customer record for user
         let customerRecord = await Customer.findOne({ userId });
+        let customerId;
 
         if (!customerRecord) {
             console.log(`No customer record found for user ${userId} - will create new customer during checkout`);
+
+            // Create new customer in Stripe for this user
+            try {
+                const customer = await stripe.customers.create({
+                    email: `user-${userId}@onepgr.com`, // Placeholder email since we don't have user email here
+                    metadata: {
+                        userId,
+                        app,
+                        createdVia: 'subscription_checkout',
+                        createdAt: new Date().toISOString()
+                    }
+                });
+                customerId = customer.id;
+
+                // Create customer record in our database
+                await Customer.updateOne(
+                    { userId },
+                    {
+                        $set: {
+                            customerId: customer.id,
+                            app: app,
+                            email: `user-${userId}@onepgr.com`, // Placeholder email
+                            createdAt: new Date()
+                        }
+                    },
+                    { upsert: true }
+                );
+
+                console.log(`🆕 Created new customer ${customerId} for user ${userId} during subscription checkout`);
+            } catch (customerError) {
+                console.error(`Error creating customer for user ${userId}:`, customerError);
+                // Continue without customer ID - Stripe will create one during checkout
+                customerId = null;
+            }
         } else {
-            console.log(`Found existing customer ${customerRecord.customerId} for user ${userId}`);
+            customerId = customerRecord.customerId;
+            console.log(`✅ Found existing customer ${customerId} for user ${userId}`);
         }
 
-        const customerId = customerRecord?.customerId || null;
-
-        // Log for debugging
-        if (customerId) {
-            console.log(`Found existing customer ${customerId} for user ${userId}`);
-        } else {
-            console.log(`No existing customer found for user ${userId}, will create new one`);
-        }
-
-        // No need for auto-consolidation with separate customer management
-
-        // 3) Always create Checkout session
+        // 3) Create Checkout session with customer if available
         const sessionPayload = {
             mode: 'subscription',
             payment_method_types: ['card'],
@@ -2478,9 +2617,12 @@ router.post('/create-checkout-session-by-app', async (req, res) => {
             allow_promotion_codes: true, // optional
         };
 
-        // If returning customer, attach them so saved cards show up
+        // If we have a customer ID, attach them so saved cards show up
         if (customerId) {
             sessionPayload.customer = customerId;
+            console.log(`🔗 Attaching existing customer ${customerId} to checkout session`);
+        } else {
+            console.log(`📝 No customer ID available, Stripe will create new customer during checkout`);
         }
 
         const session = await stripe.checkout.sessions.create(sessionPayload);
@@ -2491,6 +2633,10 @@ router.post('/create-checkout-session-by-app', async (req, res) => {
                 { userId },
                 { $set: { lastCheckoutSessionId: session.id } }
             );
+            console.log(`📝 Updated customer record with checkout session ${session.id}`);
+        } else {
+            // If no customer ID, we'll need to update it later when the webhook processes
+            console.log(`⏳ Customer record will be updated when webhook processes checkout completion`);
         }
 
         return res.json({
@@ -3480,46 +3626,4 @@ router.post('/cancel-subscription', async (req, res) => {
 
 
 //domain invoise API
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 module.exports = router;
