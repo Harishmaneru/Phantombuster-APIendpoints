@@ -318,10 +318,10 @@ async function checkUsageLimit(req, res) {
 }
 
 // ========== Routes ==========
-router.post("/subscriptions", storeSubscription);
-router.get("/fetch-subscriptions", fetchSubscription);
-router.patch("/subscriptions/usage", updateUsage);
-router.post("/subscriptions/check-limit", checkUsageLimit);
+router.post("/api/subscriptions", storeSubscription);
+router.get("/api/fetch-subscriptions", fetchSubscription);
+router.patch("/api/subscriptions/usage", updateUsage);
+router.post("/api/subscriptions/check-limit", checkUsageLimit);
 
 // ========== Exports ==========
 module.exports = {
