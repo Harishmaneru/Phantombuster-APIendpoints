@@ -124,6 +124,8 @@ const subscriptionManageAPI = require('./subscriptionController/subscriptionMana
 
 const { Http2ServerRequest } = require('http2');
 
+const sanboxStripe = require('./virtualInterviewAPI/sanboxStripe.js');
+
 const app = express();
 const port = 3001;
 
@@ -250,6 +252,9 @@ app.use(manageSubscriptions.router);
 app.use(linkedinMessaging);
 app.use(notifyAPI.router);
 app.use(subscriptionManageAPI.router);
+
+
+app.use(sanboxStripe);
 
 
 
