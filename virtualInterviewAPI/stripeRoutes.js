@@ -2548,12 +2548,9 @@ router.get('/invoice/:paymentIntentId', async (req, res) => {
     }
 });
 
-//______________________________________________________________________________________
 
 
 //______________________________API's for All Applications________________________
-
-
 
 // Buy/subscribe using saved card if available, otherwise fall back to Checkout
 // router.post('/create-checkout-session-by-app', async (req, res) => {
