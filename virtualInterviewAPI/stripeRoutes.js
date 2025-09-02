@@ -229,7 +229,7 @@ router.post(
                                     $set: {
                                         customerId: customer,
                                         app: metadata?.app || 'default',
-                                        email: stripeCustomer.email || `user-${userId}@onepgr.com`,
+                                        email: stripeCustomer.email || null,
                                         updatedAt: new Date()
                                     }
                                 },
@@ -260,7 +260,7 @@ router.post(
                                     $set: {
                                         customerId: customer.id,
                                         app: app,
-                                        email: customer.email || `user-${userId}@onepgr.com`,
+                                        email: customer.email || null,
                                         createdAt: new Date()
                                     }
                                 },
@@ -2710,7 +2710,7 @@ router.post('/create-checkout-session-by-app', async (req, res) => {
             // Create new customer in Stripe for this user
             try {
                 const customer = await stripe.customers.create({
-                    email: `user-${userId}@onepgr.com`, // Placeholder email since we don't have user email here
+                    email: null, // No email provided
                     metadata: {
                         userId,
                         app,
@@ -2730,7 +2730,7 @@ router.post('/create-checkout-session-by-app', async (req, res) => {
                             customerId: customer.id,
                             app: app,
                             planType: planType || 'unknown', // 🆕 Store plan type
-                            email: `user-${userId}@onepgr.com`, // Placeholder email
+                            email: null, // No email provided
                             createdAt: new Date()
                         }
                     },
