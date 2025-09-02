@@ -942,13 +942,15 @@ router.post('/domain/create-checkout-session', async (req, res) => {
 // Get Subscription Details from Checkout Session ID
 router.post('/get-subscription-from-session', async (req, res) => {
     const { sessionId } = req.body;
+    const isSandbox = isSandboxMode(req);
+    const stripe = getStripeInstance(isSandbox);
 
     if (!sessionId) {
         return res.status(400).json({ error: 'sessionId is required' });
     }
 
     try {
-        console.log('[get-subscription-from-session] Retrieving session:', sessionId);
+        console.log('[get-subscription-from-session] Retrieving session:', sessionId, 'Sandbox:', isSandbox);
 
         // Retrieve the session with expanded subscription data
         const session = await stripe.checkout.sessions.retrieve(sessionId, {
