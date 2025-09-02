@@ -9,6 +9,23 @@ const { registerDomainWithNamecheap } = require('../domainManagementAPI/nameChea
 // Import simple file logging system
 const fileLogger = require('../loggingSystem/fileLogger');
 
+const getStripeInstance = (isSandbox = false) => {
+    if (isSandbox) {
+        const stripe = require('stripe')(process.env.STRIPE_SANDBOX_SECRET_KEY);
+        console.log(' Using SANDBOX Stripe instance');
+        return stripe;
+    } else {
+        const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
+        console.log('🚀 Using PRODUCTION Stripe instance');
+        return stripe;
+    }
+};
+
+// Helper function to check if request is sandbox mode
+const isSandboxMode = (req) => {
+    return req.body.sandbox === true || req.query.sandbox === 'true';
+};
+
 // Middleware to parse JSON for all routes except /webhook
 router.use((req, res, next) => {
     if (req.originalUrl === '/api/stripe/webhook') {
@@ -527,13 +544,13 @@ router.post('/create-payment-intent', async (req, res) => {
         try {
             await connectToMongoDB();
             const existingCustomerRecord = await Customer.findOne({ userId });
-            
+
             if (existingCustomerRecord && existingCustomerRecord.customerId) {
                 // User has existing customer record, verify it still exists in Stripe
                 try {
                     customer = await stripe.customers.retrieve(existingCustomerRecord.customerId);
                     console.log(`✅ Reusing existing customer ${customer.id} for userId ${userId}`);
-                    
+
                     // Update customer metadata and address if needed
                     await stripe.customers.update(customer.id, {
                         metadata: {
@@ -556,7 +573,7 @@ router.post('/create-payment-intent', async (req, res) => {
                     // Customer doesn't exist in Stripe anymore, will create new one below
                 }
             }
-            
+
             // If no existing customer found, create new one
             if (!customer) {
                 customer = await stripe.customers.create({
@@ -578,7 +595,7 @@ router.post('/create-payment-intent', async (req, res) => {
                     }
                 });
                 console.log(`🆕 Created new customer ${customer.id} for email ${email}`);
-                
+
                 // Create customer record in our database
                 await Customer.updateOne(
                     { userId },
@@ -2537,14 +2554,137 @@ router.get('/invoice/:paymentIntentId', async (req, res) => {
 
 
 // Buy/subscribe using saved card if available, otherwise fall back to Checkout
+// router.post('/create-checkout-session-by-app', async (req, res) => {
+//     try {
+//         const { userId, priceId, app, quantity = 1 } = req.body;
+
+//         // 1) App URL map + validation
+//         const appUrlMap = {
+//             kampaignai: 'https://kampaign.onepgr.com',
+//             // kampaignai: 'http://localhost:4200',
+//             gps: 'https://gps.onepgr.com',
+//             getsalesgpt: 'https://sales.onepgr.com',
+//         };
+
+//         if (!app || !appUrlMap[app]) {
+//             return res.status(400).json({ error: 'Invalid or missing app parameter' });
+//         }
+//         if (!priceId) {
+//             return res.status(400).json({ error: 'Missing priceId' });
+//         }
+//         if (!quantity || quantity < 1) {
+//             return res.status(400).json({ error: 'Quantity must be at least 1' });
+//         }
+
+//         await connectToMongoDB();
+
+//         // 2) Find or create customer record for user
+//         let customerRecord = await Customer.findOne({ userId });
+//         let customerId;
+
+//         if (!customerRecord) {
+//             console.log(`No customer record found for user ${userId} - will create new customer during checkout`);
+
+//             // Create new customer in Stripe for this user
+//             try {
+//                 const customer = await stripe.customers.create({
+//                     email: `user-${userId}@onepgr.com`, // Placeholder email since we don't have user email here
+//                     metadata: {
+//                         userId,
+//                         app,
+//                         createdVia: 'subscription_checkout',
+//                         createdAt: new Date().toISOString()
+//                     }
+//                 });
+//                 customerId = customer.id;
+
+//                 // Create customer record in our database
+//                 await Customer.updateOne(
+//                     { userId },
+//                     {
+//                         $set: {
+//                             customerId: customer.id,
+//                             app: app,
+//                             email: `user-${userId}@onepgr.com`, // Placeholder email
+//                             createdAt: new Date()
+//                         }
+//                     },
+//                     { upsert: true }
+//                 );
+
+//                 console.log(`🆕 Created new customer ${customerId} for user ${userId} during subscription checkout`);
+//             } catch (customerError) {
+//                 console.error(`Error creating customer for user ${userId}:`, customerError);
+//                 // Continue without customer ID - Stripe will create one during checkout
+//                 customerId = null;
+//             }
+//         } else {
+//             customerId = customerRecord.customerId;
+//             console.log(`✅ Found existing customer ${customerId} for user ${userId}`);
+//         }
+
+//         // 3) Create Checkout session with customer if available
+//         const sessionPayload = {
+//             mode: 'subscription',
+//             payment_method_types: ['card'],
+//             line_items: [{ price: priceId, quantity }],
+//             success_url: `${appUrlMap[app]}/success?session_id={CHECKOUT_SESSION_ID}`,
+//             cancel_url: `${appUrlMap[app]}/cancel`,
+//             metadata: { userId, app },
+//             allow_promotion_codes: true, // optional
+//         };
+
+//         // If we have a customer ID, attach them so saved cards show up
+//         if (customerId) {
+//             sessionPayload.customer = customerId;
+//             console.log(`🔗 Attaching existing customer ${customerId} to checkout session`);
+//         } else {
+//             console.log(`📝 No customer ID available, Stripe will create new customer during checkout`);
+//         }
+
+//         const session = await stripe.checkout.sessions.create(sessionPayload);
+
+//         // Store checkout session info for tracking
+//         if (customerId) {
+//             await Customer.updateOne(
+//                 { userId },
+//                 { $set: { lastCheckoutSessionId: session.id } }
+//             );
+//             console.log(`📝 Updated customer record with checkout session ${session.id}`);
+//         } else {
+//             // If no customer ID, we'll need to update it later when the webhook processes
+//             console.log(`⏳ Customer record will be updated when webhook processes checkout completion`);
+//         }
+
+//         return res.json({
+//             mode: 'checkout',
+//             url: session.url,
+//         });
+//     } catch (err) {
+//         console.error('Stripe error:', err);
+//         res.status(500).json({ error: err.message });
+//     }
+// });
+
+// Buy/subscribe using saved card if available, otherwise fall back to Checkout
+// Buy/subscribe using saved card if available, otherwise fall back to Checkout
 router.post('/create-checkout-session-by-app', async (req, res) => {
     try {
-        const { userId, priceId, app, quantity = 1 } = req.body;
+        const { userId, priceId, app, quantity = 1, planType } = req.body; // 🆕 Added planType
+        const isSandbox = isSandboxMode(req);
+        const stripe = getStripeInstance(isSandbox);
 
-        // 1) App URL map + validation
-        const appUrlMap = {
+        console.log(`[${isSandbox ? 'SANDBOX' : 'PRODUCTION'}] create-checkout-session-by-app called for user:`, userId, 'app:', app, 'planType:', planType);
+
+        // 1) App URL map + validation - Different URLs for sandbox vs production
+        const appUrlMap = isSandbox ? {
+            // Sandbox URLs - Localhost for testing
+            kampaignai: 'http://localhost:4200',
+            gps: 'http://localhost:4200',
+            getsalesgpt: 'http://localhost:4200',
+        } : {
+            // Production URLs
             kampaignai: 'https://kampaign.onepgr.com',
-            // kampaignai: 'http://localhost:4200',
             gps: 'https://gps.onepgr.com',
             getsalesgpt: 'https://sales.onepgr.com',
         };
@@ -2566,7 +2706,7 @@ router.post('/create-checkout-session-by-app', async (req, res) => {
         let customerId;
 
         if (!customerRecord) {
-            console.log(`No customer record found for user ${userId} - will create new customer during checkout`);
+            console.log(`[${isSandbox ? 'SANDBOX' : 'PRODUCTION'}] No customer record found for user ${userId} - will create new customer during checkout`);
 
             // Create new customer in Stripe for this user
             try {
@@ -2575,6 +2715,8 @@ router.post('/create-checkout-session-by-app', async (req, res) => {
                     metadata: {
                         userId,
                         app,
+                        planType: planType || 'unknown', // 🆕 Store plan type
+                        environment: isSandbox ? 'sandbox' : 'production',
                         createdVia: 'subscription_checkout',
                         createdAt: new Date().toISOString()
                     }
@@ -2588,6 +2730,7 @@ router.post('/create-checkout-session-by-app', async (req, res) => {
                         $set: {
                             customerId: customer.id,
                             app: app,
+                            planType: planType || 'unknown', // 🆕 Store plan type
                             email: `user-${userId}@onepgr.com`, // Placeholder email
                             createdAt: new Date()
                         }
@@ -2595,34 +2738,94 @@ router.post('/create-checkout-session-by-app', async (req, res) => {
                     { upsert: true }
                 );
 
-                console.log(`🆕 Created new customer ${customerId} for user ${userId} during subscription checkout`);
+                console.log(`[${isSandbox ? 'SANDBOX' : 'PRODUCTION'}] 🆕 Created new customer ${customerId} for user ${userId}`);
             } catch (customerError) {
-                console.error(`Error creating customer for user ${userId}:`, customerError);
+                console.error(`[${isSandbox ? 'SANDBOX' : 'PRODUCTION'}] Error creating customer for user ${userId}:`, customerError);
                 // Continue without customer ID - Stripe will create one during checkout
                 customerId = null;
             }
         } else {
             customerId = customerRecord.customerId;
-            console.log(`✅ Found existing customer ${customerId} for user ${userId}`);
+            console.log(`[${isSandbox ? 'SANDBOX' : 'PRODUCTION'}] ✅ Found existing customer ${customerId} for user ${userId}`);
         }
+
+        const getSuccessUrl = (app, planType, isSandbox) => {
+            // 🆕 Use sandbox URLs when in sandbox mode
+            const baseUrl = isSandbox ? getSandboxUrl(app) : appUrlMap[app];
+
+            if (!baseUrl) return `${baseUrl}/success?session_id={CHECKOUT_SESSION_ID}`;
+
+            switch (planType) {
+                case 'email/warmup':
+                    return `${baseUrl}/email-success?session_id={CHECKOUT_SESSION_ID}`;
+                case 'kampaign-main':
+                    return `${baseUrl}/kampaign-success?session_id={CHECKOUT_SESSION_ID}`;
+                case 'gps':
+                    return `${baseUrl}/gps-success?session_id={CHECKOUT_SESSION_ID}`;
+                case 'getsalesgpt':
+                    return `${baseUrl}/salesgpt-success?session_id={CHECKOUT_SESSION_ID}`;
+                case 'onboarding-kai':
+                    return `${baseUrl}/get-started/success?session_id={CHECKOUT_SESSION_ID}`;
+                default:
+                    return `${baseUrl}/success?session_id={CHECKOUT_SESSION_ID}`;
+            }
+        };
+
+        // �� Helper function to get sandbox URLs
+        const getSandboxUrl = (app) => {
+            const sandboxUrls = {
+                kampaignai: 'http://localhost:4200',
+                gps: 'http://localhost:4200',
+                getsalesgpt: 'http://localhost:4200'
+            };
+            return sandboxUrls[app] || 'http://localhost:4200';
+        };
+
+        // 🆕 Update Cancel URL function too
+        const getCancelUrl = (app, planType, isSandbox) => {
+            const baseUrl = isSandbox ? getSandboxUrl(app) : appUrlMap[app];
+
+            if (!baseUrl) return `${baseUrl}/cancel`;
+
+            switch (planType) {
+                case 'email/warmup':
+                    return `${baseUrl}/cancel`;
+                case 'kampaign-main':
+                    return `${baseUrl}/cancel`;
+                case 'gps':
+                    return `${baseUrl}/cancel`;
+                case 'getsalesgpt':
+                    return `${baseUrl}/cancelg`;
+                case 'onboarding-kai':
+                    return `${baseUrl}/cancel`;
+                default:
+                    return `${baseUrl}/pricing`;
+            }
+        };
 
         // 3) Create Checkout session with customer if available
         const sessionPayload = {
             mode: 'subscription',
             payment_method_types: ['card'],
             line_items: [{ price: priceId, quantity }],
-            success_url: `${appUrlMap[app]}/success?session_id={CHECKOUT_SESSION_ID}`,
-            cancel_url: `${appUrlMap[app]}/cancel`,
-            metadata: { userId, app },
+            success_url: getSuccessUrl(app, planType, isSandbox), // 🆕 Dynamic success URL
+            cancel_url: getCancelUrl(app, planType, isSandbox),   // �� Dynamic cancel URL
+            metadata: {
+                userId,
+                app,
+                planType: planType || 'unknown', // 🆕 Store plan type
+                environment: isSandbox ? 'sandbox' : 'production',
+                sandbox: isSandbox
+            },
             allow_promotion_codes: true, // optional
         };
 
         // If we have a customer ID, attach them so saved cards show up
         if (customerId) {
             sessionPayload.customer = customerId;
-            console.log(`🔗 Attaching existing customer ${customerId} to checkout session`);
+            console.log(`[${isSandbox ? 'SANDBOX' : 'PRODUCTION'}] Attaching existing customer ${customerId} to checkout session`);
         } else {
-            console.log(`📝 No customer ID available, Stripe will create new customer during checkout`);
+            console.log(`[${isSandbox ? 'SANDBOX' : 'PRODUCTION'}] 📝 No customer ID available, Stripe will create new customer during checkout`);
         }
 
         const session = await stripe.checkout.sessions.create(sessionPayload);
@@ -2633,22 +2836,27 @@ router.post('/create-checkout-session-by-app', async (req, res) => {
                 { userId },
                 { $set: { lastCheckoutSessionId: session.id } }
             );
-            console.log(`📝 Updated customer record with checkout session ${session.id}`);
+            console.log(`[${isSandbox ? 'SANDBOX' : 'PRODUCTION'}] 📝 Updated customer record with checkout session ${session.id}`);
         } else {
             // If no customer ID, we'll need to update it later when the webhook processes
-            console.log(`⏳ Customer record will be updated when webhook processes checkout completion`);
+            console.log(`[${isSandbox ? 'SANDBOX' : 'PRODUCTION'}] ⏳ Customer record will be updated when webhook processes checkout completion`);
         }
 
         return res.json({
             mode: 'checkout',
             url: session.url,
+            environment: isSandbox ? 'sandbox' : 'production',
+            customerId: customerId,
+            planType: planType || 'unknown',
+            successUrl: getSuccessUrl(app, planType, isSandbox),
+            cancelUrl: getCancelUrl(app, planType, isSandbox),
+            appUrls: appUrlMap
         });
     } catch (err) {
-        console.error('Stripe error:', err);
+        console.error(`[${isSandboxMode(req) ? 'SANDBOX' : 'PRODUCTION'}] Stripe error:`, err);
         res.status(500).json({ error: err.message });
     }
 });
-
 
 
 // Create a Billing Portal session to manage subscription

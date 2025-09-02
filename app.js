@@ -124,7 +124,7 @@ const subscriptionManageAPI = require('./subscriptionController/subscriptionMana
 
 const { Http2ServerRequest } = require('http2');
 
-const sanboxStripe = require('./virtualInterviewAPI/sanboxStripe.js');
+
 
 const app = express();
 const port = 3001;
@@ -135,10 +135,10 @@ app.use(
     origin: function (origin, callback) {
       // Allow requests with no origin (like mobile apps or curl requests)
       if (!origin) return callback(null, true);
-      
+
       const allowedOrigins = [
         "http://localhost:4000",
-        "http://localhost:3000", 
+        "http://localhost:3000",
         "http://localhost:4200",
         "http://localhost:4201",
         "https://videoresponse.onepgr.com",
@@ -150,20 +150,20 @@ app.use(
         "https://record.onepgr.com",
         "https://kampaign.onepgr.com"
       ];
-      
+
       // Check if origin is in allowed list or is a controlled subdomain
-      if (allowedOrigins.includes(origin) || 
-          (origin.endsWith('.onepgr.com') && origin.startsWith('https://'))) {
+      if (allowedOrigins.includes(origin) ||
+        (origin.endsWith('.onepgr.com') && origin.startsWith('https://'))) {
         return callback(null, true);
       }
-      
+
       return callback(new Error('Not allowed by CORS'));
     },
     methods: ["GET", "PUT", "POST", "DELETE", "OPTIONS"],
     allowedHeaders: [
-      "Content-Type", 
-      "Authorization", 
-      "X-Requested-With", 
+      "Content-Type",
+      "Authorization",
+      "X-Requested-With",
       "stripe-signature",
       "X-User-Id"
     ],
@@ -254,7 +254,7 @@ app.use(notifyAPI.router);
 app.use(subscriptionManageAPI.router);
 
 
-app.use(sanboxStripe);
+
 
 
 
