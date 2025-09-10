@@ -2678,7 +2678,7 @@ router.post('/create-checkout-session-by-app', async (req, res) => {
         // 1) App URL map + validation - Different URLs for sandbox vs production
         const appUrlMap = isSandbox ? {
             // Sandbox URLs - Localhost for testing
-            kampaignai: 'http://localhost:4200',
+            kampaignai: 'https://kampaign.onepgr.com',
             gps: 'http://localhost:4200',
             getsalesgpt: 'http://localhost:4200',
         } : {
@@ -2773,11 +2773,11 @@ router.post('/create-checkout-session-by-app', async (req, res) => {
         // �� Helper function to get sandbox URLs
         const getSandboxUrl = (app) => {
             const sandboxUrls = {
-                kampaignai: 'http://localhost:4200',
+                kampaignai: 'https://kampaign.onepgr.com',
                 gps: 'http://localhost:4200',
                 getsalesgpt: 'http://localhost:4200'
             };
-            return sandboxUrls[app] || 'http://localhost:4200';
+            return sandboxUrls[app] || 'https://kampaign.onepgr.com';
         };
 
         // 🆕 Update Cancel URL function too
