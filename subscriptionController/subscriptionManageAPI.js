@@ -34,7 +34,7 @@ const SubscriptionFlagsSchema = new mongoose.Schema({
     }
 }, {
     timestamps: true,
-    collection: 'subscription_flags' // Explicitly set collection name
+    collection: 'subscription_flags' 
 });
 
 // Use a unique model name to avoid conflicts with existing Subscription model

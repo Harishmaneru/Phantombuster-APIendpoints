@@ -83,6 +83,7 @@ const customerSchema = new mongoose.Schema({
     app: { type: String, default: 'default' },
     email: { type: String, required: true },
     defaultPaymentMethodId: { type: String, default: null },
+    environment: { type: String, enum: ['sandbox', 'production'], default: 'production' },
     createdAt: { type: Date, default: Date.now }
 }, { collection: 'customers' });
 
@@ -222,20 +223,25 @@ router.post(
                         if (customer && userId && userId !== 'unknown') {
                             // Get customer details from Stripe
                             const stripeCustomer = await stripe.customers.retrieve(customer);
+                            
+                            // Determine environment from customer metadata or webhook source
+                            const environment = stripeCustomer.metadata?.environment || 
+                                             (stripeCustomer.id.startsWith('cus_') ? 'production' : 'sandbox');
 
                             await Customer.updateOne(
-                                { userId },
+                                { userId, environment },
                                 {
                                     $set: {
                                         customerId: customer,
                                         app: metadata?.app || 'default',
                                         email: stripeCustomer.email || null,
+                                        environment: environment,
                                         updatedAt: new Date()
                                     }
                                 },
                                 { upsert: true }
                             );
-                            console.log(`[stripeRoutes.js] Customer record created/updated for subscription user ${userId}`);
+                            console.log(`[stripeRoutes.js] Customer record created/updated for subscription user ${userId} in ${environment} environment`);
                         }
                     } catch (customerError) {
                         console.error('[stripeRoutes.js] Customer record creation error:', customerError);
@@ -251,22 +257,27 @@ router.post(
                     const userId = customer.metadata?.userId;
                     const app = customer.metadata?.app || 'default';
                     const createdVia = customer.metadata?.createdVia;
+                    
+                    // Determine environment from customer metadata
+                    const environment = customer.metadata?.environment || 
+                                     (customer.id.startsWith('cus_') ? 'production' : 'sandbox');
 
                     if (userId) {
                         try {
                             await Customer.updateOne(
-                                { userId },
+                                { userId, environment },
                                 {
                                     $set: {
                                         customerId: customer.id,
                                         app: app,
                                         email: customer.email || null,
+                                        environment: environment,
                                         createdAt: new Date()
                                     }
                                 },
                                 { upsert: true }
                             );
-                            console.log(`[stripeRoutes.js] Customer record created for user ${userId} via ${createdVia || 'unknown'}`);
+                            console.log(`[stripeRoutes.js] Customer record created for user ${userId} via ${createdVia || 'unknown'} in ${environment} environment`);
                         } catch (dbError) {
                             console.error('[stripeRoutes.js] Customer record creation error:', dbError);
                         }
@@ -539,11 +550,12 @@ router.post('/create-payment-intent', async (req, res) => {
             postalCode
         };
 
-        // Check for existing customer in database by userId, create new one if not found
+        // Check for existing customer in database by userId and environment, create new one if not found
         let customer;
         try {
             await connectToMongoDB();
-            const existingCustomerRecord = await Customer.findOne({ userId });
+            const environment = isSandbox ? 'sandbox' : 'production';
+            const existingCustomerRecord = await Customer.findOne({ userId, environment });
 
             if (existingCustomerRecord && existingCustomerRecord.customerId) {
                 // User has existing customer record, verify it still exists in Stripe
@@ -597,13 +609,15 @@ router.post('/create-payment-intent', async (req, res) => {
                 console.log(`🆕 Created new customer ${customer.id} for email ${email}`);
 
                 // Create customer record in our database
+                const environment = isSandbox ? 'sandbox' : 'production';
                 await Customer.updateOne(
-                    { userId },
+                    { userId, environment },
                     {
                         $set: {
                             customerId: customer.id,
                             app: 'default',
                             email: email,
+                            environment: environment,
                             createdAt: new Date()
                         }
                     },
@@ -775,6 +789,9 @@ router.post('/domain/create-checkout-session', async (req, res) => {
             years = '1',
             enablePrivacy = false
         } = req.body;
+        
+        const isSandbox = isSandboxMode(req);
+        const stripe = getStripeInstance(isSandbox);
 
         console.log('Domain checkout request received:', {
             userId: userId,
@@ -2700,8 +2717,12 @@ router.post('/create-checkout-session-by-app', async (req, res) => {
 
         await connectToMongoDB();
 
-        // 2) Find or create customer record for user
-        let customerRecord = await Customer.findOne({ userId });
+        // 2) Find or create customer record for user - filter by environment
+        const environment = isSandbox ? 'sandbox' : 'production';
+        let customerRecord = await Customer.findOne({ 
+            userId, 
+            environment 
+        });
         let customerId;
 
         if (!customerRecord) {
@@ -2724,13 +2745,14 @@ router.post('/create-checkout-session-by-app', async (req, res) => {
 
                 // Create customer record in our database
                 await Customer.updateOne(
-                    { userId },
+                    { userId, environment },
                     {
                         $set: {
                             customerId: customer.id,
                             app: app,
                             planType: planType || 'unknown', // 🆕 Store plan type
                             email: null, // No email provided
+                            environment: environment, // 🆕 Store environment
                             createdAt: new Date()
                         }
                     },
@@ -2832,7 +2854,7 @@ router.post('/create-checkout-session-by-app', async (req, res) => {
         // Store checkout session info for tracking
         if (customerId) {
             await Customer.updateOne(
-                { userId },
+                { userId, environment },
                 { $set: { lastCheckoutSessionId: session.id } }
             );
             console.log(`[${isSandbox ? 'SANDBOX' : 'PRODUCTION'}] 📝 Updated customer record with checkout session ${session.id}`);
@@ -2918,17 +2940,21 @@ router.post('/sync-payment-method', async (req, res) => {
             });
         }
 
+        const isSandbox = isSandboxMode(req);
+        const stripe = getStripeInstance(isSandbox);
+        const environment = isSandbox ? 'sandbox' : 'production';
+
         await connectToMongoDB();
 
-        // Find or create customer record (separate from subscriptions)
-        let customerRecord = await Customer.findOne({ userId });
+        // Find or create customer record (separate from subscriptions) - filter by environment
+        let customerRecord = await Customer.findOne({ userId, environment });
         let customerId;
 
         if (!customerRecord) {
             // Create new customer in Stripe
             const customer = await stripe.customers.create({
                 email,
-                metadata: { userId, app }
+                metadata: { userId, app, environment }
             });
             customerId = customer.id;
 
@@ -2938,6 +2964,7 @@ router.post('/sync-payment-method', async (req, res) => {
                 app,
                 customerId,
                 email,
+                environment,
                 createdAt: new Date()
             });
 
@@ -3039,10 +3066,14 @@ router.get('/customer/:userId', async (req, res) => {
             return res.status(400).json({ error: 'userId is required' });
         }
 
+        const isSandbox = isSandboxMode(req);
+        const stripe = getStripeInstance(isSandbox);
+        const environment = isSandbox ? 'sandbox' : 'production';
+
         await connectToMongoDB();
 
-        // Find customer record
-        const customerRecord = await Customer.findOne({ userId });
+        // Find customer record - filter by environment
+        const customerRecord = await Customer.findOne({ userId, environment });
 
         if (!customerRecord) {
             return res.status(404).json({
@@ -3103,9 +3134,12 @@ router.post('/check-customer', async (req, res) => {
             return res.status(400).json({ error: 'userId is required' });
         }
 
+        const isSandbox = isSandboxMode(req);
+        const environment = isSandbox ? 'sandbox' : 'production';
+
         await connectToMongoDB();
 
-        const customerRecord = await Customer.findOne({ userId });
+        const customerRecord = await Customer.findOne({ userId, environment });
 
         res.json({
             hasCustomer: !!customerRecord,
@@ -3125,10 +3159,14 @@ router.post('/get-subscription-info-by-app', async (req, res) => {
     try {
         const { userId, app, features = [] } = req.body;
 
+        const isSandbox = isSandboxMode(req);
+        const stripe = getStripeInstance(isSandbox);
+        const environment = isSandbox ? 'sandbox' : 'production';
+
         await connectToMongoDB();
 
-        // Find customer record for this user (separate from subscriptions)
-        const customerRecord = await Customer.findOne({ userId });
+        // Find customer record for this user (separate from subscriptions) - filter by environment
+        const customerRecord = await Customer.findOne({ userId, environment });
         if (!customerRecord) {
             return res.status(200).json({
                 error: 'No customer found for this user',
@@ -3251,10 +3289,14 @@ router.post('/get-user-payment-info', async (req, res) => {
             return res.status(400).json({ error: 'Missing required parameters: userId and features array' });
         }
 
+        const isSandbox = isSandboxMode(req);
+        const stripe = getStripeInstance(isSandbox);
+        const environment = isSandbox ? 'sandbox' : 'production';
+
         await connectToMongoDB();
 
-        // Find customer record for this user (separate from subscriptions)
-        const customerRecord = await Customer.findOne({ userId });
+        // Find customer record for this user (separate from subscriptions) - filter by environment
+        const customerRecord = await Customer.findOne({ userId, environment });
         if (!customerRecord) {
             return res.status(200).json({
                 error: 'No customer found for this user',
@@ -3594,10 +3636,14 @@ router.post('/set-default-card', async (req, res) => {
     try {
         const { userId, paymentMethodId } = req.body;
 
+        const isSandbox = isSandboxMode(req);
+        const stripe = getStripeInstance(isSandbox);
+        const environment = isSandbox ? 'sandbox' : 'production';
+
         await connectToMongoDB();
 
-        // Find customer record for this user
-        const customerRecord = await Customer.findOne({ userId });
+        // Find customer record for this user - filter by environment
+        const customerRecord = await Customer.findOne({ userId, environment });
         if (!customerRecord) {
             return res.status(400).json({ error: 'No customer found for this user' });
         }
@@ -3651,10 +3697,14 @@ router.post('/delete-card', async (req, res) => {
     try {
         const { userId, paymentMethodId } = req.body;
 
+        const isSandbox = isSandboxMode(req);
+        const stripe = getStripeInstance(isSandbox);
+        const environment = isSandbox ? 'sandbox' : 'production';
+
         await connectToMongoDB();
 
-        // Find customer record for this user
-        const customerRecord = await Customer.findOne({ userId });
+        // Find customer record for this user - filter by environment
+        const customerRecord = await Customer.findOne({ userId, environment });
         if (!customerRecord) {
             return res.status(400).json({ error: 'No customer found for this user' });
         }
