@@ -63,7 +63,7 @@ async function fetchSalesNavURL(salesNavUrl) {
 
         if (retries === maxRetries && status === 'pending') {
             return {
-                status: 1,
+                status: 0,
                 salesNavigatorQueueMessage: {
                     request_id: requestId,
                     message: 'Your search was added to queue. Please wait and try again later!'
@@ -194,7 +194,7 @@ router.get('/search-results/:requestId', async (req, res) => {
 
         if (result.status !== 'completed') {
             return res.status(202).json({
-                status: 1,
+                status: 0,
                 salesNavigatorQueueMessage: {
                     message: result.message,
                     search_status: result.status
