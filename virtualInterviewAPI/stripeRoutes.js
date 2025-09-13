@@ -78,7 +78,7 @@ const Subscription = mongoose.model('Subscription', subscriptionSchema);
 
 // Customer model for managing users who have cards but no subscriptions yet
 const customerSchema = new mongoose.Schema({
-    userId: { type: String, required: true, unique: true },
+    userId: { type: String, required: true },
     customerId: { type: String, required: true },
     app: { type: String, default: 'default' },
     email: { type: String, required: true },
@@ -86,6 +86,9 @@ const customerSchema = new mongoose.Schema({
     environment: { type: String, enum: ['sandbox', 'production'], default: 'production' },
     createdAt: { type: Date, default: Date.now }
 }, { collection: 'customers' });
+
+// Add compound unique index to ensure one customer per userId per environment
+customerSchema.index({ userId: 1, environment: 1 }, { unique: true });
 
 const Customer = mongoose.model('Customer', customerSchema);
 
@@ -223,10 +226,10 @@ router.post(
                         if (customer && userId && userId !== 'unknown') {
                             // Get customer details from Stripe
                             const stripeCustomer = await stripe.customers.retrieve(customer);
-                            
+
                             // Determine environment from customer metadata or webhook source
-                            const environment = stripeCustomer.metadata?.environment || 
-                                             (stripeCustomer.id.startsWith('cus_') ? 'production' : 'sandbox');
+                            const environment = stripeCustomer.metadata?.environment ||
+                                (stripeCustomer.id.startsWith('cus_') ? 'production' : 'sandbox');
 
                             await Customer.updateOne(
                                 { userId, environment },
@@ -257,10 +260,10 @@ router.post(
                     const userId = customer.metadata?.userId;
                     const app = customer.metadata?.app || 'default';
                     const createdVia = customer.metadata?.createdVia;
-                    
+
                     // Determine environment from customer metadata
-                    const environment = customer.metadata?.environment || 
-                                     (customer.id.startsWith('cus_') ? 'production' : 'sandbox');
+                    const environment = customer.metadata?.environment ||
+                        (customer.id.startsWith('cus_') ? 'production' : 'sandbox');
 
                     if (userId) {
                         try {
@@ -559,7 +562,23 @@ router.post('/create-payment-intent', async (req, res) => {
         try {
             await connectToMongoDB();
             const environment = isSandbox ? 'sandbox' : 'production';
-            const existingCustomerRecord = await Customer.findOne({ userId, environment });
+
+            // First check for customer with environment field
+            let existingCustomerRecord = await Customer.findOne({ userId, environment });
+
+            // If not found, check for legacy customer without environment field
+            if (!existingCustomerRecord) {
+                const legacyCustomer = await Customer.findOne({ userId, environment: { $exists: false } });
+                if (legacyCustomer) {
+                    console.log(`🔄 Found legacy customer record for user ${userId}, migrating to ${environment} environment`);
+                    // Update the legacy record to include environment
+                    await Customer.updateOne(
+                        { _id: legacyCustomer._id },
+                        { $set: { environment: environment } }
+                    );
+                    existingCustomerRecord = { ...legacyCustomer, environment: environment };
+                }
+            }
 
             if (existingCustomerRecord && existingCustomerRecord.customerId) {
                 // User has existing customer record, verify it still exists in Stripe
@@ -614,19 +633,14 @@ router.post('/create-payment-intent', async (req, res) => {
 
                 // Create customer record in our database
                 const environment = isSandbox ? 'sandbox' : 'production';
-                await Customer.updateOne(
-                    { userId, environment },
-                    {
-                        $set: {
-                            customerId: customer.id,
-                            app: 'default',
-                            email: email,
-                            environment: environment,
-                            createdAt: new Date()
-                        }
-                    },
-                    { upsert: true }
-                );
+                await Customer.create({
+                    userId: userId,
+                    customerId: customer.id,
+                    app: 'default',
+                    email: email,
+                    environment: environment,
+                    createdAt: new Date()
+                });
             }
         } catch (error) {
             console.error('Error handling customer creation/lookup:', error);
@@ -793,7 +807,7 @@ router.post('/domain/create-checkout-session', async (req, res) => {
             years = '1',
             enablePrivacy = false
         } = req.body;
-        
+
         const isSandbox = isSandboxMode(req);
         const stripe = getStripeInstance(isSandbox);
 
@@ -2723,10 +2737,24 @@ router.post('/create-checkout-session-by-app', async (req, res) => {
 
         // 2) Find or create customer record for user - filter by environment
         const environment = isSandbox ? 'sandbox' : 'production';
-        let customerRecord = await Customer.findOne({ 
-            userId, 
-            environment 
-        });
+
+        // First check for customer with environment field
+        let customerRecord = await Customer.findOne({ userId, environment });
+
+        // If not found, check for legacy customer without environment field
+        if (!customerRecord) {
+            const legacyCustomer = await Customer.findOne({ userId, environment: { $exists: false } });
+            if (legacyCustomer) {
+                console.log(`🔄 Found legacy customer record for user ${userId}, migrating to ${environment} environment`);
+                // Update the legacy record to include environment
+                await Customer.updateOne(
+                    { _id: legacyCustomer._id },
+                    { $set: { environment: environment } }
+                );
+                customerRecord = { ...legacyCustomer, environment: environment };
+            }
+        }
+
         let customerId;
 
         if (!customerRecord) {
@@ -2954,29 +2982,73 @@ router.post('/sync-payment-method', async (req, res) => {
         let customerRecord = await Customer.findOne({ userId, environment });
         let customerId;
 
+
+
         if (!customerRecord) {
-            // Create new customer in Stripe
-            const customer = await stripe.customers.create({
-                email,
-                metadata: { userId, app, environment }
-            });
-            customerId = customer.id;
+            console.log(`[${isSandbox ? 'SANDBOX' : 'PRODUCTION'}] No existing customer found for user ${userId} in ${environment} environment`);
 
-            // Create customer record (NOT subscription record)
-            customerRecord = await Customer.create({
-                userId,
-                app,
-                customerId,
-                email,
-                environment,
-                createdAt: new Date()
-            });
+            try {
+                const customer = await stripe.customers.create({
+                    email: null, // No email provided
+                    metadata: {
+                        userId,
+                        app,
+                        planType: planType || 'unknown',
+                        environment: environment,
+                        createdVia: 'subscription_checkout',
+                        timestamp: new Date().toISOString()
+                    }
+                });
 
-            console.log(`🆕 Created new customer ${customerId} for user ${userId}`);
+                customerId = customer.id;
+
+                // Create customer record in our database with environment
+                await Customer.create({
+                    userId,
+                    customerId: customer.id,
+                    app: app,
+                    planType: planType || 'unknown',
+                    email: null,
+                    environment: environment, // 🆕 Store environment
+                    createdAt: new Date()
+                });
+
+                console.log(`[${isSandbox ? 'SANDBOX' : 'PRODUCTION'}] 🆕 Created new customer ${customerId} for user ${userId} in ${environment} environment`);
+            } catch (customerError) {
+                console.error(`[${isSandbox ? 'SANDBOX' : 'PRODUCTION'}] Error creating customer for user ${userId}:`, customerError);
+                return res.status(500).json({
+                    error: 'Failed to create customer',
+                    details: customerError.message
+                });
+            }
         } else {
             customerId = customerRecord.customerId;
-            console.log(`✅ Found existing customer ${customerId} for user ${userId}`);
+            console.log(`[${isSandbox ? 'SANDBOX' : 'PRODUCTION'}] Found existing customer ${customerId} for user ${userId} in ${environment} environment`);
         }
+
+        // if (!customerRecord) {
+        //     // Create new customer in Stripe
+        //     const customer = await stripe.customers.create({
+        //         email,
+        //         metadata: { userId, app, environment }
+        //     });
+        //     customerId = customer.id;
+
+        //     // Create customer record (NOT subscription record)
+        //     customerRecord = await Customer.create({
+        //         userId,
+        //         app,
+        //         customerId,
+        //         email,
+        //         environment,
+        //         createdAt: new Date()
+        //     });
+
+        //     console.log(`🆕 Created new customer ${customerId} for user ${userId}`);
+        // } else {
+        //     customerId = customerRecord.customerId;
+        //     console.log(`✅ Found existing customer ${customerId} for user ${userId}`);
+        // }
 
         // Verify the payment method exists and belongs to this customer
         let paymentMethod;
@@ -3884,5 +3956,5 @@ router.post('/cancel-subscription', async (req, res) => {
         res.status(500).json({ error: err.message });
     }
 });
- 
+
 module.exports = router;
