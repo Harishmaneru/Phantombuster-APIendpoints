@@ -550,6 +550,10 @@ router.post('/create-payment-intent', async (req, res) => {
             postalCode
         };
 
+        // Determine sandbox mode and get appropriate Stripe instance
+        const isSandbox = isSandboxMode(req);
+        const stripe = getStripeInstance(isSandbox);
+
         // Check for existing customer in database by userId and environment, create new one if not found
         let customer;
         try {
