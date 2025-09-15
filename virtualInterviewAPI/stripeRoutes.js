@@ -2704,11 +2704,12 @@ router.get('/invoice/:paymentIntentId', async (req, res) => {
 // Buy/subscribe using saved card if available, otherwise fall back to Checkout
 router.post('/create-checkout-session-by-app', async (req, res) => {
     try {
-        const { userId, priceId, app, quantity = 1, planType } = req.body; // 🆕 Added planType
+        // 1. Destructure all parameters including trialPeriodDays
+        const { userId, priceId, app, quantity = 1, planType, trialPeriodDays } = req.body;
         const isSandbox = isSandboxMode(req);
         const stripe = getStripeInstance(isSandbox);
 
-        console.log(`[${isSandbox ? 'SANDBOX' : 'PRODUCTION'}] create-checkout-session-by-app called for user:`, userId, 'app:', app, 'planType:', planType);
+        console.log(`[${isSandbox ? 'SANDBOX' : 'PRODUCTION'}] create-checkout-session-by-app called for user:`, userId, 'app:', app, 'planType:', planType, 'trialDays:', trialPeriodDays);
 
         // 1) App URL map + validation - Different URLs for sandbox vs production
         const appUrlMap = isSandbox ? {
@@ -2731,6 +2732,9 @@ router.post('/create-checkout-session-by-app', async (req, res) => {
         }
         if (!quantity || quantity < 1) {
             return res.status(400).json({ error: 'Quantity must be at least 1' });
+        }
+        if (trialPeriodDays && (trialPeriodDays < 0 || trialPeriodDays > 365)) {
+            return res.status(400).json({ error: 'Trial period days must be between 0 and 365' });
         }
 
         await connectToMongoDB();
@@ -2770,7 +2774,8 @@ router.post('/create-checkout-session-by-app', async (req, res) => {
                         planType: planType || 'unknown', // 🆕 Store plan type
                         environment: isSandbox ? 'sandbox' : 'production',
                         createdVia: 'subscription_checkout',
-                        createdAt: new Date().toISOString()
+                        createdAt: new Date().toISOString(),
+                        trialPeriodDays: trialPeriodDays || 0 // Log it for reference
                     }
                 });
                 customerId = customer.id;
@@ -2868,10 +2873,19 @@ router.post('/create-checkout-session-by-app', async (req, res) => {
                 app,
                 planType: planType || 'unknown', // 🆕 Store plan type
                 environment: isSandbox ? 'sandbox' : 'production',
-                sandbox: isSandbox
+                sandbox: isSandbox,
+                trialPeriodDays: trialPeriodDays || 0 // Log it for reference
             },
             allow_promotion_codes: true, // optional
         };
+
+        // 4) 🔥 Add free trial configuration if specified
+        if (trialPeriodDays && trialPeriodDays > 0) {
+            sessionPayload.subscription_data = {
+                trial_period_days: trialPeriodDays
+            };
+            console.log(`[${isSandbox ? 'SANDBOX' : 'PRODUCTION'}] Adding free trial of ${trialPeriodDays} days to checkout`);
+        }
 
         // If we have a customer ID, attach them so saved cards show up
         if (customerId) {
@@ -2901,6 +2915,7 @@ router.post('/create-checkout-session-by-app', async (req, res) => {
             environment: isSandbox ? 'sandbox' : 'production',
             customerId: customerId,
             planType: planType || 'unknown',
+            trialPeriodDays: trialPeriodDays || 0, // Inform the frontend
             successUrl: getSuccessUrl(app, planType, isSandbox),
             cancelUrl: getCancelUrl(app, planType, isSandbox),
             appUrls: appUrlMap
