@@ -2933,6 +2933,13 @@ router.post('/create-billing-portal-session-by-app', async (req, res) => {
     const { customerId, userId, app } = req.body;
 
     try {
+        // Determine sandbox mode and get appropriate Stripe instance
+        const isSandbox = isSandboxMode(req);
+        const stripe = getStripeInstance(isSandbox);
+        const environment = isSandbox ? 'sandbox' : 'production';
+
+        console.log(`[${isSandbox ? 'SANDBOX' : 'PRODUCTION'}] create-billing-portal-session-by-app called for customer:`, customerId, 'app:', app);
+
         // Ensure MongoDB connection is established
         await connectToMongoDB();
 
@@ -2942,8 +2949,14 @@ router.post('/create-billing-portal-session-by-app', async (req, res) => {
             console.log(`Warning: Creating portal for customer ${customerId} not in our database`);
         }
 
-        // Map app names to their base URLs
-        const appUrlMap = {
+        // Map app names to their base URLs - Different URLs for sandbox vs production
+        const appUrlMap = isSandbox ? {
+            // Sandbox URLs - Localhost for testing
+            kampaignai: 'https://kampaign.onepgr.com',
+            gps: 'http://localhost:4200',
+            getsalesgpt: 'http://localhost:4200',
+        } : {
+            // Production URLs
             kampaignai: 'https://kampaign.onepgr.com',
             gps: 'https://gps.onepgr.com',
             getsalesgpt: 'https://sales.onepgr.com',
@@ -2965,10 +2978,11 @@ router.post('/create-billing-portal-session-by-app', async (req, res) => {
         res.json({
             url: portalSession.url,
             app: app || 'default',
-            returnUrl: returnUrl
+            returnUrl: returnUrl,
+            environment: environment
         });
     } catch (error) {
-        console.error('Error creating billing portal session:', error.message);
+        console.error(`[${isSandboxMode(req) ? 'SANDBOX' : 'PRODUCTION'}] Error creating billing portal session:`, error.message);
         res.status(500).json({ error: error.message });
     }
 });
