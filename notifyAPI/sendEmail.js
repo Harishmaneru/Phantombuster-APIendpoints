@@ -2064,6 +2064,58 @@ router.post('/api/get-smtphost', async (req, res) => {
   }
 });
 
+//___________________delete SMTP config API_____
+
+router.delete('/api/delete-smtpconfig', async (req, res) => {
+  try {
+    const { email, token } = req.body;
+
+    if (!email) {
+      return res.status(400).json({
+        success: false,
+        error: 'Email is required'
+      });
+    }
+
+    // If token is provided, verify it matches the email
+    if (token) {
+      const smtpRecord = await SMTPAuth.findOne({ email, token });
+      if (!smtpRecord) {
+        return res.status(403).json({
+          success: false,
+          error: 'Invalid token or email not found'
+        });
+      }
+    }
+
+    // Delete the SMTP configuration
+    const deletedRecord = await SMTPAuth.findOneAndDelete({ email });
+
+    if (!deletedRecord) {
+      return res.status(404).json({
+        success: false,
+        error: 'SMTP configuration not found for this email'
+      });
+    }
+
+    console.log(`✅ SMTP config deleted for: ${email}`);
+
+    return res.json({
+      success: true,
+      message: `SMTP configuration deleted successfully for ${email}`,
+      deletedEmail: email,
+      deletedAt: new Date().toISOString()
+    });
+
+  } catch (error) {
+    console.error('Delete SMTP Config Error:', error);
+    return res.status(500).json({
+      success: false,
+      error: error.message
+    });
+  }
+});
+
 module.exports = {
   router,
   getSMTPSettings,
