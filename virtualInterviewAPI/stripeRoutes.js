@@ -2036,7 +2036,9 @@ router.get('/invoices/user/:userId', async (req, res) => {
     }
 });
 
-// Get domain invoices for a user from namecheap_domains collection
+
+
+// Get clean domain invoices for a user
 router.get('/users/:userId/domain-invoices', async (req, res) => {
     const { userId } = req.params;
     const { limit = 50, offset = 0 } = req.query;
@@ -2066,25 +2068,24 @@ router.get('/users/:userId/domain-invoices', async (req, res) => {
             });
         }
 
-        // Extract only the required information
+        // Extract clean invoice information
         const domainInvoices = userDomains
             .filter(domain => domain.stripePayment && domain.stripePayment.invoiceId)
             .map(domain => ({
-                domain_name: domain.domain,
-                charged_amount: domain.registrationData?.chargedAmount || 0,
-                invoice_details: {
-                    id: domain.stripePayment.invoiceId,
-                    hosted_invoice_url: domain.stripePayment.hostedInvoiceUrl,
-                    invoice_pdf: domain.stripePayment.invoicePdf,
-                    receipt_url: domain.stripePayment.receiptUrl,
-                    status: domain.stripePayment.paymentStatus || 'paid'
-                },
-                date_of_purchase: domain.registrationData?.registrationDate || domain.createdAt
+                domain: domain.domain,
+                invoiceId: domain.stripePayment.invoiceId,
+                hostedInvoiceUrl: domain.stripePayment.hostedInvoiceUrl,
+                invoicePdf: domain.stripePayment.invoicePdf,
+                paymentDate: domain.stripePayment.paymentDate,
+                amountPaid: domain.stripePayment.amountPaid,
+                currency: domain.stripePayment.currency,
+                paymentStatus: domain.stripePayment.paymentStatus
             }));
 
         res.json({
             success: true,
             userId,
+            totalInvoices: domainInvoices.length,
             data: domainInvoices
         });
 
