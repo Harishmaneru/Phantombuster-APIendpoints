@@ -721,6 +721,17 @@ const FormData = require('form-data');
 const fs = require('fs');
 const router = express.Router();
 
+// Import LinkedIn account service
+const {
+    connectLinkedInAccount,
+    disconnectLinkedInAccount,
+    getLinkedInAccountStatus,
+    refreshLinkedInAccount,
+    handleAccountError,
+    getAllLinkedInAccounts,
+    deleteLinkedInAccount
+} = require('./linkedinAccountService');
+
 // ==================== MIDDLEWARE ====================
 
 // Validate environment variables on startup
@@ -804,12 +815,19 @@ router.get('/api/unipile/accounts/:accountId', async (req, res) => {
 // Create account via cookie (li_at token)
 router.post('/api/unipile/accounts/cookie', async (req, res) => {
   try {
-    const { access_token, user_agent } = req.body;
+    const { access_token, user_agent, user_id, name } = req.body;
 
     if (!access_token || !user_agent) {
       return res.status(400).json({
         success: false,
         error: 'access_token (li_at) and user_agent are required'
+      });
+    }
+
+    if (!user_id) {
+      return res.status(400).json({
+        success: false,
+        error: 'user_id is required to store account information'
       });
     }
 
@@ -823,10 +841,31 @@ router.post('/api/unipile/accounts/cookie', async (req, res) => {
       headers: getHeaders()
     });
 
+    // Store account in database
+    if (response.data && response.data.account_id) {
+      const dbResult = await connectLinkedInAccount(
+        user_id,
+        response.data.account_id,
+        'LINKEDIN',
+        name || 'LinkedIn Account',
+        {
+          user_agent: user_agent,
+          connected_via: 'cookie',
+          unipile_response: response.data
+        }
+      );
+
+      if (!dbResult.success) {
+        console.error('Failed to store account in database:', dbResult.error);
+        // Continue with success response but log the error
+      }
+    }
+
     res.status(201).json({
       success: true,
       data: response.data,
-      message: 'LinkedIn account connected successfully'
+      message: 'LinkedIn account connected successfully',
+      stored_in_db: response.data && response.data.account_id ? true : false
     });
   } catch (err) {
     handleError(err, res);
@@ -863,6 +902,7 @@ router.post('/api/unipile/auth/link', async (req, res) => {
       failure_redirect_url,
       notify_url,
       name,
+      user_id,
       type = 'create'
     } = req.body;
 
@@ -877,6 +917,13 @@ router.post('/api/unipile/auth/link', async (req, res) => {
     // Generate expiration (24 hours from now)
     const expiresOn = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
 
+    // Include user_id in notify_url if provided
+    let finalNotifyUrl = notify_url;
+    if (user_id && notify_url) {
+      const separator = notify_url.includes('?') ? '&' : '?';
+      finalNotifyUrl = `${notify_url}${separator}user_id=${user_id}`;
+    }
+
     const payload = {
       type,
       providers,
@@ -884,8 +931,9 @@ router.post('/api/unipile/auth/link', async (req, res) => {
       api_url: `https://${process.env.UNIPILE_SUBDOMAIN}.unipile.com:${process.env.UNIPILE_PORT}`,
       ...(success_redirect_url && { success_redirect_url }),
       ...(failure_redirect_url && { failure_redirect_url }),
-      ...(notify_url && { notify_url }),
-      ...(name && { name })
+      ...(finalNotifyUrl && { notify_url: finalNotifyUrl }),
+      ...(name && { name }),
+      ...(user_id && { user_id }) // Include user_id in payload for webhook
     };
 
     const response = await axios.post(
@@ -897,64 +945,91 @@ router.post('/api/unipile/auth/link', async (req, res) => {
     res.json({
       success: true,
       data: response.data,
-      message: 'Hosted auth link created successfully'
+      message: 'Hosted auth link created successfully',
+      user_id: user_id,
+      note: user_id ? 'User ID included for webhook processing' : 'No user ID provided - account will not be stored automatically'
     });
   } catch (err) {
     handleError(err, res);
   }
 });
 
-// Webhook handler for account creation
+// Webhook handler for account creation and errors
 router.post('/api/unipile/webhook/unipile-account', async (req, res) => {
   try {
-    const { status, account_id, name, provider, error } = req.body;
+    const { status, account_id, name, provider, error, user_id } = req.body;
 
     console.log('Unipile webhook received:', {
       status,
       account_id,
       name,
       provider,
+      user_id,
       timestamp: new Date().toISOString()
     });
 
     if (status === 'CREATION_SUCCESS' && account_id) {
-      console.log(`✅ Account created successfully for user ${name}: ${account_id}`);
+      console.log(`✅ Account created successfully for user ${name || user_id}: ${account_id}`);
       
-      // TODO: Store account_id in your database
-      // Example:
-      // await User.updateOne(
-      //   { _id: name },
-      //   {
-      //     $set: {
-      //       linkedin_account_id: account_id,
-      //       linkedin_connected: true,
-      //       linkedin_connected_at: new Date()
-      //     }
-      //   }
-      // );
+      // Store account in database if user_id is provided
+      if (user_id) {
+        const dbResult = await connectLinkedInAccount(
+          user_id,
+          account_id,
+          provider || 'LINKEDIN',
+          name || 'LinkedIn Account',
+          {
+            connected_via: 'hosted_auth',
+            webhook_data: req.body
+          }
+        );
+
+        if (!dbResult.success) {
+          console.error('Failed to store account in database:', dbResult.error);
+        }
+      }
 
       res.json({
         success: true,
-        message: 'Account creation processed successfully'
+        message: 'Account creation processed successfully',
+        stored_in_db: !!user_id
       });
     } 
     else if (status === 'CREATION_FAILED') {
-      console.log(`❌ Account creation failed for user ${name}:`, error);
+      console.log(`❌ Account creation failed for user ${name || user_id}:`, error);
       
-      // TODO: Update user status
-      // await User.updateOne(
-      //   { _id: name },
-      //   {
-      //     $set: {
-      //       linkedin_connected: false,
-      //       linkedin_error: error || 'Account creation failed'
-      //     }
-      //   }
-      // );
+      // Update user status if user_id is provided
+      if (user_id) {
+        const dbResult = await disconnectLinkedInAccount(
+          user_id,
+          error || 'Account creation failed'
+        );
+        
+        if (!dbResult.success) {
+          console.error('Failed to update account status in database:', dbResult.error);
+        }
+      }
 
       res.json({
         success: true,
-        message: 'Account creation failure processed'
+        message: 'Account creation failure processed',
+        updated_in_db: !!user_id
+      });
+    }
+    else if (status === 'ACCOUNT_ERROR' || status === 'ACCOUNT_STOPPED') {
+      console.log(`⚠️ Account error/stopped for account ${account_id}:`, error);
+      
+      // Handle account error
+      const dbResult = await handleAccountError(account_id, error || 'Account error occurred');
+      
+      if (!dbResult.success) {
+        console.error('Failed to handle account error in database:', dbResult.error);
+      }
+
+      res.json({
+        success: true,
+        message: 'Account error handled successfully',
+        updated_in_db: dbResult.success
       });
     }
     else {
