@@ -958,23 +958,29 @@ router.post('/api/unipile/auth/link', async (req, res) => {
 router.post('/api/unipile/webhook/unipile-account', async (req, res) => {
   try {
     const { status, account_id, name, provider, error, user_id } = req.body;
+    
+    // Also check for user_id in query parameters (from notify_url)
+    const userIdFromQuery = req.query.user_id;
+    const finalUserId = user_id || userIdFromQuery;
 
     console.log('Unipile webhook received:', {
       status,
       account_id,
       name,
       provider,
-      user_id,
+      user_id: finalUserId,
+      user_id_from_body: user_id,
+      user_id_from_query: userIdFromQuery,
       timestamp: new Date().toISOString()
     });
 
     if (status === 'CREATION_SUCCESS' && account_id) {
-      console.log(`✅ Account created successfully for user ${name || user_id}: ${account_id}`);
+      console.log(`✅ Account created successfully for user ${name || finalUserId}: ${account_id}`);
       
       // Store account in database if user_id is provided
-      if (user_id) {
+      if (finalUserId) {
         const dbResult = await connectLinkedInAccount(
-          user_id,
+          finalUserId,
           account_id,
           provider || 'LINKEDIN',
           name || 'LinkedIn Account',
@@ -987,21 +993,45 @@ router.post('/api/unipile/webhook/unipile-account', async (req, res) => {
         if (!dbResult.success) {
           console.error('Failed to store account in database:', dbResult.error);
         }
+      } else {
+        // If no user_id provided, store with a temporary identifier
+        // This allows you to manually associate the account later
+        const tempUserId = `temp_${account_id}_${Date.now()}`;
+        console.log(`⚠️ No user_id provided, storing with temporary ID: ${tempUserId}`);
+        
+        const dbResult = await connectLinkedInAccount(
+          tempUserId,
+          account_id,
+          provider || 'LINKEDIN',
+          name || 'LinkedIn Account',
+          {
+            connected_via: 'hosted_auth',
+            webhook_data: req.body,
+            is_temporary: true,
+            needs_user_association: true
+          }
+        );
+
+        if (!dbResult.success) {
+          console.error('Failed to store account in database:', dbResult.error);
+        }
       }
 
       res.json({
         success: true,
         message: 'Account creation processed successfully',
-        stored_in_db: !!user_id
+        stored_in_db: true,
+        user_id: finalUserId || `temp_${account_id}_${Date.now()}`,
+        note: finalUserId ? 'Account associated with user' : 'Account stored with temporary ID - needs user association'
       });
     } 
     else if (status === 'CREATION_FAILED') {
-      console.log(`❌ Account creation failed for user ${name || user_id}:`, error);
+      console.log(`❌ Account creation failed for user ${name || finalUserId}:`, error);
       
       // Update user status if user_id is provided
-      if (user_id) {
+      if (finalUserId) {
         const dbResult = await disconnectLinkedInAccount(
-          user_id,
+          finalUserId,
           error || 'Account creation failed'
         );
         
@@ -1013,7 +1043,7 @@ router.post('/api/unipile/webhook/unipile-account', async (req, res) => {
       res.json({
         success: true,
         message: 'Account creation failure processed',
-        updated_in_db: !!user_id
+        updated_in_db: !!finalUserId
       });
     }
     else if (status === 'ACCOUNT_ERROR' || status === 'ACCOUNT_STOPPED') {
@@ -1299,6 +1329,228 @@ router.post('/api/unipile/linkedin/message', async (req, res) => {
   } catch (err) {
     console.error('LinkedIn message error:', err.response?.data || err.message);
     handleError(err, res);
+  }
+});
+
+// ==================== ACCOUNT MANAGEMENT ENDPOINTS ====================
+
+// Associate temporary account with real user ID
+router.post('/api/unipile/account/associate', async (req, res) => {
+  try {
+    const { account_id, user_id, name } = req.body;
+    
+    if (!account_id || !user_id) {
+      return res.status(400).json({
+        success: false,
+        error: 'account_id and user_id are required'
+      });
+    }
+
+    // Use the service function to handle the association
+    const result = await connectLinkedInAccount(
+      user_id,
+      account_id,
+      'LINKEDIN',
+      name || 'LinkedIn Account',
+      {
+        connected_via: 'association',
+        is_temporary: false,
+        needs_user_association: false,
+        associated_at: new Date()
+      }
+    );
+
+    if (result.success) {
+      res.json({
+        success: true,
+        message: 'Account associated successfully',
+        account_id: account_id,
+        user_id: user_id
+      });
+    } else {
+      res.status(400).json({
+        success: false,
+        error: result.error || 'Failed to associate account'
+      });
+    }
+  } catch (err) {
+    console.error('Error associating account:', err);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to associate account'
+    });
+  }
+});
+
+// Get temporary accounts that need user association
+router.get('/api/unipile/accounts/temporary', async (req, res) => {
+  try {
+    const result = await getAllLinkedInAccounts({
+      'metadata.is_temporary': true,
+      'metadata.needs_user_association': true
+    });
+
+    res.json(result);
+  } catch (err) {
+    console.error('Error getting temporary accounts:', err);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to get temporary accounts'
+    });
+  }
+});
+
+// Get LinkedIn account status for a user
+router.get('/api/unipile/account/status/:userId', async (req, res) => {
+  try {
+    const { userId } = req.params;
+    
+    if (!userId) {
+      return res.status(400).json({
+        success: false,
+        error: 'user_id is required'
+      });
+    }
+
+    const result = await getLinkedInAccountStatus(userId);
+    res.json(result);
+  } catch (err) {
+    console.error('Error getting account status:', err);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to get account status'
+    });
+  }
+});
+
+// Disconnect LinkedIn account
+router.post('/api/unipile/account/disconnect', async (req, res) => {
+  try {
+    const { user_id, reason } = req.body;
+    
+    if (!user_id) {
+      return res.status(400).json({
+        success: false,
+        error: 'user_id is required'
+      });
+    }
+
+    const result = await disconnectLinkedInAccount(user_id, reason);
+    res.json(result);
+  } catch (err) {
+    console.error('Error disconnecting account:', err);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to disconnect account'
+    });
+  }
+});
+
+// Refresh LinkedIn account (reconnect with new credentials)
+router.post('/api/unipile/account/refresh', async (req, res) => {
+  try {
+    const { user_id, access_token, user_agent, name } = req.body;
+    
+    if (!user_id) {
+      return res.status(400).json({
+        success: false,
+        error: 'user_id is required'
+      });
+    }
+
+    if (!access_token || !user_agent) {
+      return res.status(400).json({
+        success: false,
+        error: 'access_token (li_at) and user_agent are required for refresh'
+      });
+    }
+
+    // Create new account with Unipile
+    const payload = {
+      provider: 'LINKEDIN',
+      access_token,
+      user_agent
+    };
+
+    const response = await axios.post(`${getBaseUrl()}/accounts`, payload, {
+      headers: getHeaders()
+    });
+
+    if (response.data && response.data.account_id) {
+      // Update database with new account
+      const dbResult = await refreshLinkedInAccount(
+        user_id,
+        response.data.account_id,
+        name || 'LinkedIn Account',
+        {
+          user_agent: user_agent,
+          connected_via: 'refresh',
+          unipile_response: response.data
+        }
+      );
+
+      res.json({
+        success: true,
+        data: response.data,
+        message: 'LinkedIn account refreshed successfully',
+        stored_in_db: dbResult.success
+      });
+    } else {
+      res.status(400).json({
+        success: false,
+        error: 'Failed to create new account with Unipile'
+      });
+    }
+  } catch (err) {
+    console.error('Error refreshing account:', err);
+    handleError(err, res);
+  }
+});
+
+// Delete LinkedIn account completely
+router.delete('/api/unipile/account/delete/:userId', async (req, res) => {
+  try {
+    const { userId } = req.params;
+    
+    if (!userId) {
+      return res.status(400).json({
+        success: false,
+        error: 'user_id is required'
+      });
+    }
+
+    const result = await deleteLinkedInAccount(userId);
+    res.json(result);
+  } catch (err) {
+    console.error('Error deleting account:', err);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to delete account'
+    });
+  }
+});
+
+// Get all LinkedIn accounts (admin endpoint)
+router.get('/api/unipile/accounts/all', async (req, res) => {
+  try {
+    const { connected, user_id } = req.query;
+    
+    const filters = {};
+    if (connected !== undefined) {
+      filters.connected = connected === 'true';
+    }
+    if (user_id) {
+      filters.user_id = user_id;
+    }
+
+    const result = await getAllLinkedInAccounts(filters);
+    res.json(result);
+  } catch (err) {
+    console.error('Error getting all accounts:', err);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to get accounts'
+    });
   }
 });
 

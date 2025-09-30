@@ -7,7 +7,7 @@ let client, LinkedInAccounts;
 async function connectMongoDb() {
     try {
         if (!process.env.ONEPGR_MONGO_URI) {
-            console.warn('⚠️ MONGODB_URL environment variable not set, using default localhost connection');
+            console.warn('⚠️ ONEPGR_MONGO_URI environment variable not set, using default localhost connection');
         }
         
         client = await MongoClient.connect(url);
