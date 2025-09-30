@@ -11,7 +11,7 @@ async function connectMongoDb() {
         }
         
         client = await MongoClient.connect(url);
-        LinkedInAccounts = client.db("onepgr").collection("unipile-LinkedIn-data");
+        LinkedInAccounts = client.db("onepgr_apps").collection("unipile-LinkedIn-data");
         console.log("------------------LinkedIn Accounts MongoDB Connected---------------");
     } catch (err) {
         console.error('MongoDB connection error:', err);
