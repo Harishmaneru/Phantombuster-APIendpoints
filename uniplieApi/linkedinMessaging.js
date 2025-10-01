@@ -1460,23 +1460,38 @@ router.get('/api/unipile/account/live-status/:userId', async (req, res) => {
     let connectionStatus = 'unknown';
     let lastError = null;
     let sources = [];
+    let linkedinProfile = null;
 
     if (unipileAccount && unipileAccount.sources) {
       sources = unipileAccount.sources;
       
-      // Check if any LinkedIn source is active
-      const linkedinSource = sources.find(source => 
-        source.provider === 'LINKEDIN' || 
-        source.type === 'LINKEDIN'
+      // Check if any source has status "OK" (based on your API response)
+      const activeSource = sources.find(source => 
+        source.status === 'OK' || 
+        source.status === 'active' || 
+        source.status === 'connected'
       );
       
-      if (linkedinSource) {
-        isConnected = linkedinSource.status === 'active' || 
-                     linkedinSource.status === 'connected' ||
-                     linkedinSource.status === 'ok';
-        connectionStatus = linkedinSource.status;
-        lastError = linkedinSource.error || linkedinSource.last_error;
+      if (activeSource) {
+        isConnected = true;
+        connectionStatus = activeSource.status;
+      } else {
+        isConnected = false;
+        connectionStatus = sources.length > 0 ? sources[0].status : 'unknown';
+        lastError = sources.length > 0 ? sources[0].error : 'No active sources';
       }
+    }
+
+    // Extract LinkedIn profile information if available
+    if (unipileAccount.connection_params && unipileAccount.connection_params.im) {
+      linkedinProfile = {
+        id: unipileAccount.connection_params.im.id,
+        publicIdentifier: unipileAccount.connection_params.im.publicIdentifier,
+        username: unipileAccount.connection_params.im.username,
+        premiumId: unipileAccount.connection_params.im.premiumId,
+        premiumFeatures: unipileAccount.connection_params.im.premiumFeatures,
+        organizations: unipileAccount.connection_params.im.organizations
+      };
     }
 
     // Update database if status changed
@@ -1505,10 +1520,13 @@ router.get('/api/unipile/account/live-status/:userId', async (req, res) => {
       success: true,
       connected: isConnected,
       account_id: dbResult.account_id,
-      name: dbResult.name,
+      name: unipileAccount.name || dbResult.name,
+      type: unipileAccount.type,
+      created_at: unipileAccount.created_at,
       connection_status: connectionStatus,
       last_error: lastError,
       sources: sources,
+      linkedin_profile: linkedinProfile,
       unipile_data: unipileAccount,
       last_checked: new Date(),
       source: 'unipile_live',
