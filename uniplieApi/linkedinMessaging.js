@@ -1938,6 +1938,121 @@ router.post('/api/unipile/linkedin/invite', async (req, res) => {
   }
 });
 
+
+// ==================== CHECK CONNECTION STATUS ====================
+
+// Check if a specific user is in your network
+router.get('/api/unipile/linkedin/connection-status/:identifier', async (req, res) => {
+  try {
+    const { identifier } = req.params;
+    const { account_id, user_id } = req.query;
+
+    // Get account_id from user_id if not provided
+    let finalAccountId = account_id;
+    if (!finalAccountId && user_id) {
+      const dbResult = await getLinkedInAccountStatus(user_id);
+      if (dbResult.success && dbResult.account_id) {
+        finalAccountId = dbResult.account_id;
+      }
+    }
+
+    if (!finalAccountId) {
+      return res.status(400).json({
+        success: false,
+        error: 'account_id or user_id is required'
+      });
+    }
+
+    // Get user details first
+    const userResponse = await axios.get(
+      `${getBaseUrl()}/users/${encodeURIComponent(identifier)}?account_id=${finalAccountId}`,
+      { headers: getHeaders() }
+    );
+
+    if (!userResponse.data || !userResponse.data.provider_id) {
+      return res.status(404).json({
+        success: false,
+        error: 'User not found',
+        identifier: identifier
+      });
+    }
+
+    const providerUserId = userResponse.data.provider_id;
+
+    let connectionStatus = 'not_connected';
+    let connectionData = null;
+    let invitationData = null;
+
+    // Check existing connections
+    try {
+      const connectionsResponse = await axios.get(
+        `${getBaseUrl()}/connections?account_id=${finalAccountId}&limit=1000`,
+        { headers: getHeaders() }
+      );
+
+      const existingConnection = connectionsResponse.data.items?.find(
+        connection => connection.provider_id === providerUserId
+      );
+
+      if (existingConnection) {
+        connectionStatus = 'connected';
+        connectionData = existingConnection;
+      }
+    } catch (connectionsError) {
+      console.warn('Could not fetch connections:', connectionsError.message);
+    }
+
+    // Check pending invitations if not connected
+    if (connectionStatus === 'not_connected') {
+      try {
+        const invitationsResponse = await axios.get(
+          `${getBaseUrl()}/users/invitations/sent?account_id=${finalAccountId}`,
+          { headers: getHeaders() }
+        );
+
+        const pendingInvitation = invitationsResponse.data.items?.find(
+          invitation => invitation.provider_id === providerUserId
+        );
+
+        if (pendingInvitation) {
+          connectionStatus = 'invitation_pending';
+          invitationData = pendingInvitation;
+        }
+      } catch (invitationsError) {
+        console.warn('Could not fetch invitations:', invitationsError.message);
+      }
+    }
+
+    res.json({
+      success: true,
+      connection_status: connectionStatus,
+      user: {
+        identifier: identifier,
+        provider_id: providerUserId,
+        name: userResponse.data.name || null,
+        headline: userResponse.data.headline || null,
+        profile_url: userResponse.data.profile_url || null
+      },
+      connection: connectionData,
+      invitation: invitationData,
+      checked_at: new Date()
+    });
+
+  } catch (err) {
+    console.error('Connection status check error:', err.response?.data || err.message);
+    
+    if (err.response?.status === 404) {
+      return res.status(404).json({
+        success: false,
+        error: 'User not found',
+        identifier: req.params.identifier
+      });
+    }
+    
+    handleError(err, res);
+  }
+});
+
 // ==================== GET USER DETAILS (Helper) ====================
 
 // Get LinkedIn user details by identifier
