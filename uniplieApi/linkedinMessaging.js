@@ -1338,6 +1338,48 @@ router.post('/api/unipile/linkedin/message', async (req, res) => {
   }
 });
 
+// ==================== REUSABLE FUNCTIONS ====================
+
+// Reusable function to get LinkedIn user profile
+const getLinkedInUserProfile = async (accountId, identifier = 'me') => {
+  try {
+    const response = await axios.get(
+      `${getBaseUrl()}/users/${encodeURIComponent(identifier)}?account_id=${accountId}`,
+      { headers: getHeaders() }
+    );
+
+    return {
+      success: true,
+      data: response.data,
+      profile: {
+        provider_id: response.data.provider_id,
+        name: response.data.name,
+        headline: response.data.headline,
+        profile_url: response.data.profile_url,
+        picture: response.data.picture,
+        location: response.data.location,
+        industry: response.data.industry,
+        summary: response.data.summary,
+        experience: response.data.experience,
+        education: response.data.education,
+        skills: response.data.skills,
+        connections_count: response.data.connections_count,
+        followers_count: response.data.followers_count,
+        premium_features: response.data.premium_features,
+        organizations: response.data.organizations,
+        contact_info: response.data.contact_info
+      }
+    };
+  } catch (err) {
+    console.error(`Error fetching LinkedIn profile for ${identifier}:`, err.response?.data || err.message);
+    return {
+      success: false,
+      error: err.response?.data?.error || err.message,
+      status: err.response?.status
+    };
+  }
+};
+
 // ==================== ACCOUNT MANAGEMENT ENDPOINTS ====================
 
 
@@ -1435,6 +1477,17 @@ router.get('/api/unipile/account/live-status/:userId', async (req, res) => {
       };
     }
 
+    // Fetch complete user profile if connected
+    let completeProfile = null;
+    if (isConnected) {
+      const profileResult = await getLinkedInUserProfile(dbResult.account_id, 'me');
+      if (profileResult.success) {
+        completeProfile = profileResult.profile;
+      } else {
+        console.warn('Could not fetch complete profile:', profileResult.error);
+      }
+    }
+
     // Update database if status changed
     if (isConnected !== dbResult.connected) {
       if (isConnected) {
@@ -1468,6 +1521,7 @@ router.get('/api/unipile/account/live-status/:userId', async (req, res) => {
       last_error: lastError,
       sources: sources,
       linkedin_profile: linkedinProfile,
+      complete_profile: completeProfile, // Enhanced profile with full details
       unipile_data: unipileAccount,
       last_checked: new Date(),
       source: 'unipile_live',
@@ -2226,30 +2280,29 @@ router.get('/api/unipile/linkedin/fetch-profile/:identifier', async (req, res) =
       });
     }
 
-    // Call Unipile API to get user details
-    const response = await axios.get(
-      `${getBaseUrl()}/users/${encodeURIComponent(identifier)}?account_id=${finalAccountId}`,
-      { headers: getHeaders() }
-    );
+    // Use reusable function to get user details
+    const profileResult = await getLinkedInUserProfile(finalAccountId, identifier);
+    
+    if (!profileResult.success) {
+      if (profileResult.status === 404) {
+        return res.status(404).json({
+          success: false,
+          error: 'User not found',
+          identifier: identifier
+        });
+      }
+      return res.status(profileResult.status || 500).json({
+        success: false,
+        error: profileResult.error
+      });
+    }
 
     res.json({
       success: true,
-      data: response.data,
+      data: profileResult.data,
       user: {
-        provider_id: response.data.provider_id,
-        name: response.data.name,
-        headline: response.data.headline,
-        profile_url: response.data.profile_url,
-        picture: response.data.picture,
-        identifier: identifier,
-        location: response.data.location,
-        industry: response.data.industry,
-        summary: response.data.summary,
-        experience: response.data.experience,
-        education: response.data.education,
-        skills: response.data.skills,
-        connections_count: response.data.connections_count,
-        followers_count: response.data.followers_count
+        ...profileResult.profile,
+        identifier: identifier
       },
       account_id: finalAccountId,
       fetched_at: new Date()
@@ -2295,33 +2348,27 @@ router.get('/api/unipile/linkedin/user/me', async (req, res) => {
       });
     }
 
-    // Call Unipile API to get current user's profile
-    const response = await axios.get(
-      `${getBaseUrl()}/users/me?account_id=${finalAccountId}`,
-      { headers: getHeaders() }
-    );
+    // Use reusable function to get current user's profile
+    const profileResult = await getLinkedInUserProfile(finalAccountId, 'me');
+    
+    if (!profileResult.success) {
+      if (profileResult.status === 404) {
+        return res.status(404).json({
+          success: false,
+          error: 'User profile not found',
+          details: 'Unable to fetch current user profile from LinkedIn'
+        });
+      }
+      return res.status(profileResult.status || 500).json({
+        success: false,
+        error: profileResult.error
+      });
+    }
 
     res.json({
       success: true,
-      data: response.data,
-      profile: {
-        provider_id: response.data.provider_id,
-        name: response.data.name,
-        headline: response.data.headline,
-        profile_url: response.data.profile_url,
-        picture: response.data.picture,
-        location: response.data.location,
-        industry: response.data.industry,
-        summary: response.data.summary,
-        experience: response.data.experience,
-        education: response.data.education,
-        skills: response.data.skills,
-        connections_count: response.data.connections_count,
-        followers_count: response.data.followers_count,
-        premium_features: response.data.premium_features,
-        organizations: response.data.organizations,
-        contact_info: response.data.contact_info
-      },
+      data: profileResult.data,
+      profile: profileResult.profile,
       account_id: finalAccountId,
       fetched_at: new Date()
     });
