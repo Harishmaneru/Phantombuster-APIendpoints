@@ -1695,6 +1695,85 @@ router.get('/api/unipile/accounts/all', async (req, res) => {
   }
 });
 
+// Restart LinkedIn account (restore connection)
+router.post('/api/unipile/account/restart/:userId', async (req, res) => {
+  try {
+    const { userId } = req.params;
+    
+    if (!userId) {
+      return res.status(400).json({
+        success: false,
+        error: 'user_id is required'
+      });
+    }
+
+    // First, get the account_id from our database
+    const dbResult = await getLinkedInAccountStatus(userId);
+    
+    if (!dbResult.success || !dbResult.account_id) {
+      return res.status(404).json({
+        success: false,
+        error: 'No LinkedIn account found for this user'
+      });
+    }
+
+    // Call Unipile restart API
+    const response = await axios.post(
+      `${getBaseUrl()}/accounts/${dbResult.account_id}/restart`,
+      {},
+      { headers: getHeaders() }
+    );
+
+    // Update database to reflect restart attempt
+    await connectLinkedInAccount(
+      userId,
+      dbResult.account_id,
+      'LINKEDIN',
+      dbResult.name,
+      {
+        ...dbResult.metadata,
+        last_restart_attempt: new Date(),
+        restart_response: response.data,
+        connected_via: dbResult.metadata?.connected_via || 'restart'
+      }
+    );
+
+    res.json({
+      success: true,
+      message: 'Account restart initiated successfully',
+      account_id: dbResult.account_id,
+      user_id: userId,
+      unipile_response: response.data,
+      restart_attempted_at: new Date()
+    });
+
+  } catch (err) {
+    console.error('Error restarting account:', err);
+    
+    // If restart fails, still update database with error
+    try {
+      const dbResult = await getLinkedInAccountStatus(req.params.userId);
+      if (dbResult.success && dbResult.account_id) {
+        await disconnectLinkedInAccount(
+          req.params.userId,
+          `Restart failed: ${err.response?.data?.error || err.message}`
+        );
+      }
+    } catch (dbErr) {
+      console.error('Error updating database after restart failure:', dbErr);
+    }
+
+    res.status(500).json({
+      success: false,
+      error: 'Failed to restart account',
+      unipile_error: err.response?.data?.error || err.message,
+      account_id: err.config?.url?.split('/').pop() || 'unknown'
+    });
+  }
+});
+
+
+
 // ==================== HEALTH CHECK ====================
 
 router.get('/api/unipile/health', (req, res) => {
