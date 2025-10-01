@@ -1343,32 +1343,39 @@ router.post('/api/unipile/linkedin/message', async (req, res) => {
 // Reusable function to get LinkedIn user profile
 const getLinkedInUserProfile = async (accountId, identifier = 'me') => {
   try {
+    console.log(`Fetching LinkedIn profile for ${identifier} with account ${accountId}`);
     const response = await axios.get(
       `${getBaseUrl()}/users/${encodeURIComponent(identifier)}?account_id=${accountId}`,
       { headers: getHeaders() }
     );
 
+    console.log('Raw Unipile API response:', JSON.stringify(response.data, null, 2));
+
+    const profile = {
+      provider_id: response.data.provider_id,
+      name: response.data.name,
+      headline: response.data.headline,
+      profile_url: response.data.profile_url,
+      picture: response.data.picture,
+      location: response.data.location,
+      industry: response.data.industry,
+      summary: response.data.summary,
+      experience: response.data.experience,
+      education: response.data.education,
+      skills: response.data.skills,
+      connections_count: response.data.connections_count,
+      followers_count: response.data.followers_count,
+      premium_features: response.data.premium_features,
+      organizations: response.data.organizations,
+      contact_info: response.data.contact_info
+    };
+
+    console.log('Processed profile:', JSON.stringify(profile, null, 2));
+
     return {
       success: true,
       data: response.data,
-      profile: {
-        provider_id: response.data.provider_id,
-        name: response.data.name,
-        headline: response.data.headline,
-        profile_url: response.data.profile_url,
-        picture: response.data.picture,
-        location: response.data.location,
-        industry: response.data.industry,
-        summary: response.data.summary,
-        experience: response.data.experience,
-        education: response.data.education,
-        skills: response.data.skills,
-        connections_count: response.data.connections_count,
-        followers_count: response.data.followers_count,
-        premium_features: response.data.premium_features,
-        organizations: response.data.organizations,
-        contact_info: response.data.contact_info
-      }
+      profile: profile
     };
   } catch (err) {
     console.error(`Error fetching LinkedIn profile for ${identifier}:`, err.response?.data || err.message);
@@ -1480,9 +1487,12 @@ router.get('/api/unipile/account/live-status/:userId', async (req, res) => {
     // Fetch complete user profile if connected
     let completeProfile = null;
     if (isConnected) {
+      console.log('Fetching complete profile for account:', dbResult.account_id);
       const profileResult = await getLinkedInUserProfile(dbResult.account_id, 'me');
+      console.log('Profile result:', JSON.stringify(profileResult, null, 2));
       if (profileResult.success) {
         completeProfile = profileResult.profile;
+        console.log('Complete profile extracted:', JSON.stringify(completeProfile, null, 2));
       } else {
         console.warn('Could not fetch complete profile:', profileResult.error);
       }
