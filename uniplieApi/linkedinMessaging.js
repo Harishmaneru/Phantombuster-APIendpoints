@@ -1438,7 +1438,7 @@ router.get('/api/unipile/account/live-status/:userId', async (req, res) => {
     // First, get the account_id from our database
     const dbResult = await getLinkedInAccountStatus(userId);
     
-    if (!dbResult.success || !dbResult.connected || !dbResult.account_id) {
+    if (!dbResult.success || !dbResult.account_id) {
       return res.json({
         success: true,
         connected: false,
