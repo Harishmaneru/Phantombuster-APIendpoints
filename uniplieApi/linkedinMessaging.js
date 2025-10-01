@@ -1400,7 +1400,7 @@ router.get('/api/unipile/accounts/temporary', async (req, res) => {
   }
 });
 
-// Get LinkedIn account status for a user
+// Get LinkedIn account status for a user (from database)
 router.get('/api/unipile/account/status/:userId', async (req, res) => {
   try {
     const { userId } = req.params;
@@ -1420,6 +1420,129 @@ router.get('/api/unipile/account/status/:userId', async (req, res) => {
       success: false,
       error: 'Failed to get account status'
     });
+  }
+});
+
+// Get live LinkedIn account status from Unipile API
+router.get('/api/unipile/account/live-status/:userId', async (req, res) => {
+  try {
+    const { userId } = req.params;
+    
+    if (!userId) {
+      return res.status(400).json({
+        success: false,
+        error: 'user_id is required'
+      });
+    }
+
+    // First, get the account_id from our database
+    const dbResult = await getLinkedInAccountStatus(userId);
+    
+    if (!dbResult.success || !dbResult.connected || !dbResult.account_id) {
+      return res.json({
+        success: true,
+        connected: false,
+        message: 'No LinkedIn account found in database',
+        source: 'database'
+      });
+    }
+
+    // Now fetch live status from Unipile
+    const response = await axios.get(
+      `${getBaseUrl()}/accounts/${dbResult.account_id}`,
+      { headers: getHeaders() }
+    );
+
+    const unipileAccount = response.data;
+    
+    // Parse the Unipile response to determine connection status
+    let isConnected = false;
+    let connectionStatus = 'unknown';
+    let lastError = null;
+    let sources = [];
+
+    if (unipileAccount && unipileAccount.sources) {
+      sources = unipileAccount.sources;
+      
+      // Check if any LinkedIn source is active
+      const linkedinSource = sources.find(source => 
+        source.provider === 'LINKEDIN' || 
+        source.type === 'LINKEDIN'
+      );
+      
+      if (linkedinSource) {
+        isConnected = linkedinSource.status === 'active' || 
+                     linkedinSource.status === 'connected' ||
+                     linkedinSource.status === 'ok';
+        connectionStatus = linkedinSource.status;
+        lastError = linkedinSource.error || linkedinSource.last_error;
+      }
+    }
+
+    // Update database if status changed
+    if (isConnected !== dbResult.connected) {
+      if (isConnected) {
+        await connectLinkedInAccount(
+          userId,
+          dbResult.account_id,
+          'LINKEDIN',
+          dbResult.name,
+          {
+            ...dbResult.metadata,
+            last_live_check: new Date(),
+            live_status: connectionStatus
+          }
+        );
+      } else {
+        await disconnectLinkedInAccount(
+          userId,
+          lastError || 'Account disconnected (live check)'
+        );
+      }
+    }
+
+    res.json({
+      success: true,
+      connected: isConnected,
+      account_id: dbResult.account_id,
+      name: dbResult.name,
+      connection_status: connectionStatus,
+      last_error: lastError,
+      sources: sources,
+      unipile_data: unipileAccount,
+      last_checked: new Date(),
+      source: 'unipile_live',
+      database_status: {
+        connected: dbResult.connected,
+        connected_at: dbResult.connected_at,
+        last_error: dbResult.last_error
+      }
+    });
+
+  } catch (err) {
+    console.error('Error getting live account status:', err);
+    
+    // If Unipile API fails, fall back to database status
+    try {
+      const dbResult = await getLinkedInAccountStatus(req.params.userId);
+      res.json({
+        success: true,
+        connected: dbResult.connected || false,
+        account_id: dbResult.account_id,
+        name: dbResult.name,
+        last_error: dbResult.last_error,
+        source: 'database_fallback',
+        unipile_error: err.response?.data?.error || err.message,
+        note: 'Unipile API unavailable, showing database status'
+      });
+    } catch (dbErr) {
+      res.status(500).json({
+        success: false,
+        error: 'Failed to get account status from both Unipile and database',
+        unipile_error: err.response?.data?.error || err.message,
+        database_error: dbErr.message
+      });
+    }
   }
 });
 
