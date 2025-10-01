@@ -2205,7 +2205,7 @@ router.get('/api/unipile/linkedin/connection-status/:identifier', async (req, re
 // ==================== GET USER DETAILS (Helper) ====================
 
 // Get LinkedIn user details by identifier
-router.get('/api/unipile/linkedin/user/:identifier', async (req, res) => {
+router.get('/api/unipile/linkedin/fetch-profile/:identifier', async (req, res) => {
   try {
     const { identifier } = req.params;
     const { account_id, user_id } = req.query;
@@ -2226,6 +2226,7 @@ router.get('/api/unipile/linkedin/user/:identifier', async (req, res) => {
       });
     }
 
+    // Call Unipile API to get user details
     const response = await axios.get(
       `${getBaseUrl()}/users/${encodeURIComponent(identifier)}?account_id=${finalAccountId}`,
       { headers: getHeaders() }
@@ -2240,8 +2241,18 @@ router.get('/api/unipile/linkedin/user/:identifier', async (req, res) => {
         headline: response.data.headline,
         profile_url: response.data.profile_url,
         picture: response.data.picture,
-        identifier: identifier
-      }
+        identifier: identifier,
+        location: response.data.location,
+        industry: response.data.industry,
+        summary: response.data.summary,
+        experience: response.data.experience,
+        education: response.data.education,
+        skills: response.data.skills,
+        connections_count: response.data.connections_count,
+        followers_count: response.data.followers_count
+      },
+      account_id: finalAccountId,
+      fetched_at: new Date()
     });
 
   } catch (err) {
@@ -2262,6 +2273,73 @@ router.get('/api/unipile/linkedin/user/:identifier', async (req, res) => {
 
 
 
+
+// Get current user's own LinkedIn profile
+router.get('/api/unipile/linkedin/user/me', async (req, res) => {
+  try {
+    const { account_id, user_id } = req.query;
+
+    // Get account_id from user_id if not provided
+    let finalAccountId = account_id;
+    if (!finalAccountId && user_id) {
+      const dbResult = await getLinkedInAccountStatus(user_id);
+      if (dbResult.success && dbResult.account_id) {
+        finalAccountId = dbResult.account_id;
+      }
+    }
+
+    if (!finalAccountId) {
+      return res.status(400).json({
+        success: false,
+        error: 'account_id or user_id is required'
+      });
+    }
+
+    // Call Unipile API to get current user's profile
+    const response = await axios.get(
+      `${getBaseUrl()}/users/me?account_id=${finalAccountId}`,
+      { headers: getHeaders() }
+    );
+
+    res.json({
+      success: true,
+      data: response.data,
+      profile: {
+        provider_id: response.data.provider_id,
+        name: response.data.name,
+        headline: response.data.headline,
+        profile_url: response.data.profile_url,
+        picture: response.data.picture,
+        location: response.data.location,
+        industry: response.data.industry,
+        summary: response.data.summary,
+        experience: response.data.experience,
+        education: response.data.education,
+        skills: response.data.skills,
+        connections_count: response.data.connections_count,
+        followers_count: response.data.followers_count,
+        premium_features: response.data.premium_features,
+        organizations: response.data.organizations,
+        contact_info: response.data.contact_info
+      },
+      account_id: finalAccountId,
+      fetched_at: new Date()
+    });
+
+  } catch (err) {
+    console.error('Get current user profile error:', err.response?.data || err.message);
+    
+    if (err.response?.status === 404) {
+      return res.status(404).json({
+        success: false,
+        error: 'User profile not found',
+        details: 'Unable to fetch current user profile from LinkedIn'
+      });
+    }
+    
+    handleError(err, res);
+  }
+});
 
 // ==================== HEALTH CHECK ====================
 
