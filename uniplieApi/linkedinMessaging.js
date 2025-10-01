@@ -1755,10 +1755,10 @@ router.post('/api/unipile/linkedin/invite', async (req, res) => {
   try {
     const {
       account_id,
-      user_id, // Your app's user_id to lookup account
+      user_id,
       profile_url,
       profile_identifier,
-      message // Optional connection message
+      message
     } = req.body;
 
     // Get account_id from user_id if not provided
@@ -1785,13 +1785,13 @@ router.post('/api/unipile/linkedin/invite', async (req, res) => {
       });
     }
 
-    // Extract LinkedIn identifier from URL if provided
+    // Extract LinkedIn identifier from URL
     let recipientIdentifier = profile_identifier;
     if (profile_url && !profile_identifier) {
       const patterns = [
-        /linkedin\.com\/in\/([^\/\?#]+)/,           // Standard profile
-        /linkedin\.com\/sales\/people\/([^,]+)/,    // Sales Navigator
-        /linkedin\.com\/sales\/lead\/([^,]+)/       // Sales Navigator lead
+        /linkedin\.com\/in\/([^\/\?#]+)/,
+        /linkedin\.com\/sales\/people\/([^,]+)/,
+        /linkedin\.com\/sales\/lead\/([^,]+)/
       ];
       
       let match = null;
@@ -1811,9 +1811,9 @@ router.post('/api/unipile/linkedin/invite', async (req, res) => {
       }
     }
 
-    // STEP 1: Get user details to obtain provider_id
-    console.log('Fetching user details for:', recipientIdentifier);
+    console.log('Step 1: Fetching user details for:', recipientIdentifier);
     
+    // STEP 1: Get user details to obtain provider_id
     const userResponse = await axios.get(
       `${getBaseUrl()}/users/${encodeURIComponent(recipientIdentifier)}?account_id=${finalAccountId}`,
       { headers: getHeaders() }
@@ -1823,36 +1823,37 @@ router.post('/api/unipile/linkedin/invite', async (req, res) => {
       return res.status(404).json({
         success: false,
         error: 'Could not find LinkedIn user or retrieve provider_id',
-        identifier: recipientIdentifier
+        identifier: recipientIdentifier,
+        user_response: userResponse.data
       });
     }
 
     const providerUserId = userResponse.data.provider_id;
-    console.log('Found provider_id:', providerUserId);
+    console.log('Step 2: Found provider_id:', providerUserId);
 
-    // STEP 2: Send connection invitation using FormData
-    const FormData = require('form-data');
-    const form = new FormData();
-    
-    form.append('account_id', finalAccountId);
-    form.append('user_id', providerUserId); // ✅ Correct parameter name
-    
-    if (message) {
-      form.append('message', message);
+    // STEP 2: Send invitation - Build JSON payload (NOT FormData!)
+    const invitePayload = {
+      account_id: finalAccountId,
+      provider_id: providerUserId // ✅ Correct field name
+    };
+
+    // Only add message if provided
+    if (message && message.trim()) {
+      invitePayload.message = message.trim();
     }
 
-    console.log('Sending invitation request...');
-    
+    console.log('Step 3: Sending invitation with payload:', invitePayload);
+
+    // Send as JSON, not FormData
     const inviteResponse = await axios.post(
-      `${getBaseUrl()}/users/invite`, // ✅ Correct endpoint
-      form,
+      `${getBaseUrl()}/users/invite`,
+      invitePayload,
       { 
-        headers: {
-          'X-API-KEY': process.env.UNIPILE_API_KEY,
-          ...form.getHeaders()
-        }
+        headers: getHeaders('application/json') // Send as JSON
       }
     );
+
+    console.log('Step 4: Invitation sent successfully');
 
     res.json({
       success: true,
@@ -1862,7 +1863,8 @@ router.post('/api/unipile/linkedin/invite', async (req, res) => {
         identifier: recipientIdentifier,
         provider_id: providerUserId,
         name: userResponse.data.name || null,
-        headline: userResponse.data.headline || null
+        headline: userResponse.data.headline || null,
+        profile_url: userResponse.data.profile_url || profile_url
       },
       account_id: finalAccountId,
       invitation_sent_at: new Date()
@@ -1873,7 +1875,8 @@ router.post('/api/unipile/linkedin/invite', async (req, res) => {
       status: err.response?.status,
       statusText: err.response?.statusText,
       error: err.response?.data,
-      message: err.message
+      message: err.message,
+      url: err.config?.url
     });
 
     // Handle specific error cases
@@ -1881,7 +1884,8 @@ router.post('/api/unipile/linkedin/invite', async (req, res) => {
       return res.status(404).json({
         success: false,
         error: 'LinkedIn user not found',
-        details: err.response?.data?.detail || 'The profile identifier could not be found'
+        details: err.response?.data?.detail || 'The profile identifier could not be found',
+        identifier: req.body.profile_identifier || req.body.profile_url
       });
     }
 
@@ -1918,6 +1922,15 @@ router.post('/api/unipile/linkedin/invite', async (req, res) => {
         success: false,
         error: 'Rate limit exceeded',
         details: 'Too many requests. Please try again later.'
+      });
+    }
+
+    if (err.response?.status === 400) {
+      return res.status(400).json({
+        success: false,
+        error: 'Bad request',
+        details: err.response?.data?.detail || err.response?.data?.title || 'Invalid parameters',
+        unipile_error: err.response?.data
       });
     }
 
