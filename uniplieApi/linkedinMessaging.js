@@ -1772,7 +1772,58 @@ router.post('/api/unipile/account/restart/:userId', async (req, res) => {
   }
 });
 
+// Get LinkedIn account details by account_id (Pure Unipile API)
+router.get('/api/unipile/account/:accountId/details', async (req, res) => {
+  try {
+    const { accountId } = req.params;
+    
+    if (!accountId) {
+      return res.status(400).json({
+        success: false,
+        error: 'account_id is required'
+      });
+    }
 
+    // Fetch account details from Unipile only
+    const response = await axios.get(
+      `${getBaseUrl()}/accounts/${accountId}`,
+      { headers: getHeaders() }
+    );
+
+    const unipileAccount = response.data;
+    
+    // Return pure Unipile response with minimal processing
+    res.json({
+      success: true,
+      data: {
+        account_id: unipileAccount.id,
+        provider: unipileAccount.provider || unipileAccount.type,
+        status: unipileAccount.status,
+        username: unipileAccount.username,
+        name: unipileAccount.name,
+        created_at: unipileAccount.created_at,
+        last_sync: unipileAccount.last_sync,
+        profile: unipileAccount.profile,
+        connection_params: unipileAccount.connection_params,
+        sources: unipileAccount.sources,
+        groups: unipileAccount.groups,
+        object: unipileAccount.object,
+        fetched_at: new Date(),
+        source: 'unipile_api'
+      }
+    });
+
+  } catch (err) {
+    console.error('Error getting account details:', err);
+    
+    res.status(500).json({
+      success: false,
+      error: 'Failed to get account details',
+      unipile_error: err.response?.data?.error || err.message,
+      account_id: accountId
+    });
+  }
+});
 
 // ==================== HEALTH CHECK ====================
 
