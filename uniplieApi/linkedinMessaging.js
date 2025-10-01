@@ -831,14 +831,18 @@ router.post('/api/unipile/accounts/cookie', async (req, res) => {
       });
     }
 
-    const payload = {
-      provider: 'LINKEDIN',
-      access_token,
-      user_agent
-    };
+    // Use FormData for consistency
+    const form = new FormData();
+    
+    form.append('provider', 'LINKEDIN');
+    form.append('access_token', access_token);
+    form.append('user_agent', user_agent);
 
-    const response = await axios.post(`${getBaseUrl()}/accounts`, payload, {
-      headers: getHeaders()
+    const response = await axios.post(`${getBaseUrl()}/accounts`, form, {
+      headers: {
+        'X-API-KEY': process.env.UNIPILE_API_KEY,
+        ...form.getHeaders()
+      }
     });
 
     // Store account in database
@@ -933,7 +937,10 @@ router.post('/api/unipile/auth/link', async (req, res) => {
       ...(failure_redirect_url && { failure_redirect_url }),
       ...(finalNotifyUrl && { notify_url: finalNotifyUrl }),
       ...(name && { name }),
-      ...(user_id && { user_id }) // Include user_id in payload for webhook
+      // Use metadata to pass custom data
+      metadata: {
+        user_id: user_id
+      }
     };
 
     const response = await axios.post(
@@ -957,11 +964,12 @@ router.post('/api/unipile/auth/link', async (req, res) => {
 // Webhook handler for account creation and errors
 router.post('/api/unipile/webhook/unipile-account', async (req, res) => {
   try {
-    const { status, account_id, name, provider, error, user_id } = req.body;
+    const { status, account_id, name, provider, error, user_id, metadata } = req.body;
     
-    // Also check for user_id in query parameters (from notify_url)
+    // Also check for user_id in query parameters (from notify_url) and metadata
     const userIdFromQuery = req.query.user_id;
-    const finalUserId = user_id || userIdFromQuery;
+    const userIdFromMetadata = metadata?.user_id;
+    const finalUserId = user_id || userIdFromQuery || userIdFromMetadata;
 
     console.log('Unipile webhook received:', {
       status,
@@ -971,6 +979,7 @@ router.post('/api/unipile/webhook/unipile-account', async (req, res) => {
       user_id: finalUserId,
       user_id_from_body: user_id,
       user_id_from_query: userIdFromQuery,
+      user_id_from_metadata: userIdFromMetadata,
       timestamp: new Date().toISOString()
     });
 
@@ -1081,50 +1090,73 @@ router.post('/api/unipile/webhook/unipile-account', async (req, res) => {
 // ==================== CHAT ENDPOINTS ====================
 
 // List all chats
-router.get('/api/unipile/chats', async (req, res) => {
-  try {
-    const { account_id, limit = 50, cursor } = req.query;
+// router.get('/api/unipile/chats', async (req, res) => {
+//   try {
+//     const { account_id, limit = 250, cursor } = req.query;
 
-    if (!account_id) {
-      return res.status(400).json({
-        success: false,
-        error: 'account_id is required'
-      });
+//     if (!account_id) {
+//       return res.status(400).json({
+//         success: false,
+//         error: 'account_id is required'
+//       });
+//     }
+
+//     const params = new URLSearchParams();
+//     params.append('account_id', account_id);
+//     params.append('limit', limit);
+//     if (cursor) params.append('cursor', cursor);
+
+//     const response = await axios.get(`${getBaseUrl()}/chats?${params}`, {
+//       headers: getHeaders()
+//     });
+
+//     res.json({
+//       success: true,
+//       data: response.data
+//     });
+//   } catch (err) {
+//     handleError(err, res);
+//   }
+// });
+
+// Get all chats for a userId
+router.get('/api/unipile/user/:userId/chats', async (req, res) => {
+  try {
+    const { userId } = req.params;
+    const dbResult = await getLinkedInAccountStatus(userId);
+
+    if (!dbResult.success || !dbResult.account_id) {
+      return res.status(404).json({ success: false, error: 'No LinkedIn account found' });
     }
 
-    const params = new URLSearchParams();
-    params.append('account_id', account_id);
-    params.append('limit', limit);
-    if (cursor) params.append('cursor', cursor);
-
-    const response = await axios.get(`${getBaseUrl()}/chats?${params}`, {
-      headers: getHeaders()
-    });
+    const response = await axios.get(
+      `${getBaseUrl()}/chats?account_id=${dbResult.account_id}&limit=50`,
+      { headers: getHeaders() }
+    );
 
     res.json({
       success: true,
-      data: response.data
+      data: response.data,
+      account_id: dbResult.account_id
     });
   } catch (err) {
     handleError(err, res);
   }
 });
 
-// Get messages from a specific chat
-router.get('/api/unipile/chats/:chatId/messages', async (req, res) => {
+// Get messages for a userId + chatId
+router.get('/api/unipile/user/:userId/chats/:chatId/messages', async (req, res) => {
   try {
-    const { chatId } = req.params;
-    const { account_id, limit = 100, cursor } = req.query;
+    const { userId, chatId } = req.params;
+    const { limit = 50, cursor } = req.query;
 
-    if (!account_id) {
-      return res.status(400).json({
-        success: false,
-        error: 'account_id is required'
-      });
+    const dbResult = await getLinkedInAccountStatus(userId);
+    if (!dbResult.success || !dbResult.account_id) {
+      return res.status(404).json({ success: false, error: 'No LinkedIn account found' });
     }
 
     const params = new URLSearchParams();
-    params.append('account_id', account_id);
+    params.append('account_id', dbResult.account_id);
     params.append('limit', limit);
     if (cursor) params.append('cursor', cursor);
 
@@ -1135,57 +1167,9 @@ router.get('/api/unipile/chats/:chatId/messages', async (req, res) => {
 
     res.json({
       success: true,
-      data: response.data
-    });
-  } catch (err) {
-    handleError(err, res);
-  }
-});
-
-// Send message in existing chat
-router.post('/api/unipile/chats/:chatId/messages', async (req, res) => {
-  try {
-    const { chatId } = req.params;
-    const form = new FormData();
-
-    // Add text message
-    if (req.body.text) {
-      form.append('text', req.body.text);
-    }
-
-    // Add account_id if provided
-    if (req.body.account_id) {
-      form.append('account_id', req.body.account_id);
-    }
-
-    // Handle file attachments
-    ['voice_message', 'video_message', 'attachments'].forEach(field => {
-      const files = req.files?.[field];
-      if (files) {
-        const fileArray = Array.isArray(files) ? files : [files];
-        fileArray.forEach(file => {
-          form.append(field, fs.createReadStream(file.path));
-        });
-      }
-    });
-
-    const response = await axios.post(
-      `${getBaseUrl()}/chats/${chatId}/messages`,
-      form,
-      {
-        headers: {
-          ...form.getHeaders(),
-          'X-API-KEY': process.env.UNIPILE_API_KEY
-        },
-        maxContentLength: Infinity,
-        maxBodyLength: Infinity
-      }
-    );
-
-    res.status(201).json({
-      success: true,
       data: response.data,
-      message: 'Message sent successfully'
+      account_id: dbResult.account_id,
+      chat_id: chatId
     });
   } catch (err) {
     handleError(err, res);
@@ -1223,35 +1207,7 @@ router.get('/api/unipile/chats/:chatId/sync', async (req, res) => {
   }
 });
 
-// Get chat attendees/participants
-router.get('/api/unipile/chats/:chatId/attendees', async (req, res) => {
-  try {
-    const { chatId } = req.params;
-    const { account_id } = req.query;
 
-    if (!account_id) {
-      return res.status(400).json({
-        success: false,
-        error: 'account_id is required'
-      });
-    }
-
-    const params = new URLSearchParams();
-    params.append('account_id', account_id);
-
-    const response = await axios.get(
-      `${getBaseUrl()}/chats/${chatId}/attendees?${params}`,
-      { headers: getHeaders() }
-    );
-
-    res.json({
-      success: true,
-      data: response.data
-    });
-  } catch (err) {
-    handleError(err, res);
-  }
-});
 
 // ==================== LINKEDIN MESSAGING ====================
 
@@ -1260,17 +1216,29 @@ router.post('/api/unipile/linkedin/message', async (req, res) => {
   try {
     const {
       account_id,
+      user_id, // Add this to lookup account_id
       profile_url,
       profile_identifier,
       message,
-      use_inmail = false
+      subject,
+      use_inmail = false,
+      attachments // Support attachments
     } = req.body;
 
+    // Get account_id from user_id if not provided
+    let finalAccountId = account_id;
+    if (!finalAccountId && user_id) {
+      const dbResult = await getLinkedInAccountStatus(user_id);
+      if (dbResult.success && dbResult.account_id) {
+        finalAccountId = dbResult.account_id;
+      }
+    }
+
     // Validation
-    if (!account_id) {
+    if (!finalAccountId) {
       return res.status(400).json({
         success: false,
-        error: 'account_id is required'
+        error: 'account_id or user_id is required'
       });
     }
 
@@ -1291,114 +1259,87 @@ router.post('/api/unipile/linkedin/message', async (req, res) => {
     // Extract LinkedIn identifier from URL if provided
     let recipientId = profile_identifier;
     if (profile_url && !profile_identifier) {
-      const match = profile_url.match(/linkedin\.com\/in\/([^\/\?]+)/);
-      if (match) {
-        recipientId = match[1];
-      } else {
+      // Handle various LinkedIn URL formats
+      const patterns = [
+        /linkedin\.com\/in\/([^\/\?#]+)/,           // Standard profile
+        /linkedin\.com\/company\/([^\/\?#]+)/,      // Company page
+        /linkedin\.com\/sales\/people\/([^\/\?#]+)/, // Sales Navigator
+      ];
+      
+      let match = null;
+      for (const pattern of patterns) {
+        match = profile_url.match(pattern);
+        if (match) {
+          recipientId = match[1];
+          break;
+        }
+      }
+      
+      if (!match) {
         return res.status(400).json({
           success: false,
-          error: 'Invalid LinkedIn profile URL format. Expected: https://linkedin.com/in/username'
+          error: 'Invalid LinkedIn profile URL format. Expected: https://linkedin.com/in/username or https://linkedin.com/company/companyname'
         });
       }
     }
 
-    // Build payload
-    const payload = {
-      account_id,
-      attendees_ids: [recipientId],
-      text: message,
-      ...(use_inmail && { options: { linkedin: { inmail: true } } })
-    };
+    // Build FormData payload
+    const form = new FormData();
+    
+    form.append('account_id', finalAccountId);
+    form.append('attendees_ids[]', recipientId);
+    form.append('text', message);
+    
+    if (subject) {
+      form.append('subject', subject);
+    }
+    
+    if (use_inmail) {
+      form.append('linkedin[inmail]', 'true');
+    }
+    
+    // Handle attachments if provided
+    if (attachments && Array.isArray(attachments)) {
+      attachments.forEach(attachment => {
+        if (attachment.path) {
+          form.append('attachments', fs.createReadStream(attachment.path));
+        }
+      });
+    }
 
     // Send message (Unipile creates chat if it doesn't exist)
     const response = await axios.post(
       `${getBaseUrl()}/chats`,
-      payload,
-      { headers: getHeaders() }
+      form,
+      { 
+        headers: {
+          'X-API-KEY': process.env.UNIPILE_API_KEY,
+          ...form.getHeaders()
+        }
+      }
     );
 
     res.json({
       success: true,
       data: response.data,
-      message: use_inmail
-        ? 'InMail sent successfully'
-        : 'Message sent successfully',
-      chat_id: response.data.id,
-      recipient_id: recipientId
+      message: use_inmail ? 'InMail sent successfully' : 'Message sent successfully',
+      chat_id: response.data.chat_id,
+      message_id: response.data.message_id,
+      recipient_id: recipientId,
+      account_id: finalAccountId
     });
   } catch (err) {
-    console.error('LinkedIn message error:', err.response?.data || err.message);
+    console.error('LinkedIn message error:', {
+      status: err.response?.status,
+      data: err.response?.data,
+      message: err.message
+    });
     handleError(err, res);
   }
 });
 
 // ==================== ACCOUNT MANAGEMENT ENDPOINTS ====================
 
-// Associate temporary account with real user ID
-router.post('/api/unipile/account/associate', async (req, res) => {
-  try {
-    const { account_id, user_id, name } = req.body;
-    
-    if (!account_id || !user_id) {
-      return res.status(400).json({
-        success: false,
-        error: 'account_id and user_id are required'
-      });
-    }
-
-    // Use the service function to handle the association
-    const result = await connectLinkedInAccount(
-      user_id,
-      account_id,
-      'LINKEDIN',
-      name || 'LinkedIn Account',
-      {
-        connected_via: 'association',
-        is_temporary: false,
-        needs_user_association: false,
-        associated_at: new Date()
-      }
-    );
-
-    if (result.success) {
-      res.json({
-        success: true,
-        message: 'Account associated successfully',
-        account_id: account_id,
-        user_id: user_id
-      });
-    } else {
-      res.status(400).json({
-        success: false,
-        error: result.error || 'Failed to associate account'
-      });
-    }
-  } catch (err) {
-    console.error('Error associating account:', err);
-    res.status(500).json({
-      success: false,
-      error: 'Failed to associate account'
-    });
-  }
-});
-
-// Get temporary accounts that need user association
-router.get('/api/unipile/accounts/temporary', async (req, res) => {
-  try {
-    const result = await getAllLinkedInAccounts({
-      'metadata.is_temporary': true,
-      'metadata.needs_user_association': true
-    });
-
-    res.json(result);
-  } catch (err) {
-    console.error('Error getting temporary accounts:', err);
-    res.status(500).json({
-      success: false,
-      error: 'Failed to get temporary accounts'
-    });
-  }
-});
 
 // Get LinkedIn account status for a user (from database)
 router.get('/api/unipile/account/status/:userId', async (req, res) => {
@@ -1606,15 +1547,18 @@ router.post('/api/unipile/account/refresh', async (req, res) => {
       });
     }
 
-    // Create new account with Unipile
-    const payload = {
-      provider: 'LINKEDIN',
-      access_token,
-      user_agent
-    };
+    // Create new account with Unipile using FormData
+    const form = new FormData();
+    
+    form.append('provider', 'LINKEDIN');
+    form.append('access_token', access_token);
+    form.append('user_agent', user_agent);
 
-    const response = await axios.post(`${getBaseUrl()}/accounts`, payload, {
-      headers: getHeaders()
+    const response = await axios.post(`${getBaseUrl()}/accounts`, form, {
+      headers: {
+        'X-API-KEY': process.env.UNIPILE_API_KEY,
+        ...form.getHeaders()
+      }
     });
 
     if (response.data && response.data.account_id) {
@@ -1671,29 +1615,6 @@ router.delete('/api/unipile/account/delete/:userId', async (req, res) => {
   }
 });
 
-// Get all LinkedIn accounts (admin endpoint)
-router.get('/api/unipile/accounts/all', async (req, res) => {
-  try {
-    const { connected, user_id } = req.query;
-    
-    const filters = {};
-    if (connected !== undefined) {
-      filters.connected = connected === 'true';
-    }
-    if (user_id) {
-      filters.user_id = user_id;
-    }
-
-    const result = await getAllLinkedInAccounts(filters);
-    res.json(result);
-  } catch (err) {
-    console.error('Error getting all accounts:', err);
-    res.status(500).json({
-      success: false,
-      error: 'Failed to get accounts'
-    });
-  }
-});
 
 // Restart LinkedIn account (restore connection)
 router.post('/api/unipile/account/restart/:userId', async (req, res) => {
@@ -1824,6 +1745,246 @@ router.get('/api/unipile/account/:accountId/details', async (req, res) => {
     });
   }
 });
+
+
+
+// ==================== LINKEDIN CONNECTION INVITE ====================
+
+// Send LinkedIn connection request
+router.post('/api/unipile/linkedin/invite', async (req, res) => {
+  try {
+    const {
+      account_id,
+      user_id, // Your app's user_id to lookup account
+      profile_url,
+      profile_identifier,
+      message // Optional connection message
+    } = req.body;
+
+    // Get account_id from user_id if not provided
+    let finalAccountId = account_id;
+    if (!finalAccountId && user_id) {
+      const dbResult = await getLinkedInAccountStatus(user_id);
+      if (dbResult.success && dbResult.account_id) {
+        finalAccountId = dbResult.account_id;
+      }
+    }
+
+    // Validation
+    if (!finalAccountId) {
+      return res.status(400).json({
+        success: false,
+        error: 'account_id or user_id is required'
+      });
+    }
+
+    if (!profile_url && !profile_identifier) {
+      return res.status(400).json({
+        success: false,
+        error: 'Either profile_url or profile_identifier is required'
+      });
+    }
+
+    // Extract LinkedIn identifier from URL if provided
+    let recipientIdentifier = profile_identifier;
+    if (profile_url && !profile_identifier) {
+      const patterns = [
+        /linkedin\.com\/in\/([^\/\?#]+)/,           // Standard profile
+        /linkedin\.com\/sales\/people\/([^,]+)/,    // Sales Navigator
+        /linkedin\.com\/sales\/lead\/([^,]+)/       // Sales Navigator lead
+      ];
+      
+      let match = null;
+      for (const pattern of patterns) {
+        match = profile_url.match(pattern);
+        if (match) {
+          recipientIdentifier = match[1];
+          break;
+        }
+      }
+      
+      if (!match) {
+        return res.status(400).json({
+          success: false,
+          error: 'Invalid LinkedIn profile URL format. Expected: https://linkedin.com/in/username'
+        });
+      }
+    }
+
+    // STEP 1: Get user details to obtain provider_id
+    console.log('Fetching user details for:', recipientIdentifier);
+    
+    const userResponse = await axios.get(
+      `${getBaseUrl()}/users/${encodeURIComponent(recipientIdentifier)}?account_id=${finalAccountId}`,
+      { headers: getHeaders() }
+    );
+
+    if (!userResponse.data || !userResponse.data.provider_id) {
+      return res.status(404).json({
+        success: false,
+        error: 'Could not find LinkedIn user or retrieve provider_id',
+        identifier: recipientIdentifier
+      });
+    }
+
+    const providerUserId = userResponse.data.provider_id;
+    console.log('Found provider_id:', providerUserId);
+
+    // STEP 2: Send connection invitation using FormData
+    const FormData = require('form-data');
+    const form = new FormData();
+    
+    form.append('account_id', finalAccountId);
+    form.append('user_id', providerUserId); // ✅ Correct parameter name
+    
+    if (message) {
+      form.append('message', message);
+    }
+
+    console.log('Sending invitation request...');
+    
+    const inviteResponse = await axios.post(
+      `${getBaseUrl()}/users/invite`, // ✅ Correct endpoint
+      form,
+      { 
+        headers: {
+          'X-API-KEY': process.env.UNIPILE_API_KEY,
+          ...form.getHeaders()
+        }
+      }
+    );
+
+    res.json({
+      success: true,
+      data: inviteResponse.data,
+      message: 'Connection request sent successfully',
+      recipient: {
+        identifier: recipientIdentifier,
+        provider_id: providerUserId,
+        name: userResponse.data.name || null,
+        headline: userResponse.data.headline || null
+      },
+      account_id: finalAccountId,
+      invitation_sent_at: new Date()
+    });
+
+  } catch (err) {
+    console.error('LinkedIn invitation error:', {
+      status: err.response?.status,
+      statusText: err.response?.statusText,
+      error: err.response?.data,
+      message: err.message
+    });
+
+    // Handle specific error cases
+    if (err.response?.status === 404) {
+      return res.status(404).json({
+        success: false,
+        error: 'LinkedIn user not found',
+        details: err.response?.data?.detail || 'The profile identifier could not be found'
+      });
+    }
+
+    if (err.response?.status === 422) {
+      const errorType = err.response?.data?.type;
+      
+      if (errorType === 'errors/already_invited_recently') {
+        return res.status(422).json({
+          success: false,
+          error: 'Already sent invitation recently',
+          details: 'You have already sent a connection request to this user recently'
+        });
+      }
+      
+      if (errorType === 'errors/cannot_invite_attendee') {
+        return res.status(422).json({
+          success: false,
+          error: 'Cannot send invitation',
+          details: 'You are already connected to this user or the invitation cannot be sent'
+        });
+      }
+
+      if (errorType === 'errors/limit_exceeded') {
+        return res.status(422).json({
+          success: false,
+          error: 'Invitation limit exceeded',
+          details: 'LinkedIn weekly invitation limit reached'
+        });
+      }
+    }
+
+    if (err.response?.status === 429) {
+      return res.status(429).json({
+        success: false,
+        error: 'Rate limit exceeded',
+        details: 'Too many requests. Please try again later.'
+      });
+    }
+
+    handleError(err, res);
+  }
+});
+
+// ==================== GET USER DETAILS (Helper) ====================
+
+// Get LinkedIn user details by identifier
+router.get('/api/unipile/linkedin/user/:identifier', async (req, res) => {
+  try {
+    const { identifier } = req.params;
+    const { account_id, user_id } = req.query;
+
+    // Get account_id from user_id if not provided
+    let finalAccountId = account_id;
+    if (!finalAccountId && user_id) {
+      const dbResult = await getLinkedInAccountStatus(user_id);
+      if (dbResult.success && dbResult.account_id) {
+        finalAccountId = dbResult.account_id;
+      }
+    }
+
+    if (!finalAccountId) {
+      return res.status(400).json({
+        success: false,
+        error: 'account_id or user_id is required'
+      });
+    }
+
+    const response = await axios.get(
+      `${getBaseUrl()}/users/${encodeURIComponent(identifier)}?account_id=${finalAccountId}`,
+      { headers: getHeaders() }
+    );
+
+    res.json({
+      success: true,
+      data: response.data,
+      user: {
+        provider_id: response.data.provider_id,
+        name: response.data.name,
+        headline: response.data.headline,
+        profile_url: response.data.profile_url,
+        picture: response.data.picture,
+        identifier: identifier
+      }
+    });
+
+  } catch (err) {
+    console.error('Get user error:', err.response?.data || err.message);
+    
+    if (err.response?.status === 404) {
+      return res.status(404).json({
+        success: false,
+        error: 'User not found',
+        identifier: req.params.identifier
+      });
+    }
+    
+    handleError(err, res);
+  }
+});
+
+
+
+
 
 // ==================== HEALTH CHECK ====================
 
