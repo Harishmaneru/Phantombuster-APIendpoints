@@ -5,11 +5,11 @@ const router = express.Router();
 const RAPID_API_HOST = 'fresh-linkedin-profile-data.p.rapidapi.com';
 const RAPID_API_KEY = '9844a765dbmsh2921a4931f5e3acp19930bjsneb132c95f806';
 
-async function fetchSalesNavURL(salesNavUrl) {
-    console.log('Starting LinkedIn Sales Navigator search with URL:', salesNavUrl);
+async function fetchSalesNavURL(salesNavUrl, limit = 25) {
+    console.log('Starting LinkedIn Sales Navigator search with URL:', salesNavUrl, 'Limit:', limit);
 
     try {
-        const payload = { url: salesNavUrl, limit: 25 };
+        const payload = { url: salesNavUrl, limit: limit };
         console.log('Initiating search request with payload:', payload);
 
         // Step 1: Initiate search request
@@ -136,7 +136,7 @@ async function getSearchResults(requestId) {
 // Route 1: Find employees by Sales Navigator URL
 router.post('/find-employees', async (req, res) => {
     try {
-        const { salesNavUrl } = req.body;
+        const { salesNavUrl, limit } = req.body;
 
         if (!salesNavUrl) {
             return res.status(400).json({
@@ -147,7 +147,17 @@ router.post('/find-employees', async (req, res) => {
             });
         }
 
-        const result = await fetchSalesNavURL(salesNavUrl);
+        // Validate limit if provided
+        if (limit !== undefined && (isNaN(limit) || limit < 1 || limit > 100)) {
+            return res.status(400).json({
+                status: -1,
+                salesNavigatorDataError: {
+                    message: 'Limit must be a number between 1 and 100'
+                }
+            });
+        }
+
+        const result = await fetchSalesNavURL(salesNavUrl, limit);
 
         // If the result already contains a salesNavigatorQueueMessage, return it directly
         if (result.salesNavigatorQueueMessage) {
