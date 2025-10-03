@@ -2344,49 +2344,127 @@ router.get('/api/unipile/linkedin/user/me', async (req, res) => {
 
 
 // Check connection/invitation status
+// Check connection/invitation status - FIXED VERSION
 router.get('/api/unipile/linkedin/status/:identifier', async (req, res) => {
   try {
     const { identifier } = req.params;
     const { user_id } = req.query;
 
+    // Validate parameters
+    if (!user_id) {
+      return res.status(400).json({ 
+        success: false, 
+        error: 'user_id query parameter is required' 
+      });
+    }
+
     // Lookup account_id from DB
     const dbResult = await getLinkedInAccountStatus(user_id);
     if (!dbResult.success || !dbResult.account_id) {
-      return res.status(404).json({ success: false, error: 'No LinkedIn account found' });
+      return res.status(404).json({ 
+        success: false, 
+        error: 'No LinkedIn account found for this user' 
+      });
     }
 
     const accountId = dbResult.account_id;
+    console.log(`🔍 Checking LinkedIn status for: ${identifier}, account: ${accountId}`);
 
-    // Step 1: Check if already connected
-    const userResponse = await axios.get(
-      `${getBaseUrl()}/users/${encodeURIComponent(identifier)}?account_id=${accountId}`,
-      { headers: getHeaders() }
-    );
+    // STEP 1: Check connections (1st degree)
+    try {
+      const connectionsResponse = await axios.get(
+        `${getBaseUrl()}/connections?account_id=${accountId}&search=${encodeURIComponent(identifier)}`,
+        { headers: getHeaders() }
+      );
 
-    if (userResponse.data?.is_relation) {
-      return res.json({ success: true, status: 'connected', user: userResponse.data });
+      console.log('🔗 Connections check:', JSON.stringify(connectionsResponse.data, null, 2));
+
+      // Check if user is in connections
+      const connectedUser = connectionsResponse.data.items?.find(connection =>
+        connection.public_identifier === identifier ||
+        connection.provider_id === identifier ||
+        connection.profile_url?.includes(identifier)
+      );
+
+      if (connectedUser) {
+        return res.json({
+          success: true,
+          status: 'connected',
+          user: connectedUser,
+          message: 'Already connected on LinkedIn'
+        });
+      }
+    } catch (connectionsError) {
+      console.log('No connections found or error:', connectionsError.message);
     }
 
-    // Step 2: Check pending invitations
-    const invitesResponse = await axios.get(
-      `${getBaseUrl()}/users/invitations/sent?account_id=${accountId}`,
-      { headers: getHeaders() }
-    );
+    // STEP 2: Check pending invitations
+    try {
+      const invitesResponse = await axios.get(
+        `${getBaseUrl()}/users/invitations/sent?account_id=${accountId}`,
+        { headers: getHeaders() }
+      );
 
-    const pending = invitesResponse.data.items?.find(
-      (i) => i.user_public_identifier === identifier || i.user_provider_id === identifier
-    );
+      console.log('📨 Pending invitations:', JSON.stringify(invitesResponse.data, null, 2));
 
-    if (pending) {
-      return res.json({ success: true, status: 'pending', invitation: pending });
+      // Find pending invitation for this user
+      const pendingInvite = invitesResponse.data.items?.find(invite =>
+        invite.user_public_identifier === identifier ||
+        invite.user_provider_id === identifier ||
+        invite.user_profile_url?.includes(identifier) ||
+        invite.invitation_identifier === identifier
+      );
+
+      if (pendingInvite) {
+        return res.json({
+          success: true,
+          status: 'pending',
+          invitation: pendingInvite,
+          message: 'Invitation already sent and pending'
+        });
+      }
+    } catch (invitesError) {
+      console.log('Error checking invitations:', invitesError.message);
     }
 
-    // Otherwise not invited yet
-    res.json({ success: true, status: 'not_invited' });
+    // STEP 3: Check if we can invite (profile exists)
+    try {
+      const profileResponse = await axios.get(
+        `${getBaseUrl()}/users/${encodeURIComponent(identifier)}?account_id=${accountId}`,
+        { headers: getHeaders() }
+      );
+
+      console.log('👤 Profile found:', JSON.stringify(profileResponse.data, null, 2));
+
+      // If profile exists but not connected and no pending invite
+      if (profileResponse.data) {
+        return res.json({
+          success: true,
+          status: 'can_invite',
+          user: profileResponse.data,
+          message: 'Profile found - can send invitation'
+        });
+      }
+    } catch (profileError) {
+      // Profile not found or other error
+      console.log('Profile check result:', profileError.response?.status, profileError.message);
+    }
+
+    // If we get here, user not found or can't be invited
+    res.json({
+      success: true,
+      status: 'not_found',
+      message: 'User not found or cannot be invited'
+    });
 
   } catch (err) {
-    console.error('Error checking LinkedIn status:', err.response?.data || err.message);
-    res.status(500).json({ success: false, error: 'Failed to check status' });
+    console.error('❌ Error checking LinkedIn status:', err.response?.data || err.message);
+    
+    res.status(500).json({
+      success: false,
+      error: 'Failed to check LinkedIn status',
+      details: err.message
+    });
   }
 });
 
