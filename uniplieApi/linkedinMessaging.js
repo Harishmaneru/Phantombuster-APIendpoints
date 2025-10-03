@@ -2341,6 +2341,56 @@ router.get('/api/unipile/linkedin/user/me', async (req, res) => {
   }
 });
 
+
+
+// Check connection/invitation status
+router.get('/api/unipile/linkedin/status/:identifier', async (req, res) => {
+  try {
+    const { identifier } = req.params;
+    const { user_id } = req.query;
+
+    // Lookup account_id from DB
+    const dbResult = await getLinkedInAccountStatus(user_id);
+    if (!dbResult.success || !dbResult.account_id) {
+      return res.status(404).json({ success: false, error: 'No LinkedIn account found' });
+    }
+
+    const accountId = dbResult.account_id;
+
+    // Step 1: Check if already connected
+    const userResponse = await axios.get(
+      `${getBaseUrl()}/users/${encodeURIComponent(identifier)}?account_id=${accountId}`,
+      { headers: getHeaders() }
+    );
+
+    if (userResponse.data?.is_relation) {
+      return res.json({ success: true, status: 'connected', user: userResponse.data });
+    }
+
+    // Step 2: Check pending invitations
+    const invitesResponse = await axios.get(
+      `${getBaseUrl()}/users/invitations/sent?account_id=${accountId}`,
+      { headers: getHeaders() }
+    );
+
+    const pending = invitesResponse.data.items?.find(
+      (i) => i.user_public_identifier === identifier || i.user_provider_id === identifier
+    );
+
+    if (pending) {
+      return res.json({ success: true, status: 'pending', invitation: pending });
+    }
+
+    // Otherwise not invited yet
+    res.json({ success: true, status: 'not_invited' });
+
+  } catch (err) {
+    console.error('Error checking LinkedIn status:', err.response?.data || err.message);
+    res.status(500).json({ success: false, error: 'Failed to check status' });
+  }
+});
+
+
 // ==================== HEALTH CHECK ====================
 
 router.get('/api/unipile/health', (req, res) => {
