@@ -1751,6 +1751,192 @@ router.get('/api/unipile/account/:accountId/details', async (req, res) => {
 // ==================== LINKEDIN CONNECTION INVITE ====================
 
 // Send LinkedIn connection request
+// router.post('/api/unipile/linkedin/invite', async (req, res) => {
+//   try {
+//     const {
+//       account_id,
+//       user_id,
+//       profile_url,
+//       profile_identifier,
+//       message
+//     } = req.body;
+
+//     // Get account_id from user_id if not provided
+//     let finalAccountId = account_id;
+//     if (!finalAccountId && user_id) {
+//       const dbResult = await getLinkedInAccountStatus(user_id);
+//       if (dbResult.success && dbResult.account_id) {
+//         finalAccountId = dbResult.account_id;
+//       }
+//     }
+
+//     // Validation
+//     if (!finalAccountId) {
+//       return res.status(400).json({
+//         success: false,
+//         error: 'account_id or user_id is required'
+//       });
+//     }
+
+//     if (!profile_url && !profile_identifier) {
+//       return res.status(400).json({
+//         success: false,
+//         error: 'Either profile_url or profile_identifier is required'
+//       });
+//     }
+
+//     // Extract LinkedIn identifier from URL
+//     let recipientIdentifier = profile_identifier;
+//     if (profile_url && !profile_identifier) {
+//       const patterns = [
+//         /linkedin\.com\/in\/([^\/\?#]+)/,
+//         /linkedin\.com\/sales\/people\/([^,]+)/,
+//         /linkedin\.com\/sales\/lead\/([^,]+)/
+//       ];
+      
+//       let match = null;
+//       for (const pattern of patterns) {
+//         match = profile_url.match(pattern);
+//         if (match) {
+//           recipientIdentifier = match[1];
+//           break;
+//         }
+//       }
+      
+//       if (!match) {
+//         return res.status(400).json({
+//           success: false,
+//           error: 'Invalid LinkedIn profile URL format. Expected: https://linkedin.com/in/username'
+//         });
+//       }
+//     }
+
+//     console.log('Step 1: Fetching user details for:', recipientIdentifier);
+    
+//     // STEP 1: Get user details to obtain provider_id
+//     const userResponse = await axios.get(
+//       `${getBaseUrl()}/users/${encodeURIComponent(recipientIdentifier)}?account_id=${finalAccountId}`,
+//       { headers: getHeaders() }
+//     );
+
+//     if (!userResponse.data || !userResponse.data.provider_id) {
+//       return res.status(404).json({
+//         success: false,
+//         error: 'Could not find LinkedIn user or retrieve provider_id',
+//         identifier: recipientIdentifier,
+//         user_response: userResponse.data
+//       });
+//     }
+
+//     const providerUserId = userResponse.data.provider_id;
+//     console.log('Step 2: Found provider_id:', providerUserId);
+
+//     // STEP 2: Send invitation - Build JSON payload (NOT FormData!)
+//     const invitePayload = {
+//       account_id: finalAccountId,
+//       provider_id: providerUserId // ✅ Correct field name
+//     };
+
+//     // Only add message if provided
+//     if (message && message.trim()) {
+//       invitePayload.message = message.trim();
+//     }
+
+//     console.log('Step 3: Sending invitation with payload:', invitePayload);
+
+//     // Send as JSON, not FormData
+//     const inviteResponse = await axios.post(
+//       `${getBaseUrl()}/users/invite`,
+//       invitePayload,
+//       { 
+//         headers: getHeaders('application/json') // Send as JSON
+//       }
+//     );
+
+//     console.log('Step 4: Invitation sent successfully');
+
+//     res.json({
+//       success: true,
+//       data: inviteResponse.data,
+//       message: 'Connection request sent successfully',
+//       recipient: {
+//         identifier: recipientIdentifier,
+//         provider_id: providerUserId,
+//         name: userResponse.data.name || null,
+//         headline: userResponse.data.headline || null,
+//         profile_url: userResponse.data.profile_url || profile_url
+//       },
+//       account_id: finalAccountId,
+//       invitation_sent_at: new Date()
+//     });
+
+//   } catch (err) {
+//     console.error('LinkedIn invitation error:', {
+//       status: err.response?.status,
+//       statusText: err.response?.statusText,
+//       error: err.response?.data,
+//       message: err.message,
+//       url: err.config?.url
+//     });
+
+//     // Handle specific error cases
+//     if (err.response?.status === 404) {
+//       return res.status(404).json({
+//         success: false,
+//         error: 'LinkedIn user not found',
+//         details: err.response?.data?.detail || 'The profile identifier could not be found',
+//         identifier: req.body.profile_identifier || req.body.profile_url
+//       });
+//     }
+
+//     if (err.response?.status === 422) {
+//       const errorType = err.response?.data?.type;
+      
+//       if (errorType === 'errors/already_invited_recently') {
+//         return res.status(422).json({
+//           success: false,
+//           error: 'Already sent invitation recently',
+//           details: 'You have already sent a connection request to this user recently'
+//         });
+//       }
+      
+//       if (errorType === 'errors/cannot_invite_attendee') {
+//         return res.status(422).json({
+//           success: false,
+//           error: 'Cannot send invitation',
+//           details: 'You are already connected to this user or the invitation cannot be sent'
+//         });
+//       }
+
+//       if (errorType === 'errors/limit_exceeded') {
+//         return res.status(422).json({
+//           success: false,
+//           error: 'Invitation limit exceeded',
+//           details: 'LinkedIn weekly invitation limit reached'
+//         });
+//       }
+//     }
+
+//     if (err.response?.status === 429) {
+//       return res.status(429).json({
+//         success: false,
+//         error: 'Rate limit exceeded',
+//         details: 'Too many requests. Please try again later.'
+//       });
+//     }
+
+//     if (err.response?.status === 400) {
+//       return res.status(400).json({
+//         success: false,
+//         error: 'Bad request',
+//         details: err.response?.data?.detail || err.response?.data?.title || 'Invalid parameters',
+//         unipile_error: err.response?.data
+//       });
+//     }
+
+//     handleError(err, res);
+//   }
+// });
 router.post('/api/unipile/linkedin/invite', async (req, res) => {
   try {
     const {
@@ -1760,6 +1946,8 @@ router.post('/api/unipile/linkedin/invite', async (req, res) => {
       profile_identifier,
       message
     } = req.body;
+
+    console.log('📨 Received invite request:', { user_id, profile_url, profile_identifier });
 
     // Get account_id from user_id if not provided
     let finalAccountId = account_id;
@@ -1785,159 +1973,153 @@ router.post('/api/unipile/linkedin/invite', async (req, res) => {
       });
     }
 
-    // Extract LinkedIn identifier from URL
+    // Extract LinkedIn identifier
     let recipientIdentifier = profile_identifier;
     if (profile_url && !profile_identifier) {
-      const patterns = [
-        /linkedin\.com\/in\/([^\/\?#]+)/,
-        /linkedin\.com\/sales\/people\/([^,]+)/,
-        /linkedin\.com\/sales\/lead\/([^,]+)/
-      ];
-      
-      let match = null;
-      for (const pattern of patterns) {
-        match = profile_url.match(pattern);
-        if (match) {
-          recipientIdentifier = match[1];
-          break;
-        }
-      }
-      
-      if (!match) {
+      if (profile_url.includes('/in/')) {
+        recipientIdentifier = profile_url.split('/in/')[1].split('/')[0].split('?')[0];
+      } else {
         return res.status(400).json({
           success: false,
-          error: 'Invalid LinkedIn profile URL format. Expected: https://linkedin.com/in/username'
+          error: 'Invalid LinkedIn profile URL'
         });
       }
     }
 
-    console.log('Step 1: Fetching user details for:', recipientIdentifier);
-    
-    // STEP 1: Get user details to obtain provider_id
-    const userResponse = await axios.get(
-      `${getBaseUrl()}/users/${encodeURIComponent(recipientIdentifier)}?account_id=${finalAccountId}`,
-      { headers: getHeaders() }
-    );
+    console.log('🔍 Step 1: Using identifier:', recipientIdentifier);
 
-    if (!userResponse.data || !userResponse.data.provider_id) {
-      return res.status(404).json({
-        success: false,
-        error: 'Could not find LinkedIn user or retrieve provider_id',
-        identifier: recipientIdentifier,
-        user_response: userResponse.data
-      });
+    // STEP 1: Get user details to get provider_id (REQUIRED)
+    let providerUserId;
+    try {
+      const userResponse = await axios.get(
+        `${getBaseUrl()}/users/${encodeURIComponent(recipientIdentifier)}?account_id=${finalAccountId}`,
+        { headers: getHeaders() }
+      );
+
+      console.log('✅ User details response received');
+
+      if (!userResponse.data || !userResponse.data.provider_id) {
+        return res.status(404).json({
+          success: false,
+          error: 'LinkedIn user not found or missing provider_id',
+          details: userResponse.data
+        });
+      }
+
+      providerUserId = userResponse.data.provider_id;
+      console.log('🔍 Step 2: Found provider_id:', providerUserId);
+
+    } catch (userError) {
+      console.error('❌ Error fetching user details:', userError.response?.data || userError.message);
+      
+      if (userError.response?.status === 404) {
+        return res.status(404).json({
+          success: false,
+          error: 'LinkedIn profile not found',
+          identifier: recipientIdentifier
+        });
+      }
+      
+      throw userError;
     }
 
-    const providerUserId = userResponse.data.provider_id;
-    console.log('Step 2: Found provider_id:', providerUserId);
-
-    // STEP 2: Send invitation - Build JSON payload (NOT FormData!)
+    // STEP 2: Send invitation - CORRECTED PAYLOAD
     const invitePayload = {
       account_id: finalAccountId,
-      provider_id: providerUserId // ✅ Correct field name
+      provider_id: providerUserId,  // ✅ CORRECT FIELD NAME - Use the provider_id from user details
+      message: message?.trim() || "Hi, I'd like to connect with you on LinkedIn."
     };
 
-    // Only add message if provided
-    if (message && message.trim()) {
-      invitePayload.message = message.trim();
-    }
+    console.log('🚀 Step 3: Sending invitation with CORRECT payload:', invitePayload);
 
-    console.log('Step 3: Sending invitation with payload:', invitePayload);
+    try {
+      const inviteResponse = await axios.post(
+        `${getBaseUrl()}/users/invite`,
+        invitePayload,
+        { 
+          headers: getHeaders('application/json'),
+          timeout: 15000
+        }
+      );
 
-    // Send as JSON, not FormData
-    const inviteResponse = await axios.post(
-      `${getBaseUrl()}/users/invite`,
-      invitePayload,
-      { 
-        headers: getHeaders('application/json') // Send as JSON
+      console.log('✅ Step 4: Invitation successful:', inviteResponse.data);
+
+      res.json({
+        success: true,
+        data: inviteResponse.data,
+        message: 'Connection request sent successfully',
+        recipient: {
+          identifier: recipientIdentifier,
+          provider_id: providerUserId,
+          name: `${userResponse.data.first_name} ${userResponse.data.last_name}`,
+          headline: userResponse.data.headline
+        },
+        invitation_id: inviteResponse.data.invitation_id || inviteResponse.data.id
+      });
+
+    } catch (inviteError) {
+      console.error('❌ Invitation API error:', {
+        status: inviteError.response?.status,
+        data: inviteError.response?.data,
+        message: inviteError.message
+      });
+
+      // Handle specific Unipile errors
+      if (inviteError.response?.status === 400) {
+        return res.status(400).json({
+          success: false,
+          error: 'Bad Request',
+          details: 'Invalid parameters sent to Unipile API',
+          unipile_error: inviteError.response.data
+        });
       }
-    );
 
-    console.log('Step 4: Invitation sent successfully');
+      if (inviteError.response?.status === 422) {
+        const errorData = inviteError.response.data;
+        
+        // Check for specific Unipile error types
+        if (errorData.type === 'errors/already_invited_recently') {
+          return res.status(422).json({
+            success: false,
+            error: 'Already invited recently',
+            details: 'You have already sent an invitation to this user recently'
+          });
+        }
 
-    res.json({
-      success: true,
-      data: inviteResponse.data,
-      message: 'Connection request sent successfully',
-      recipient: {
-        identifier: recipientIdentifier,
-        provider_id: providerUserId,
-        name: userResponse.data.name || null,
-        headline: userResponse.data.headline || null,
-        profile_url: userResponse.data.profile_url || profile_url
-      },
-      account_id: finalAccountId,
-      invitation_sent_at: new Date()
-    });
+        if (errorData.type === 'errors/cannot_invite_attendee') {
+          return res.status(422).json({
+            success: false,
+            error: 'Cannot invite',
+            details: 'You are already connected or cannot invite this user'
+          });
+        }
+
+        return res.status(422).json({
+          success: false,
+          error: 'Unprocessable Entity',
+          details: errorData.detail || errorData.message || 'Invalid request format',
+          unipile_error: errorData
+        });
+      }
+      
+      throw inviteError;
+    }
 
   } catch (err) {
-    console.error('LinkedIn invitation error:', {
+    console.error('💥 Final error:', {
       status: err.response?.status,
-      statusText: err.response?.statusText,
-      error: err.response?.data,
-      message: err.message,
-      url: err.config?.url
+      data: err.response?.data,
+      message: err.message
     });
 
-    // Handle specific error cases
-    if (err.response?.status === 404) {
-      return res.status(404).json({
-        success: false,
-        error: 'LinkedIn user not found',
-        details: err.response?.data?.detail || 'The profile identifier could not be found',
-        identifier: req.body.profile_identifier || req.body.profile_url
-      });
-    }
-
-    if (err.response?.status === 422) {
-      const errorType = err.response?.data?.type;
-      
-      if (errorType === 'errors/already_invited_recently') {
-        return res.status(422).json({
-          success: false,
-          error: 'Already sent invitation recently',
-          details: 'You have already sent a connection request to this user recently'
-        });
-      }
-      
-      if (errorType === 'errors/cannot_invite_attendee') {
-        return res.status(422).json({
-          success: false,
-          error: 'Cannot send invitation',
-          details: 'You are already connected to this user or the invitation cannot be sent'
-        });
-      }
-
-      if (errorType === 'errors/limit_exceeded') {
-        return res.status(422).json({
-          success: false,
-          error: 'Invitation limit exceeded',
-          details: 'LinkedIn weekly invitation limit reached'
-        });
-      }
-    }
-
-    if (err.response?.status === 429) {
-      return res.status(429).json({
-        success: false,
-        error: 'Rate limit exceeded',
-        details: 'Too many requests. Please try again later.'
-      });
-    }
-
-    if (err.response?.status === 400) {
-      return res.status(400).json({
-        success: false,
-        error: 'Bad request',
-        details: err.response?.data?.detail || err.response?.data?.title || 'Invalid parameters',
-        unipile_error: err.response?.data
-      });
-    }
-
-    handleError(err, res);
+    // Generic error handler
+    res.status(err.response?.status || 500).json({
+      success: false,
+      error: 'Failed to send invitation',
+      details: err.response?.data || err.message
+    });
   }
 });
-
 
 // ==================== CHECK CONNECTION STATUS ====================
 
