@@ -46,6 +46,7 @@
     "node-fetch": "^2.7.0",
     "nodemailer": "^6.10.1",
     "openai": "^4.79.1",
+    "opentok": "^2.22.0",
     "opossum": "^8.5.0",
     "playwright": "^1.50.1",
     "puppeteer": "^24.1.0",

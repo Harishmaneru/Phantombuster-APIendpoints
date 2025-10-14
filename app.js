@@ -8,6 +8,8 @@ const cors = require('cors');
 
 const { router: slackRouter } = require('./webhooks/slackEvents');
 const { router: slackLoggerRouter } = require('./webhooks/slackLogger');
+const opentokWebhookRouter = require('./openTok/opentokWebhook.js');
+const opentokSessionAPI = require('./openTok/opentokSessionAPI.js');
 
 // Domain Management API
 
@@ -129,6 +131,9 @@ const { Http2ServerRequest } = require('http2');
 const app = express();
 const port = 3001;
 
+// Trust proxy for ngrok and other reverse proxies
+app.set('trust proxy', true);
+
 // Single, secure CORS configuration
 app.use(
   cors({
@@ -186,8 +191,14 @@ app.use(
 // Mount Slack Logger webhook routes
 app.use('/webhooks/slackLogger', slackLoggerRouter);
 
-// Global middleware for parsing JSON (after webhook route)
+// Global middleware for parsing JSON (before all routes)
 app.use(express.json());
+
+// Mount OpenTok webhook routes
+app.use(opentokWebhookRouter.router);
+
+// Mount OpenTok session API routes
+app.use(opentokSessionAPI);
 
 // Mount domain management routes
 
@@ -252,8 +263,6 @@ app.use(manageSubscriptions.router);
 app.use(linkedinMessaging);
 app.use(notifyAPI.router);
 app.use(subscriptionManageAPI.router);
-
-
 
 
 
