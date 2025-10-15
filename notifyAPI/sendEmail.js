@@ -739,11 +739,11 @@ router.post('/api/emailsend', async (req, res) => {
 //   }
 // });
 
-router.post('/api/fetchinbox', async (req, res) => {
+router.post('/api/fetchemail', async (req, res) => {
   try {
-    const { token, email, page = 1, limit = 20 } = req.body;
-    if (!token || !email) {
-      return res.status(400).json({ success: false, error: 'Missing token or email' });
+    const { token, email, uid } = req.body;
+    if (!token || !email || !uid) {
+      return res.status(400).json({ success: false, error: 'Missing required fields' });
     }
 
     const smtp = await SMTPAuth.findOne({ email, token });
@@ -751,7 +751,6 @@ router.post('/api/fetchinbox', async (req, res) => {
       return res.status(403).json({ success: false, error: 'Invalid token or sender email' });
     }
 
-    // Decrypt the password
     let decryptedPass;
     try {
       decryptedPass = decrypt(smtp.pass);
@@ -769,89 +768,63 @@ router.post('/api/fetchinbox', async (req, res) => {
     });
 
     await client.connect();
-    const lock = await client.mailboxOpen('INBOX');
-    const totalMessages = lock.exists;
-    
-    // Calculate pagination
-    const maxLimit = Math.min(limit, 50); // Max 50 per page
-    const currentPage = Math.max(parseInt(page), 1);
-    const totalPages = Math.ceil(totalMessages / maxLimit);
-    
-    // Calculate message range (IMAP uses 1-based indexing, newest first)
-    const startSeq = Math.max(totalMessages - (currentPage * maxLimit) + 1, 1);
-    const endSeq = Math.max(totalMessages - ((currentPage - 1) * maxLimit), 1);
-    
-    console.log(`Fetching messages ${startSeq}:${endSeq} (Page ${currentPage}, Limit ${maxLimit})`);
+    await client.mailboxOpen('INBOX');
 
-    const messages = [];
+    let emailContent = null;
     
-    if (startSeq <= endSeq) {
-      for await (let msg of client.fetch(`${startSeq}:${endSeq}`, { 
-        envelope: true, 
-        uid: true, 
-        flags: true, 
-        source: true,
-        bodyStructure: true 
-      })) {
-        const parsed = await simpleParser(msg.source);
-        
-        // Clean HTML content
-        let cleanHtml = parsed.html || '';
-        if (cleanHtml) {
-          cleanHtml = cleanHtml.replace(/https:\/\/tracking\.inflection\.io\/[^"']+/g, (url) => {
-            try {
-              const urlObj = new URL(url);
-              const redirect = urlObj.searchParams.get('redirect');
-              return redirect || url;
-            } catch {
-              return url;
-            }
-          });
-          
-          cleanHtml = cleanHtml.replace(/<span[^>]*id="inflection-email-preheader"[^>]*>.*?<\/span>/gis, '');
-        }
-
-        // Extract clean text
-        let cleanText = parsed.text || '';
-        if (cleanText) {
-          cleanText = cleanText.replace(/https:\/\/tracking\.inflection\.io\/[^\s]+/g, '');
-        }
-
-        messages.push({
-          subject: msg.envelope.subject,
-          from: msg.envelope.from.map(f => `${f.name || ''} <${f.address}>`).join(', '),
-          date: msg.envelope.date,
-          uid: msg.uid,
-          seq: msg.seq, // Store sequence number for reference
-          read: Array.isArray(msg.flags) ? msg.flags.includes('\\Seen') : false,
-          text: cleanText,
-          html: cleanHtml,
-          to: msg.envelope.to?.map(t => `${t.name || ''} <${t.address}>`).join(', '),
-          cc: msg.envelope.cc?.map(c => `${c.name || ''} <${c.address}>`).join(', '),
-          messageId: msg.envelope.messageId
+    // Fetch specific email by UID
+    for await (let msg of client.fetch(uid, { 
+      source: true,
+      envelope: true,
+      uid: true
+    }, { uid: true })) { // uid: true means we're searching by UID instead of sequence
+      
+      const parsed = await simpleParser(msg.source);
+      
+      // Clean HTML content
+      let cleanHtml = parsed.html || '';
+      if (cleanHtml) {
+        cleanHtml = cleanHtml.replace(/https:\/\/tracking\.inflection\.io\/[^"']+/g, (url) => {
+          try {
+            const urlObj = new URL(url);
+            const redirect = urlObj.searchParams.get('redirect');
+            return redirect || url;
+          } catch {
+            return url;
+          }
         });
+        
+        cleanHtml = cleanHtml.replace(/<span[^>]*id="inflection-email-preheader"[^>]*>.*?<\/span>/gis, '');
       }
+
+      // Extract clean text
+      let cleanText = parsed.text || '';
+      if (cleanText) {
+        cleanText = cleanText.replace(/https:\/\/tracking\.inflection\.io\/[^\s]+/g, '');
+      }
+
+      emailContent = {
+        uid: msg.uid,
+        text: cleanText,
+        html: cleanHtml,
+        attachments: parsed.attachments || []
+      };
+      
+      break; // We only need one email
     }
 
     await client.logout();
 
-    // Reverse to show newest first in the array
-    const sortedMessages = messages.reverse();
+    if (!emailContent) {
+      return res.status(404).json({ success: false, error: 'Email not found' });
+    }
 
     return res.json({ 
       success: true, 
-      inbox: sortedMessages,
-      pagination: {
-        currentPage,
-        totalPages,
-        totalMessages,
-        limit: maxLimit,
-        hasNextPage: currentPage < totalPages,
-        hasPrevPage: currentPage > 1
-      }
+      email: emailContent
     });
   } catch (err) {
-    console.error('Inbox Fetch Error:', err);
+    console.error('Email Fetch Error:', err);
     return res.status(500).json({ success: false, error: err.message });
   }
 });
