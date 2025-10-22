@@ -2922,8 +2922,19 @@ router.post('/create-checkout-session-by-app', async (req, res) => {
         };
         const getSuccessUrl = (app, planType, isSandbox) => {
             const baseUrl = isSandbox ? getSandboxUrl(app) : appUrlMap[app];
+            
+            // All email-related plans go to email-success
+            if (planType && (
+                planType.includes('email') || 
+                planType.includes('warmup') || 
+                planType === 'email/warmup' ||
+                planType === 'email-only' ||
+                planType === 'warmup-only'
+            )) {
+                return `${baseUrl}/email-success?session_id={CHECKOUT_SESSION_ID}`;
+            }
+            
             switch (planType) {
-                case 'email/warmup': return `${baseUrl}/email-success?session_id={CHECKOUT_SESSION_ID}`;
                 case 'kampaign-main': return `${baseUrl}/kampaign-success?session_id={CHECKOUT_SESSION_ID}`;
                 case 'gps': return `${baseUrl}/gps-success?session_id={CHECKOUT_SESSION_ID}`;
                 case 'getsalesgpt': return `${baseUrl}/sales-success?session_id={CHECKOUT_SESSION_ID}`;
