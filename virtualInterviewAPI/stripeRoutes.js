@@ -938,6 +938,79 @@ router.post('/domain/create-checkout-session', async (req, res) => {
     }
 });
 
+// Helper functions for plan type detection
+function determinePlanType(productData, priceData) {
+    const productName = (productData?.name || '').toLowerCase();
+    const priceNickname = (priceData?.nickname || '').toLowerCase();
+    const planMetadata = (priceData?.metadata?.Plan || priceData?.metadata?.plan || '').toLowerCase();
+    
+    // Check for warmup-related keywords
+    if (productName.includes('warmup') || priceNickname.includes('warmup') || planMetadata.includes('warmup')) {
+        return 'email_with_warmup';
+    }
+    
+    // Check for email-only keywords
+    if (productName.includes('email') && !productName.includes('warmup')) {
+        return 'email_only';
+    }
+    
+    // Default fallback
+    return 'standard';
+}
+
+function extractPlanFeatures(productData, priceData, subscriptionItem) {
+    const features = [];
+    const productName = (productData?.name || '').toLowerCase();
+    const description = (productData?.description || '').toLowerCase();
+    
+    // Get quantity from subscription item (default to 1 if not found)
+    const quantity = subscriptionItem?.quantity || 1;
+    
+    // Email features
+    if (productName.includes('email') || description.includes('email')) {
+        features.push(`email_accounts: ${quantity}`);
+    }
+    
+    // Warmup features
+    if (productName.includes('warmup') || description.includes('warmup')) {
+        features.push(`warmup_inbox: ${quantity}`);
+    }
+    
+    // Additional feature detection based on common patterns
+    if (description.includes('domain') || productName.includes('domain')) {
+        features.push(`domain_management: ${quantity}`);
+    }
+    
+    if (description.includes('scraping') || productName.includes('scrap')) {
+        features.push(`data_scraping: ${quantity}`);
+    }
+    
+    return features;
+}
+
+function isEmailOnlyPlan(productData, priceData) {
+    const planType = determinePlanType(productData, priceData);
+    return planType === 'email_only';
+}
+
+function isEmailWithWarmupPlan(productData, priceData) {
+    const planType = determinePlanType(productData, priceData);
+    return planType === 'email_with_warmup';
+}
+
+function getPlanCategory(productData, priceData) {
+    const planType = determinePlanType(productData, priceData);
+    
+    switch (planType) {
+        case 'email_only':
+            return 'email_services';
+        case 'email_with_warmup':
+            return 'email_services_with_warmup';
+        default:
+            return 'general_services';
+    }
+}
+
 // Get Subscription Details from Checkout Session ID
 router.post('/get-subscription-from-session', async (req, res) => {
     const { sessionId } = req.body;
@@ -1373,6 +1446,13 @@ router.post('/get-subscription-from-session', async (req, res) => {
                 refund: refundInfo,
                 invoice: invoiceInfo,
                 createdAt: createdAt?.iso || null
+            },
+            items: {
+                planType: determinePlanType(productData, priceData),
+                features: extractPlanFeatures(productData, priceData, subscription.items.data[0]),
+                isEmailOnly: isEmailOnlyPlan(productData, priceData),
+                isEmailWithWarmup: isEmailWithWarmupPlan(productData, priceData),
+                planCategory: getPlanCategory(productData, priceData)
             }
         };
 
