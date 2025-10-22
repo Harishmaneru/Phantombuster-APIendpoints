@@ -2929,6 +2929,7 @@ router.post('/create-checkout-session-by-app', async (req, res) => {
                 planType.includes('warmup') || 
                 planType === 'email/warmup' ||
                 planType === 'email-only' ||
+                planType === 'email_with_warmup' ||
                 planType === 'warmup-only'
             )) {
                 return `${baseUrl}/email-success?session_id={CHECKOUT_SESSION_ID}`;
