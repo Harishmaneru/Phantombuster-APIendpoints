@@ -324,8 +324,6 @@ router.post(
                     }
                     break;
                 }
-
-
                 case 'customer.subscription.deleted': {
                     const subscription = event.data.object;
                     try {
@@ -2861,14 +2859,29 @@ router.post('/create-checkout-session-by-app', async (req, res) => {
             }
         };
 
-        // 5) Build line items (supports both single and multiple priceIds)
-        const lineItems = Array.isArray(priceIds) && priceIds.length > 0
-            ? priceIds.map(p => ({ price: p, quantity }))
-            : [{ price: priceId, quantity }];
+        // 5) Build price list (supports both single and multiple)
+        const priceList = Array.isArray(priceIds) && priceIds.length > 0
+            ? priceIds
+            : priceId
+            ? [priceId]
+            : [];
 
-        // 6) Create checkout session payload
+        if (priceList.length === 0) {
+            return res.status(400).json({ error: "No price IDs provided" });
+        }
+
+        // 6) Fetch prices from Stripe to detect recurring vs one-time
+        const stripePrices = await Promise.all(priceList.map((p) => stripe.prices.retrieve(p)));
+        const hasRecurring = stripePrices.some((p) => p.type === "recurring");
+
+        const lineItems = priceList.map((p) => ({ price: p, quantity }));
+
+        // 7) Dynamically choose mode based on price types
+        const sessionMode = hasRecurring ? "subscription" : "payment";
+
+        // 8) Create checkout session payload
         const sessionPayload = {
-            mode: 'subscription',
+            mode: sessionMode,
             payment_method_types: ['card'],
             line_items: lineItems,
             success_url: getSuccessUrl(app, planType, isSandbox),
@@ -2877,8 +2890,8 @@ router.post('/create-checkout-session-by-app', async (req, res) => {
             allow_promotion_codes: true
         };
 
-        // Add free trial if specified
-        if (trialPeriodDays && trialPeriodDays > 0) {
+        // Add free trial if specified (only for subscription mode)
+        if (trialPeriodDays && trialPeriodDays > 0 && sessionMode === 'subscription') {
             sessionPayload.subscription_data = { trial_period_days: trialPeriodDays };
         }
 
@@ -2893,15 +2906,17 @@ router.post('/create-checkout-session-by-app', async (req, res) => {
         }
 
         return res.json({
-            mode: 'checkout',
+            mode: sessionMode,
             url: session.url,
+            id: session.id,
             environment: isSandbox ? 'sandbox' : 'production',
             customerId,
             planType: planType || 'unknown',
             trialPeriodDays: trialPeriodDays || 0,
             successUrl: getSuccessUrl(app, planType, isSandbox),
             cancelUrl: getCancelUrl(app, planType, isSandbox),
-            appUrls: appUrlMap
+            appUrls: appUrlMap,
+            priceTypes: stripePrices.map(p => ({ id: p.id, type: p.type, amount: p.unit_amount }))
         });
 
     } catch (err) {
