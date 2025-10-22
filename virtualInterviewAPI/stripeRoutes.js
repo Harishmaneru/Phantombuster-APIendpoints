@@ -297,40 +297,6 @@ router.post(
                     if (subscriptionId) {
                         await connectToMongoDB();
 
-                        // Retrieve subscription with metadata
-                        const subscription = await stripe.subscriptions.retrieve(subscriptionId, {
-                            expand: ['items.data.price.product'],
-                        });
-                        const currentPriceId = subscription.items.data[0]?.price?.id;
-                        const appFromMetadata = subscription.metadata?.app;
-
-                        // Define your combo and $4 plan price IDs
-                        const COMBO_MONTHLY_PRICE_ID = process.env.STRIPE_COMBO_MONTHLY; // $19
-                        const EMAIL_MONTHLY_PRICE_ID = process.env.STRIPE_EMAIL_MONTHLY; // $4
-
-                        const COMBO_YEARLY_PRICE_ID = process.env.STRIPE_COMBO_YEARLY; // $55
-                        const EMAIL_YEARLY_PRICE_ID = process.env.STRIPE_EMAIL_YEARLY; // $40
-
-                        if (appFromMetadata === "kampaignai") {
-                            // monthly downgrade
-                            if (currentPriceId === COMBO_MONTHLY_PRICE_ID) {
-                                await stripe.subscriptions.update(subscriptionId, {
-                                    items: [{ id: subscription.items.data[0].id, price: EMAIL_MONTHLY_PRICE_ID }],
-                                    billing_cycle_anchor: 'unchanged',
-                                    proration_behavior: 'none',
-                                });
-                            }
-
-                            // yearly downgrade
-                            if (currentPriceId === COMBO_YEARLY_PRICE_ID) {
-                                await stripe.subscriptions.update(subscriptionId, {
-                                    items: [{ id: subscription.items.data[0].id, price: EMAIL_YEARLY_PRICE_ID }],
-                                    billing_cycle_anchor: 'unchanged',
-                                    proration_behavior: 'none',
-                                });
-                            }
-                        }
-
 
                         // Your existing DB update logic (unaffected)
                         const lineItem = invoice.lines.data[0];
