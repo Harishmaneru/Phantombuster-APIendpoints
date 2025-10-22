@@ -2402,7 +2402,7 @@ async function validateDMARCRecords(domain) {
     // Check response structure
     if (dmarcRecord.success && dmarcRecord.data) {
       // Find the DMARC record for this specific domain in the payload array
-      const domainRecord = dmarcRecord.data.payload.find(record => 
+      const domainRecord = dmarcRecord.data.payload.find(record =>
         record.domain === domain
       );
 
@@ -2441,7 +2441,7 @@ async function validateDMARCRecords(domain) {
     }
   } catch (error) {
     console.error(`Error validating DMARC records for ${domain}:`, error);
-    
+
     // Handle specific error types
     let errorMessage = `Error validating DMARC record: ${error.message}`;
     let errorType = 'UNKNOWN_ERROR';

@@ -2585,18 +2585,24 @@ router.get('/invoice/:paymentIntentId', async (req, res) => {
 });
 
 
-
-//______________________________API's for All Applications________________________
-
-// Buy/subscribe using saved card if available, otherwise fall back to Checkout
 // router.post('/create-checkout-session-by-app', async (req, res) => {
 //     try {
-//         const { userId, priceId, app, quantity = 1 } = req.body;
+//         // 1. Destructure all parameters including trialPeriodDays
+//         const { userId, priceId, app, quantity = 1, planType, trialPeriodDays } = req.body;
+//         const isSandbox = isSandboxMode(req);
+//         const stripe = getStripeInstance(isSandbox);
 
-//         // 1) App URL map + validation
-//         const appUrlMap = {
+//         console.log(`[${isSandbox ? 'SANDBOX' : 'PRODUCTION'}] create-checkout-session-by-app called for user:`, userId, 'app:', app, 'planType:', planType, 'trialDays:', trialPeriodDays);
+
+//         // 1) App URL map + validation - Different URLs for sandbox vs production
+//         const appUrlMap = isSandbox ? {
+//             // Sandbox URLs - Localhost for testing
 //             kampaignai: 'https://kampaign.onepgr.com',
-//             // kampaignai: 'http://localhost:4200',
+//             gps: 'http://localhost:4200',
+//             getsalesgpt: 'http://localhost:4200',
+//         } : {
+//             // Production URLs
+//             kampaignai: 'https://kampaign.onepgr.com',
 //             gps: 'https://gps.onepgr.com',
 //             getsalesgpt: 'https://sales.onepgr.com',
 //         };
@@ -2610,71 +2616,166 @@ router.get('/invoice/:paymentIntentId', async (req, res) => {
 //         if (!quantity || quantity < 1) {
 //             return res.status(400).json({ error: 'Quantity must be at least 1' });
 //         }
+//         if (trialPeriodDays && (trialPeriodDays < 0 || trialPeriodDays > 365)) {
+//             return res.status(400).json({ error: 'Trial period days must be between 0 and 365' });
+//         }
 
 //         await connectToMongoDB();
 
-//         // 2) Find or create customer record for user
-//         let customerRecord = await Customer.findOne({ userId });
+//         // 2) Find or create customer record for user - filter by environment
+//         const environment = isSandbox ? 'sandbox' : 'production';
+
+//         // First check for customer with environment field
+//         let customerRecord = await Customer.findOne({ userId, environment });
+
+//         // If not found, check for legacy customer without environment field
+//         if (!customerRecord) {
+//             const legacyCustomer = await Customer.findOne({ userId, environment: { $exists: false } });
+//             if (legacyCustomer) {
+//                 console.log(`🔄 Found legacy customer record for user ${userId}, migrating to ${environment} environment`);
+//                 // Update the legacy record to include environment
+//                 await Customer.updateOne(
+//                     { _id: legacyCustomer._id },
+//                     { $set: { environment: environment } }
+//                 );
+//                 customerRecord = { ...legacyCustomer, environment: environment };
+//             }
+//         }
+
 //         let customerId;
 
 //         if (!customerRecord) {
-//             console.log(`No customer record found for user ${userId} - will create new customer during checkout`);
+//             console.log(`[${isSandbox ? 'SANDBOX' : 'PRODUCTION'}] No customer record found for user ${userId} - will create new customer during checkout`);
 
 //             // Create new customer in Stripe for this user
 //             try {
 //                 const customer = await stripe.customers.create({
-//                     email: `user-${userId}@onepgr.com`, // Placeholder email since we don't have user email here
+//                     email: null, // No email provided
 //                     metadata: {
 //                         userId,
 //                         app,
+//                         planType: planType || 'unknown', // 🆕 Store plan type
+//                         environment: isSandbox ? 'sandbox' : 'production',
 //                         createdVia: 'subscription_checkout',
-//                         createdAt: new Date().toISOString()
+//                         createdAt: new Date().toISOString(),
+//                         trialPeriodDays: trialPeriodDays || 0 // Log it for reference
 //                     }
 //                 });
 //                 customerId = customer.id;
 
 //                 // Create customer record in our database
 //                 await Customer.updateOne(
-//                     { userId },
+//                     { userId, environment },
 //                     {
 //                         $set: {
 //                             customerId: customer.id,
 //                             app: app,
-//                             email: `user-${userId}@onepgr.com`, // Placeholder email
+//                             planType: planType || 'unknown', // 🆕 Store plan type
+//                             email: null, // No email provided
+//                             environment: environment, // 🆕 Store environment
 //                             createdAt: new Date()
 //                         }
 //                     },
 //                     { upsert: true }
 //                 );
 
-//                 console.log(`🆕 Created new customer ${customerId} for user ${userId} during subscription checkout`);
+//                 console.log(`[${isSandbox ? 'SANDBOX' : 'PRODUCTION'}] 🆕 Created new customer ${customerId} for user ${userId}`);
 //             } catch (customerError) {
-//                 console.error(`Error creating customer for user ${userId}:`, customerError);
+//                 console.error(`[${isSandbox ? 'SANDBOX' : 'PRODUCTION'}] Error creating customer for user ${userId}:`, customerError);
 //                 // Continue without customer ID - Stripe will create one during checkout
 //                 customerId = null;
 //             }
 //         } else {
 //             customerId = customerRecord.customerId;
-//             console.log(`✅ Found existing customer ${customerId} for user ${userId}`);
+//             console.log(`[${isSandbox ? 'SANDBOX' : 'PRODUCTION'}] ✅ Found existing customer ${customerId} for user ${userId}`);
 //         }
+
+//         const getSuccessUrl = (app, planType, isSandbox) => {
+//             // 🆕 Use sandbox URLs when in sandbox mode
+//             const baseUrl = isSandbox ? getSandboxUrl(app) : appUrlMap[app];
+
+//             if (!baseUrl) return `${baseUrl}/success?session_id={CHECKOUT_SESSION_ID}`;
+
+//             switch (planType) {
+//                 case 'email/warmup':
+//                     return `${baseUrl}/email-success?session_id={CHECKOUT_SESSION_ID}`;
+//                 case 'kampaign-main':
+//                     return `${baseUrl}/kampaign-success?session_id={CHECKOUT_SESSION_ID}`;
+//                 case 'gps':
+//                     return `${baseUrl}/gps-success?session_id={CHECKOUT_SESSION_ID}`;
+//                 case 'getsalesgpt':
+//                     return `${baseUrl}/salesgpt-success?session_id={CHECKOUT_SESSION_ID}`;
+//                 case 'onboarding-kai':
+//                     return `${baseUrl}/get-started/success?session_id={CHECKOUT_SESSION_ID}`;
+//                 default:
+//                     return `${baseUrl}/success?session_id={CHECKOUT_SESSION_ID}`;
+//             }
+//         };
+
+//         // �� Helper function to get sandbox URLs
+//         const getSandboxUrl = (app) => {
+//             const sandboxUrls = {
+//                 kampaignai: 'https://kampaign.onepgr.com',
+//                 gps: 'http://localhost:4200',
+//                 getsalesgpt: 'http://localhost:4200'
+//             };
+//             return sandboxUrls[app] || 'https://kampaign.onepgr.com';
+//         };
+
+//         // 🆕 Update Cancel URL function too
+//         const getCancelUrl = (app, planType, isSandbox) => {
+//             const baseUrl = isSandbox ? getSandboxUrl(app) : appUrlMap[app];
+
+//             if (!baseUrl) return `${baseUrl}/cancel`;
+
+//             switch (planType) {
+//                 case 'email/warmup':
+//                     return `${baseUrl}/cancel`;
+//                 case 'kampaign-main':
+//                     return `${baseUrl}/cancel`;
+//                 case 'gps':
+//                     return `${baseUrl}/cancel`;
+//                 case 'getsalesgpt':
+//                     return `${baseUrl}/cancelg`;
+//                 case 'onboarding-kai':
+//                     return `${baseUrl}/cancel`;
+//                 default:
+//                     return `${baseUrl}/pricing`;
+//             }
+//         };
 
 //         // 3) Create Checkout session with customer if available
 //         const sessionPayload = {
 //             mode: 'subscription',
 //             payment_method_types: ['card'],
 //             line_items: [{ price: priceId, quantity }],
-//             success_url: `${appUrlMap[app]}/success?session_id={CHECKOUT_SESSION_ID}`,
-//             cancel_url: `${appUrlMap[app]}/cancel`,
-//             metadata: { userId, app },
+//             success_url: getSuccessUrl(app, planType, isSandbox), // 🆕 Dynamic success URL
+//             cancel_url: getCancelUrl(app, planType, isSandbox),   // �� Dynamic cancel URL
+//             metadata: {
+//                 userId,
+//                 app,
+//                 planType: planType || 'unknown', // 🆕 Store plan type
+//                 environment: isSandbox ? 'sandbox' : 'production',
+//                 sandbox: isSandbox,
+//                 trialPeriodDays: trialPeriodDays || 0 // Log it for reference
+//             },
 //             allow_promotion_codes: true, // optional
 //         };
+
+//         // 4) 🔥 Add free trial configuration if specified
+//         if (trialPeriodDays && trialPeriodDays > 0) {
+//             sessionPayload.subscription_data = {
+//                 trial_period_days: trialPeriodDays
+//             };
+//             console.log(`[${isSandbox ? 'SANDBOX' : 'PRODUCTION'}] Adding free trial of ${trialPeriodDays} days to checkout`);
+//         }
 
 //         // If we have a customer ID, attach them so saved cards show up
 //         if (customerId) {
 //             sessionPayload.customer = customerId;
-//             console.log(`🔗 Attaching existing customer ${customerId} to checkout session`);
+//             console.log(`[${isSandbox ? 'SANDBOX' : 'PRODUCTION'}] Attaching existing customer ${customerId} to checkout session`);
 //         } else {
-//             console.log(`📝 No customer ID available, Stripe will create new customer during checkout`);
+//             console.log(`[${isSandbox ? 'SANDBOX' : 'PRODUCTION'}] 📝 No customer ID available, Stripe will create new customer during checkout`);
 //         }
 
 //         const session = await stripe.checkout.sessions.create(sessionPayload);
@@ -2682,245 +2783,161 @@ router.get('/invoice/:paymentIntentId', async (req, res) => {
 //         // Store checkout session info for tracking
 //         if (customerId) {
 //             await Customer.updateOne(
-//                 { userId },
+//                 { userId, environment },
 //                 { $set: { lastCheckoutSessionId: session.id } }
 //             );
-//             console.log(`📝 Updated customer record with checkout session ${session.id}`);
+//             console.log(`[${isSandbox ? 'SANDBOX' : 'PRODUCTION'}] 📝 Updated customer record with checkout session ${session.id}`);
 //         } else {
 //             // If no customer ID, we'll need to update it later when the webhook processes
-//             console.log(`⏳ Customer record will be updated when webhook processes checkout completion`);
+//             console.log(`[${isSandbox ? 'SANDBOX' : 'PRODUCTION'}] ⏳ Customer record will be updated when webhook processes checkout completion`);
 //         }
 
 //         return res.json({
 //             mode: 'checkout',
 //             url: session.url,
+//             environment: isSandbox ? 'sandbox' : 'production',
+//             customerId: customerId,
+//             planType: planType || 'unknown',
+//             trialPeriodDays: trialPeriodDays || 0, // Inform the frontend
+//             successUrl: getSuccessUrl(app, planType, isSandbox),
+//             cancelUrl: getCancelUrl(app, planType, isSandbox),
+//             appUrls: appUrlMap
 //         });
 //     } catch (err) {
-//         console.error('Stripe error:', err);
+//         console.error(`[${isSandboxMode(req) ? 'SANDBOX' : 'PRODUCTION'}] Stripe error:`, err);
 //         res.status(500).json({ error: err.message });
 //     }
 // });
 
-// Buy/subscribe using saved card if available, otherwise fall back to Checkout
-// Buy/subscribe using saved card if available, otherwise fall back to Checkout
+
 router.post('/create-checkout-session-by-app', async (req, res) => {
     try {
-        // 1. Destructure all parameters including trialPeriodDays
-        const { userId, priceId, app, quantity = 1, planType, trialPeriodDays } = req.body;
+        // 1. Destructure all parameters including optional array of priceIds
+        const { userId, priceId, priceIds, app, quantity = 1, planType, trialPeriodDays } = req.body;
         const isSandbox = isSandboxMode(req);
         const stripe = getStripeInstance(isSandbox);
 
         console.log(`[${isSandbox ? 'SANDBOX' : 'PRODUCTION'}] create-checkout-session-by-app called for user:`, userId, 'app:', app, 'planType:', planType, 'trialDays:', trialPeriodDays);
 
-        // 1) App URL map + validation - Different URLs for sandbox vs production
+        // 2) App URL map + validation
         const appUrlMap = isSandbox ? {
-            // Sandbox URLs - Localhost for testing
             kampaignai: 'https://kampaign.onepgr.com',
             gps: 'http://localhost:4200',
             getsalesgpt: 'http://localhost:4200',
         } : {
-            // Production URLs
             kampaignai: 'https://kampaign.onepgr.com',
             gps: 'https://gps.onepgr.com',
             getsalesgpt: 'https://sales.onepgr.com',
         };
 
-        if (!app || !appUrlMap[app]) {
-            return res.status(400).json({ error: 'Invalid or missing app parameter' });
-        }
-        if (!priceId) {
-            return res.status(400).json({ error: 'Missing priceId' });
-        }
-        if (!quantity || quantity < 1) {
-            return res.status(400).json({ error: 'Quantity must be at least 1' });
-        }
-        if (trialPeriodDays && (trialPeriodDays < 0 || trialPeriodDays > 365)) {
-            return res.status(400).json({ error: 'Trial period days must be between 0 and 365' });
-        }
+        if (!app || !appUrlMap[app]) return res.status(400).json({ error: 'Invalid or missing app parameter' });
+        if ((!priceId && (!priceIds || priceIds.length === 0))) return res.status(400).json({ error: 'Missing priceId(s)' });
+        if (!quantity || quantity < 1) return res.status(400).json({ error: 'Quantity must be at least 1' });
+        if (trialPeriodDays && (trialPeriodDays < 0 || trialPeriodDays > 365)) return res.status(400).json({ error: 'Trial period days must be between 0 and 365' });
 
         await connectToMongoDB();
 
-        // 2) Find or create customer record for user - filter by environment
         const environment = isSandbox ? 'sandbox' : 'production';
 
-        // First check for customer with environment field
+        // 3) Find or create customer record
         let customerRecord = await Customer.findOne({ userId, environment });
-
-        // If not found, check for legacy customer without environment field
         if (!customerRecord) {
             const legacyCustomer = await Customer.findOne({ userId, environment: { $exists: false } });
             if (legacyCustomer) {
-                console.log(`🔄 Found legacy customer record for user ${userId}, migrating to ${environment} environment`);
-                // Update the legacy record to include environment
-                await Customer.updateOne(
-                    { _id: legacyCustomer._id },
-                    { $set: { environment: environment } }
-                );
-                customerRecord = { ...legacyCustomer, environment: environment };
+                await Customer.updateOne({ _id: legacyCustomer._id }, { $set: { environment } });
+                customerRecord = { ...legacyCustomer, environment };
             }
         }
 
         let customerId;
-
         if (!customerRecord) {
-            console.log(`[${isSandbox ? 'SANDBOX' : 'PRODUCTION'}] No customer record found for user ${userId} - will create new customer during checkout`);
-
-            // Create new customer in Stripe for this user
             try {
                 const customer = await stripe.customers.create({
-                    email: null, // No email provided
-                    metadata: {
-                        userId,
-                        app,
-                        planType: planType || 'unknown', // 🆕 Store plan type
-                        environment: isSandbox ? 'sandbox' : 'production',
-                        createdVia: 'subscription_checkout',
-                        createdAt: new Date().toISOString(),
-                        trialPeriodDays: trialPeriodDays || 0 // Log it for reference
-                    }
+                    email: null,
+                    metadata: { userId, app, planType: planType || 'unknown', environment, createdVia: 'subscription_checkout', createdAt: new Date().toISOString(), trialPeriodDays: trialPeriodDays || 0 }
                 });
                 customerId = customer.id;
 
-                // Create customer record in our database
                 await Customer.updateOne(
                     { userId, environment },
-                    {
-                        $set: {
-                            customerId: customer.id,
-                            app: app,
-                            planType: planType || 'unknown', // 🆕 Store plan type
-                            email: null, // No email provided
-                            environment: environment, // 🆕 Store environment
-                            createdAt: new Date()
-                        }
-                    },
+                    { $set: { customerId: customer.id, app, planType: planType || 'unknown', email: null, environment, createdAt: new Date() } },
                     { upsert: true }
                 );
-
-                console.log(`[${isSandbox ? 'SANDBOX' : 'PRODUCTION'}] 🆕 Created new customer ${customerId} for user ${userId}`);
             } catch (customerError) {
-                console.error(`[${isSandbox ? 'SANDBOX' : 'PRODUCTION'}] Error creating customer for user ${userId}:`, customerError);
-                // Continue without customer ID - Stripe will create one during checkout
+                console.error(`[${isSandbox ? 'SANDBOX' : 'PRODUCTION'}] Error creating customer:`, customerError);
                 customerId = null;
             }
         } else {
             customerId = customerRecord.customerId;
-            console.log(`[${isSandbox ? 'SANDBOX' : 'PRODUCTION'}] ✅ Found existing customer ${customerId} for user ${userId}`);
         }
 
-        const getSuccessUrl = (app, planType, isSandbox) => {
-            // 🆕 Use sandbox URLs when in sandbox mode
-            const baseUrl = isSandbox ? getSandboxUrl(app) : appUrlMap[app];
-
-            if (!baseUrl) return `${baseUrl}/success?session_id={CHECKOUT_SESSION_ID}`;
-
-            switch (planType) {
-                case 'email/warmup':
-                    return `${baseUrl}/email-success?session_id={CHECKOUT_SESSION_ID}`;
-                case 'kampaign-main':
-                    return `${baseUrl}/kampaign-success?session_id={CHECKOUT_SESSION_ID}`;
-                case 'gps':
-                    return `${baseUrl}/gps-success?session_id={CHECKOUT_SESSION_ID}`;
-                case 'getsalesgpt':
-                    return `${baseUrl}/salesgpt-success?session_id={CHECKOUT_SESSION_ID}`;
-                case 'onboarding-kai':
-                    return `${baseUrl}/get-started/success?session_id={CHECKOUT_SESSION_ID}`;
-                default:
-                    return `${baseUrl}/success?session_id={CHECKOUT_SESSION_ID}`;
-            }
-        };
-
-        // �� Helper function to get sandbox URLs
+        // 4) Helper functions for URLs
         const getSandboxUrl = (app) => {
-            const sandboxUrls = {
-                kampaignai: 'https://kampaign.onepgr.com',
-                gps: 'http://localhost:4200',
-                getsalesgpt: 'http://localhost:4200'
-            };
+            const sandboxUrls = { kampaignai: 'https://kampaign.onepgr.com', gps: 'http://localhost:4200', getsalesgpt: 'http://localhost:4200' };
             return sandboxUrls[app] || 'https://kampaign.onepgr.com';
         };
-
-        // 🆕 Update Cancel URL function too
+        const getSuccessUrl = (app, planType, isSandbox) => {
+            const baseUrl = isSandbox ? getSandboxUrl(app) : appUrlMap[app];
+            switch (planType) {
+                case 'email/warmup': return `${baseUrl}/email-success?session_id={CHECKOUT_SESSION_ID}`;
+                case 'kampaign-main': return `${baseUrl}/kampaign-success?session_id={CHECKOUT_SESSION_ID}`;
+                case 'gps': return `${baseUrl}/gps-success?session_id={CHECKOUT_SESSION_ID}`;
+                case 'getsalesgpt': return `${baseUrl}/sales-success?session_id={CHECKOUT_SESSION_ID}`;
+                case 'onboarding-kai': return `${baseUrl}/get-started/success?session_id={CHECKOUT_SESSION_ID}`;
+                default: return `${baseUrl}/success?session_id={CHECKOUT_SESSION_ID}`;
+            }
+        };
         const getCancelUrl = (app, planType, isSandbox) => {
             const baseUrl = isSandbox ? getSandboxUrl(app) : appUrlMap[app];
-
-            if (!baseUrl) return `${baseUrl}/cancel`;
-
             switch (planType) {
-                case 'email/warmup':
-                    return `${baseUrl}/cancel`;
-                case 'kampaign-main':
-                    return `${baseUrl}/cancel`;
-                case 'gps':
-                    return `${baseUrl}/cancel`;
-                case 'getsalesgpt':
-                    return `${baseUrl}/cancelg`;
-                case 'onboarding-kai':
-                    return `${baseUrl}/cancel`;
-                default:
-                    return `${baseUrl}/pricing`;
+                case 'getsalesgpt': return `${baseUrl}/cancelg`;
+                default: return `${baseUrl}/cancel`;
             }
         };
 
-        // 3) Create Checkout session with customer if available
+        // 5) Build line items (supports both single and multiple priceIds)
+        const lineItems = Array.isArray(priceIds) && priceIds.length > 0
+            ? priceIds.map(p => ({ price: p, quantity }))
+            : [{ price: priceId, quantity }];
+
+        // 6) Create checkout session payload
         const sessionPayload = {
             mode: 'subscription',
             payment_method_types: ['card'],
-            line_items: [{ price: priceId, quantity }],
-            success_url: getSuccessUrl(app, planType, isSandbox), // 🆕 Dynamic success URL
-            cancel_url: getCancelUrl(app, planType, isSandbox),   // �� Dynamic cancel URL
-            metadata: {
-                userId,
-                app,
-                planType: planType || 'unknown', // 🆕 Store plan type
-                environment: isSandbox ? 'sandbox' : 'production',
-                sandbox: isSandbox,
-                trialPeriodDays: trialPeriodDays || 0 // Log it for reference
-            },
-            allow_promotion_codes: true, // optional
+            line_items: lineItems,
+            success_url: getSuccessUrl(app, planType, isSandbox),
+            cancel_url: getCancelUrl(app, planType, isSandbox),
+            metadata: { userId, app, planType: planType || 'unknown', environment, sandbox: isSandbox, trialPeriodDays: trialPeriodDays || 0 },
+            allow_promotion_codes: true
         };
 
-        // 4) 🔥 Add free trial configuration if specified
+        // Add free trial if specified
         if (trialPeriodDays && trialPeriodDays > 0) {
-            sessionPayload.subscription_data = {
-                trial_period_days: trialPeriodDays
-            };
-            console.log(`[${isSandbox ? 'SANDBOX' : 'PRODUCTION'}] Adding free trial of ${trialPeriodDays} days to checkout`);
+            sessionPayload.subscription_data = { trial_period_days: trialPeriodDays };
         }
 
-        // If we have a customer ID, attach them so saved cards show up
-        if (customerId) {
-            sessionPayload.customer = customerId;
-            console.log(`[${isSandbox ? 'SANDBOX' : 'PRODUCTION'}] Attaching existing customer ${customerId} to checkout session`);
-        } else {
-            console.log(`[${isSandbox ? 'SANDBOX' : 'PRODUCTION'}] 📝 No customer ID available, Stripe will create new customer during checkout`);
-        }
+        if (customerId) sessionPayload.customer = customerId;
 
+        // 7) Create session
         const session = await stripe.checkout.sessions.create(sessionPayload);
 
-        // Store checkout session info for tracking
+        // Store session info in DB
         if (customerId) {
-            await Customer.updateOne(
-                { userId, environment },
-                { $set: { lastCheckoutSessionId: session.id } }
-            );
-            console.log(`[${isSandbox ? 'SANDBOX' : 'PRODUCTION'}] 📝 Updated customer record with checkout session ${session.id}`);
-        } else {
-            // If no customer ID, we'll need to update it later when the webhook processes
-            console.log(`[${isSandbox ? 'SANDBOX' : 'PRODUCTION'}] ⏳ Customer record will be updated when webhook processes checkout completion`);
+            await Customer.updateOne({ userId, environment }, { $set: { lastCheckoutSessionId: session.id } });
         }
 
         return res.json({
             mode: 'checkout',
             url: session.url,
             environment: isSandbox ? 'sandbox' : 'production',
-            customerId: customerId,
+            customerId,
             planType: planType || 'unknown',
-            trialPeriodDays: trialPeriodDays || 0, // Inform the frontend
+            trialPeriodDays: trialPeriodDays || 0,
             successUrl: getSuccessUrl(app, planType, isSandbox),
             cancelUrl: getCancelUrl(app, planType, isSandbox),
             appUrls: appUrlMap
         });
+
     } catch (err) {
         console.error(`[${isSandboxMode(req) ? 'SANDBOX' : 'PRODUCTION'}] Stripe error:`, err);
         res.status(500).json({ error: err.message });
