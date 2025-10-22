@@ -939,40 +939,66 @@ router.post('/domain/create-checkout-session', async (req, res) => {
 });
 
 // Helper functions for plan type detection
-function determinePlanType(productData, priceData) {
+function determinePlanType(productData, priceData, metadataPlanType) {
     const productName = (productData?.name || '').toLowerCase();
     const priceNickname = (priceData?.nickname || '').toLowerCase();
     const planMetadata = (priceData?.metadata?.Plan || priceData?.metadata?.plan || '').toLowerCase();
+    const metadataPlan = (metadataPlanType || '').toLowerCase();
     
-    // Check for warmup-related keywords
-    if (productName.includes('warmup') || priceNickname.includes('warmup') || planMetadata.includes('warmup')) {
+    // PRIORITY 1: Check metadata plan type first (most reliable)
+    if (metadataPlan === 'warmup-only') {
+        return 'warmup_only';
+    }
+    if (metadataPlan === 'email-only') {
+        return 'email_only';
+    }
+    if (metadataPlan === 'email/warmup' || metadataPlan === 'email_with_warmup') {
         return 'email_with_warmup';
     }
     
-    // Check for email-only keywords
-    if (productName.includes('email') && !productName.includes('warmup')) {
+    // PRIORITY 2: Check for email + warmup combination
+    if ((productName.includes('email') && productName.includes('warmup')) || 
+        (metadataPlan.includes('email') && metadataPlan.includes('warmup'))) {
+        return 'email_with_warmup';
+    }
+    
+    // PRIORITY 3: Check for warmup-only (no email mentioned)
+    if ((productName.includes('warmup') && !productName.includes('email')) || 
+        (metadataPlan.includes('warmup') && !metadataPlan.includes('email'))) {
+        return 'warmup_only';
+    }
+    
+    // PRIORITY 4: Check for email-only (no warmup mentioned)
+    if ((productName.includes('email') && !productName.includes('warmup')) || 
+        (metadataPlan.includes('email') && !metadataPlan.includes('warmup'))) {
         return 'email_only';
+    }
+    
+    // PRIORITY 5: General warmup detection (fallback)
+    if (productName.includes('warmup') || priceNickname.includes('warmup') || planMetadata.includes('warmup')) {
+        return 'warmup_only'; // Changed from email_with_warmup to warmup_only
     }
     
     // Default fallback
     return 'standard';
 }
 
-function extractPlanFeatures(productData, priceData, subscriptionItem) {
+function extractPlanFeatures(productData, priceData, subscriptionItem, metadataPlanType) {
     const features = [];
     const productName = (productData?.name || '').toLowerCase();
     const description = (productData?.description || '').toLowerCase();
+    const metadataPlan = (metadataPlanType || '').toLowerCase();
     
     // Get quantity from subscription item (default to 1 if not found)
     const quantity = subscriptionItem?.quantity || 1;
     
     // Email features
-    if (productName.includes('email') || description.includes('email')) {
+    if (productName.includes('email') || description.includes('email') || metadataPlan.includes('email')) {
         features.push(`email_accounts: ${quantity}`);
     }
     
     // Warmup features
-    if (productName.includes('warmup') || description.includes('warmup')) {
+    if (productName.includes('warmup') || description.includes('warmup') || metadataPlan.includes('warmup')) {
         features.push(`warmup_inbox: ${quantity}`);
     }
     
@@ -988,26 +1014,28 @@ function extractPlanFeatures(productData, priceData, subscriptionItem) {
     return features;
 }
 
-function isEmailOnlyPlan(productData, priceData) {
-    const planType = determinePlanType(productData, priceData);
+function isEmailOnlyPlan(productData, priceData, metadataPlanType) {
+    const planType = determinePlanType(productData, priceData, metadataPlanType);
     return planType === 'email_only';
 }
 
-function isEmailWithWarmupPlan(productData, priceData) {
-    const planType = determinePlanType(productData, priceData);
+function isEmailWithWarmupPlan(productData, priceData, metadataPlanType) {
+    const planType = determinePlanType(productData, priceData, metadataPlanType);
     return planType === 'email_with_warmup';
 }
 
-function getPlanCategory(productData, priceData) {
-    const planType = determinePlanType(productData, priceData);
+function getPlanCategory(productData, priceData, metadataPlanType) {
+    const planType = determinePlanType(productData, priceData, metadataPlanType);
     
     switch (planType) {
         case 'email_only':
             return 'email_services';
         case 'email_with_warmup':
             return 'email_services_with_warmup';
+        case 'warmup_only':
+            return 'warmup_services';
         default:
-            return 'general_services';
+            return 'others';
     }
 }
 
@@ -1026,7 +1054,7 @@ router.post('/get-subscription-from-session', async (req, res) => {
 
         // Retrieve the session with expanded subscription data
         const session = await stripe.checkout.sessions.retrieve(sessionId, {
-            expand: ['subscription', 'customer', 'line_items']
+            expand: ['subscription', 'customer', 'line_items', 'line_items.data.price.product']
         });
 
         console.log('[get-subscription-from-session] Session retrieved:', {
@@ -1127,7 +1155,121 @@ router.post('/get-subscription-from-session', async (req, res) => {
                     console.error('[get-subscription-from-session] Error logging domain purchase data:', logError);
                 }
             } else {
-                // Generic one-time payment
+                // Generic one-time payment - return same structure as subscription
+                console.log('[get-subscription-from-session] One-time payment detected, returning structured response');
+                
+                // Get line items to extract product information
+                const lineItems = session.line_items?.data || [];
+                let productData = null;
+                let priceData = null;
+                
+                console.log('[get-subscription-from-session] Line items:', lineItems.length);
+                
+                if (lineItems.length > 0) {
+                    const firstItem = lineItems[0];
+                    priceData = firstItem.price;
+                    console.log('[get-subscription-from-session] Price data:', priceData);
+                    
+                    if (priceData && priceData.product) {
+                        productData = priceData.product;
+                        console.log('[get-subscription-from-session] Product data:', productData);
+                    }
+                }
+                
+                // Fallback: if no product data, try to get it from metadata or create basic info
+                if (!productData && session.metadata?.planType) {
+                    productData = {
+                        name: session.metadata.planType,
+                        description: ''
+                    };
+                }
+                
+                // Additional fallback: use session metadata for plan detection
+                const planTypeFromMetadata = session.metadata?.planType || 'unknown';
+                console.log('[get-subscription-from-session] Plan type from metadata:', planTypeFromMetadata);
+                
+                // Helper function to safely format dates
+                const safeFormatDate = (timestamp) => {
+                    if (!timestamp) return null;
+                    try {
+                        const date = new Date(timestamp * 1000);
+                        return {
+                            iso: date.toISOString(),
+                            formatted: date.toDateString()
+                        };
+                    } catch (e) {
+                        console.warn(`Invalid date conversion for timestamp: ${timestamp}`);
+                        return null;
+                    }
+                };
+                
+                const createdAt = safeFormatDate(session.created);
+                
+                // Build response in same format as subscription
+                const response = {
+                    checkout: {
+                        id: session.id,
+                        status: session.status || 'unknown',
+                        paymentStatus: session.payment_status || 'unknown'
+                    },
+                    subscription: {
+                        id: session.id, // Use session ID as subscription ID for one-time payments
+                        status: session.status || 'completed',
+                        plan: {
+                            id: priceData?.id || 'one-time-payment',
+                            name: productData?.name || priceData?.nickname || 'One-time Payment',
+                            description: productData?.description || '',
+                            amount: session.amount_total ? session.amount_total / 100 : 0,
+                            currency: session.currency || 'usd',
+                            interval: 'one-time',
+                            planType: session.metadata?.planType || 'one-time'
+                        },
+                        billing: {
+                            nextBillingDate: null,
+                            nextBillingDateFormatted: 'N/A',
+                            currentPeriodStart: createdAt?.iso || null,
+                            currentPeriodEnd: createdAt?.iso || null,
+                            cancelAtPeriodEnd: false,
+                            trialEnd: null,
+                            invoice: {
+                                id: session.payment_intent || null,
+                                hosted_invoice_url: null,
+                                invoice_pdf: null,
+                                status: session.payment_status || 'paid',
+                                amount_paid: session.amount_total ? session.amount_total / 100 : null,
+                                currency: session.currency || 'usd'
+                            }
+                        },
+                        customer: session.customer ? {
+                            id: typeof session.customer === 'object' ? session.customer.id : session.customer,
+                            email: typeof session.customer === 'object' ? session.customer.email : null,
+                            name: typeof session.customer === 'object' ? session.customer.name : null
+                        } : null,
+                        payment: {
+                            paymentStatus: session.payment_status || 'paid',
+                            paymentMethod: session.payment_method_types?.[0] || 'card',
+                            amountTotal: session.amount_total ? session.amount_total / 100 : null
+                        },
+                        refund: null,
+                        invoice: {
+                            id: session.payment_intent || null,
+                            hosted_invoice_url: null,
+                            invoice_pdf: null,
+                            status: session.payment_status || 'paid',
+                            amount_paid: session.amount_total ? session.amount_total / 100 : null,
+                            currency: session.currency || 'usd'
+                        },
+                        createdAt: createdAt?.iso || null
+                    },
+                    items: {
+                        planType: determinePlanType(productData, priceData, planTypeFromMetadata),
+                        features: extractPlanFeatures(productData, priceData, { quantity: 1 }, planTypeFromMetadata),
+                        isEmailOnly: isEmailOnlyPlan(productData, priceData, planTypeFromMetadata),
+                        isEmailWithWarmup: isEmailWithWarmupPlan(productData, priceData, planTypeFromMetadata),
+                        planCategory: getPlanCategory(productData, priceData, planTypeFromMetadata)
+                    }
+                };
+
                 // Log the one-time payment response
                 try {
                     fileLogger.logSubscriptionPayment({
@@ -1146,25 +1288,15 @@ router.post('/get-subscription-from-session', async (req, res) => {
                         metadata: {
                             sessionType: 'one-time-payment',
                             paymentStatus: session.payment_status,
-                            sessionStatus: session.status
+                            sessionStatus: session.status,
+                            planName: productData?.name || 'One-time Payment'
                         }
                     });
                 } catch (logError) {
                     console.error('[get-subscription-from-session] Error logging one-time payment data:', logError);
                 }
 
-                return res.status(400).json({
-                    error: 'This session is for a one-time payment, not a subscription',
-                    sessionType: 'one-time-payment',
-                    sessionData: {
-                        id: session.id,
-                        status: session.status,
-                        paymentStatus: session.payment_status,
-                        amount: session.amount_total ? session.amount_total / 100 : null,
-                        currency: session.currency,
-                        metadata: session.metadata
-                    }
-                });
+                return res.json(response);
             }
         }
 
@@ -1448,11 +1580,11 @@ router.post('/get-subscription-from-session', async (req, res) => {
                 createdAt: createdAt?.iso || null
             },
             items: {
-                planType: determinePlanType(productData, priceData),
-                features: extractPlanFeatures(productData, priceData, subscription.items.data[0]),
-                isEmailOnly: isEmailOnlyPlan(productData, priceData),
-                isEmailWithWarmup: isEmailWithWarmupPlan(productData, priceData),
-                planCategory: getPlanCategory(productData, priceData)
+                planType: determinePlanType(productData, priceData, session.metadata?.planType),
+                features: extractPlanFeatures(productData, priceData, subscription.items.data[0], session.metadata?.planType),
+                isEmailOnly: isEmailOnlyPlan(productData, priceData, session.metadata?.planType),
+                isEmailWithWarmup: isEmailWithWarmupPlan(productData, priceData, session.metadata?.planType),
+                planCategory: getPlanCategory(productData, priceData, session.metadata?.planType)
             }
         };
 
