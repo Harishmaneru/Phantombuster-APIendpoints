@@ -2785,7 +2785,7 @@ router.post('/create-checkout-session-by-app', async (req, res) => {
 
         // 2) App URL map + validation
         const appUrlMap = isSandbox ? {
-            kampaignai: 'https://kampaign.onepgr.com',
+            kampaignai: 'http://localhost:4200',
             gps: 'http://localhost:4200',
             getsalesgpt: 'http://localhost:4200',
         } : {
@@ -2837,8 +2837,8 @@ router.post('/create-checkout-session-by-app', async (req, res) => {
 
         // 4) Helper functions for URLs
         const getSandboxUrl = (app) => {
-            const sandboxUrls = { kampaignai: 'https://kampaign.onepgr.com', gps: 'http://localhost:4200', getsalesgpt: 'http://localhost:4200' };
-            return sandboxUrls[app] || 'https://kampaign.onepgr.com';
+            const sandboxUrls = { kampaignai: 'http://localhost:4200', gps: 'http://localhost:4200', getsalesgpt: 'http://localhost:4200' };
+            return sandboxUrls[app] || 'http://localhost:4200';
         };
         const getSuccessUrl = (app, planType, isSandbox) => {
             const baseUrl = isSandbox ? getSandboxUrl(app) : appUrlMap[app];
