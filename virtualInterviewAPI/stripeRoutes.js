@@ -3174,6 +3174,20 @@ router.post('/create-checkout-session-by-app', async (req, res) => {
             await Customer.updateOne({ userId, environment }, { $set: { lastCheckoutSessionId: session.id } });
         }
 
+        // 8) CRITICAL: Store plan type in customer record for later retrieval
+        if (customerId && planType) {
+            await Customer.updateOne(
+                { userId, environment },
+                { $set: { 
+                    lastPlanType: planType,
+                    lastCheckoutPlanType: planType,
+                    lastCheckoutSessionId: session.id,
+                    lastCheckoutTimestamp: new Date()
+                }}
+            );
+            console.log(`[${isSandbox ? 'SANDBOX' : 'PRODUCTION'}] 🚨 CRITICAL: Stored planType '${planType}' in customer record for user ${userId}`);
+        }
+
         return res.json({
             mode: sessionMode,
             url: session.url,
@@ -3826,6 +3840,7 @@ router.post('/get-user-payment-info', async (req, res) => {
                     }
                 } else {
                     console.log(`🔍 Invoice ${inv.id} - No subscription ID found, trying to find subscription by customer and price`);
+                    console.log(`🔍 Invoice customer: ${inv.customer}, line items: ${lineItems.length}`);
                     
                     // Try to find subscription by customer and price ID from line items
                     if (inv.customer && lineItems.length > 0) {
@@ -3836,12 +3851,17 @@ router.post('/get-user-payment-info', async (req, res) => {
                                 limit: 10
                             });
                             
+                            console.log(`🔍 Found ${subscriptions.data.length} active subscriptions for customer ${inv.customer}`);
+                            
                             // Look for subscription with matching price ID
-                            const matchingSubscription = subscriptions.data.find(sub => 
-                                sub.items.data.some(item => 
+                            const matchingSubscription = subscriptions.data.find(sub => {
+                                const hasMatchingPrice = sub.items.data.some(item => 
                                     lineItems.some(invItem => invItem.price?.id === item.price.id)
-                                )
-                            );
+                                );
+                                console.log(`🔍 Checking subscription ${sub.id} - has matching price: ${hasMatchingPrice}`);
+                                console.log(`🔍 Subscription ${sub.id} metadata:`, sub.metadata);
+                                return hasMatchingPrice;
+                            });
                             
                             if (matchingSubscription) {
                                 subscriptionMetadata = matchingSubscription.metadata;
@@ -3853,6 +3873,7 @@ router.post('/get-user-payment-info', async (req, res) => {
                                 if (inv.payment_intent) {
                                     try {
                                         const paymentIntent = await stripe.paymentIntents.retrieve(inv.payment_intent);
+                                        console.log(`🔍 Payment intent ${inv.payment_intent} metadata:`, paymentIntent.metadata);
                                         if (paymentIntent.metadata?.planType) {
                                             subscriptionMetadata = { planType: paymentIntent.metadata.planType };
                                             console.log(`🔍 Found payment intent metadata:`, subscriptionMetadata);
@@ -3866,6 +3887,19 @@ router.post('/get-user-payment-info', async (req, res) => {
                                 if (!subscriptionMetadata && inv.metadata?.planType) {
                                     subscriptionMetadata = { planType: inv.metadata.planType };
                                     console.log(`🔍 Found invoice metadata:`, subscriptionMetadata);
+                                }
+                                
+                                // CRITICAL FALLBACK: Use customer record's stored plan type
+                                if (!subscriptionMetadata && inv.customer) {
+                                    try {
+                                        const customerRecord = await Customer.findOne({ customerId: inv.customer });
+                                        if (customerRecord?.lastPlanType) {
+                                            subscriptionMetadata = { planType: customerRecord.lastPlanType };
+                                            console.log(`🚨 CRITICAL FALLBACK: Using customer record planType: ${customerRecord.lastPlanType}`);
+                                        }
+                                    } catch (error) {
+                                        console.warn(`Could not fetch customer record for ${inv.customer}:`, error.message);
+                                    }
                                 }
                             }
                         } catch (error) {
@@ -3896,17 +3930,31 @@ router.post('/get-user-payment-info', async (req, res) => {
                         console.log(`⚠️ Using product data planType: ${planType} for item: ${item.description}`);
                     } else {
                         // Fallback to description-based detection
-                        planType = item.description?.toLowerCase().includes('warmup') ? 
-                                 (item.description?.toLowerCase().includes('email') ? 'email_with_warmup' : 'warmup_only') : 
-                                 'standard';
+                        const desc = item.description?.toLowerCase() || '';
+                        if (desc.includes('warmup') && desc.includes('email')) {
+                            planType = 'email_with_warmup';
+                        } else if (desc.includes('warmup') && !desc.includes('email')) {
+                            planType = 'warmup_only';
+                        } else if (desc.includes('email') && !desc.includes('warmup')) {
+                            planType = 'email_only';
+                        } else {
+                            planType = 'standard';
+                        }
                         console.log(`⚠️ Using description fallback planType: ${planType} for item: ${item.description}`);
+                    }
+
+                    // CRITICAL: If we have subscription metadata, use it and override everything else
+                    if (subscriptionMetadata?.planType) {
+                        planType = subscriptionMetadata.planType;
+                        console.log(`🚨 OVERRIDE: Using subscription metadata planType: ${planType} for item: ${item.description}`);
                     }
 
                     // Detect if this is a warmup item based on plan type and description
                     const isWarmup = planType === 'warmup_only' || 
                                    planType === 'email_with_warmup' ||
                                    item.description?.toLowerCase().includes('kampaignai-warmup') ||
-                                   item.description?.toLowerCase().includes('kampaignai');
+                                   (item.description?.toLowerCase().includes('kampaignai') && 
+                                    item.description?.toLowerCase().includes('warmup'));
 
                     return {
                         description: item.description || 'Subscription item',
@@ -3922,6 +3970,7 @@ router.post('/get-user-payment-info', async (req, res) => {
 
                 // Calculate totals
                 const totalAmount = detailedItems.reduce((sum, item) => sum + (item.amount * item.quantity), 0);
+            console.log(`🔍 Invoice ${inv.id} - Calculated totalAmount: ${totalAmount}, Invoice amount: ${inv.amount_paid / 100}`);
                 const warmupItems = detailedItems.filter(item => item.isWarmup);
                 const hasWarmup = warmupItems.length > 0;
 
@@ -4142,6 +4191,19 @@ router.post('/get-user-payment-info', async (req, res) => {
                             planCategory = getPlanCategory(productData, plan, sub.metadata?.planType);
                         } catch (error) {
                             console.warn(`Could not fetch product data for ${plan.product}:`, error.message);
+                        }
+
+                        // CRITICAL FALLBACK: Use customer record's stored plan type for subscriptions
+                        if (!sub.metadata?.planType && customerId) {
+                            try {
+                                const customerRecord = await Customer.findOne({ customerId });
+                                if (customerRecord?.lastPlanType) {
+                                    planType = customerRecord.lastPlanType;
+                                    console.log(`🚨 CRITICAL FALLBACK: Using customer record planType for subscription: ${customerRecord.lastPlanType}`);
+                                }
+                            } catch (error) {
+                                console.warn(`Could not fetch customer record for subscription:`, error.message);
+                            }
                         }
 
                         return {
