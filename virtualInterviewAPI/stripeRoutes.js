@@ -3117,6 +3117,48 @@ router.post('/create-checkout-session-by-app', async (req, res) => {
             allow_promotion_codes: true
         };
 
+        // 8.1) Add invoice creation for one-time payments (especially warmup services)
+        if (sessionMode === 'payment') {
+            console.log(`[${isSandbox ? 'SANDBOX' : 'PRODUCTION'}] Adding invoice creation for one-time payment`);
+            
+            sessionPayload.invoice_creation = {
+                enabled: true,
+                invoice_data: {
+                    metadata: {
+                        userId,
+                        app,
+                        planType: planType || 'unknown',
+                        environment,
+                        sandbox: isSandbox,
+                        paymentType: 'one_time',
+                        serviceType: planType === 'warmup-only' ? 'warmup_service' : 
+                                   planType === 'email-only' ? 'email_service' :
+                                   planType === 'email_with_warmup' ? 'email_warmup_service' : 'general_service'
+                    },
+                    footer: planType === 'warmup-only' ? 'Thank you for your warmup service purchase' :
+                           planType === 'email-only' ? 'Thank you for your email service purchase' :
+                           planType === 'email_with_warmup' ? 'Thank you for your email + warmup service purchase' :
+                           'Thank you for your purchase',
+                    custom_fields: [
+                        {
+                            name: 'Service Type',
+                            value: planType === 'warmup-only' ? 'Warmup Service' :
+                                   planType === 'email-only' ? 'Email Service' :
+                                   planType === 'email_with_warmup' ? 'Email + Warmup Service' : 'General Service'
+                        },
+                        {
+                            name: 'Plan Type',
+                            value: planType || 'Unknown'
+                        },
+                        {
+                            name: 'Environment',
+                            value: isSandbox ? 'Sandbox' : 'Production'
+                        }
+                    ]
+                }
+            };
+        }
+
         // Add free trial if specified (only for subscription mode)
         if (trialPeriodDays && trialPeriodDays > 0 && sessionMode === 'subscription') {
             sessionPayload.subscription_data = { trial_period_days: trialPeriodDays };
@@ -3768,14 +3810,139 @@ router.post('/get-user-payment-info', async (req, res) => {
                 invoices = customerInvoices.data;
             }
 
-            response.billingHistory = invoices.map(inv => ({
-                id: inv.id,
-                amount: inv.amount_paid / 100,
-                currency: inv.currency.toUpperCase(),
-                status: inv.status,
-                date: formatStripeDate(inv.created),
-                invoiceUrl: inv.hosted_invoice_url,
-                description: inv.lines?.data[0]?.description || 'Subscription payment'
+            response.billingHistory = await Promise.all(invoices.map(async (inv) => {
+                // Get detailed line items for each invoice
+                const lineItems = inv.lines?.data || [];
+                
+                // Try to get subscription metadata for accurate plan type detection
+                let subscriptionMetadata = null;
+                if (inv.subscription) {
+                    try {
+                        const subscription = await stripe.subscriptions.retrieve(inv.subscription);
+                        subscriptionMetadata = subscription.metadata;
+                        console.log(`🔍 Invoice ${inv.id} - Subscription ${inv.subscription} metadata:`, subscriptionMetadata);
+                    } catch (error) {
+                        console.warn(`Could not fetch subscription metadata for ${inv.subscription}:`, error.message);
+                    }
+                } else {
+                    console.log(`🔍 Invoice ${inv.id} - No subscription ID found, trying to find subscription by customer and price`);
+                    
+                    // Try to find subscription by customer and price ID from line items
+                    if (inv.customer && lineItems.length > 0) {
+                        try {
+                            const subscriptions = await stripe.subscriptions.list({
+                                customer: inv.customer,
+                                status: 'active',
+                                limit: 10
+                            });
+                            
+                            // Look for subscription with matching price ID
+                            const matchingSubscription = subscriptions.data.find(sub => 
+                                sub.items.data.some(item => 
+                                    lineItems.some(invItem => invItem.price?.id === item.price.id)
+                                )
+                            );
+                            
+                            if (matchingSubscription) {
+                                subscriptionMetadata = matchingSubscription.metadata;
+                                console.log(`🔍 Found matching subscription ${matchingSubscription.id} metadata:`, subscriptionMetadata);
+                            } else {
+                                console.log(`🔍 No matching subscription found for customer ${inv.customer}`);
+                                
+                                // Try to get checkout session metadata as fallback
+                                if (inv.payment_intent) {
+                                    try {
+                                        const paymentIntent = await stripe.paymentIntents.retrieve(inv.payment_intent);
+                                        if (paymentIntent.metadata?.planType) {
+                                            subscriptionMetadata = { planType: paymentIntent.metadata.planType };
+                                            console.log(`🔍 Found payment intent metadata:`, subscriptionMetadata);
+                                        }
+                                    } catch (error) {
+                                        console.warn(`Could not fetch payment intent ${inv.payment_intent}:`, error.message);
+                                    }
+                                }
+                                
+                                // Try to get invoice metadata as another fallback
+                                if (!subscriptionMetadata && inv.metadata?.planType) {
+                                    subscriptionMetadata = { planType: inv.metadata.planType };
+                                    console.log(`🔍 Found invoice metadata:`, subscriptionMetadata);
+                                }
+                            }
+                        } catch (error) {
+                            console.warn(`Could not fetch subscriptions for customer ${inv.customer}:`, error.message);
+                        }
+                    }
+                }
+
+                const detailedItems = await Promise.all(lineItems.map(async (item) => {
+                    // Try to get product data for better plan type detection
+                    let productData = null;
+                    let planType = 'standard';
+                    
+                    if (item.price?.product) {
+                        try {
+                            productData = await stripe.products.retrieve(item.price.product);
+                        } catch (error) {
+                            console.warn(`Could not fetch product data for ${item.price.product}:`, error.message);
+                        }
+                    }
+
+                    // Use subscription metadata first, then product data, then description fallback
+                    if (subscriptionMetadata?.planType) {
+                        planType = subscriptionMetadata.planType;
+                        console.log(`✅ Using subscription metadata planType: ${planType} for item: ${item.description}`);
+                    } else if (productData) {
+                        planType = determinePlanType(productData, item.price, null);
+                        console.log(`⚠️ Using product data planType: ${planType} for item: ${item.description}`);
+                    } else {
+                        // Fallback to description-based detection
+                        planType = item.description?.toLowerCase().includes('warmup') ? 
+                                 (item.description?.toLowerCase().includes('email') ? 'email_with_warmup' : 'warmup_only') : 
+                                 'standard';
+                        console.log(`⚠️ Using description fallback planType: ${planType} for item: ${item.description}`);
+                    }
+
+                    // Detect if this is a warmup item based on plan type and description
+                    const isWarmup = planType === 'warmup_only' || 
+                                   planType === 'email_with_warmup' ||
+                                   item.description?.toLowerCase().includes('kampaignai-warmup') ||
+                                   item.description?.toLowerCase().includes('kampaignai');
+
+                    return {
+                        description: item.description || 'Subscription item',
+                        amount: item.amount / 100,
+                        currency: inv.currency.toUpperCase(),
+                        quantity: item.quantity || 1,
+                        priceId: item.price?.id || null,
+                        productId: item.price?.product || null,
+                        isWarmup: isWarmup,
+                        planType: planType
+                    };
+                }));
+
+                // Calculate totals
+                const totalAmount = detailedItems.reduce((sum, item) => sum + (item.amount * item.quantity), 0);
+                const warmupItems = detailedItems.filter(item => item.isWarmup);
+                const hasWarmup = warmupItems.length > 0;
+
+                return {
+                    id: inv.id,
+                    amount: inv.amount_paid / 100,
+                    currency: inv.currency.toUpperCase(),
+                    status: inv.status,
+                    date: formatStripeDate(inv.created),
+                    invoiceUrl: inv.hosted_invoice_url,
+                    description: inv.lines?.data[0]?.description || 'Subscription payment',
+                    // Add detailed breakdown
+                    lineItems: detailedItems,
+                    totalAmount: totalAmount,
+                    hasWarmup: hasWarmup,
+                    warmupItems: warmupItems,
+                    // Summary of items
+                    itemSummary: detailedItems.map(item => 
+                        `${item.description} - Qty ${item.quantity} - $${item.amount.toFixed(2)}`
+                    ).join(', ')
+                };
             }));
         }
 
@@ -3824,6 +3991,27 @@ router.post('/get-user-payment-info', async (req, res) => {
                 // Get accurate period dates
                 const { currentPeriodStart, currentPeriodEnd } = await getSubscriptionPeriodDates(primarySub);
 
+                // Fetch product data for primary subscription plan type detection
+                let primaryProductData = null;
+                let primaryPlanType = 'standard';
+                let primaryFeatures = [];
+                let primaryIsEmailWithWarmup = false;
+                let primaryIsWarmupOnly = false;
+                let primaryPlanCategory = 'standard';
+
+                try {
+                    primaryProductData = await stripe.products.retrieve(plan.product);
+                    
+                    // Determine plan type and features for primary subscription
+                    primaryPlanType = determinePlanType(primaryProductData, plan, primarySub.metadata?.planType);
+                    primaryFeatures = extractPlanFeatures(primaryProductData, plan, primarySub.items.data[0], primarySub.metadata?.planType);
+                    primaryIsEmailWithWarmup = isEmailWithWarmupPlan(primaryProductData, plan, primarySub.metadata?.planType);
+                    primaryIsWarmupOnly = primaryPlanType === 'warmup_only';
+                    primaryPlanCategory = getPlanCategory(primaryProductData, plan, primarySub.metadata?.planType);
+                } catch (error) {
+                    console.warn(`Could not fetch product data for primary subscription ${plan.product}:`, error.message);
+                }
+
                 // Get next payment date - use current_period_end if available
                 let nextPaymentDate = currentPeriodEnd ? formatStripeDate(currentPeriodEnd) : null;
                 let nextPaymentAmount = (plan.unit_amount / 100) * (primarySub.items.data[0].quantity || 1);
@@ -3869,7 +4057,20 @@ router.post('/get-user-payment-info', async (req, res) => {
                         currency: plan.currency.toUpperCase(),
                         quantity: primarySub.items.data[0].quantity || 1,
                         totalAmount: (plan.unit_amount / 100) * (primarySub.items.data[0].quantity || 1)
-                    }
+                    },
+                    // Add plan type and warmup details for next billing
+                    planType: primaryPlanType,
+                    features: primaryFeatures,
+                    isEmailWithWarmup: primaryIsEmailWithWarmup,
+                    isWarmupOnly: primaryIsWarmupOnly,
+                    planCategory: primaryPlanCategory,
+                    // Add warmup-specific information for next billing
+                    warmupDetails: primaryIsWarmupOnly || primaryIsEmailWithWarmup ? {
+                        hasWarmup: true,
+                        warmupType: primaryPlanType,
+                        warmupFeatures: primaryFeatures.filter(f => f.includes('warmup')),
+                        isWarmupWithWarmup: primaryPlanType === 'email_with_warmup'
+                    } : null
                 };
 
                 response.subscription = {
@@ -3895,7 +4096,20 @@ router.post('/get-user-payment-info', async (req, res) => {
                         currency: plan.currency.toUpperCase(),
                         quantity: primarySub.items.data[0].quantity || 1,
                         totalAmount: (plan.unit_amount / 100) * (primarySub.items.data[0].quantity || 1)
-                    }
+                    },
+                    // Add plan type and warmup details for primary subscription
+                    planType: primaryPlanType,
+                    features: primaryFeatures,
+                    isEmailWithWarmup: primaryIsEmailWithWarmup,
+                    isWarmupOnly: primaryIsWarmupOnly,
+                    planCategory: primaryPlanCategory,
+                    // Add warmup-specific information for primary subscription
+                    warmupDetails: primaryIsWarmupOnly || primaryIsEmailWithWarmup ? {
+                        hasWarmup: true,
+                        warmupType: primaryPlanType,
+                        warmupFeatures: primaryFeatures.filter(f => f.includes('warmup')),
+                        isWarmupWithWarmup: primaryPlanType === 'email_with_warmup'
+                    } : null
                 };
             }
 
@@ -3904,9 +4118,31 @@ router.post('/get-user-payment-info', async (req, res) => {
                 response.allSubscriptions = await Promise.all(
                     subscriptions.data.map(async (sub) => {
                         const plan = sub.items.data[0].price;
+                        const subscriptionItem = sub.items.data[0];
 
                         // Get accurate period dates for each subscription
                         const { currentPeriodStart, currentPeriodEnd } = await getSubscriptionPeriodDates(sub);
+
+                        // Fetch product data for plan type detection
+                        let productData = null;
+                        let planType = 'standard';
+                        let features = [];
+                        let isEmailWithWarmup = false;
+                        let isWarmupOnly = false;
+                        let planCategory = 'standard';
+
+                        try {
+                            productData = await stripe.products.retrieve(plan.product);
+                            
+                            // Determine plan type and features
+                            planType = determinePlanType(productData, plan, sub.metadata?.planType);
+                            features = extractPlanFeatures(productData, plan, subscriptionItem, sub.metadata?.planType);
+                            isEmailWithWarmup = isEmailWithWarmupPlan(productData, plan, sub.metadata?.planType);
+                            isWarmupOnly = planType === 'warmup_only';
+                            planCategory = getPlanCategory(productData, plan, sub.metadata?.planType);
+                        } catch (error) {
+                            console.warn(`Could not fetch product data for ${plan.product}:`, error.message);
+                        }
 
                         return {
                             subscriptionId: sub.id,
@@ -3929,7 +4165,20 @@ router.post('/get-user-payment-info', async (req, res) => {
                                 currency: plan.currency.toUpperCase(),
                                 quantity: sub.items.data[0].quantity || 1,
                                 totalAmount: (plan.unit_amount / 100) * (sub.items.data[0].quantity || 1)
-                            }
+                            },
+                            // Add plan type and warmup details
+                            planType: planType,
+                            features: features,
+                            isEmailWithWarmup: isEmailWithWarmup,
+                            isWarmupOnly: isWarmupOnly,
+                            planCategory: planCategory,
+                            // Add warmup-specific information
+                            warmupDetails: isWarmupOnly || isEmailWithWarmup ? {
+                                hasWarmup: true,
+                                warmupType: planType,
+                                warmupFeatures: features.filter(f => f.includes('warmup')),
+                                isWarmupWithWarmup: planType === 'email_with_warmup'
+                            } : null
                         };
                     })
                 );
