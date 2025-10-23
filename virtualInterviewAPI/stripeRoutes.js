@@ -1162,13 +1162,16 @@ router.post('/get-subscription-from-session', async (req, res) => {
                 const lineItems = session.line_items?.data || [];
                 let productData = null;
                 let priceData = null;
+                let quantity = 1; // Default quantity
                 
                 console.log('[get-subscription-from-session] Line items:', lineItems.length);
                 
                 if (lineItems.length > 0) {
                     const firstItem = lineItems[0];
                     priceData = firstItem.price;
+                    quantity = firstItem.quantity || 1; // Get actual quantity from line item
                     console.log('[get-subscription-from-session] Price data:', priceData);
+                    console.log('[get-subscription-from-session] Quantity:', quantity);
                     
                     if (priceData && priceData.product) {
                         productData = priceData.product;
@@ -1263,7 +1266,7 @@ router.post('/get-subscription-from-session', async (req, res) => {
                     },
                     items: {
                         planType: determinePlanType(productData, priceData, planTypeFromMetadata),
-                        features: extractPlanFeatures(productData, priceData, { quantity: 1 }, planTypeFromMetadata),
+                        features: extractPlanFeatures(productData, priceData, { quantity: quantity }, planTypeFromMetadata),
                         isEmailOnly: isEmailOnlyPlan(productData, priceData, planTypeFromMetadata),
                         isEmailWithWarmup: isEmailWithWarmupPlan(productData, priceData, planTypeFromMetadata),
                         planCategory: getPlanCategory(productData, priceData, planTypeFromMetadata)

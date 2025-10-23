@@ -1,0 +1,27 @@
+[
+  {
+    "id": "1761190584027_fuxxvwegp",
+    "timestamp": "2025-10-23T03:36:24.028Z",
+    "type": "subscription",
+    "userId": "4991",
+    "userEmail": "unknown",
+    "amount": 30,
+    "currency": "usd",
+    "status": "completed",
+    "stripeSessionId": "cs_test_b1Dn9qh48PPnS7uzoSFcxZ6hP49E6Zu1u9r1z9ewSlk02iUOFCqokLjcWy",
+    "paymentIntentId": "pi_3SLF6C4CXyekys3e0gJV413V",
+    "customerId": "cus_T1mav9kp14JcTc",
+    "systemInfo": {
+      "ipAddress": "::1",
+      "userAgent": "PostmanRuntime/7.49.0",
+      "apiEndpoint": "/get-subscription-from-session",
+      "requestMethod": "POST"
+    },
+    "metadata": {
+      "sessionType": "one-time-payment",
+      "paymentStatus": "paid",
+      "sessionStatus": "complete",
+      "planName": "KampaignAI-warmup"
+    }
+  }
+]
