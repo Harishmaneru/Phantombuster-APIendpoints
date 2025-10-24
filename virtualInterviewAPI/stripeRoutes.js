@@ -3984,7 +3984,6 @@ router.post('/get-user-payment-info', async (req, res) => {
                     description: inv.lines?.data[0]?.description || 'Subscription payment',
                     // Add detailed breakdown
                     lineItems: detailedItems,
-                    totalAmount: totalAmount,
                     hasWarmup: hasWarmup,
                     warmupItems: warmupItems,
                     // Summary of items
