@@ -2560,6 +2560,294 @@ router.get('/cpanel/validate-dmarc', async (req, res) => {
 });
 
 
+//Update DNS zone record API
+
+
+
+/**
+ * Get DNS Zone Records (dumpzone)
+ * This endpoint retrieves DNS zone records for a domain
+ * Useful to get line numbers for editing records
+ */
+router.get('/cpanel/dns-zone/:userId/:domain', async (req, res) => {
+  const { userId, domain } = req.params;
+
+  if (!userId || !domain) {
+    return res.status(400).json({
+      success: false,
+      error: 'userId and domain are required.'
+    });
+  }
+
+  if (!isValidDomain(domain)) {
+    return res.status(400).json({
+      success: false,
+      error: 'Invalid domain format.'
+    });
+  }
+
+  try {
+    // Verify user owns domain
+    const domainOwnership = await userOwnsDomain(userId, domain);
+    if (!domainOwnership) {
+      return res.status(403).json({
+        success: false,
+        error: 'Domain not registered to user or domain is not active.'
+      });
+    }
+
+    // Get DNS zone records using dumpzone
+    const result = await whmRequest('dumpzone', {
+      domain: domain.toLowerCase()
+    });
+
+    if (result.metadata && result.metadata.result === 1) {
+      return res.json({
+        success: true,
+        message: 'DNS zone records retrieved successfully',
+        domain: domain.toLowerCase(),
+        records: result.data,
+        metadata: result.metadata
+      });
+    } else {
+      const errorMsg = result.metadata?.reason || 'Unknown error from WHM API';
+      
+      return res.status(500).json({
+        success: false,
+        error: 'Failed to retrieve DNS zone records',
+        details: errorMsg
+      });
+    }
+
+  } catch (err) {
+    console.error('Failed to retrieve DNS zone:', err.message);
+    res.status(500).json({
+      success: false,
+      error: err.message,
+      details: err.response?.data || null
+    });
+  }
+});
+
+/**
+ * Smart Update or Add DNS Record (Upsert)
+ * Automatically fetches line number for existing records
+ * - Updates if exists
+ * - Adds new if not found
+ * Users don't need to know line numbers
+ */
+router.post('/cpanel/upsert-dns-record', async (req, res) => {
+  const { 
+    userId, 
+    domain, 
+    name, 
+    ttl = 14400, 
+    type = 'A',
+    address, // For A records
+    cname,   // For CNAME records
+    exchange, // For MX records
+    priority, // For MX records
+    txtdata,  // For TXT records
+    target    // For A6 records
+  } = req.body;
+
+  // Input validation
+  if (!userId || !domain || !name) {
+    return res.status(400).json({
+      success: false,
+      error: 'userId, domain, and name are required.'
+    });
+  }
+
+  if (!isValidDomain(domain)) {
+    return res.status(400).json({
+      success: false,
+      error: 'Invalid domain format.'
+    });
+  }
+
+  if (!Number.isInteger(ttl) || ttl < 1) {
+    return res.status(400).json({
+      success: false,
+      error: 'TTL must be a positive integer (>= 1).'
+    });
+  }
+
+  try {
+    // Step 1: Verify user owns domain
+    const domainOwnership = await userOwnsDomain(userId, domain);
+    if (!domainOwnership) {
+      return res.status(403).json({
+        success: false,
+        error: 'Domain not registered to user or domain is not active.'
+      });
+    }
+
+    // Step 2: Get existing zone records using dumpzone
+    const zone = await whmRequest('dumpzone', {
+      domain: domain.toLowerCase()
+    });
+
+    if (!zone.metadata || zone.metadata.result !== 1) {
+      throw new Error('Failed to retrieve DNS zone records');
+    }
+
+    const records = zone.data || [];
+
+    // Normalize record names (remove trailing dots for comparison)
+    const normalizeName = (n) => n ? n.replace(/\.$/, '').toLowerCase() : '';
+
+    // Step 3: Try to find existing record (by name + type)
+    const existing = records.find(
+      (r) => {
+        const recordName = normalizeName(r.name);
+        const recordType = r.type ? r.type.toUpperCase() : '';
+        const searchName = normalizeName(name);
+        const searchType = type.toUpperCase();
+        
+        return recordName === searchName && recordType === searchType;
+      }
+    );
+
+    console.log(`Found existing record:`, existing ? `Line ${existing.line}` : 'None');
+
+    // Step 4: Build common params
+    const params = {
+      domain: domain.toLowerCase(),
+      name: name.endsWith('.') ? name : name + '.',
+      ttl: ttl,
+      type: type.toUpperCase()
+    };
+
+    // Add type-specific values
+    switch (type.toUpperCase()) {
+      case 'A':
+        if (!address) {
+          return res.status(400).json({
+            success: false,
+            error: 'address is required for A records.'
+          });
+        }
+        params.address = address;
+        break;
+      case 'AAAA':
+        if (!address) {
+          return res.status(400).json({
+            success: false,
+            error: 'address is required for AAAA records.'
+          });
+        }
+        params.address = address;
+        break;
+      case 'CNAME':
+        if (!cname) {
+          return res.status(400).json({
+            success: false,
+            error: 'cname is required for CNAME records.'
+          });
+        }
+        params.cname = cname;
+        break;
+      case 'MX':
+        if (!exchange) {
+          return res.status(400).json({
+            success: false,
+            error: 'exchange is required for MX records.'
+          });
+        }
+        params.exchange = exchange;
+        if (priority !== undefined) {
+          params.priority = priority;
+        }
+        break;
+      case 'PTR':
+        if (!target) {
+          return res.status(400).json({
+            success: false,
+            error: 'target (ptrdname) is required for PTR records.'
+          });
+        }
+        params.ptrdname = target;
+        break;
+      case 'TXT':
+        if (!txtdata) {
+          return res.status(400).json({
+            success: false,
+            error: 'txtdata is required for TXT records.'
+          });
+        }
+        params.txtdata = txtdata;
+        break;
+      case 'A6':
+        if (!target) {
+          return res.status(400).json({
+            success: false,
+            error: 'target is required for A6 records.'
+          });
+        }
+        params.target = target;
+        break;
+      default:
+        return res.status(400).json({
+          success: false,
+          error: `Unsupported DNS record type: ${type}`
+        });
+    }
+
+    let result;
+    let isUpdate = false;
+
+    if (existing) {
+      // Step 5A: Update existing record
+      params.line = existing.line;
+      console.log(`Updating ${type} record for ${name} (line ${existing.line}) with params:`, params);
+      result = await whmRequest('editzonerecord', params);
+      isUpdate = true;
+    } else {
+      // Step 5B: Add new record if none found
+      console.log(`Adding new ${type} record for ${name} with params:`, params);
+      result = await whmRequest('addzonerecord', params);
+      isUpdate = false;
+    }
+
+    // Step 6: Check if the operation was successful
+    if (result.metadata && result.metadata.result === 1) {
+      return res.json({
+        success: true,
+        message: isUpdate ? 'DNS record updated successfully' : 'DNS record added successfully',
+        action: isUpdate ? 'updated' : 'added',
+        data: result.data,
+        metadata: result.metadata,
+        record: {
+          domain: domain.toLowerCase(),
+          name: params.name,
+          type: type.toUpperCase(),
+          ttl: ttl,
+          line: existing ? existing.line : 'new',
+          timestamp: new Date().toISOString()
+        }
+      });
+    } else {
+      const errorMsg = result.metadata?.reason || result.errors?.[0] || 'Unknown error from WHM API';
+      
+      return res.status(500).json({
+        success: false,
+        error: isUpdate ? 'Failed to update DNS record' : 'Failed to add DNS record',
+        details: errorMsg,
+        metadata: result.metadata
+      });
+    }
+
+  } catch (err) {
+    console.error('DNS upsert failed:', err.message);
+    res.status(500).json({
+      success: false,
+      error: err.message,
+      details: err.response?.data || null
+    });
+  }
+});
+
 
 module.exports = {
   router,
