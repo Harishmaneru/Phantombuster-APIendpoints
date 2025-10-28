@@ -71,7 +71,6 @@ const getInboxIdFromDB = async (userId, email) => {
   return warmupInbox.inbox_id;
 };
 
-
 router.post('/api/warmup/add-inbox', async (req, res) => {
   const {
     userId,
@@ -81,7 +80,7 @@ router.post('/api/warmup/add-inbox', async (req, res) => {
     sender_last
   } = req.body;
 
-  // Validation - According to API docs
+  // Validation
   if (!userId || !email || !password || !sender_first || !sender_last) {
     return res.status(400).json({
       status: "-1",
@@ -101,7 +100,7 @@ router.post('/api/warmup/add-inbox', async (req, res) => {
   try {
     await connectToMongoDB();
 
-    // Check if inbox already exists for this user and email
+    // Check if inbox already exists
     const existingInbox = await WarmupInbox.findOne({ userId, email });
     if (existingInbox) {
       return res.status(409).json({
@@ -115,37 +114,77 @@ router.post('/api/warmup/add-inbox', async (req, res) => {
       });
     }
 
-    // Always use hardcoded SSL hostname for consistent behavior
-    console.log('🔍 Using hardcoded SSL hostname for consistent SMTP/IMAP configuration...');
-
-    const smtpConfig = {
-      host: 'mail.server1.engagegptapp.com', // Hardcoded correct SSL hostname
-      port: 465,
-      username: email, // Always use email as username
-      password: password,
-      tls: true
+    // Extract domain from email
+    const domain = email.split('@')[1];
+    
+    // Define known external email providers
+    const externalProviders = {
+      // Namecheap PrivateEmail
+      'privateemail.com': { smtp: 'mail.privateemail.com', imap: 'mail.privateemail.com' },
+      
+      // Common email providers
+      'gmail.com': { smtp: 'smtp.gmail.com', imap: 'imap.gmail.com' },
+      'outlook.com': { smtp: 'smtp-mail.outlook.com', imap: 'outlook.office365.com' },
+      'hotmail.com': { smtp: 'smtp-mail.outlook.com', imap: 'outlook.office365.com' },
+      'yahoo.com': { smtp: 'smtp.mail.yahoo.com', imap: 'imap.mail.yahoo.com' },
+      'protonmail.com': { smtp: 'smtp.protonmail.com', imap: 'imap.protonmail.com' },
+      'zoho.com': { smtp: 'smtp.zoho.com', imap: 'imap.zoho.com' },
+      
+      // Add more as needed
     };
 
-    const imapConfig = {
-      host: 'mail.server1.engagegptapp.com', // Hardcoded correct SSL hostname
-      port: 993,
-      username: email, // Always use email as username
-      password: password,
-      tls: true
-    };
+    let smtpConfig, imapConfig;
 
-    console.log('✅ Using hardcoded SSL settings:', {
+    // Check if this domain uses a known external provider
+    const provider = externalProviders[domain];
+    
+    if (provider) {
+      console.log(`🌐 Detected external provider for ${domain}, using: ${provider.smtp}`);
+      smtpConfig = {
+        host: provider.smtp,
+        port: 465,
+        username: email,
+        password: password,
+        tls: true
+      };
+      imapConfig = {
+        host: provider.imap,
+        port: 993,
+        username: email,
+        password: password,
+        tls: true
+      };
+    } else {
+      // Use your internal mail server for domains purchased through your app
+      console.log(`🏢 Using internal mail server for ${domain}`);
+      smtpConfig = {
+        host: 'mail.server1.engagegptapp.com',
+        port: 465,
+        username: email,
+        password: password,
+        tls: true
+      };
+      imapConfig = {
+        host: 'mail.server1.engagegptapp.com',
+        port: 993,
+        username: email,
+        password: password,
+        tls: true
+      };
+    }
+
+    console.log('✅ Using mail settings:', {
       smtp: { host: smtpConfig.host, port: smtpConfig.port, username: smtpConfig.username },
       imap: { host: imapConfig.host, port: imapConfig.port, username: imapConfig.username }
     });
 
-    // Build payload for ADVANCED endpoint with exact structure as requested
+    // Build payload
     const payload = {
       email: email,
       sender_first: sender_first,
       sender_last: sender_last,
       plan: "basic",
-      tags: [], // Add empty tags array for consistency with advanced endpoint
+      tags: [],
       smtp: {
         host: smtpConfig.host,
         port: smtpConfig.port,
@@ -159,7 +198,6 @@ router.post('/api/warmup/add-inbox', async (req, res) => {
         username: email,
         tls: imapConfig.tls,
         password: password,
-
       },
       frequency: {
         starting_baseline: 2,
@@ -174,18 +212,16 @@ router.post('/api/warmup/add-inbox', async (req, res) => {
     console.log('Full Payload:', JSON.stringify(payload, null, 2));
     console.log('=== END PAYLOAD LOG ===');
 
-    // Make API call to ADVANCED endpoint
+    // Make API call
     const response = await axiosInstance.post('/inboxes/advanced', payload);
     console.log('Warmup Inbox API Response:', response.data);
 
-    // Handle response according to API docs
     if (response.data.code === 'created') {
-      // Store the response in MongoDB
       const warmupInboxData = new WarmupInbox({
         userId,
         email,
         inbox_id: response.data.inbox_id,
-        password, // Consider encrypting this before storage
+        password,
         sender_first,
         sender_last,
         status: response.data.code || 'created',
@@ -223,13 +259,12 @@ router.post('/api/warmup/add-inbox', async (req, res) => {
       error: error.response?.data?.error
     });
 
-    // Simple, single retry using common mail server patterns if SMTP/IMAP/config error
-    const shouldRetrySimpleFallback = [400, 422].includes(error.response?.status) ||
+    // Fallback logic - try domain-based mail servers
+    const shouldRetryFallback = [400, 422].includes(error.response?.status) ||
       ['smtp_connection_failed', 'imap_connection_failed', 'invalid_request'].includes(error.response?.data?.error);
 
-    if (shouldRetrySimpleFallback) {
+    if (shouldRetryFallback) {
       try {
-        // Extract domain from email and try common mail server patterns
         const domain = email.split('@')[1];
         const commonMailHosts = [
           `mail.${domain}`,
@@ -239,9 +274,7 @@ router.post('/api/warmup/add-inbox', async (req, res) => {
         ];
 
         let fallbackResponse = null;
-        let lastFallbackError = null;
 
-        // Try each common mail host pattern
         for (const host of commonMailHosts) {
           try {
             const fallbackPayload = {
@@ -278,72 +311,45 @@ router.post('/api/warmup/add-inbox', async (req, res) => {
             
             if (fallbackResponse.data?.code === 'created') {
               console.log(`✅ Fallback succeeded with ${host}`);
-              break;
+              
+              const warmupInboxData = new WarmupInbox({
+                userId,
+                email,
+                inbox_id: fallbackResponse.data.inbox_id,
+                password,
+                sender_first,
+                sender_last,
+                status: fallbackResponse.data.code || 'created',
+                plan: 'basic',
+                smtp_settings: { host, port: 465, username: email, tls: true },
+                imap_settings: { host, port: 993, username: email, tls: true },
+                warmup_response: fallbackResponse.data,
+                updated_at: new Date()
+              });
+
+              await warmupInboxData.save();
+
+              return res.status(201).json({
+                status: '1',
+                message: 'Inbox successfully added to warmup (fallback)',
+                data: {
+                  inbox_id: fallbackResponse.data.inbox_id,
+                  status: 'pending_activation',
+                  userId,
+                  stored_in_db: true
+                }
+              });
             }
           } catch (hostError) {
             console.log(`❌ ${host} failed:`, hostError.response?.data?.message);
-            lastFallbackError = hostError;
           }
         }
-
-        if (fallbackResponse && fallbackResponse.data?.code === 'created') {
-          const warmupInboxData = new WarmupInbox({
-            userId,
-            email,
-            inbox_id: fallbackResponse.data.inbox_id,
-            password,
-            sender_first,
-            sender_last,
-            status: fallbackResponse.data.code || 'created',
-            plan: 'basic',
-            frequency: {
-              starting_baseline: 2,
-              increase_per_day: 2,
-              max_sends_per_day: 15,
-              reply_rate: 9,
-              strategy: 'progressive'
-            },
-            smtp_settings: {
-              host: fallbackResponse.config?.data ? JSON.parse(fallbackResponse.config.data).smtp.host : 'unknown',
-              port: 465,
-              username: email,
-              tls: true
-            },
-            imap_settings: {
-              host: fallbackResponse.config?.data ? JSON.parse(fallbackResponse.config.data).imap.host : 'unknown',
-              port: 993,
-              username: email,
-              tls: true
-            },
-            warmup_response: fallbackResponse.data,
-            updated_at: new Date()
-          });
-
-          await warmupInboxData.save();
-
-          return res.status(201).json({
-            status: '1',
-            message: 'Inbox successfully added to warmup (fallback with domain-based hosts)',
-            data: {
-              inbox_id: fallbackResponse.data.inbox_id,
-              status: 'pending_activation',
-              next_steps: [
-                'Configure email client filters using filter_id',
-                'Verify DNS records (MX, SPF, DKIM)',
-                'Test SMTP/IMAP connectivity'
-              ],
-              userId,
-              stored_in_db: true
-            }
-          });
-        }
       } catch (fallbackError) {
-        console.error('All fallback attempts failed:', fallbackError.response?.data || fallbackError.message);
-        // fall through to return original error mapping below
+        console.error('All fallback attempts failed');
       }
     }
 
-    // Handle other error cases (including when fallback also failed)
+    // Return error
     const apiError = error.response?.data?.error || 'unknown_error';
     const statusCode = error.response?.status || 500;
 
@@ -362,7 +368,7 @@ router.post('/api/warmup/add-inbox', async (req, res) => {
     if (error.response?.status === 409) {
       errorMessage = 'Inbox already exists in Warmup Inbox service';
     } else if (error.response?.status === 401) {
-      errorMessage = 'Invalid API key. Please check your WARMUPINBOX_API_KEY configuration';
+      errorMessage = 'Invalid API key';
     }
 
     return res.status(errorMap[apiError] || statusCode).json({
@@ -373,6 +379,307 @@ router.post('/api/warmup/add-inbox', async (req, res) => {
     });
   }
 });
+// router.post('/api/warmup/add-inbox', async (req, res) => {
+//   const {
+//     userId,
+//     email,
+//     password,
+//     sender_first,
+//     sender_last
+//   } = req.body;
+
+//   // Validation - According to API docs
+//   if (!userId || !email || !password || !sender_first || !sender_last) {
+//     return res.status(400).json({
+//       status: "-1",
+//       message: "Missing required fields",
+//       details: {
+//         required_fields: {
+//           userId: "string",
+//           email: "valid email address",
+//           password: "string (min 8 chars)",
+//           sender_first: "string",
+//           sender_last: "string"
+//         }
+//       }
+//     });
+//   }
+
+//   try {
+//     await connectToMongoDB();
+
+//     // Check if inbox already exists for this user and email
+//     const existingInbox = await WarmupInbox.findOne({ userId, email });
+//     if (existingInbox) {
+//       return res.status(409).json({
+//         status: "-1",
+//         message: "Inbox already exists for this userId and email",
+//         data: {
+//           inbox_id: existingInbox.inbox_id,
+//           email: existingInbox.email,
+//           status: existingInbox.status
+//         }
+//       });
+//     }
+
+//     // Always use hardcoded SSL hostname for consistent behavior
+//     console.log('🔍 Using hardcoded SSL hostname for consistent SMTP/IMAP configuration...');
+
+//     const smtpConfig = {
+//       host: 'mail.server1.engagegptapp.com', // Hardcoded correct SSL hostname
+//       port: 465,
+//       username: email, // Always use email as username
+//       password: password,
+//       tls: true
+//     };
+
+//     const imapConfig = {
+//       host: 'mail.server1.engagegptapp.com', // Hardcoded correct SSL hostname
+//       port: 993,
+//       username: email, // Always use email as username
+//       password: password,
+//       tls: true
+//     };
+
+//     console.log('✅ Using hardcoded SSL settings:', {
+//       smtp: { host: smtpConfig.host, port: smtpConfig.port, username: smtpConfig.username },
+//       imap: { host: imapConfig.host, port: imapConfig.port, username: imapConfig.username }
+//     });
+
+//     // Build payload for ADVANCED endpoint with exact structure as requested
+//     const payload = {
+//       email: email,
+//       sender_first: sender_first,
+//       sender_last: sender_last,
+//       plan: "basic",
+//       tags: [], // Add empty tags array for consistency with advanced endpoint
+//       smtp: {
+//         host: smtpConfig.host,
+//         port: smtpConfig.port,
+//         username: email,
+//         tls: smtpConfig.tls,
+//         password: password,
+//       },
+//       imap: {
+//         host: imapConfig.host,
+//         port: imapConfig.port,
+//         username: email,
+//         tls: imapConfig.tls,
+//         password: password,
+
+//       },
+//       frequency: {
+//         starting_baseline: 2,
+//         increase_per_day: 2,
+//         max_sends_per_day: 15,
+//         reply_rate: 9,
+//         strategy: "progressive"
+//       }
+//     };
+
+//     console.log('=== SENDING PAYLOAD TO WARMUP INBOX (ADVANCED) ===');
+//     console.log('Full Payload:', JSON.stringify(payload, null, 2));
+//     console.log('=== END PAYLOAD LOG ===');
+
+//     // Make API call to ADVANCED endpoint
+//     const response = await axiosInstance.post('/inboxes/advanced', payload);
+//     console.log('Warmup Inbox API Response:', response.data);
+
+//     // Handle response according to API docs
+//     if (response.data.code === 'created') {
+//       // Store the response in MongoDB
+//       const warmupInboxData = new WarmupInbox({
+//         userId,
+//         email,
+//         inbox_id: response.data.inbox_id,
+//         password, // Consider encrypting this before storage
+//         sender_first,
+//         sender_last,
+//         status: response.data.code || 'created',
+//         plan: payload.plan,
+//         smtp_settings: payload.smtp,
+//         imap_settings: payload.imap,
+//         warmup_response: response.data,
+//         updated_at: new Date()
+//       });
+
+//       await warmupInboxData.save();
+
+//       return res.status(201).json({
+//         status: "1",
+//         message: "Inbox successfully added to warmup",
+//         data: {
+//           inbox_id: response.data.inbox_id,
+//           status: "pending_activation",
+//           next_steps: [
+//             "Configure email client filters using filter_id",
+//             "Verify DNS records (MX, SPF, DKIM)",
+//             "Test SMTP/IMAP connectivity"
+//           ],
+//           userId,
+//           stored_in_db: true
+//         }
+//       });
+//     }
+
+//   } catch (error) {
+//     console.error('Warmup Inbox API Error:', {
+//       status: error.response?.status,
+//       data: error.response?.data,
+//       message: error.message,
+//       error: error.response?.data?.error
+//     });
+
+//     // Simple, single retry using common mail server patterns if SMTP/IMAP/config error
+//     const shouldRetrySimpleFallback = [400, 422].includes(error.response?.status) ||
+//       ['smtp_connection_failed', 'imap_connection_failed', 'invalid_request'].includes(error.response?.data?.error);
+
+//     if (shouldRetrySimpleFallback) {
+//       try {
+//         // Extract domain from email and try common mail server patterns
+//         const domain = email.split('@')[1];
+//         const commonMailHosts = [
+//           `mail.${domain}`,
+//           `smtp.${domain}`,
+//           `imap.${domain}`,
+//           domain
+//         ];
+
+//         let fallbackResponse = null;
+//         let lastFallbackError = null;
+
+//         // Try each common mail host pattern
+//         for (const host of commonMailHosts) {
+//           try {
+//             const fallbackPayload = {
+//               email: email,
+//               sender_first: sender_first,
+//               sender_last: sender_last,
+//               plan: 'basic',
+//               tags: [],
+//               smtp: {
+//                 host: host,
+//                 port: 465,
+//                 username: email,
+//                 tls: true,
+//                 password: password
+//               },
+//               imap: {
+//                 host: host,
+//                 port: 993,
+//                 username: email,
+//                 tls: true,
+//                 password: password
+//               },
+//               frequency: {
+//                 starting_baseline: 2,
+//                 increase_per_day: 2,
+//                 max_sends_per_day: 15,
+//                 reply_rate: 9,
+//                 strategy: 'progressive'
+//               }
+//             };
+
+//             console.log(`🔁 Retrying with ${host}...`);
+//             fallbackResponse = await axiosInstance.post('/inboxes/advanced', fallbackPayload);
+            
+//             if (fallbackResponse.data?.code === 'created') {
+//               console.log(`✅ Fallback succeeded with ${host}`);
+//               break;
+//             }
+//           } catch (hostError) {
+//             console.log(`❌ ${host} failed:`, hostError.response?.data?.message);
+//             lastFallbackError = hostError;
+//           }
+//         }
+
+//         if (fallbackResponse && fallbackResponse.data?.code === 'created') {
+//           const warmupInboxData = new WarmupInbox({
+//             userId,
+//             email,
+//             inbox_id: fallbackResponse.data.inbox_id,
+//             password,
+//             sender_first,
+//             sender_last,
+//             status: fallbackResponse.data.code || 'created',
+//             plan: 'basic',
+//             frequency: {
+//               starting_baseline: 2,
+//               increase_per_day: 2,
+//               max_sends_per_day: 15,
+//               reply_rate: 9,
+//               strategy: 'progressive'
+//             },
+//             smtp_settings: {
+//               host: fallbackResponse.config?.data ? JSON.parse(fallbackResponse.config.data).smtp.host : 'unknown',
+//               port: 465,
+//               username: email,
+//               tls: true
+//             },
+//             imap_settings: {
+//               host: fallbackResponse.config?.data ? JSON.parse(fallbackResponse.config.data).imap.host : 'unknown',
+//               port: 993,
+//               username: email,
+//               tls: true
+//             },
+//             warmup_response: fallbackResponse.data,
+//             updated_at: new Date()
+//           });
+
+//           await warmupInboxData.save();
+
+//           return res.status(201).json({
+//             status: '1',
+//             message: 'Inbox successfully added to warmup (fallback with domain-based hosts)',
+//             data: {
+//               inbox_id: fallbackResponse.data.inbox_id,
+//               status: 'pending_activation',
+//               next_steps: [
+//                 'Configure email client filters using filter_id',
+//                 'Verify DNS records (MX, SPF, DKIM)',
+//                 'Test SMTP/IMAP connectivity'
+//               ],
+//               userId,
+//               stored_in_db: true
+//             }
+//           });
+//         }
+//       } catch (fallbackError) {
+//         console.error('All fallback attempts failed:', fallbackError.response?.data || fallbackError.message);
+//         // fall through to return original error mapping below
+//       }
+//     }
+
+//     // Handle other error cases (including when fallback also failed)
+//     const apiError = error.response?.data?.error || 'unknown_error';
+//     const statusCode = error.response?.status || 500;
+
+//     const errorMap = {
+//       'invalid_api_key': 401,
+//       'missing_api_key': 401,
+//       'invalid_request': 400,
+//       'inbox_already_exists': 409,
+//       'domain_not_configured': 422,
+//       'smtp_connection_failed': 422,
+//       'imap_connection_failed': 422
+//     };
+
+//     let errorMessage = error.response?.data?.message || error.message;
+
+//     if (error.response?.status === 409) {
+//       errorMessage = 'Inbox already exists in Warmup Inbox service';
+//     } else if (error.response?.status === 401) {
+//       errorMessage = 'Invalid API key. Please check your WARMUPINBOX_API_KEY configuration';
+//     }
+
+//     return res.status(errorMap[apiError] || statusCode).json({
+//       status: '-1',
+//       error: apiError,
+//       message: errorMessage,
+//       details: error.response?.data?.details || undefined
+//     });
+//   }
+// });
 /**
  * 2. Start the warmup process for an inbox
  *
