@@ -223,100 +223,70 @@ router.post('/api/warmup/add-inbox', async (req, res) => {
       error: error.response?.data?.error
     });
 
-    // Check if it's a SMTP authentication error (535 Incorrect authentication data)
-    const isAuthError = error.response?.status === 400 && 
-      error.response?.data?.message?.includes('535 Incorrect authentication data');
+    // Simple, single retry using common mail server patterns if SMTP/IMAP/config error
+    const shouldRetrySimpleFallback = [400, 422].includes(error.response?.status) ||
+      ['smtp_connection_failed', 'imap_connection_failed', 'invalid_request'].includes(error.response?.data?.error);
 
-    if (isAuthError) {
-      console.log('🔄 SMTP authentication error detected, retrying with mail.domain.com format...');
-      
+    if (shouldRetrySimpleFallback) {
       try {
-        // Extract domain from email
+        // Extract domain from email and try common mail server patterns
         const domain = email.split('@')[1];
-        console.log(`📧 Extracted domain: ${domain}`);
-
-        // Create fallback payload with mail.domain.com format
-        const fallbackPayload = {
-          email: email,
-          sender_first: sender_first,
-          sender_last: sender_last,
-          plan: "basic",
-          tags: [],
-          smtp: {
-            host: `mail.${domain}`,
-            port: 465,
-            username: email,
-            tls: true,
-            password: password,
-          },
-          imap: {
-            host: `mail.${domain}`,
-            port: 993,
-            username: email,
-            tls: true,
-            password: password,
-          },
-          frequency: {
-            starting_baseline: 2,
-            increase_per_day: 2,
-            max_sends_per_day: 15,
-            reply_rate: 9,
-            strategy: "progressive"
-          }
-        };
-
-        console.log('🔄 Retrying with mail.domain.com format:', {
-          email: fallbackPayload.email,
-          smtp_host: fallbackPayload.smtp.host,
-          smtp_port: fallbackPayload.smtp.port,
-          imap_host: fallbackPayload.imap.host,
-          imap_port: fallbackPayload.imap.port
-        });
-
-        // Try multiple fallback configurations
-        let fallbackResponse;
-        let lastError;
-        
-        // List of fallback configurations to try
-        const fallbackConfigs = [
-          { smtp_host: `mail.${domain}`, smtp_port: 465, imap_host: `mail.${domain}`, imap_port: 993, tls: true },
-          { smtp_host: `smtp.${domain}`, smtp_port: 587, imap_host: `imap.${domain}`, imap_port: 993, tls: false },
-          { smtp_host: `smtp.${domain}`, smtp_port: 465, imap_host: `imap.${domain}`, imap_port: 993, tls: true },
-          { smtp_host: domain, smtp_port: 587, imap_host: domain, imap_port: 993, tls: false },
-          { smtp_host: domain, smtp_port: 465, imap_host: domain, imap_port: 993, tls: true }
+        const commonMailHosts = [
+          `mail.${domain}`,
+          `smtp.${domain}`,
+          `imap.${domain}`,
+          domain
         ];
 
-        for (const config of fallbackConfigs) {
+        let fallbackResponse = null;
+        let lastFallbackError = null;
+
+        // Try each common mail host pattern
+        for (const host of commonMailHosts) {
           try {
-            console.log(`🔄 Trying fallback config: SMTP ${config.smtp_host}:${config.smtp_port}, IMAP ${config.imap_host}:${config.imap_port} (TLS: ${config.tls})`);
-            
-            const testPayload = {
-              ...fallbackPayload,
+            const fallbackPayload = {
+              email: email,
+              sender_first: sender_first,
+              sender_last: sender_last,
+              plan: 'basic',
+              tags: [],
               smtp: {
-                ...fallbackPayload.smtp,
-                host: config.smtp_host,
-                port: config.smtp_port,
-                tls: config.tls
+                host: host,
+                port: 465,
+                username: email,
+                tls: true,
+                password: password
               },
               imap: {
-                ...fallbackPayload.imap,
-                host: config.imap_host,
-                port: config.imap_port,
-                tls: config.tls
+                host: host,
+                port: 993,
+                username: email,
+                tls: true,
+                password: password
+              },
+              frequency: {
+                starting_baseline: 2,
+                increase_per_day: 2,
+                max_sends_per_day: 15,
+                reply_rate: 9,
+                strategy: 'progressive'
               }
             };
 
-            fallbackResponse = await axiosInstance.post('/inboxes/advanced', testPayload);
-            console.log('✅ Fallback API Response:', fallbackResponse.data);
-            break; // Success, exit the loop
-          } catch (configError) {
-            console.log(`❌ Config failed (${config.smtp_host}:${config.smtp_port}):`, configError.response?.data?.message);
-            lastError = configError;
+            console.log(`🔁 Retrying with ${host}...`);
+            fallbackResponse = await axiosInstance.post('/inboxes/advanced', fallbackPayload);
+            
+            if (fallbackResponse.data?.code === 'created') {
+              console.log(`✅ Fallback succeeded with ${host}`);
+              break;
+            }
+          } catch (hostError) {
+            console.log(`❌ ${host} failed:`, hostError.response?.data?.message);
+            lastFallbackError = hostError;
           }
         }
 
-        if (fallbackResponse && fallbackResponse.data.code === 'created') {
-          // Store the response in MongoDB
+        if (fallbackResponse && fallbackResponse.data?.code === 'created') {
           const warmupInboxData = new WarmupInbox({
             userId,
             email,
@@ -325,90 +295,56 @@ router.post('/api/warmup/add-inbox', async (req, res) => {
             sender_first,
             sender_last,
             status: fallbackResponse.data.code || 'created',
-            plan: fallbackPayload.plan,
-            frequency: fallbackPayload.frequency,
-            smtp_settings: fallbackPayload.smtp,
-            imap_settings: fallbackPayload.imap,
+            plan: 'basic',
+            frequency: {
+              starting_baseline: 2,
+              increase_per_day: 2,
+              max_sends_per_day: 15,
+              reply_rate: 9,
+              strategy: 'progressive'
+            },
+            smtp_settings: {
+              host: fallbackResponse.config?.data ? JSON.parse(fallbackResponse.config.data).smtp.host : 'unknown',
+              port: 465,
+              username: email,
+              tls: true
+            },
+            imap_settings: {
+              host: fallbackResponse.config?.data ? JSON.parse(fallbackResponse.config.data).imap.host : 'unknown',
+              port: 993,
+              username: email,
+              tls: true
+            },
             warmup_response: fallbackResponse.data,
-            created_at: new Date(),
             updated_at: new Date()
           });
 
           await warmupInboxData.save();
 
           return res.status(201).json({
-            status: "1",
-            message: "Inbox successfully added to warmup (with mail.domain.com format)",
+            status: '1',
+            message: 'Inbox successfully added to warmup (fallback with domain-based hosts)',
             data: {
               inbox_id: fallbackResponse.data.inbox_id,
-              status: "pending_activation",
-              userId,
-              email: email,
-              plan: fallbackPayload.plan,
-              smtp_configured: true,
-              imap_configured: true,
-              smtp_host: fallbackPayload.smtp.host,
-              imap_host: fallbackPayload.imap.host,
+              status: 'pending_activation',
               next_steps: [
-                "Configure email client filters using filter_id",
-                "Verify DNS records (MX, SPF, DKIM)",
-                "Test SMTP/IMAP connectivity",
-                "Start the warmup process"
+                'Configure email client filters using filter_id',
+                'Verify DNS records (MX, SPF, DKIM)',
+                'Test SMTP/IMAP connectivity'
               ],
+              userId,
               stored_in_db: true
-            }
-          });
-        } else {
-          // All fallback attempts failed
-          console.error('All fallback attempts failed:', {
-            status: lastError?.response?.status,
-            data: lastError?.response?.data,
-            message: lastError?.message
-          });
-
-          // Return detailed error for all attempts
-          return res.status(400).json({
-            status: "-1",
-            error: "Bad Request",
-            message: "We cannot connect via SMTP. We are receiving the following error: Error: Invalid login: 535 Incorrect authentication data (Error Code: 535)",
-            details: {
-              original_error: error.response?.data?.message || error.message,
-              fallback_error: lastError?.response?.data?.message || lastError?.message,
-              attempted_configs: [
-                "mail.server1.engagegptapp.com (original)",
-                ...fallbackConfigs.map(config => `${config.smtp_host}:${config.smtp_port} (fallback)`)
-              ],
-              suggestion: "Please verify email credentials and ensure SMTP/IMAP is enabled for this email account."
             }
           });
         }
       } catch (fallbackError) {
-        console.error('Fallback attempt failed with unexpected error:', {
-          status: fallbackError.response?.status,
-          data: fallbackError.response?.data,
-          message: fallbackError.message
-        });
-
-        // Return detailed error for both attempts
-        return res.status(400).json({
-          status: "-1",
-          error: "Bad Request",
-          message: "We cannot connect via SMTP. We are receiving the following error: Error: Invalid login: 535 Incorrect authentication data (Error Code: 535)",
-          details: {
-            original_error: error.response?.data?.message || error.message,
-            fallback_error: fallbackError.response?.data?.message || fallbackError.message,
-            attempted_configs: [
-              "mail.server1.engagegptapp.com (original)",
-              `mail.${email.split('@')[1]} (fallback)`
-            ],
-            suggestion: "Please verify email credentials and ensure SMTP/IMAP is enabled for this email account."
-          }
-        });
+        console.error('All fallback attempts failed:', fallbackError.response?.data || fallbackError.message);
+        // fall through to return original error mapping below
       }
     }
 
-    // Handle other error cases
-    const apiError = error.response?.data?.error || "unknown_error";
+    // Handle other error cases (including when fallback also failed)
+    const apiError = error.response?.data?.error || 'unknown_error';
     const statusCode = error.response?.status || 500;
 
     const errorMap = {
@@ -421,17 +357,16 @@ router.post('/api/warmup/add-inbox', async (req, res) => {
       'imap_connection_failed': 422
     };
 
-    // More detailed error handling for common issues
     let errorMessage = error.response?.data?.message || error.message;
 
     if (error.response?.status === 409) {
-      errorMessage = "Inbox already exists in Warmup Inbox service";
+      errorMessage = 'Inbox already exists in Warmup Inbox service';
     } else if (error.response?.status === 401) {
-      errorMessage = "Invalid API key. Please check your WARMUPINBOX_API_KEY configuration";
+      errorMessage = 'Invalid API key. Please check your WARMUPINBOX_API_KEY configuration';
     }
 
     return res.status(errorMap[apiError] || statusCode).json({
-      status: "-1",
+      status: '-1',
       error: apiError,
       message: errorMessage,
       details: error.response?.data?.details || undefined
