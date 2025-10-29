@@ -7,6 +7,10 @@ const crypto = require('crypto');
 const mongoose = require('mongoose');
 require('dotenv').config();
 
+const ical = require('ical');
+const IcalExpander = require('ical-expander');
+const fetch = require('node-fetch');
+
 const router = express.Router();
 
 // Encryption setup
@@ -2332,6 +2336,141 @@ router.delete('/api/delete-smtpconfig', async (req, res) => {
     });
   }
 });
+
+
+
+
+router.post('/api/fetchcalendar', async (req, res) => {
+  try {
+    const { token, email, provider, rangeStart, rangeEnd } = req.body;
+    if (!token || !email) {
+      return res.status(400).json({ success: false, error: 'Missing token or email' });
+    }
+
+    const smtp = await SMTPAuth.findOne({ email, token });
+    if (!smtp) {
+      return res.status(403).json({ success: false, error: 'Invalid token or sender email' });
+    }
+
+    const decryptedPass = decrypt(smtp.pass);
+    const domain = email.split('@')[1].toLowerCase();
+    const now = new Date();
+    const start = rangeStart ? new Date(rangeStart) : new Date(now.getFullYear(), now.getMonth(), 1);
+    const end = rangeEnd ? new Date(rangeEnd) : new Date(now.getFullYear(), now.getMonth() + 1, 0);
+
+    let events = [];
+
+    // 1️⃣ Google Workspace / Gmail ICS Feed
+    if (domain.includes('gmail') || domain.includes('google')) {
+      try {
+        const googleFeedUrl = `https://calendar.google.com/calendar/ical/${encodeURIComponent(email)}/public/basic.ics`;
+        const response = await fetch(googleFeedUrl);
+        const icsData = await response.text();
+        const icalExpander = new IcalExpander({ ics: icsData, maxIterations: 1000 });
+        const expanded = icalExpander.between(start, end);
+
+        events = [
+          ...expanded.events.map(e => ({
+            eventId: e.uid,
+            summary: e.summary,
+            description: e.description,
+            location: e.location,
+            start: e.startDate.toJSDate(),
+            end: e.endDate.toJSDate(),
+            attendees: e.attendee ? (Array.isArray(e.attendee) ? e.attendee : [e.attendee]) : []
+          })),
+          ...expanded.occurrences.map(o => ({
+            eventId: o.item.uid,
+            summary: o.item.summary,
+            description: o.item.description,
+            location: o.item.location,
+            start: o.startDate.toJSDate(),
+            end: o.endDate.toJSDate(),
+            attendees: o.item.attendee ? (Array.isArray(o.item.attendee) ? o.item.attendee : [o.item.attendee]) : []
+          }))
+        ];
+      } catch (err) {
+        console.log('Google calendar fetch failed:', err.message);
+      }
+    }
+
+    // 2️⃣ Outlook / Microsoft 365 ICS (via autodiscover)
+    else if (domain.includes('outlook') || domain.includes('hotmail') || domain.includes('microsoft')) {
+      try {
+        const outlookFeedUrl = `https://outlook.office365.com/owa/calendar/${encodeURIComponent(email)}/calendar.ics`;
+        const response = await fetch(outlookFeedUrl, {
+          headers: { 'Authorization': 'Basic ' + Buffer.from(`${email}:${decryptedPass}`).toString('base64') }
+        });
+        const icsData = await response.text();
+        const icalExpander = new IcalExpander({ ics: icsData, maxIterations: 1000 });
+        const expanded = icalExpander.between(start, end);
+
+        events = events.concat(
+          expanded.events.map(e => ({
+            eventId: e.uid,
+            summary: e.summary,
+            description: e.description,
+            start: e.startDate.toJSDate(),
+            end: e.endDate.toJSDate(),
+            attendees: e.attendee ? (Array.isArray(e.attendee) ? e.attendee : [e.attendee]) : []
+          }))
+        );
+      } catch (err) {
+        console.log('Outlook calendar fetch failed:', err.message);
+      }
+    }
+
+    // 3️⃣ Self-hosted / cPanel Calendar via IMAP ICS attachment
+    else {
+      try {
+        const client = new ImapFlow({
+          host: smtp.host.replace('smtp.', 'imap.'),
+          port: 993,
+          secure: true,
+          auth: { user: email, pass: decryptedPass },
+          logger: false
+        });
+        await client.connect();
+        await client.mailboxOpen('Calendar').catch(() => client.mailboxOpen('INBOX')); // fallback
+
+        for await (let msg of client.fetch('1:*', { source: true })) {
+          const parsed = await simpleParser(msg.source);
+          if (parsed.attachments && parsed.attachments.length > 0) {
+            for (const att of parsed.attachments) {
+              if (att.contentType.includes('calendar') || att.filename.endsWith('.ics')) {
+                const icalExpander = new IcalExpander({ ics: att.content.toString(), maxIterations: 100 });
+                const expanded = icalExpander.between(start, end);
+                events.push(...expanded.events.map(e => ({
+                  eventId: e.uid,
+                  summary: e.summary,
+                  description: e.description,
+                  start: e.startDate.toJSDate(),
+                  end: e.endDate.toJSDate(),
+                  attendees: e.attendee ? (Array.isArray(e.attendee) ? e.attendee : [e.attendee]) : []
+                })));
+              }
+            }
+          }
+        }
+        await client.logout();
+      } catch (err) {
+        console.log('Self-hosted calendar fetch failed:', err.message);
+      }
+    }
+
+    return res.json({
+      success: true,
+      provider: domain,
+      range: { start, end },
+      totalEvents: events.length,
+      events: events.sort((a, b) => new Date(a.start) - new Date(b.start))
+    });
+  } catch (error) {
+    console.error('Calendar Fetch Error:', error);
+    return res.status(500).json({ success: false, error: error.message });
+  }
+});
+
 
 module.exports = {
   router,

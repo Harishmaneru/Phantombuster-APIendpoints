@@ -124,6 +124,9 @@ const notifyAPI = require('./notifyAPI/sendEmail.js');
 
 const subscriptionManageAPI = require('./subscriptionController/subscriptionManageAPI.js');
 
+// Nylas Email API
+// const emailAPI = require('./nylasAPI/emailAPI.js');
+
 const { Http2ServerRequest } = require('http2');
 
 
@@ -263,6 +266,9 @@ app.use(manageSubscriptions.router);
 app.use(linkedinMessaging);
 app.use(notifyAPI.router);
 app.use(subscriptionManageAPI.router);
+
+// Mount Nylas Email API routes
+// app.use('/api/inbox', emailAPI);
 
 
 
