@@ -127,6 +127,8 @@ const subscriptionManageAPI = require('./subscriptionController/subscriptionMana
 // Nylas Email API
 const nylasEmailAPI = require('./nylasAPI/nylasemailAPI.js');
 
+const supabaseApi = require('./nylasAPI/supabaseAPI.js');
+const openAI = require('./nylasAPI/openAI');
 const { Http2ServerRequest } = require('http2');
 
 
@@ -135,7 +137,8 @@ const app = express();
 const port = 3001;
 
 // Trust proxy for ngrok and other reverse proxies
-app.set('trust proxy', true);
+// Set to 1 to trust first proxy (fixes rate limit warning)
+app.set('trust proxy', 1);
 
 // Single, secure CORS configuration
 app.use(
@@ -269,6 +272,10 @@ app.use(subscriptionManageAPI.router);
 
 // Mount Nylas Email API routes
 app.use('/api/nylas', nylasEmailAPI);
+app.use(supabaseApi);
+
+// Mount OpenAI Email Reply API routes
+app.use('/api/openai', openAI);
 
 
 
