@@ -92,12 +92,48 @@ router.get('/api/nylas/specificthread/:grantId/:threadId', checkApiKey, async (r
 /**
  * Send an email via Nylas
  * POST /api/nylas/sendemail/:grantId
- * Body: { to, from, subject, body, html, cc, bcc, reply_to, attachments }
+ * Body: { 
+ *   to,                    // Required: array or string
+ *   subject,               // Required
+ *   from,                  // Optional: array or string
+ *   body,                  // Optional: plain text body
+ *   html,                  // Optional: HTML body (or use body_html)
+ *   body_html,             // Optional: HTML body (alternative to html)
+ *   cc,                    // Optional: array or string
+ *   bcc,                   // Optional: array or string
+ *   reply_to,              // Optional: array or string
+ *   reply_to_message_id,   // Optional: message ID to reply to
+ *   attachments,           // Optional: array of attachment objects
+ *   tracking_options       // Optional: { 
+ *                          //   opens: bool - Track when message is opened
+ *                          //   links: bool - Track link clicks (max 20 links)
+ *                          //   thread_replies: bool - Track thread replies
+ *                          //   payload: string - Custom tracking data
+ *                          //   label: string - Custom label for tracking
+ *                          // }
+ * }
+ * 
+ * Reference: 
+ * - https://developer.nylas.com/docs/v3/email/send-email/
+ * - https://developer.nylas.com/docs/v3/email/message-tracking/
  */
 router.post('/api/nylas/sendemail/:grantId', checkApiKey, async (req, res) => {
   try {
     const { grantId } = req.params;
-    const { to, from, subject, body, html, cc, bcc, reply_to, attachments } = req.body;
+    const { 
+      to, 
+      from, 
+      subject, 
+      body, 
+      html, 
+      body_html,
+      cc, 
+      bcc, 
+      reply_to, 
+      reply_to_message_id,
+      attachments,
+      tracking_options
+    } = req.body;
 
     // Validate required fields
     if (!to || !subject) {
@@ -109,19 +145,10 @@ router.post('/api/nylas/sendemail/:grantId', checkApiKey, async (req, res) => {
       });
     }
 
-    // Validate that either body or html is provided
-    if (!body && !html) {
-      return res.status(400).json({
-        success: false,
-        message: 'Either body (plain text) or html content is required',
-        data: null,
-        timestamp: new Date().toISOString()
-      });
-    }
-
     const url = `${NYLAS_API_BASE_URL}/grants/${grantId}/messages/send`;
 
     // Format recipients - handle both string and array formats
+    // Returns array of { name, email } objects as per Nylas spec
     const formatRecipients = (recipients) => {
       if (!recipients) return [];
       if (typeof recipients === 'string') {
@@ -138,7 +165,7 @@ router.post('/api/nylas/sendemail/:grantId', checkApiKey, async (req, res) => {
             const match = r.match(/^(.+?)\s*<(.+?)>$/);
             return match ? { name: match[1].trim(), email: match[2].trim() } : { email: r.trim() };
           }
-          return r;
+          return r; // Already an object
         });
       }
       return [];
@@ -146,18 +173,30 @@ router.post('/api/nylas/sendemail/:grantId', checkApiKey, async (req, res) => {
 
     const payload = {
       subject: subject,
-      to: formatRecipients(to),
-      body: body || (html ? html.replace(/<[^>]*>/g, '') : ''), // Extract text from HTML if no body provided
+      to: formatRecipients(to)
     };
 
-    // Add from field if provided
+    // Add from field - must be array as per Nylas spec
     if (from) {
-      payload.from = formatRecipients(from)[0] || { email: from };
+      const fromArray = formatRecipients(from);
+      if (fromArray.length > 0) {
+        payload.from = fromArray; // Array format as per docs
+      }
     }
 
-    // Add HTML body if provided
-    if (html) {
-      payload.body_html = html;
+    // Add body - plain text (required if no HTML)
+    if (body) {
+      payload.body = body;
+    } else if (html || body_html) {
+      // Auto-extract text from HTML if no body provided
+      const htmlContent = html || body_html;
+      payload.body = htmlContent.replace(/<[^>]*>/g, '').trim();
+    }
+
+    // Add HTML body - use body_html as per Nylas spec (or html as alias)
+    const htmlContent = body_html || html;
+    if (htmlContent) {
+      payload.body_html = htmlContent;
     }
 
     // Add CC if provided
@@ -175,17 +214,41 @@ router.post('/api/nylas/sendemail/:grantId', checkApiKey, async (req, res) => {
       payload.reply_to = formatRecipients(reply_to);
     }
 
+    // Add reply_to_message_id if provided
+    if (reply_to_message_id) {
+      payload.reply_to_message_id = reply_to_message_id;
+    }
+
     // Add attachments if provided
     if (attachments && Array.isArray(attachments)) {
       payload.attachments = attachments;
     }
 
+    // Add tracking_options if provided
+    // Structure: { opens: bool, links: bool, thread_replies: bool, payload: string, label: string }
+    // Reference: https://developer.nylas.com/docs/v3/email/message-tracking/
+    if (tracking_options) {
+      // Validate tracking options structure
+      const validTrackingOptions = {};
+      if (tracking_options.opens !== undefined) validTrackingOptions.opens = Boolean(tracking_options.opens);
+      if (tracking_options.links !== undefined) validTrackingOptions.links = Boolean(tracking_options.links);
+      if (tracking_options.thread_replies !== undefined) validTrackingOptions.thread_replies = Boolean(tracking_options.thread_replies);
+      if (tracking_options.payload !== undefined) validTrackingOptions.payload = String(tracking_options.payload);
+      if (tracking_options.label !== undefined) validTrackingOptions.label = String(tracking_options.label);
+      
+      if (Object.keys(validTrackingOptions).length > 0) {
+        payload.tracking_options = validTrackingOptions;
+      }
+    }
+
+    // Set timeout to 150 seconds as recommended by Nylas docs
     const response = await axios.post(url, payload, {
       headers: {
         'Accept': 'application/json, application/gzip',
         'Authorization': `Bearer ${NYLAS_API_KEY}`,
         'Content-Type': 'application/json'
-      }
+      },
+      timeout: 150000 // 150 seconds as per Nylas recommendation for self-hosted Exchange
     });
 
     res.json({
@@ -196,9 +259,272 @@ router.post('/api/nylas/sendemail/:grantId', checkApiKey, async (req, res) => {
     });
   } catch (error) {
     console.error('Error sending email:', error.response?.data || error.message);
+    
+    // Handle 503 errors with backoff recommendation as per Nylas docs
+    if (error.response?.status === 503) {
+      return res.status(503).json({
+        success: false,
+        message: 'Service temporarily unavailable. Please wait 10-20 minutes before retrying.',
+        data: error.response?.data || null,
+        timestamp: new Date().toISOString()
+      });
+    }
+
     res.status(error.response?.status || 500).json({
       success: false,
       message: error.response?.data?.message || error.message || 'Failed to send email',
+      data: error.response?.data || null,
+      timestamp: new Date().toISOString()
+    });
+  }
+});
+
+/*_________________________MESSAGE TRACKING API's_________________________*/
+
+
+
+router.get('/api/nylas/get-tracking/:grantId/:messageId', checkApiKey, async (req, res) => {
+  try {
+    const { grantId, messageId } = req.params;
+
+    // 1. Get message details
+    const messageUrl = `${NYLAS_API_BASE_URL}/grants/${grantId}/messages/${messageId}`;
+    let message, threadId, thread;
+
+    try {
+      const messageResponse = await axios.get(messageUrl, {
+        headers: {
+          'Accept': 'application/json, application/gzip',
+          'Authorization': `Bearer ${NYLAS_API_KEY}`,
+          'Content-Type': 'application/json'
+        }
+      });
+      message = messageResponse.data?.data || messageResponse.data;
+      threadId = message?.thread_id || message?.threadId;
+    } catch (error) {
+      console.error('Error fetching message:', error.response?.data || error.message);
+      message = null;
+    }
+
+    // 2. Get thread details (for replies tracking)
+    if (threadId) {
+      try {
+        const threadUrl = `${NYLAS_API_BASE_URL}/grants/${grantId}/threads/${threadId}`;
+        const threadResponse = await axios.get(threadUrl, {
+          headers: {
+            'Accept': 'application/json, application/gzip',
+            'Authorization': `Bearer ${NYLAS_API_KEY}`,
+            'Content-Type': 'application/json'
+          }
+        });
+        thread = threadResponse.data?.data || threadResponse.data;
+      } catch (error) {
+        console.error('Error fetching thread:', error.response?.data || error.message);
+        thread = null;
+      }
+    }
+
+    // 3. Extract tracking data from message metadata
+    const trackingMetadata = message?.metadata || message?.tracking_metadata || {};
+    const trackingOptions = message?.tracking_options || {};
+
+    // Extract link.clicked tracking data
+    const linkClicked = [];
+    if (message?.tracking?.links || trackingMetadata.link_clicks) {
+      const links = Array.isArray(message?.tracking?.links) ? message.tracking.links :
+                   Array.isArray(trackingMetadata.link_clicks) ? trackingMetadata.link_clicks :
+                   trackingMetadata.links || [];
+      
+      links.forEach((link, index) => {
+        linkClicked.push({
+          url: link.url || link.link_url || link.href,
+          linkId: link.link_id || link.id || `link-${index}`,
+          clickedAt: link.clicked_at || link.timestamp || link.date,
+          ip: link.ip || link.ip_address,
+          userAgent: link.user_agent || link.userAgent,
+          recents: link.recents || link.recent_clicks || [],
+          payload: trackingOptions.payload || trackingMetadata.payload,
+          label: trackingOptions.label || trackingMetadata.label
+        });
+      });
+    }
+
+    // Extract message.opened tracking data
+    const messageOpened = [];
+    if (message?.tracking?.opens || trackingMetadata.opens) {
+      const opens = Array.isArray(message?.tracking?.opens) ? message.tracking.opens :
+                   Array.isArray(trackingMetadata.opens) ? trackingMetadata.opens :
+                   trackingMetadata.open_events || [];
+      
+      opens.forEach((open, index) => {
+        messageOpened.push({
+          openedId: open.opened_id || open.id || `open-${index}`,
+          openedAt: open.opened_at || open.timestamp || open.date,
+          ip: open.ip || open.ip_address,
+          userAgent: open.user_agent || open.userAgent,
+          recents: open.recents || open.recent_opens || [],
+          payload: trackingOptions.payload || trackingMetadata.payload,
+          label: trackingOptions.label || trackingMetadata.label
+        });
+      });
+    }
+
+    // Extract thread.replied tracking data
+    let threadReplied = null;
+    if (thread && thread.messages) {
+      const replies = thread.messages.filter(msg => 
+        msg.id !== messageId && 
+        (msg.in_reply_to === messageId || msg.references?.includes(messageId))
+      );
+
+      if (replies.length > 0) {
+        threadReplied = {
+          messageId: replies[0]?.id,
+          rootMessageId: messageId,
+          threadId: threadId || thread.id,
+          replyCount: replies.length,
+          replyData: {
+            count: replies.length,
+            latestReply: replies[0]?.date || replies[0]?.timestamp,
+            replies: replies.map(reply => ({
+              messageId: reply.id,
+              from: reply.from,
+              subject: reply.subject,
+              date: reply.date
+            }))
+          },
+          payload: trackingOptions.payload || trackingMetadata.payload,
+          label: trackingOptions.label || trackingMetadata.label
+        };
+      }
+    }
+
+    // 4. Compile unified tracking response
+    const trackingData = {
+      message_id: message?.id || messageId,
+      subject: message?.subject,
+      sent_at: message?.date,
+      tracking_enabled: !!(message?.tracking || trackingOptions.opens || trackingOptions.links || trackingOptions.thread_replies),
+      tracking_options: trackingOptions,
+      
+      // Link Clicked Tracking
+      link_clicked: {
+        enabled: trackingOptions.links === true,
+        count: linkClicked.length,
+        data: linkClicked.map(click => ({
+          url: click.url,
+          linkId: click.linkId,
+          clickedAt: click.clickedAt,
+          ip: click.ip,
+          userAgent: click.userAgent,
+          recents: click.recents,
+          payload: click.payload,
+          label: click.label
+        }))
+      },
+
+      // Message Opened Tracking
+      message_opened: {
+        enabled: trackingOptions.opens === true,
+        count: messageOpened.length,
+        data: messageOpened.map(open => ({
+          openedId: open.openedId,
+          openedAt: open.openedAt,
+          ip: open.ip,
+          userAgent: open.userAgent,
+          recents: open.recents,
+          payload: open.payload,
+          label: open.label
+        }))
+      },
+
+      // Thread Replied Tracking
+      thread_replied: {
+        enabled: trackingOptions.thread_replies === true,
+        hasReplies: !!threadReplied,
+        data: threadReplied ? {
+          messageId: threadReplied.messageId,
+          rootMessageId: threadReplied.rootMessageId,
+          threadId: threadReplied.threadId,
+          replyCount: threadReplied.replyCount,
+          replyData: threadReplied.replyData,
+          payload: threadReplied.payload,
+          label: threadReplied.label
+        } : null
+      },
+
+      // Raw data for debugging
+      raw_data: {
+        message: message,
+        thread: thread,
+        metadata: trackingMetadata
+      }
+    };
+
+    res.json({
+      success: true,
+      data: trackingData,
+      message: 'All tracking data retrieved successfully',
+      timestamp: new Date().toISOString()
+    });
+
+  } catch (error) {
+    console.error('Error fetching tracking data:', error.response?.data || error.message);
+    res.status(error.response?.status || 500).json({
+      success: false,
+      message: error.response?.data?.message || error.message || 'Failed to fetch tracking data',
+      data: error.response?.data || null,
+      timestamp: new Date().toISOString()
+    });
+  }
+});
+
+/**
+ * Get all tracking events for a message (aggregated view) - Legacy endpoint
+ * GET /api/nylas/tracking-events/:grantId/:messageId
+ * 
+ * Returns aggregated tracking data for a specific message
+ */
+router.get('/api/nylas/tracking-events/:grantId/:messageId', checkApiKey, async (req, res) => {
+  try {
+    const { grantId, messageId } = req.params;
+
+    // Get message details
+    const messageUrl = `${NYLAS_API_BASE_URL}/grants/${grantId}/messages/${messageId}`;
+    const messageResponse = await axios.get(messageUrl, {
+      headers: {
+        'Accept': 'application/json, application/gzip',
+        'Authorization': `Bearer ${NYLAS_API_KEY}`,
+        'Content-Type': 'application/json'
+      }
+    });
+
+    const message = messageResponse.data?.data || messageResponse.data;
+
+    // Format tracking summary
+    const trackingSummary = {
+      message_id: message?.id || messageId,
+      subject: message?.subject,
+      sent_at: message?.date,
+      tracking_enabled: !!(message?.tracking || message?.tracking_options),
+      tracking_options: message?.tracking_options || null,
+      summary: {
+        note: 'Use GET /api/nylas/get-tracking/:grantId/:messageId for detailed tracking data'
+      },
+      message_data: message
+    };
+
+    res.json({
+      success: true,
+      data: trackingSummary,
+      message: 'Use GET /api/nylas/get-tracking/:grantId/:messageId for detailed tracking data',
+      timestamp: new Date().toISOString()
+    });
+  } catch (error) {
+    console.error('Error fetching tracking events:', error.response?.data || error.message);
+    res.status(error.response?.status || 500).json({
+      success: false,
+      message: error.response?.data?.message || error.message || 'Failed to fetch tracking events',
       data: error.response?.data || null,
       timestamp: new Date().toISOString()
     });
