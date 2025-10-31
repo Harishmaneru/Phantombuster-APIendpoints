@@ -2473,6 +2473,7 @@ router.post('/api/fetchcalendar', async (req, res) => {
 
 // 3️⃣.1️⃣ Sent Items Fetch with Mailbox Autodetection
 router.post('/api/fetchsent', async (req, res) => {
+  let client;
   try {
     const { token, email, page = 1, limit = 20 } = req.body;
     if (!token || !email) {
@@ -2493,12 +2494,13 @@ router.post('/api/fetchsent', async (req, res) => {
       return res.status(500).json({ success: false, error: 'Failed to decrypt stored credentials' });
     }
 
-    const client = new ImapFlow({
-      host: smtp.host,
+    client = new ImapFlow({
+      host: smtp.host.replace('smtp.', 'imap.'), // Use IMAP host, not SMTP
       port: 993,
       secure: true,
       auth: { user: email, pass: decryptedPass },
-      logger: false
+      logger: false,
+      timeout: 30000 // Add timeout to prevent hanging
     });
 
     await client.connect();
@@ -2519,9 +2521,11 @@ router.post('/api/fetchsent', async (req, res) => {
         const lock = await client.mailboxOpen(box);
         if (lock && typeof lock.exists === 'number') {
           selectedBox = { name: box, lock };
+          console.log(`Found sent mailbox: ${box} with ${lock.exists} messages`);
           break;
         }
-      } catch (_) {
+      } catch (error) {
+        console.log(`Mailbox ${box} not found: ${error.message}`);
         // continue trying next mailbox
       }
     }
@@ -2534,73 +2538,123 @@ router.post('/api/fetchsent', async (req, res) => {
             try {
               const lock = await client.mailboxOpen(mailbox.name);
               selectedBox = { name: mailbox.name, lock };
+              console.log(`Found sent mailbox via listing: ${mailbox.name} with ${lock.exists} messages`);
               break;
-            } catch (_) { /* ignore */ }
+            } catch (error) {
+              console.log(`Mailbox ${mailbox.name} failed: ${error.message}`);
+            }
           }
         }
-      } catch (_) { /* ignore */ }
+      } catch (error) {
+        console.log('Mailbox listing failed:', error.message);
+      }
     }
 
     if (!selectedBox) {
       await client.logout();
-      return res.status(404).json({ success: false, error: 'Sent mailbox not found' });
+      return res.json({
+        success: true,
+        mailbox: null,
+        sent: [],
+        pagination: {
+          currentPage: 1,
+          totalPages: 0,
+          totalMessages: 0,
+          limit: Math.min(limit, 50),
+          hasNextPage: false,
+          hasPrevPage: false
+        },
+        message: 'No sent mailbox found or sent mailbox is empty'
+      });
     }
 
     const totalMessages = selectedBox.lock.exists;
     const maxLimit = Math.min(limit, 50);
     const currentPage = Math.max(parseInt(page), 1);
+    
+    // Fix: Handle empty mailbox case
+    if (totalMessages === 0) {
+      await client.logout();
+      return res.json({
+        success: true,
+        mailbox: selectedBox.name,
+        sent: [],
+        pagination: {
+          currentPage: 1,
+          totalPages: 0,
+          totalMessages: 0,
+          limit: maxLimit,
+          hasNextPage: false,
+          hasPrevPage: false
+        }
+      });
+    }
+
     const totalPages = Math.ceil(totalMessages / maxLimit);
 
+    // Fix: Calculate sequence numbers correctly (IMAP is 1-based)
     const startSeq = Math.max(totalMessages - (currentPage * maxLimit) + 1, 1);
     const endSeq = Math.max(totalMessages - ((currentPage - 1) * maxLimit), 1);
 
+    console.log(`Fetching sent messages ${startSeq}:${endSeq} (Page ${currentPage}, Total: ${totalMessages})`);
+
     const messages = [];
 
-    if (startSeq <= endSeq) {
-      for await (let msg of client.fetch(`${startSeq}:${endSeq}`, {
-        envelope: true,
-        uid: true,
-        flags: true,
-        source: true,
-        bodyStructure: true
-      })) {
-        const parsed = await simpleParser(msg.source);
+    if (startSeq <= endSeq && startSeq >= 1 && endSeq >= 1) {
+      try {
+        for await (let msg of client.fetch(`${startSeq}:${endSeq}`, {
+          envelope: true,
+          uid: true,
+          flags: true,
+          source: true,
+          bodyStructure: true
+        })) {
+          try {
+            const parsed = await simpleParser(msg.source);
 
-        // Clean HTML content
-        let cleanHtml = parsed.html || '';
-        if (cleanHtml) {
-          cleanHtml = cleanHtml.replace(/https:\/\/tracking\.inflection\.io\/[^"]+/g, (url) => {
-            try {
-              const urlObj = new URL(url);
-              const redirect = urlObj.searchParams.get('redirect');
-              return redirect || url;
-            } catch {
-              return url;
+            // Clean HTML content
+            let cleanHtml = parsed.html || '';
+            if (cleanHtml) {
+              cleanHtml = cleanHtml.replace(/https:\/\/tracking\.inflection\.io\/[^"]+/g, (url) => {
+                try {
+                  const urlObj = new URL(url);
+                  const redirect = urlObj.searchParams.get('redirect');
+                  return redirect || url;
+                } catch {
+                  return url;
+                }
+              });
+
+              cleanHtml = cleanHtml.replace(/<span[^>]*id="inflection-email-preheader"[^>]*>.*?<\/span>/gis, '');
             }
-          });
 
-          cleanHtml = cleanHtml.replace(/<span[^>]*id="inflection-email-preheader"[^>]*>.*?<\/span>/gis, '');
+            // Extract clean text
+            let cleanText = parsed.text || '';
+            if (cleanText) {
+              cleanText = cleanText.replace(/https:\/\/tracking\.inflection\.io\/[^\s]+/g, '');
+            }
+
+            messages.push({
+              subject: msg.envelope.subject || '(No Subject)',
+              from: msg.envelope.from?.map(f => `${f.name || ''} <${f.address}>`).join(', ') || email,
+              date: msg.envelope.date || new Date(),
+              uid: msg.uid,
+              seq: msg.seq,
+              read: Array.isArray(msg.flags) ? msg.flags.includes('\\Seen') : false,
+              text: cleanText,
+              html: cleanHtml,
+              to: msg.envelope.to?.map(t => `${t.name || ''} <${t.address}>`).join(', ') || '',
+              cc: msg.envelope.cc?.map(c => `${c.name || ''} <${c.address}>`).join(', ') || '',
+              messageId: msg.envelope.messageId
+            });
+          } catch (parseError) {
+            console.error('Error parsing message:', parseError);
+            // Continue with next message even if one fails
+          }
         }
-
-        // Extract clean text
-        let cleanText = parsed.text || '';
-        if (cleanText) {
-          cleanText = cleanText.replace(/https:\/\/tracking\.inflection\.io\/[^\s]+/g, '');
-        }
-
-        messages.push({
-          subject: msg.envelope.subject,
-          from: msg.envelope.from?.map(f => `${f.name || ''} <${f.address}>`).join(', '),
-          date: msg.envelope.date,
-          uid: msg.uid,
-          seq: msg.seq,
-          read: Array.isArray(msg.flags) ? msg.flags.includes('\\Seen') : false,
-          text: cleanText,
-          html: cleanHtml,
-          to: msg.envelope.to?.map(t => `${t.name || ''} <${t.address}>`).join(', '),
-          cc: msg.envelope.cc?.map(c => `${c.name || ''} <${c.address}>`).join(', '),
-          messageId: msg.envelope.messageId
-        });
+      } catch (fetchError) {
+        console.error('Fetch error:', fetchError);
+        // Return empty messages but don't fail the entire request
       }
     }
 
@@ -2623,7 +2677,21 @@ router.post('/api/fetchsent', async (req, res) => {
     });
   } catch (err) {
     console.error('Sent Fetch Error:', err);
-    return res.status(500).json({ success: false, error: err.message });
+    
+    // Ensure client is properly closed even on error
+    if (client) {
+      try {
+        await client.logout();
+      } catch (logoutError) {
+        console.error('Error during logout:', logoutError);
+      }
+    }
+    
+    return res.status(500).json({ 
+      success: false, 
+      error: err.message,
+      details: 'Failed to fetch sent emails. Please check your credentials and try again.'
+    });
   }
 });
 
