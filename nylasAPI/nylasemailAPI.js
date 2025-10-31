@@ -120,16 +120,16 @@ router.get('/specificthread/:grantId/:threadId', checkApiKey, async (req, res) =
 router.post('/sendemail/:grantId', checkApiKey, async (req, res) => {
   try {
     const { grantId } = req.params;
-    const { 
-      to, 
-      from, 
-      subject, 
-      body, 
-      html, 
+    const {
+      to,
+      from,
+      subject,
+      body,
+      html,
       body_html,
-      cc, 
-      bcc, 
-      reply_to, 
+      cc,
+      bcc,
+      reply_to,
       reply_to_message_id,
       attachments,
       tracking_options
@@ -235,13 +235,14 @@ router.post('/sendemail/:grantId', checkApiKey, async (req, res) => {
       if (tracking_options.thread_replies !== undefined) validTrackingOptions.thread_replies = Boolean(tracking_options.thread_replies);
       if (tracking_options.payload !== undefined) validTrackingOptions.payload = String(tracking_options.payload);
       if (tracking_options.label !== undefined) validTrackingOptions.label = String(tracking_options.label);
-      
+
       if (Object.keys(validTrackingOptions).length > 0) {
         payload.tracking_options = validTrackingOptions;
       }
     }
 
     // Set timeout to 150 seconds as recommended by Nylas docs
+    console.log('Sending email payload:', JSON.stringify(payload, null, 2));
     const response = await axios.post(url, payload, {
       headers: {
         'Accept': 'application/json, application/gzip',
@@ -259,7 +260,7 @@ router.post('/sendemail/:grantId', checkApiKey, async (req, res) => {
     });
   } catch (error) {
     console.error('Error sending email:', error.response?.data || error.message);
-    
+
     // Handle 503 errors with backoff recommendation as per Nylas docs
     if (error.response?.status === 503) {
       return res.status(503).json({
@@ -332,9 +333,9 @@ router.get('/get-tracking/:grantId/:messageId', checkApiKey, async (req, res) =>
     const linkClicked = [];
     if (message?.tracking?.links || trackingMetadata.link_clicks) {
       const links = Array.isArray(message?.tracking?.links) ? message.tracking.links :
-                   Array.isArray(trackingMetadata.link_clicks) ? trackingMetadata.link_clicks :
-                   trackingMetadata.links || [];
-      
+        Array.isArray(trackingMetadata.link_clicks) ? trackingMetadata.link_clicks :
+          trackingMetadata.links || [];
+
       links.forEach((link, index) => {
         linkClicked.push({
           url: link.url || link.link_url || link.href,
@@ -353,9 +354,9 @@ router.get('/get-tracking/:grantId/:messageId', checkApiKey, async (req, res) =>
     const messageOpened = [];
     if (message?.tracking?.opens || trackingMetadata.opens) {
       const opens = Array.isArray(message?.tracking?.opens) ? message.tracking.opens :
-                   Array.isArray(trackingMetadata.opens) ? trackingMetadata.opens :
-                   trackingMetadata.open_events || [];
-      
+        Array.isArray(trackingMetadata.opens) ? trackingMetadata.opens :
+          trackingMetadata.open_events || [];
+
       opens.forEach((open, index) => {
         messageOpened.push({
           openedId: open.opened_id || open.id || `open-${index}`,
@@ -372,8 +373,8 @@ router.get('/get-tracking/:grantId/:messageId', checkApiKey, async (req, res) =>
     // Extract thread.replied tracking data
     let threadReplied = null;
     if (thread && thread.messages) {
-      const replies = thread.messages.filter(msg => 
-        msg.id !== messageId && 
+      const replies = thread.messages.filter(msg =>
+        msg.id !== messageId &&
         (msg.in_reply_to === messageId || msg.references?.includes(messageId))
       );
 
@@ -406,7 +407,7 @@ router.get('/get-tracking/:grantId/:messageId', checkApiKey, async (req, res) =>
       sent_at: message?.date,
       tracking_enabled: !!(message?.tracking || trackingOptions.opens || trackingOptions.links || trackingOptions.thread_replies),
       tracking_options: trackingOptions,
-      
+
       // Link Clicked Tracking
       link_clicked: {
         enabled: trackingOptions.links === true,
