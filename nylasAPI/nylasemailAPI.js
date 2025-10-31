@@ -21,7 +21,7 @@ const checkApiKey = (req, res, next) => {
 
 /*_________________________GET ALL THREADS_________________________*/
 
-router.get('/api/nylas/allthreads/:grantId', checkApiKey, async (req, res) => {
+router.get('/allthreads/:grantId', checkApiKey, async (req, res) => {
   try {
     const { grantId } = req.params;
     const limit = req.query.limit || 5;
@@ -55,7 +55,7 @@ router.get('/api/nylas/allthreads/:grantId', checkApiKey, async (req, res) => {
 
 /*_________________________GET SPECIFIC THREAD BY ID_________________________*/
 
-router.get('/api/nylas/specificthread/:grantId/:threadId', checkApiKey, async (req, res) => {
+router.get('/specificthread/:grantId/:threadId', checkApiKey, async (req, res) => {
   try {
     const { grantId, threadId } = req.params;
 
@@ -117,7 +117,7 @@ router.get('/api/nylas/specificthread/:grantId/:threadId', checkApiKey, async (r
  * - https://developer.nylas.com/docs/v3/email/send-email/
  * - https://developer.nylas.com/docs/v3/email/message-tracking/
  */
-router.post('/api/nylas/sendemail/:grantId', checkApiKey, async (req, res) => {
+router.post('/sendemail/:grantId', checkApiKey, async (req, res) => {
   try {
     const { grantId } = req.params;
     const { 
@@ -283,7 +283,7 @@ router.post('/api/nylas/sendemail/:grantId', checkApiKey, async (req, res) => {
 
 
 
-router.get('/api/nylas/get-tracking/:grantId/:messageId', checkApiKey, async (req, res) => {
+router.get('/get-tracking/:grantId/:messageId', checkApiKey, async (req, res) => {
   try {
     const { grantId, messageId } = req.params;
 
@@ -485,7 +485,7 @@ router.get('/api/nylas/get-tracking/:grantId/:messageId', checkApiKey, async (re
  * 
  * Returns aggregated tracking data for a specific message
  */
-router.get('/api/nylas/tracking-events/:grantId/:messageId', checkApiKey, async (req, res) => {
+router.get('/tracking-events/:grantId/:messageId', checkApiKey, async (req, res) => {
   try {
     const { grantId, messageId } = req.params;
 
@@ -538,7 +538,7 @@ router.get('/api/nylas/tracking-events/:grantId/:messageId', checkApiKey, async 
  * GET /api/nylas/calendars/:grantId
  * Query params: limit (optional, default: 5)
  */
-router.get('/api/nylas/calendars/:grantId', checkApiKey, async (req, res) => {
+router.get('/calendars/:grantId', checkApiKey, async (req, res) => {
   try {
     const { grantId } = req.params;
     const limit = req.query.limit || 5;
@@ -574,7 +574,7 @@ router.get('/api/nylas/calendars/:grantId', checkApiKey, async (req, res) => {
  * Get a specific calendar by ID
  * GET /api/nylas/specificcalendar/:grantId/:calendarId
  */
-router.get('/api/nylas/specificcalendar/:grantId/:calendarId', checkApiKey, async (req, res) => {
+router.get('/specificcalendar/:grantId/:calendarId', checkApiKey, async (req, res) => {
   try {
     const { grantId, calendarId } = req.params;
 
@@ -610,7 +610,7 @@ router.get('/api/nylas/specificcalendar/:grantId/:calendarId', checkApiKey, asyn
  * POST /api/nylas/createcalendar/:grantId
  * Body: { name, description, location, timezone }
  */
-router.post('/api/nylas/createcalendar/:grantId', checkApiKey, async (req, res) => {
+router.post('/createcalendar/:grantId', checkApiKey, async (req, res) => {
   try {
     const { grantId } = req.params;
     const { name, description, location, timezone } = req.body;
@@ -662,7 +662,7 @@ router.post('/api/nylas/createcalendar/:grantId', checkApiKey, async (req, res) 
  * PUT /api/nylas/updatecalendar/:grantId/:calendarId
  * Body: { name, description, location, timezone }
  */
-router.put('/api/nylas/updatecalendar/:grantId/:calendarId', checkApiKey, async (req, res) => {
+router.put('/updatecalendar/:grantId/:calendarId', checkApiKey, async (req, res) => {
   try {
     const { grantId, calendarId } = req.params;
     const { name, description, location, timezone } = req.body;
