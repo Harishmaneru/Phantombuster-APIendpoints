@@ -2471,7 +2471,163 @@ router.post('/api/fetchcalendar', async (req, res) => {
   }
 });
 
+// 3️⃣.1️⃣ Sent Items Fetch with Mailbox Autodetection
+router.post('/api/fetchsent', async (req, res) => {
+  try {
+    const { token, email, page = 1, limit = 20 } = req.body;
+    if (!token || !email) {
+      return res.status(400).json({ success: false, error: 'Missing token or email' });
+    }
 
+    const smtp = await SMTPAuth.findOne({ email, token });
+    if (!smtp) {
+      return res.status(403).json({ success: false, error: 'Invalid token or sender email' });
+    }
+
+    // Decrypt the password
+    let decryptedPass;
+    try {
+      decryptedPass = decrypt(smtp.pass);
+    } catch (decryptError) {
+      console.error('Password decryption failed:', decryptError);
+      return res.status(500).json({ success: false, error: 'Failed to decrypt stored credentials' });
+    }
+
+    const client = new ImapFlow({
+      host: smtp.host,
+      port: 993,
+      secure: true,
+      auth: { user: email, pass: decryptedPass },
+      logger: false
+    });
+
+    await client.connect();
+
+    // Try common Sent mailbox names across providers
+    const candidateMailboxes = [
+      '[Gmail]/Sent Mail', // Gmail
+      'Sent Mail',
+      'Sent Items',        // Outlook / Microsoft 365
+      'Sent',              // cPanel/self-hosted
+      'Sent Messages',
+      'INBOX.Sent'
+    ];
+
+    let selectedBox = null;
+    for (const box of candidateMailboxes) {
+      try {
+        const lock = await client.mailboxOpen(box);
+        if (lock && typeof lock.exists === 'number') {
+          selectedBox = { name: box, lock };
+          break;
+        }
+      } catch (_) {
+        // continue trying next mailbox
+      }
+    }
+
+    if (!selectedBox) {
+      // As a last resort, list mailboxes and try first containing 'Sent'
+      try {
+        for await (let mailbox of client.list()) {
+          if (/sent/i.test(mailbox.name)) {
+            try {
+              const lock = await client.mailboxOpen(mailbox.name);
+              selectedBox = { name: mailbox.name, lock };
+              break;
+            } catch (_) { /* ignore */ }
+          }
+        }
+      } catch (_) { /* ignore */ }
+    }
+
+    if (!selectedBox) {
+      await client.logout();
+      return res.status(404).json({ success: false, error: 'Sent mailbox not found' });
+    }
+
+    const totalMessages = selectedBox.lock.exists;
+    const maxLimit = Math.min(limit, 50);
+    const currentPage = Math.max(parseInt(page), 1);
+    const totalPages = Math.ceil(totalMessages / maxLimit);
+
+    const startSeq = Math.max(totalMessages - (currentPage * maxLimit) + 1, 1);
+    const endSeq = Math.max(totalMessages - ((currentPage - 1) * maxLimit), 1);
+
+    const messages = [];
+
+    if (startSeq <= endSeq) {
+      for await (let msg of client.fetch(`${startSeq}:${endSeq}`, {
+        envelope: true,
+        uid: true,
+        flags: true,
+        source: true,
+        bodyStructure: true
+      })) {
+        const parsed = await simpleParser(msg.source);
+
+        // Clean HTML content
+        let cleanHtml = parsed.html || '';
+        if (cleanHtml) {
+          cleanHtml = cleanHtml.replace(/https:\/\/tracking\.inflection\.io\/[^"]+/g, (url) => {
+            try {
+              const urlObj = new URL(url);
+              const redirect = urlObj.searchParams.get('redirect');
+              return redirect || url;
+            } catch {
+              return url;
+            }
+          });
+
+          cleanHtml = cleanHtml.replace(/<span[^>]*id="inflection-email-preheader"[^>]*>.*?<\/span>/gis, '');
+        }
+
+        // Extract clean text
+        let cleanText = parsed.text || '';
+        if (cleanText) {
+          cleanText = cleanText.replace(/https:\/\/tracking\.inflection\.io\/[^\s]+/g, '');
+        }
+
+        messages.push({
+          subject: msg.envelope.subject,
+          from: msg.envelope.from?.map(f => `${f.name || ''} <${f.address}>`).join(', '),
+          date: msg.envelope.date,
+          uid: msg.uid,
+          seq: msg.seq,
+          read: Array.isArray(msg.flags) ? msg.flags.includes('\\Seen') : false,
+          text: cleanText,
+          html: cleanHtml,
+          to: msg.envelope.to?.map(t => `${t.name || ''} <${t.address}>`).join(', '),
+          cc: msg.envelope.cc?.map(c => `${c.name || ''} <${c.address}>`).join(', '),
+          messageId: msg.envelope.messageId
+        });
+      }
+    }
+
+    await client.logout();
+
+    const sortedMessages = messages.reverse();
+
+    return res.json({
+      success: true,
+      mailbox: selectedBox.name,
+      sent: sortedMessages,
+      pagination: {
+        currentPage,
+        totalPages,
+        totalMessages,
+        limit: maxLimit,
+        hasNextPage: currentPage < totalPages,
+        hasPrevPage: currentPage > 1
+      }
+    });
+  } catch (err) {
+    console.error('Sent Fetch Error:', err);
+    return res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+//
 module.exports = {
   router,
   getSMTPSettings,
