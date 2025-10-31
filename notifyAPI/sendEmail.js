@@ -2472,6 +2472,229 @@ router.post('/api/fetchcalendar', async (req, res) => {
 });
 
 // 3️⃣.1️⃣ Sent Items Fetch with Mailbox Autodetection
+// router.post('/api/fetchsent', async (req, res) => {
+//   let client;
+//   try {
+//     const { token, email, page = 1, limit = 20 } = req.body;
+//     if (!token || !email) {
+//       return res.status(400).json({ success: false, error: 'Missing token or email' });
+//     }
+
+//     const smtp = await SMTPAuth.findOne({ email, token });
+//     if (!smtp) {
+//       return res.status(403).json({ success: false, error: 'Invalid token or sender email' });
+//     }
+
+//     // Decrypt the password
+//     let decryptedPass;
+//     try {
+//       decryptedPass = decrypt(smtp.pass);
+//     } catch (decryptError) {
+//       console.error('Password decryption failed:', decryptError);
+//       return res.status(500).json({ success: false, error: 'Failed to decrypt stored credentials' });
+//     }
+
+//     client = new ImapFlow({
+//       host: smtp.host.replace('smtp.', 'imap.'), // Use IMAP host, not SMTP
+//       port: 993,
+//       secure: true,
+//       auth: { user: email, pass: decryptedPass },
+//       logger: false,
+//       timeout: 30000 // Add timeout to prevent hanging
+//     });
+
+//     await client.connect();
+
+//     // Try common Sent mailbox names across providers
+//     const candidateMailboxes = [
+//       '[Gmail]/Sent Mail', // Gmail
+//       'Sent Mail',
+//       'Sent Items',        // Outlook / Microsoft 365
+//       'Sent',              // cPanel/self-hosted
+//       'Sent Messages',
+//       'INBOX.Sent'
+//     ];
+
+//     let selectedBox = null;
+//     for (const box of candidateMailboxes) {
+//       try {
+//         const lock = await client.mailboxOpen(box);
+//         if (lock && typeof lock.exists === 'number') {
+//           selectedBox = { name: box, lock };
+//           console.log(`Found sent mailbox: ${box} with ${lock.exists} messages`);
+//           break;
+//         }
+//       } catch (error) {
+//         console.log(`Mailbox ${box} not found: ${error.message}`);
+//         // continue trying next mailbox
+//       }
+//     }
+
+//     if (!selectedBox) {
+//       // As a last resort, list mailboxes and try first containing 'Sent'
+//       try {
+//         for await (let mailbox of client.list()) {
+//           if (/sent/i.test(mailbox.name)) {
+//             try {
+//               const lock = await client.mailboxOpen(mailbox.name);
+//               selectedBox = { name: mailbox.name, lock };
+//               console.log(`Found sent mailbox via listing: ${mailbox.name} with ${lock.exists} messages`);
+//               break;
+//             } catch (error) {
+//               console.log(`Mailbox ${mailbox.name} failed: ${error.message}`);
+//             }
+//           }
+//         }
+//       } catch (error) {
+//         console.log('Mailbox listing failed:', error.message);
+//       }
+//     }
+
+//     if (!selectedBox) {
+//       await client.logout();
+//       return res.json({
+//         success: true,
+//         mailbox: null,
+//         sent: [],
+//         pagination: {
+//           currentPage: 1,
+//           totalPages: 0,
+//           totalMessages: 0,
+//           limit: Math.min(limit, 50),
+//           hasNextPage: false,
+//           hasPrevPage: false
+//         },
+//         message: 'No sent mailbox found or sent mailbox is empty'
+//       });
+//     }
+
+//     const totalMessages = selectedBox.lock.exists;
+//     const maxLimit = Math.min(limit, 50);
+//     const currentPage = Math.max(parseInt(page), 1);
+    
+//     // Fix: Handle empty mailbox case
+//     if (totalMessages === 0) {
+//       await client.logout();
+//       return res.json({
+//         success: true,
+//         mailbox: selectedBox.name,
+//         sent: [],
+//         pagination: {
+//           currentPage: 1,
+//           totalPages: 0,
+//           totalMessages: 0,
+//           limit: maxLimit,
+//           hasNextPage: false,
+//           hasPrevPage: false
+//         }
+//       });
+//     }
+
+//     const totalPages = Math.ceil(totalMessages / maxLimit);
+
+//     // Fix: Calculate sequence numbers correctly (IMAP is 1-based)
+//     const startSeq = Math.max(totalMessages - (currentPage * maxLimit) + 1, 1);
+//     const endSeq = Math.max(totalMessages - ((currentPage - 1) * maxLimit), 1);
+
+//     console.log(`Fetching sent messages ${startSeq}:${endSeq} (Page ${currentPage}, Total: ${totalMessages})`);
+
+//     const messages = [];
+
+//     if (startSeq <= endSeq && startSeq >= 1 && endSeq >= 1) {
+//       try {
+//         for await (let msg of client.fetch(`${startSeq}:${endSeq}`, {
+//           envelope: true,
+//           uid: true,
+//           flags: true,
+//           source: true,
+//           bodyStructure: true
+//         })) {
+//           try {
+//             const parsed = await simpleParser(msg.source);
+
+//             // Clean HTML content
+//             let cleanHtml = parsed.html || '';
+//             if (cleanHtml) {
+//               cleanHtml = cleanHtml.replace(/https:\/\/tracking\.inflection\.io\/[^"]+/g, (url) => {
+//                 try {
+//                   const urlObj = new URL(url);
+//                   const redirect = urlObj.searchParams.get('redirect');
+//                   return redirect || url;
+//                 } catch {
+//                   return url;
+//                 }
+//               });
+
+//               cleanHtml = cleanHtml.replace(/<span[^>]*id="inflection-email-preheader"[^>]*>.*?<\/span>/gis, '');
+//             }
+
+//             // Extract clean text
+//             let cleanText = parsed.text || '';
+//             if (cleanText) {
+//               cleanText = cleanText.replace(/https:\/\/tracking\.inflection\.io\/[^\s]+/g, '');
+//             }
+
+//             messages.push({
+//               subject: msg.envelope.subject || '(No Subject)',
+//               from: msg.envelope.from?.map(f => `${f.name || ''} <${f.address}>`).join(', ') || email,
+//               date: msg.envelope.date || new Date(),
+//               uid: msg.uid,
+//               seq: msg.seq,
+//               read: Array.isArray(msg.flags) ? msg.flags.includes('\\Seen') : false,
+//               text: cleanText,
+//               html: cleanHtml,
+//               to: msg.envelope.to?.map(t => `${t.name || ''} <${t.address}>`).join(', ') || '',
+//               cc: msg.envelope.cc?.map(c => `${c.name || ''} <${c.address}>`).join(', ') || '',
+//               messageId: msg.envelope.messageId
+//             });
+//           } catch (parseError) {
+//             console.error('Error parsing message:', parseError);
+//             // Continue with next message even if one fails
+//           }
+//         }
+//       } catch (fetchError) {
+//         console.error('Fetch error:', fetchError);
+//         // Return empty messages but don't fail the entire request
+//       }
+//     }
+
+//     await client.logout();
+
+//     const sortedMessages = messages.reverse();
+
+//     return res.json({
+//       success: true,
+//       mailbox: selectedBox.name,
+//       sent: sortedMessages,
+//       pagination: {
+//         currentPage,
+//         totalPages,
+//         totalMessages,
+//         limit: maxLimit,
+//         hasNextPage: currentPage < totalPages,
+//         hasPrevPage: currentPage > 1
+//       }
+//     });
+//   } catch (err) {
+//     console.error('Sent Fetch Error:', err);
+    
+//     // Ensure client is properly closed even on error
+//     if (client) {
+//       try {
+//         await client.logout();
+//       } catch (logoutError) {
+//         console.error('Error during logout:', logoutError);
+//       }
+//     }
+    
+//     return res.status(500).json({ 
+//       success: false, 
+//       error: err.message,
+//       details: 'Failed to fetch sent emails. Please check your credentials and try again.'
+//     });
+//   }
+// });
+
 router.post('/api/fetchsent', async (req, res) => {
   let client;
   try {
@@ -2634,18 +2857,29 @@ router.post('/api/fetchsent', async (req, res) => {
               cleanText = cleanText.replace(/https:\/\/tracking\.inflection\.io\/[^\s]+/g, '');
             }
 
+            // FIXED: Proper read status detection
+            const flags = msg.flags || [];
+            const isRead = flags.includes('\\Seen') || flags.includes('Seen');
+            
+            // Additional debug logging for flags
+            console.log(`Message ${msg.uid} flags:`, flags, 'isRead:', isRead);
+
             messages.push({
               subject: msg.envelope.subject || '(No Subject)',
               from: msg.envelope.from?.map(f => `${f.name || ''} <${f.address}>`).join(', ') || email,
               date: msg.envelope.date || new Date(),
               uid: msg.uid,
               seq: msg.seq,
-              read: Array.isArray(msg.flags) ? msg.flags.includes('\\Seen') : false,
+              read: isRead, // Fixed: Use the properly detected read status
+              flags: flags, // Include all flags for debugging
               text: cleanText,
               html: cleanHtml,
               to: msg.envelope.to?.map(t => `${t.name || ''} <${t.address}>`).join(', ') || '',
               cc: msg.envelope.cc?.map(c => `${c.name || ''} <${c.address}>`).join(', ') || '',
-              messageId: msg.envelope.messageId
+              bcc: msg.envelope.bcc?.map(b => `${b.name || ''} <${b.address}>`).join(', ') || '', // Add BCC if available
+              messageId: msg.envelope.messageId,
+              inReplyTo: msg.envelope.inReplyTo, // Add threading information
+              references: msg.envelope.references
             });
           } catch (parseError) {
             console.error('Error parsing message:', parseError);
