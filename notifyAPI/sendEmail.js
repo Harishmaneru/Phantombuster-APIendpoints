@@ -2857,12 +2857,26 @@ router.post('/api/fetchsent', async (req, res) => {
               cleanText = cleanText.replace(/https:\/\/tracking\.inflection\.io\/[^\s]+/g, '');
             }
 
-            // FIXED: Proper read status detection
-            const flags = msg.flags || [];
-            const isRead = flags.includes('\\Seen') || flags.includes('Seen');
+            // FIXED: Proper read status detection for different flag types
+            let isRead = false;
+            let flagsArray = [];
             
-            // Additional debug logging for flags
-            console.log(`Message ${msg.uid} flags:`, flags, 'isRead:', isRead);
+            // Handle different types of flags object
+            if (msg.flags) {
+              if (Array.isArray(msg.flags)) {
+                flagsArray = msg.flags;
+                isRead = flagsArray.includes('\\Seen') || flagsArray.includes('Seen');
+              } else if (msg.flags instanceof Set) {
+                flagsArray = Array.from(msg.flags);
+                isRead = flagsArray.includes('\\Seen') || flagsArray.includes('Seen');
+              } else if (typeof msg.flags === 'object') {
+                // Convert object to array of keys
+                flagsArray = Object.keys(msg.flags);
+                isRead = flagsArray.includes('\\Seen') || flagsArray.includes('Seen');
+              }
+            }
+
+            console.log(`Message ${msg.uid} - Flags:`, flagsArray, 'Read:', isRead);
 
             messages.push({
               subject: msg.envelope.subject || '(No Subject)',
@@ -2870,15 +2884,15 @@ router.post('/api/fetchsent', async (req, res) => {
               date: msg.envelope.date || new Date(),
               uid: msg.uid,
               seq: msg.seq,
-              read: isRead, // Fixed: Use the properly detected read status
-              flags: flags, // Include all flags for debugging
+              read: isRead,
+              flags: flagsArray, // Store as array for consistency
               text: cleanText,
               html: cleanHtml,
               to: msg.envelope.to?.map(t => `${t.name || ''} <${t.address}>`).join(', ') || '',
               cc: msg.envelope.cc?.map(c => `${c.name || ''} <${c.address}>`).join(', ') || '',
-              bcc: msg.envelope.bcc?.map(b => `${b.name || ''} <${b.address}>`).join(', ') || '', // Add BCC if available
+              bcc: msg.envelope.bcc?.map(b => `${b.name || ''} <${b.address}>`).join(', ') || '',
               messageId: msg.envelope.messageId,
-              inReplyTo: msg.envelope.inReplyTo, // Add threading information
+              inReplyTo: msg.envelope.inReplyTo,
               references: msg.envelope.references
             });
           } catch (parseError) {
