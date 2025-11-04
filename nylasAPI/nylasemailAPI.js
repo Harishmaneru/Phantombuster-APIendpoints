@@ -280,6 +280,76 @@ router.post('/sendemail/:grantId', checkApiKey, async (req, res) => {
   }
 });
 
+router.get('/fetchsentemails/:grantId', checkApiKey, async (req, res) => {
+  try {
+    const { grantId } = req.params;
+    const limit = req.query.limit || 15;
+    const page = req.query.page || 1; // New: page parameter
+    const subject = req.query.subject;
+    const to = req.query.to;
+    const start = req.query.start;
+    const end = req.query.end;
+    const folder = req.query.folder || 'sent';
+
+    // Calculate offset for pagination
+    const offset = (page - 1) * limit;
+
+    // Build query parameters
+    const queryParams = new URLSearchParams();
+    queryParams.append('limit', limit);
+    queryParams.append('offset', offset); // New: offset parameter
+    queryParams.append('in', folder);
+
+    if (subject) {
+      queryParams.append('subject', subject);
+    }
+
+    if (to) {
+      queryParams.append('to', to);
+    }
+
+    if (start) {
+      queryParams.append('start', start);
+    }
+
+    if (end) {
+      queryParams.append('end', end);
+    }
+
+    const url = `${NYLAS_API_BASE_URL}/grants/${grantId}/messages?${queryParams.toString()}`;
+
+    const response = await axios.get(url, {
+      headers: {
+        'Accept': 'application/json, application/gzip',
+        'Authorization': `Bearer ${NYLAS_API_KEY}`,
+        'Content-Type': 'application/json'
+      }
+    });
+
+    // Add pagination info to response
+    res.json({
+      success: true,
+      data: response.data,
+      pagination: {
+        page: parseInt(page),
+        limit: parseInt(limit),
+        offset: offset,
+        hasMore: response.data.length >= limit // Check if there might be more results
+      },
+      message: 'Sent emails fetched successfully',
+      timestamp: new Date().toISOString()
+    });
+  } catch (error) {
+    console.error('Error fetching sent emails:', error.response?.data || error.message);
+    res.status(error.response?.status || 500).json({
+      success: false,
+      message: error.response?.data?.message || error.message || 'Failed to fetch sent emails',
+      data: error.response?.data || null,
+      timestamp: new Date().toISOString()
+    });
+  }
+});
+
 /*_________________________MESSAGE TRACKING API's_________________________*/
 
 
