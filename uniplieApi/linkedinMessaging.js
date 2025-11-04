@@ -1119,25 +1119,98 @@ router.post('/api/unipile/webhook/unipile-account', async (req, res) => {
 //   }
 // });
 
-// Get all chats for a userId
+// Get all chats/conversations for a userId
 router.get('/api/unipile/user/:userId/chats', async (req, res) => {
   try {
     const { userId } = req.params;
+    const { limit = 50, cursor, search } = req.query;
+
     const dbResult = await getLinkedInAccountStatus(userId);
 
     if (!dbResult.success || !dbResult.account_id) {
       return res.status(404).json({ success: false, error: 'No LinkedIn account found' });
     }
 
+    const params = new URLSearchParams();
+    params.append('account_id', dbResult.account_id);
+    params.append('limit', limit);
+    if (cursor) params.append('cursor', cursor);
+    if (search) params.append('search', search);
+
     const response = await axios.get(
-      `${getBaseUrl()}/chats?account_id=${dbResult.account_id}&limit=50`,
+      `${getBaseUrl()}/chats?${params}`,
       { headers: getHeaders() }
     );
 
     res.json({
       success: true,
       data: response.data,
-      account_id: dbResult.account_id
+      account_id: dbResult.account_id,
+      user_id: userId
+    });
+  } catch (err) {
+    handleError(err, res);
+  }
+});
+
+// Alias endpoint: Get all conversations for a userId (same as chats)
+router.get('/api/unipile/user/:userId/conversations', async (req, res) => {
+  try {
+    const { userId } = req.params;
+    const { limit = 50, cursor, search } = req.query;
+
+    const dbResult = await getLinkedInAccountStatus(userId);
+
+    if (!dbResult.success || !dbResult.account_id) {
+      return res.status(404).json({ success: false, error: 'No LinkedIn account found' });
+    }
+
+    const params = new URLSearchParams();
+    params.append('account_id', dbResult.account_id);
+    params.append('limit', limit);
+    if (cursor) params.append('cursor', cursor);
+    if (search) params.append('search', search);
+
+    const response = await axios.get(
+      `${getBaseUrl()}/chats?${params}`,
+      { headers: getHeaders() }
+    );
+
+    res.json({
+      success: true,
+      data: response.data,
+      account_id: dbResult.account_id,
+      user_id: userId
+    });
+  } catch (err) {
+    handleError(err, res);
+  }
+});
+
+// Get a specific conversation/chat by ID for a user
+router.get('/api/unipile/user/:userId/conversations/:chatId', async (req, res) => {
+  try {
+    const { userId, chatId } = req.params;
+
+    const dbResult = await getLinkedInAccountStatus(userId);
+    if (!dbResult.success || !dbResult.account_id) {
+      return res.status(404).json({ success: false, error: 'No LinkedIn account found' });
+    }
+
+    const params = new URLSearchParams();
+    params.append('account_id', dbResult.account_id);
+
+    const response = await axios.get(
+      `${getBaseUrl()}/chats/${chatId}?${params}`,
+      { headers: getHeaders() }
+    );
+
+    res.json({
+      success: true,
+      data: response.data,
+      account_id: dbResult.account_id,
+      chat_id: chatId,
+      user_id: userId
     });
   } catch (err) {
     handleError(err, res);
@@ -1169,14 +1242,110 @@ router.get('/api/unipile/user/:userId/chats/:chatId/messages', async (req, res) 
       success: true,
       data: response.data,
       account_id: dbResult.account_id,
-      chat_id: chatId
+      chat_id: chatId,
+      user_id: userId
     });
   } catch (err) {
     handleError(err, res);
   }
 });
 
-// Sync chat (get new messages since timestamp)
+// Alias endpoint: Get messages for a conversation (same as chats)
+router.get('/api/unipile/user/:userId/conversations/:chatId/messages', async (req, res) => {
+  try {
+    const { userId, chatId } = req.params;
+    const { limit = 50, cursor } = req.query;
+
+    const dbResult = await getLinkedInAccountStatus(userId);
+    if (!dbResult.success || !dbResult.account_id) {
+      return res.status(404).json({ success: false, error: 'No LinkedIn account found' });
+    }
+
+    const params = new URLSearchParams();
+    params.append('account_id', dbResult.account_id);
+    params.append('limit', limit);
+    if (cursor) params.append('cursor', cursor);
+
+    const response = await axios.get(
+      `${getBaseUrl()}/chats/${chatId}/messages?${params}`,
+      { headers: getHeaders() }
+    );
+
+    res.json({
+      success: true,
+      data: response.data,
+      account_id: dbResult.account_id,
+      chat_id: chatId,
+      user_id: userId
+    });
+  } catch (err) {
+    handleError(err, res);
+  }
+});
+
+// Get conversation attendees (participants) for a chat
+router.get('/api/unipile/user/:userId/conversations/:chatId/attendees', async (req, res) => {
+  try {
+    const { userId, chatId } = req.params;
+
+    const dbResult = await getLinkedInAccountStatus(userId);
+    if (!dbResult.success || !dbResult.account_id) {
+      return res.status(404).json({ success: false, error: 'No LinkedIn account found' });
+    }
+
+    const params = new URLSearchParams();
+    params.append('account_id', dbResult.account_id);
+
+    const response = await axios.get(
+      `${getBaseUrl()}/chats/${chatId}/attendees?${params}`,
+      { headers: getHeaders() }
+    );
+
+    res.json({
+      success: true,
+      data: response.data,
+      account_id: dbResult.account_id,
+      chat_id: chatId,
+      user_id: userId
+    });
+  } catch (err) {
+    handleError(err, res);
+  }
+});
+
+// Sync chat (get new messages since timestamp) - with user_id in URL
+router.get('/api/unipile/user/:userId/conversations/:chatId/sync', async (req, res) => {
+  try {
+    const { userId, chatId } = req.params;
+    const { since } = req.query;
+
+    const dbResult = await getLinkedInAccountStatus(userId);
+    if (!dbResult.success || !dbResult.account_id) {
+      return res.status(404).json({ success: false, error: 'No LinkedIn account found' });
+    }
+
+    const params = new URLSearchParams();
+    params.append('account_id', dbResult.account_id);
+    if (since) params.append('since', since);
+
+    const response = await axios.get(
+      `${getBaseUrl()}/chats/${chatId}/sync?${params}`,
+      { headers: getHeaders() }
+    );
+
+    res.json({
+      success: true,
+      data: response.data,
+      account_id: dbResult.account_id,
+      chat_id: chatId,
+      user_id: userId
+    });
+  } catch (err) {
+    handleError(err, res);
+  }
+});
+
+// Sync chat (get new messages since timestamp) - legacy endpoint with account_id in query
 router.get('/api/unipile/chats/:chatId/sync', async (req, res) => {
   try {
     const { chatId } = req.params;
