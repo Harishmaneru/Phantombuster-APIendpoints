@@ -284,21 +284,76 @@ router.get('/fetchsentemails/:grantId', checkApiKey, async (req, res) => {
   try {
     const { grantId } = req.params;
     const limit = req.query.limit || 15;
-    const page = req.query.page || 1; // New: page parameter
+    const page = req.query.page || 1;
     const subject = req.query.subject;
     const to = req.query.to;
     const start = req.query.start;
     const end = req.query.end;
-    const folder = req.query.folder || 'sent';
+    const folderId = req.query.folderId; // Optional: allow passing folder ID directly
 
     // Calculate offset for pagination
     const offset = (page - 1) * limit;
 
+    let sentFolderId = folderId;
+
+    // If no folder ID provided, fetch folders to find the "Sent" folder
+    if (!sentFolderId) {
+      try {
+        const foldersUrl = `${NYLAS_API_BASE_URL}/grants/${grantId}/folders`;
+        const foldersResponse = await axios.get(foldersUrl, {
+          headers: {
+            'Accept': 'application/json, application/gzip',
+            'Authorization': `Bearer ${NYLAS_API_KEY}`,
+            'Content-Type': 'application/json'
+          }
+        });
+
+        const folders = foldersResponse.data?.data || foldersResponse.data || [];
+        
+        // Find sent folder by role or name
+        const sentFolder = folders.find(folder => 
+          folder.role === 'sent' || 
+          folder.role === 'sent_items' ||
+          folder.name?.toLowerCase().includes('sent')
+        );
+
+        if (sentFolder) {
+          sentFolderId = sentFolder.id;
+        } else {
+          // If no sent folder found, try common names
+          const commonNames = ['Sent', 'Sent Mail', 'Sent Items', 'Sent Messages'];
+          const folderByName = folders.find(folder => 
+            commonNames.some(name => folder.name?.toLowerCase() === name.toLowerCase())
+          );
+          if (folderByName) {
+            sentFolderId = folderByName.id;
+          }
+        }
+
+        if (!sentFolderId) {
+          return res.status(404).json({
+            success: false,
+            message: 'Sent folder not found. Please provide folderId as query parameter.',
+            data: { availableFolders: folders.map(f => ({ id: f.id, name: f.name, role: f.role })) },
+            timestamp: new Date().toISOString()
+          });
+        }
+      } catch (folderError) {
+        console.error('Error fetching folders:', folderError.response?.data || folderError.message);
+        return res.status(500).json({
+          success: false,
+          message: 'Failed to fetch folders. Please provide folderId as query parameter.',
+          data: folderError.response?.data || null,
+          timestamp: new Date().toISOString()
+        });
+      }
+    }
+
     // Build query parameters
     const queryParams = new URLSearchParams();
     queryParams.append('limit', limit);
-    queryParams.append('offset', offset); // New: offset parameter
-    queryParams.append('in', folder);
+    queryParams.append('offset', offset);
+    queryParams.append('in', sentFolderId); // Use folder ID instead of name
 
     if (subject) {
       queryParams.append('subject', subject);
@@ -344,6 +399,45 @@ router.get('/fetchsentemails/:grantId', checkApiKey, async (req, res) => {
     res.status(error.response?.status || 500).json({
       success: false,
       message: error.response?.data?.message || error.message || 'Failed to fetch sent emails',
+      data: error.response?.data || null,
+      timestamp: new Date().toISOString()
+    });
+  }
+});
+
+/*_________________________FOLDERS API_________________________*/
+
+/**
+ * Get all folders for a grant
+ * GET /api/nylas/folders/:grantId
+ * Query params: limit (optional, default: 50)
+ */
+router.get('/folders/:grantId', checkApiKey, async (req, res) => {
+  try {
+    const { grantId } = req.params;
+    const limit = req.query.limit || 50;
+
+    const url = `${NYLAS_API_BASE_URL}/grants/${grantId}/folders?limit=${limit}`;
+
+    const response = await axios.get(url, {
+      headers: {
+        'Accept': 'application/json, application/gzip',
+        'Authorization': `Bearer ${NYLAS_API_KEY}`,
+        'Content-Type': 'application/json'
+      }
+    });
+
+    res.json({
+      success: true,
+      data: response.data,
+      message: null,
+      timestamp: new Date().toISOString()
+    });
+  } catch (error) {
+    console.error('Error fetching folders:', error.response?.data || error.message);
+    res.status(error.response?.status || 500).json({
+      success: false,
+      message: error.response?.data?.message || error.message || 'Failed to fetch folders',
       data: error.response?.data || null,
       timestamp: new Date().toISOString()
     });
