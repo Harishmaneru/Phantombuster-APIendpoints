@@ -862,19 +862,19 @@ router.get('/api/unipile/user/:userId/chats/:chatId/full-messages', async (req, 
     );
 
     // Find current user's attendee profile
-    const currentUserAttendee = uniqueAttendees.find(attendee => 
+    const currentUserAttendee = uniqueAttendees.find(attendee =>
       attendee.provider_id === currentUserProviderId || attendee.is_self === 1
     );
 
     // Find other attendees (excluding current user)
-    const otherAttendees = uniqueAttendees.filter(attendee => 
+    const otherAttendees = uniqueAttendees.filter(attendee =>
       attendee.provider_id !== currentUserProviderId && attendee.is_self !== 1
     );
 
     // Process messages with clean structure
     const processedMessages = messages.map(msg => {
       const isMyMessage = msg.is_sender === 1;
-      const senderAttendee = uniqueAttendees.find(attendee => 
+      const senderAttendee = uniqueAttendees.find(attendee =>
         attendee.provider_id === msg.sender_id
       );
 
@@ -905,7 +905,7 @@ router.get('/api/unipile/user/:userId/chats/:chatId/full-messages', async (req, 
         messages: processedMessages,
         my_messages: myMessages,
         attendee_messages: attendeeMessages,
-        
+
         // Single source of truth for profiles
         participants: {
           current_user: currentUserAttendee ? {
@@ -915,7 +915,7 @@ router.get('/api/unipile/user/:userId/chats/:chatId/full-messages', async (req, 
             profile_url: currentUserAttendee.profile_url,
             occupation: currentUserAttendee.specifics?.occupation
           } : null,
-          
+
           other_attendees: otherAttendees.map(attendee => ({
             id: attendee.id,
             name: attendee.name,
@@ -925,7 +925,7 @@ router.get('/api/unipile/user/:userId/chats/:chatId/full-messages', async (req, 
             network_distance: attendee.specifics?.network_distance
           }))
         },
-        
+
         // Simplified chat info
         chat_info: {
           id: chatInfo.id,
@@ -936,7 +936,7 @@ router.get('/api/unipile/user/:userId/chats/:chatId/full-messages', async (req, 
             is_my_message: chatInfo.lastMessage.is_sender === 1
           } : null
         },
-        
+
         pagination: messagesResponse.data?.pagination || {
           cursor: messagesResponse.data?.cursor || null,
           has_more: messagesResponse.data?.has_more || false,
@@ -1922,27 +1922,69 @@ router.get('/api/unipile/linkedin/fetch-profile/:identifier', async (req, res) =
     let chatId = null;
 
     // Try to find chat ID using the user's provider_id
-    try {
-      const chatsResponse = await axios.get(
-        `${getBaseUrl()}/chats?account_id=${finalAccountId}&limit=100`,
-        { headers: getHeaders() }
-      );
-
-      const chats = chatsResponse.data?.chats || chatsResponse.data?.items || [];
-      
-      // Find chat where this user is an attendee
-      const userChat = chats.find(chat => {
-        const attendees = chat.attendees || [];
-        return attendees.some(attendee => 
-          attendee.provider_id === userProfile.provider_id
+    // Only proceed if we have a provider_id
+    if (userProfile?.provider_id) {
+      try {
+        const chatsResponse = await axios.get(
+          `${getBaseUrl()}/chats?account_id=${finalAccountId}&limit=100`,
+          { headers: getHeaders() }
         );
-      });
 
-      chatId = userChat?.id || null;
+        const chats = chatsResponse.data?.chats || chatsResponse.data?.items || [];
 
-    } catch (chatError) {
-      console.log('Could not fetch chat ID:', chatError.message);
-      // Continue without chat ID if chat fetch fails
+        // First, try to find chat where attendees are included in the response
+        let userChat = chats.find(chat => {
+          const attendees = chat.attendees || [];
+          return attendees.some(attendee =>
+            attendee.provider_id === userProfile.provider_id
+          );
+        });
+
+      // If not found and we have chats, fetch attendees for each chat
+      if (!userChat && chats.length > 0) {
+        // Try to find chat by checking attendees endpoint for each chat
+        // Limit to first 20 chats to avoid too many API calls
+        const chatsToCheck = chats.slice(0, 20);
+        
+        for (const chat of chatsToCheck) {
+          try {
+            // Handle both 'id' and 'chat_id' field names
+            const currentChatId = chat.id || chat.chat_id;
+            if (!currentChatId) continue;
+
+            const attendeesResponse = await axios.get(
+              `${getBaseUrl()}/chats/${currentChatId}/attendees?account_id=${finalAccountId}`,
+              { headers: getHeaders() }
+            );
+
+            const attendeesData = attendeesResponse.data?.attendees || attendeesResponse.data?.items || attendeesResponse.data || [];
+            const attendees = Array.isArray(attendeesData) ? attendeesData : [];
+
+            const foundAttendee = attendees.find(attendee =>
+              attendee.provider_id === userProfile.provider_id
+            );
+
+            if (foundAttendee) {
+              userChat = chat;
+              break;
+            }
+          } catch (attendeeError) {
+            // Continue to next chat if this one fails
+            continue;
+          }
+        }
+      }
+
+        // Handle both 'id' and 'chat_id' field names
+        chatId = userChat?.id || userChat?.chat_id || null;
+
+      } catch (chatError) {
+        console.error('Could not fetch chat ID:', chatError.message);
+        console.error('Chat error details:', chatError.response?.data || chatError.message);
+        // Continue without chat ID if chat fetch fails
+      }
+    } else {
+      console.log('No provider_id found in user profile, skipping chat lookup');
     }
 
     res.json({
