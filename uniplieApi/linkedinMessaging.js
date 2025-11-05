@@ -1826,6 +1826,71 @@ router.get('/api/unipile/linkedin/connection-status/:identifier', async (req, re
 // ==================== GET USER DETAILS (Helper) ====================
 
 // Get LinkedIn user details by identifier
+// router.get('/api/unipile/linkedin/fetch-profile/:identifier', async (req, res) => {
+//   try {
+//     const { identifier } = req.params;
+//     const { account_id, user_id } = req.query;
+
+//     // Get account_id from user_id if not provided
+//     let finalAccountId = account_id;
+//     if (!finalAccountId && user_id) {
+//       const dbResult = await getLinkedInAccountStatus(user_id);
+//       if (dbResult.success && dbResult.account_id) {
+//         finalAccountId = dbResult.account_id;
+//       }
+//     }
+
+//     if (!finalAccountId) {
+//       return res.status(400).json({
+//         success: false,
+//         error: 'account_id or user_id is required'
+//       });
+//     }
+
+//     // Call Unipile API to get user details
+//     const response = await axios.get(
+//       `${getBaseUrl()}/users/${encodeURIComponent(identifier)}?account_id=${finalAccountId}`,
+//       { headers: getHeaders() }
+//     );
+
+//     res.json({
+//       success: true,
+//       data: response.data,
+//       user: {
+//         provider_id: response.data.provider_id,
+//         name: response.data.name,
+//         headline: response.data.headline,
+//         profile_url: response.data.profile_url,
+//         picture: response.data.picture,
+//         identifier: identifier,
+//         location: response.data.location,
+//         industry: response.data.industry,
+//         summary: response.data.summary,
+//         experience: response.data.experience,
+//         education: response.data.education,
+//         skills: response.data.skills,
+//         connections_count: response.data.connections_count,
+//         followers_count: response.data.followers_count
+//       },
+//       account_id: finalAccountId,
+//       fetched_at: new Date()
+//     });
+
+//   } catch (err) {
+//     console.error('Get user error:', err.response?.data || err.message);
+
+//     if (err.response?.status === 404) {
+//       return res.status(404).json({
+//         success: false,
+//         error: 'User not found',
+//         identifier: req.params.identifier
+//       });
+//     }
+
+//     handleError(err, res);
+//   }
+// });
+
 router.get('/api/unipile/linkedin/fetch-profile/:identifier', async (req, res) => {
   try {
     const { identifier } = req.params;
@@ -1853,24 +1918,55 @@ router.get('/api/unipile/linkedin/fetch-profile/:identifier', async (req, res) =
       { headers: getHeaders() }
     );
 
+    const userProfile = response.data;
+    let chatId = null;
+
+    // Try to find chat ID using the user's provider_id
+    try {
+      const chatsResponse = await axios.get(
+        `${getBaseUrl()}/chats?account_id=${finalAccountId}&limit=100`,
+        { headers: getHeaders() }
+      );
+
+      const chats = chatsResponse.data?.chats || chatsResponse.data?.items || [];
+      
+      // Find chat where this user is an attendee
+      const userChat = chats.find(chat => {
+        const attendees = chat.attendees || [];
+        return attendees.some(attendee => 
+          attendee.provider_id === userProfile.provider_id
+        );
+      });
+
+      chatId = userChat?.id || null;
+
+    } catch (chatError) {
+      console.log('Could not fetch chat ID:', chatError.message);
+      // Continue without chat ID if chat fetch fails
+    }
+
     res.json({
       success: true,
-      data: response.data,
+      data: userProfile,
       user: {
-        provider_id: response.data.provider_id,
-        name: response.data.name,
-        headline: response.data.headline,
-        profile_url: response.data.profile_url,
-        picture: response.data.picture,
+        provider_id: userProfile.provider_id,
+        name: userProfile.name,
+        headline: userProfile.headline,
+        profile_url: userProfile.profile_url,
+        picture: userProfile.profile_picture_url,
         identifier: identifier,
-        location: response.data.location,
-        industry: response.data.industry,
-        summary: response.data.summary,
-        experience: response.data.experience,
-        education: response.data.education,
-        skills: response.data.skills,
-        connections_count: response.data.connections_count,
-        followers_count: response.data.followers_count
+        location: userProfile.location,
+        industry: userProfile.industry,
+        summary: userProfile.summary,
+        experience: userProfile.experience,
+        education: userProfile.education,
+        skills: userProfile.skills,
+        connections_count: userProfile.connections_count,
+        followers_count: userProfile.follower_count
+      },
+      chat_info: {
+        chat_id: chatId,
+        has_existing_chat: !!chatId
       },
       account_id: finalAccountId,
       fetched_at: new Date()
@@ -1890,8 +1986,6 @@ router.get('/api/unipile/linkedin/fetch-profile/:identifier', async (req, res) =
     handleError(err, res);
   }
 });
-
-
 
 
 
