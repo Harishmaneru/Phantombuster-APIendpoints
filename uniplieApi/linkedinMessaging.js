@@ -833,7 +833,7 @@ router.get('/api/unipile/user/:userId/chats/:chatId/full-messages', async (req, 
 
     const accountId = dbResult.account_id;
 
-    // Get current user's profile to compare sender IDs
+    // Get current user's profile
     const currentUserResponse = await axios.get(
       `${getBaseUrl()}/accounts/${accountId}`,
       { headers: getHeaders() }
@@ -856,69 +856,106 @@ router.get('/api/unipile/user/:userId/chats/:chatId/full-messages', async (req, 
     const attendeesData = attendeesResponse.data?.attendees || attendeesResponse.data?.items || attendeesResponse.data || [];
     const attendees = Array.isArray(attendeesData) ? attendeesData : [];
 
-    // CORRECTED: Determine if message is from current user
-    const isMyMessage = (msg) => {
-      // Method 1: Compare sender_id with current user's provider_id
-      if (msg.sender_id === currentUserProviderId) return true;
-      
-      // Method 2: Check is_sender field (0 = other person, 1 = you)
-      if (msg.hasOwnProperty('is_sender')) {
-        return msg.is_sender === 1;
-      }
-      
-      // Method 3: Compare with account_id as fallback
-      return msg.sender_id === accountId;
-    };
+    // Remove duplicate attendees based on provider_id
+    const uniqueAttendees = attendees.filter((attendee, index, self) =>
+      index === self.findIndex(a => a.provider_id === attendee.provider_id)
+    );
 
-    // CORRECTED: Combine messages with attendee profiles (no duplicates)
-    const messagesWithProfiles = messages.map(msg => {
-      const senderId = msg.sender_id;
-      const attendeeProfile = attendees.find(attendee => 
-        attendee.provider_id === senderId || attendee.id === msg.sender_attendee_id
+    // Find current user's attendee profile
+    const currentUserAttendee = uniqueAttendees.find(attendee => 
+      attendee.provider_id === currentUserProviderId || attendee.is_self === 1
+    );
+
+    // Find other attendees (excluding current user)
+    const otherAttendees = uniqueAttendees.filter(attendee => 
+      attendee.provider_id !== currentUserProviderId && attendee.is_self !== 1
+    );
+
+    // Process messages with clean structure
+    const processedMessages = messages.map(msg => {
+      const isMyMessage = msg.is_sender === 1;
+      const senderAttendee = uniqueAttendees.find(attendee => 
+        attendee.provider_id === msg.sender_id
       );
-      
+
       return {
-        ...msg,
-        is_my_message: isMyMessage(msg),
-        attendee_profile: attendeeProfile || null // Single profile field
+        id: msg.id,
+        text: msg.text,
+        timestamp: msg.timestamp,
+        is_my_message: isMyMessage,
+        is_sender: msg.is_sender,
+        sender_id: msg.sender_id,
+        message_type: msg.message_type,
+        delivered: msg.delivered,
+        seen: msg.seen,
+        reactions: msg.reactions,
+        attachments: msg.attachments
+        // Removed duplicate profile fields
       };
     });
 
-    const myMessages = messagesWithProfiles.filter(msg => msg.is_my_message);
-    const attendeeMessages = messagesWithProfiles.filter(msg => !msg.is_my_message);
+    const myMessages = processedMessages.filter(msg => msg.is_my_message);
+    const attendeeMessages = processedMessages.filter(msg => !msg.is_my_message);
 
+    // Clean, polished response
     res.json({
       success: true,
       data: {
-        messages: messagesWithProfiles,
+        // Clean message lists without duplicate profiles
+        messages: processedMessages,
         my_messages: myMessages,
         attendee_messages: attendeeMessages,
-        attendees: attendees,
-        chat_info: chatInfo,
+        
+        // Single source of truth for profiles
+        participants: {
+          current_user: currentUserAttendee ? {
+            id: currentUserAttendee.id,
+            name: currentUserAttendee.name,
+            picture_url: currentUserAttendee.picture_url,
+            profile_url: currentUserAttendee.profile_url,
+            occupation: currentUserAttendee.specifics?.occupation
+          } : null,
+          
+          other_attendees: otherAttendees.map(attendee => ({
+            id: attendee.id,
+            name: attendee.name,
+            picture_url: attendee.picture_url,
+            profile_url: attendee.profile_url,
+            occupation: attendee.specifics?.occupation,
+            network_distance: attendee.specifics?.network_distance
+          }))
+        },
+        
+        // Simplified chat info
+        chat_info: {
+          id: chatInfo.id,
+          unread_count: chatInfo.unread_count,
+          last_message: chatInfo.lastMessage ? {
+            text: chatInfo.lastMessage.text,
+            timestamp: chatInfo.lastMessage.timestamp,
+            is_my_message: chatInfo.lastMessage.is_sender === 1
+          } : null
+        },
+        
         pagination: messagesResponse.data?.pagination || {
           cursor: messagesResponse.data?.cursor || null,
           has_more: messagesResponse.data?.has_more || false,
           limit: parseInt(limit),
-          total: messages.length
+          total: processedMessages.length
         }
       },
-      account_id: accountId,
-      chat_id: chatId,
-      user_id: userId,
-      total_messages: messagesWithProfiles.length,
-      my_message_count: myMessages.length,
-      attendee_message_count: attendeeMessages.length,
-      accuracy_check: {
-        current_user_provider_id: currentUserProviderId,
-        message_ownership_corrected: true
+      meta: {
+        account_id: accountId,
+        chat_id: chatId,
+        user_id: userId,
+        total_messages: processedMessages.length,
+        my_message_count: myMessages.length,
+        attendee_message_count: attendeeMessages.length,
+        participant_count: uniqueAttendees.length
       }
     });
   } catch (err) {
-    console.error('Full messages API error:', {
-      status: err.response?.status,
-      data: err.response?.data,
-      message: err.message
-    });
+    console.error('Polished messages API error:', err.message);
     handleError(err, res);
   }
 });
