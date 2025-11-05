@@ -892,7 +892,7 @@ router.get('/api/unipile/user/:userId/chats/:chatId/full-messages', async (req, 
         attachments: msg.attachments
         // Removed duplicate profile fields
       };
-    });
+    }).reverse(); // Reverse to show oldest first (like real chat)
 
     const myMessages = processedMessages.filter(msg => msg.is_my_message);
     const attendeeMessages = processedMessages.filter(msg => !msg.is_my_message);
@@ -959,6 +959,11 @@ router.get('/api/unipile/user/:userId/chats/:chatId/full-messages', async (req, 
     handleError(err, res);
   }
 });
+
+
+
+
+
 // ==================== ACCOUNT MANAGEMENT ENDPOINTS ====================
 
 
