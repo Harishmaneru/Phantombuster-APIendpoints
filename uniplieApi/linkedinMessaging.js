@@ -738,7 +738,7 @@ router.post('/api/unipile/user/:userId/linkedin/message', async (req, res) => {
     }
 
     // Extract LinkedIn identifier from URL if provided
-    let recipientId = profile_identifier;
+    let recipientIdentifier = profile_identifier;
     if (profile_url && !profile_identifier) {
       // Handle various LinkedIn URL formats
       const patterns = [
@@ -751,7 +751,7 @@ router.post('/api/unipile/user/:userId/linkedin/message', async (req, res) => {
       for (const pattern of patterns) {
         match = profile_url.match(pattern);
         if (match) {
-          recipientId = match[1];
+          recipientIdentifier = match[1];
           break;
         }
       }
@@ -762,6 +762,26 @@ router.post('/api/unipile/user/:userId/linkedin/message', async (req, res) => {
           error: 'Invalid LinkedIn profile URL format. Expected: https://linkedin.com/in/username or https://linkedin.com/company/companyname'
         });
       }
+    }
+
+    // Try to get provider_id from Unipile API (more reliable than public identifier)
+    let recipientId = recipientIdentifier;
+    try {
+      const userResponse = await axios.get(
+        `${getBaseUrl()}/users/${encodeURIComponent(recipientIdentifier)}?account_id=${finalAccountId}`,
+        { headers: getHeaders() }
+      );
+
+      // Use provider_id if available, otherwise fall back to identifier
+      if (userResponse.data?.provider_id) {
+        recipientId = userResponse.data.provider_id;
+        console.log(`Found provider_id for ${recipientIdentifier}: ${recipientId}`);
+      } else {
+        console.log(`No provider_id found, using identifier: ${recipientIdentifier}`);
+      }
+    } catch (userError) {
+      console.warn(`Could not fetch user details for ${recipientIdentifier}, using identifier directly:`, userError.message);
+      // Continue with identifier if user lookup fails - Unipile might accept it
     }
 
     // Build FormData payload
@@ -814,8 +834,35 @@ router.post('/api/unipile/user/:userId/linkedin/message', async (req, res) => {
     console.error('LinkedIn message error:', {
       status: err.response?.status,
       data: err.response?.data,
-      message: err.message
+      message: err.message,
+      url: err.config?.url,
+      recipient_id: recipientId,
+      account_id: finalAccountId,
+      user_id: userId
     });
+
+    // Provide detailed error information for 422 errors from Unipile
+    if (err.response?.status === 422) {
+      const unipileError = err.response?.data;
+      return res.status(422).json({
+        success: false,
+        error: unipileError?.error || unipileError?.message || 'Unprocessable Entity - Unable to send message',
+        details: unipileError?.detail || unipileError?.details || unipileError?.title,
+        type: unipileError?.type,
+        recipient_id: recipientId,
+        account_id: finalAccountId,
+        user_id: userId,
+        unipile_response: unipileError,
+        possible_reasons: [
+          'Recipient profile not found or invalid',
+          'Account not properly connected to LinkedIn',
+          'Rate limit exceeded',
+          'Recipient is not a connection (may need InMail)',
+          'LinkedIn account has restrictions'
+        ]
+      });
+    }
+
     handleError(err, res);
   }
 });
