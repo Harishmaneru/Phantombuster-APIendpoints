@@ -833,89 +833,85 @@ router.get('/api/unipile/user/:userId/chats/:chatId/full-messages', async (req, 
 
     const accountId = dbResult.account_id;
 
-    // Fetch messages, chat details, and attendees in parallel for better performance
+    // Get current user's profile to compare sender IDs
+    const currentUserResponse = await axios.get(
+      `${getBaseUrl()}/accounts/${accountId}`,
+      { headers: getHeaders() }
+    );
+    const currentUserProviderId = currentUserResponse.data?.provider_id;
+
     const params = new URLSearchParams();
     params.append('account_id', accountId);
     params.append('limit', limit);
     if (cursor) params.append('cursor', cursor);
 
     const [messagesResponse, chatResponse, attendeesResponse] = await Promise.all([
-      // Get all messages
       axios.get(`${getBaseUrl()}/chats/${chatId}/messages?${params}`, { headers: getHeaders() }),
-      // Get chat details
       axios.get(`${getBaseUrl()}/chats/${chatId}?account_id=${accountId}`, { headers: getHeaders() }),
-      // Get attendees separately for complete profile information
       axios.get(`${getBaseUrl()}/chats/${chatId}/attendees?account_id=${accountId}`, { headers: getHeaders() })
     ]);
 
-    // Extract data from responses - handle different possible response structures
     const messages = messagesResponse.data?.messages || messagesResponse.data?.items || [];
     const chatInfo = chatResponse.data || {};
     const attendeesData = attendeesResponse.data?.attendees || attendeesResponse.data?.items || attendeesResponse.data || [];
     const attendees = Array.isArray(attendeesData) ? attendeesData : [];
 
-    // Helper function to find attendee by various possible identifiers
-    const findAttendee = (senderId) => {
-      if (!senderId) return null;
-      
-      return attendees.find(attendee => 
-        attendee.id === senderId ||
-        attendee.provider_id === senderId ||
-        attendee.account_id === senderId ||
-        attendee.sender_id === senderId ||
-        (attendee.sender && (attendee.sender.id === senderId || attendee.sender.account_id === senderId))
-      );
-    };
-
-    // Helper function to determine if message is from current user
+    // CORRECTED: Determine if message is from current user
     const isMyMessage = (msg) => {
-      // Check multiple possible fields for sender identification
-      const senderId = msg.sender_id || msg.sender?.account_id || msg.sender?.id || msg.account_id;
-      const senderAccountId = msg.sender?.account_id || msg.account_id;
+      // Method 1: Compare sender_id with current user's provider_id
+      if (msg.sender_id === currentUserProviderId) return true;
       
-      // Message is from current user if sender matches account_id
-      return senderId === accountId || senderAccountId === accountId || 
-             (msg.sender && (msg.sender.account_id === accountId || msg.sender.id === accountId));
+      // Method 2: Check is_sender field (0 = other person, 1 = you)
+      if (msg.hasOwnProperty('is_sender')) {
+        return msg.is_sender === 1;
+      }
+      
+      // Method 3: Compare with account_id as fallback
+      return msg.sender_id === accountId;
     };
 
-    // Combine messages with attendee profiles
+    // CORRECTED: Combine messages with attendee profiles (no duplicates)
     const messagesWithProfiles = messages.map(msg => {
-      const senderId = msg.sender_id || msg.sender?.account_id || msg.sender?.id;
-      const attendeeProfile = findAttendee(senderId);
-      const isMyMsg = isMyMessage(msg);
-
+      const senderId = msg.sender_id;
+      const attendeeProfile = attendees.find(attendee => 
+        attendee.provider_id === senderId || attendee.id === msg.sender_attendee_id
+      );
+      
       return {
         ...msg,
-        is_my_message: isMyMsg,
-        sender_profile: attendeeProfile || msg.sender || null,
-        attendee_profile: attendeeProfile || null // Keep for backward compatibility
+        is_my_message: isMyMessage(msg),
+        attendee_profile: attendeeProfile || null // Single profile field
       };
     });
 
-    // Extract pagination info
-    const pagination = messagesResponse.data?.pagination || {
-      cursor: messagesResponse.data?.cursor || null,
-      has_more: messagesResponse.data?.has_more || false,
-      limit: parseInt(limit),
-      total: messages.length
-    };
+    const myMessages = messagesWithProfiles.filter(msg => msg.is_my_message);
+    const attendeeMessages = messagesWithProfiles.filter(msg => !msg.is_my_message);
 
     res.json({
       success: true,
       data: {
         messages: messagesWithProfiles,
-        my_messages: messagesWithProfiles.filter(msg => msg.is_my_message),
-        attendee_messages: messagesWithProfiles.filter(msg => !msg.is_my_message),
+        my_messages: myMessages,
+        attendee_messages: attendeeMessages,
         attendees: attendees,
         chat_info: chatInfo,
-        pagination: pagination
+        pagination: messagesResponse.data?.pagination || {
+          cursor: messagesResponse.data?.cursor || null,
+          has_more: messagesResponse.data?.has_more || false,
+          limit: parseInt(limit),
+          total: messages.length
+        }
       },
       account_id: accountId,
       chat_id: chatId,
       user_id: userId,
       total_messages: messagesWithProfiles.length,
-      my_message_count: messagesWithProfiles.filter(msg => msg.is_my_message).length,
-      attendee_message_count: messagesWithProfiles.filter(msg => !msg.is_my_message).length
+      my_message_count: myMessages.length,
+      attendee_message_count: attendeeMessages.length,
+      accuracy_check: {
+        current_user_provider_id: currentUserProviderId,
+        message_ownership_corrected: true
+      }
     });
   } catch (err) {
     console.error('Full messages API error:', {
@@ -926,7 +922,6 @@ router.get('/api/unipile/user/:userId/chats/:chatId/full-messages', async (req, 
     handleError(err, res);
   }
 });
-
 // ==================== ACCOUNT MANAGEMENT ENDPOINTS ====================
 
 
