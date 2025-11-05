@@ -984,11 +984,20 @@ router.get('/api/unipile/user/:userId/chats/:chatId/full-messages', async (req, 
           } : null
         },
 
-        pagination: messagesResponse.data?.pagination || {
-          cursor: messagesResponse.data?.cursor || null,
-          has_more: messagesResponse.data?.has_more || false,
+        pagination: {
+          cursor: messagesResponse.data?.pagination?.cursor || 
+                  messagesResponse.data?.cursor || 
+                  messagesResponse.data?.next_cursor || 
+                  null,
+          has_more: messagesResponse.data?.pagination?.has_more !== undefined 
+                    ? messagesResponse.data.pagination.has_more 
+                    : (messagesResponse.data?.has_more !== undefined 
+                        ? messagesResponse.data.has_more 
+                        : (!!messagesResponse.data?.cursor || !!messagesResponse.data?.pagination?.cursor)),
           limit: parseInt(limit),
-          total: processedMessages.length
+          total: messagesResponse.data?.pagination?.total || 
+                 messagesResponse.data?.total || 
+                 processedMessages.length
         }
       },
       meta: {
@@ -1995,7 +2004,7 @@ router.get('/api/unipile/linkedin/fetch-profile/:identifier', async (req, res) =
         let userChat = chatsArray.find(chat => {
           const attendees = chat.attendees || chat.participants || [];
           if (!Array.isArray(attendees)) return false;
-          
+
           return attendees.some(attendee => {
             // Match by provider_id (most reliable)
             if (providerId && (attendee.provider_id === providerId || attendee.id === providerId)) {
@@ -2016,7 +2025,7 @@ router.get('/api/unipile/linkedin/fetch-profile/:identifier', async (req, res) =
         // If not found in initial response, fetch attendees for each chat
         if (!userChat && chatsArray.length > 0) {
           console.log('Chat not found in initial response, checking attendees for each chat...');
-          
+
           // Check all chats (not just first 20)
           for (const chat of chatsArray) {
             try {
@@ -2028,9 +2037,9 @@ router.get('/api/unipile/linkedin/fetch-profile/:identifier', async (req, res) =
                 { headers: getHeaders() }
               );
 
-              const attendeesData = attendeesResponse.data?.attendees || 
-                                   attendeesResponse.data?.items || 
-                                   attendeesResponse.data || [];
+              const attendeesData = attendeesResponse.data?.attendees ||
+                attendeesResponse.data?.items ||
+                attendeesResponse.data || [];
               const attendees = Array.isArray(attendeesData) ? attendeesData : [];
 
               // Check for match by provider_id or public_identifier
