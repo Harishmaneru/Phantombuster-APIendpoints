@@ -918,12 +918,49 @@ router.get('/api/unipile/user/:userId/chats/:chatId/full-messages', async (req, 
       attendee.provider_id !== currentUserProviderId && attendee.is_self !== 1
     );
 
+    // Log raw message structure from Unipile for debugging (first message only)
+    if (messages.length > 0) {
+      console.log('🔍 Raw Unipile message structure (first message):', JSON.stringify(messages[0], null, 2));
+      console.log('🔍 All available fields in first message:', Object.keys(messages[0]));
+    }
+
     // Process messages with clean structure
     const processedMessages = messages.map(msg => {
       const isMyMessage = msg.is_sender === 1;
       const senderAttendee = uniqueAttendees.find(attendee =>
         attendee.provider_id === msg.sender_id
       );
+
+      // Extract seen status - check multiple possible field names from Unipile
+      // Unipile might use: seen, read, seen_at, read_at, is_seen, is_read, read_status, etc.
+      let seenStatus = null;
+      
+      // Check for direct 'seen' field (most common)
+      if (msg.seen !== undefined && msg.seen !== null) {
+        seenStatus = msg.seen;
+      }
+      // Check for 'read' field (alternative naming)
+      else if (msg.read !== undefined && msg.read !== null) {
+        seenStatus = msg.read;
+      }
+      // Check for boolean 'is_seen' or 'is_read'
+      else if (msg.is_seen !== undefined) {
+        seenStatus = msg.is_seen ? 1 : 0;
+      }
+      else if (msg.is_read !== undefined) {
+        seenStatus = msg.is_read ? 1 : 0;
+      }
+      // Check for timestamp-based fields (if timestamp exists, it's been seen)
+      else if (msg.seen_at) {
+        seenStatus = 1;
+      }
+      else if (msg.read_at) {
+        seenStatus = 1;
+      }
+      // Default to 0 if no seen status found
+      else {
+        seenStatus = 0;
+      }
 
       return {
         id: msg.id,
@@ -934,9 +971,9 @@ router.get('/api/unipile/user/:userId/chats/:chatId/full-messages', async (req, 
         sender_id: msg.sender_id,
         message_type: msg.message_type,
         delivered: msg.delivered,
-        seen: msg.seen,
-        reactions: msg.reactions,
-        attachments: msg.attachments
+        seen: seenStatus,
+        reactions: msg.reactions || [],
+        attachments: msg.attachments || []
         // Removed duplicate profile fields
       };
     }).reverse(); // Reverse to show oldest first (like real chat)
