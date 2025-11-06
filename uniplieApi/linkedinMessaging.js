@@ -2160,115 +2160,148 @@ router.get('/api/unipile/linkedin/fetch-profile/:identifier', async (req, res) =
     let chatId = null;
     let hasExistingChat = false;
 
-    // Try to find chat ID using the user's provider_id or public_identifier
-    const providerId = userProfile?.provider_id;
-    const publicIdentifier = userProfile?.public_identifier || identifier;
+    // Only check for chat if profile is connected (has network_distance)
+    const networkDistance = userProfile?.network_distance;
+    const isConnected = networkDistance !== undefined && networkDistance !== null;
 
-    if (providerId || publicIdentifier) {
-      try {
-        // Fetch chats with higher limit to find existing chats
-        const chatsResponse = await axios.get(
-          `${getBaseUrl()}/chats?account_id=${finalAccountId}&limit=250`,
-          { headers: getHeaders() }
-        );
+    // Try to find chat ID only if user is connected to the profile
+    if (isConnected) {
+      const providerId = userProfile?.provider_id;
+      const publicIdentifier = userProfile?.public_identifier || identifier;
 
-        const chats = chatsResponse.data?.chats || chatsResponse.data?.items || chatsResponse.data || [];
-        const chatsArray = Array.isArray(chats) ? chats : [];
+      if (providerId || publicIdentifier) {
+        // Helper function to find chat with timeout
+        const findChatWithTimeout = async (timeoutMs = 3000) => {
+          return Promise.race([
+            (async () => {
+              try {
+                // Fetch chats with higher limit to find existing chats (only for connected profiles)
+                const chatsResponse = await axios.get(
+                  `${getBaseUrl()}/chats?account_id=${finalAccountId}&limit=250`,
+                  { headers: getHeaders() }
+                );
 
-        console.log(`Searching through ${chatsArray.length} chats for provider_id: ${providerId} or identifier: ${publicIdentifier}`);
+                const chats = chatsResponse.data?.chats || chatsResponse.data?.items || chatsResponse.data || [];
+                const chatsArray = Array.isArray(chats) ? chats : [];
 
-        // First, try to find chat where attendees are included in the response
-        let userChat = chatsArray.find(chat => {
-          const attendees = chat.attendees || chat.participants || [];
-          if (!Array.isArray(attendees)) return false;
+                console.log(`Searching through ${chatsArray.length} chats for connected profile: ${providerId || publicIdentifier}`);
 
-          return attendees.some(attendee => {
-            // Match by provider_id (most reliable)
-            if (providerId && (attendee.provider_id === providerId || attendee.id === providerId)) {
-              return true;
-            }
-            // Match by public_identifier as fallback
-            if (publicIdentifier && (
-              attendee.public_identifier === publicIdentifier ||
-              attendee.identifier === publicIdentifier ||
-              attendee.username === publicIdentifier
-            )) {
-              return true;
-            }
-            return false;
-          });
-        });
+                // First, try to find chat where attendees are included in the response
+                let userChat = chatsArray.find(chat => {
+                  const attendees = chat.attendees || chat.participants || [];
+                  if (!Array.isArray(attendees)) return false;
 
-        // If not found in initial response, fetch attendees for each chat
-        if (!userChat && chatsArray.length > 0) {
-          console.log('Chat not found in initial response, checking attendees for each chat...');
+                  return attendees.some(attendee => {
+                    // Match by provider_id (most reliable)
+                    if (providerId && (attendee.provider_id === providerId || attendee.id === providerId)) {
+                      return true;
+                    }
+                    // Match by public_identifier as fallback
+                    if (publicIdentifier && (
+                      attendee.public_identifier === publicIdentifier ||
+                      attendee.identifier === publicIdentifier ||
+                      attendee.username === publicIdentifier
+                    )) {
+                      return true;
+                    }
+                    return false;
+                  });
+                });
 
-          // Check all chats (not just first 20)
-          for (const chat of chatsArray) {
-            try {
-              const currentChatId = chat.id || chat.chat_id || chat.chatId;
-              if (!currentChatId) continue;
+                // If not found in initial response, fetch attendees for limited number of chats
+                if (!userChat && chatsArray.length > 0) {
+                  console.log('Chat not found in initial response, checking attendees for first 20 chats...');
 
-              const attendeesResponse = await axios.get(
-                `${getBaseUrl()}/chats/${currentChatId}/attendees?account_id=${finalAccountId}`,
-                { headers: getHeaders() }
-              );
+                  // Only check first 20 chats to avoid long delays
+                  const maxChatsToCheck = Math.min(chatsArray.length, 20);
+                  for (let i = 0; i < maxChatsToCheck; i++) {
+                    const chat = chatsArray[i];
+                    try {
+                      const currentChatId = chat.id || chat.chat_id || chat.chatId;
+                      if (!currentChatId) continue;
 
-              const attendeesData = attendeesResponse.data?.attendees ||
-                attendeesResponse.data?.items ||
-                attendeesResponse.data || [];
-              const attendees = Array.isArray(attendeesData) ? attendeesData : [];
+                      const attendeesResponse = await axios.get(
+                        `${getBaseUrl()}/chats/${currentChatId}/attendees?account_id=${finalAccountId}`,
+                        { headers: getHeaders() }
+                      );
 
-              // Check for match by provider_id or public_identifier
-              const foundAttendee = attendees.find(attendee => {
-                // Match by provider_id (most reliable)
-                if (providerId && (
-                  attendee.provider_id === providerId ||
-                  attendee.id === providerId ||
-                  attendee.account_id === providerId
-                )) {
-                  return true;
+                      const attendeesData = attendeesResponse.data?.attendees ||
+                        attendeesResponse.data?.items ||
+                        attendeesResponse.data || [];
+                      const attendees = Array.isArray(attendeesData) ? attendeesData : [];
+
+                      // Check for match by provider_id or public_identifier
+                      const foundAttendee = attendees.find(attendee => {
+                        // Match by provider_id (most reliable)
+                        if (providerId && (
+                          attendee.provider_id === providerId ||
+                          attendee.id === providerId ||
+                          attendee.account_id === providerId
+                        )) {
+                          return true;
+                        }
+                        // Match by public_identifier as fallback
+                        if (publicIdentifier && (
+                          attendee.public_identifier === publicIdentifier ||
+                          attendee.identifier === publicIdentifier ||
+                          attendee.username === publicIdentifier ||
+                          attendee.profile_url?.includes(publicIdentifier)
+                        )) {
+                          return true;
+                        }
+                        return false;
+                      });
+
+                      if (foundAttendee) {
+                        userChat = chat;
+                        console.log(`Found matching chat: ${currentChatId} for ${providerId || publicIdentifier}`);
+                        break;
+                      }
+                    } catch (attendeeError) {
+                      // Continue to next chat if this one fails
+                      continue;
+                    }
+                  }
                 }
-                // Match by public_identifier as fallback
-                if (publicIdentifier && (
-                  attendee.public_identifier === publicIdentifier ||
-                  attendee.identifier === publicIdentifier ||
-                  attendee.username === publicIdentifier ||
-                  attendee.profile_url?.includes(publicIdentifier)
-                )) {
-                  return true;
-                }
-                return false;
-              });
 
-              if (foundAttendee) {
-                userChat = chat;
-                console.log(`Found matching chat: ${currentChatId} for ${providerId || publicIdentifier}`);
-                break;
+                // Extract chat ID
+                if (userChat) {
+                  const foundChatId = userChat.id || userChat.chat_id || userChat.chatId || null;
+                  console.log(`Chat found: ${foundChatId} for user ${providerId || publicIdentifier}`);
+                  return { chatId: foundChatId, hasExistingChat: !!foundChatId };
+                } else {
+                  console.log(`No chat found for user ${providerId || publicIdentifier}`);
+                  return { chatId: null, hasExistingChat: false };
+                }
+              } catch (chatError) {
+                console.error('Could not fetch chat ID:', chatError.message);
+                console.error('Chat error details:', chatError.response?.data || chatError.message);
+                return { chatId: null, hasExistingChat: false };
               }
-            } catch (attendeeError) {
-              // Continue to next chat if this one fails
-              continue;
-            }
-          }
-        }
+            })(),
+            new Promise((resolve) => 
+              setTimeout(() => {
+                console.log('Chat lookup timeout - returning profile without chat info');
+                resolve({ chatId: null, hasExistingChat: false, timeout: true });
+              }, timeoutMs)
+            )
+          ]);
+        };
 
-        // Extract chat ID
-        if (userChat) {
-          chatId = userChat.id || userChat.chat_id || userChat.chatId || null;
-          hasExistingChat = !!chatId;
-          console.log(`Chat found: ${chatId} for user ${providerId || publicIdentifier}`);
-        } else {
-          console.log(`No chat found for user ${providerId || publicIdentifier}`);
+        // Try to find chat with 3 second timeout (non-blocking)
+        try {
+          const chatResult = await findChatWithTimeout(3000);
+          chatId = chatResult.chatId;
+          hasExistingChat = chatResult.hasExistingChat;
+        } catch (error) {
+          console.error('Chat lookup error:', error.message);
+          // Continue without chat ID if chat fetch fails
         }
-
-      } catch (chatError) {
-        console.error('Could not fetch chat ID:', chatError.message);
-        console.error('Chat error details:', chatError.response?.data || chatError.message);
-        // Continue without chat ID if chat fetch fails
+      } else {
+        console.log('No provider_id or public_identifier found in user profile, skipping chat lookup');
       }
     } else {
-      console.log('No provider_id or public_identifier found in user profile, skipping chat lookup');
+      console.log('Profile not connected (no network_distance), skipping chat lookup');
     }
 
     res.json({
