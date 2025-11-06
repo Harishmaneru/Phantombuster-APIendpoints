@@ -1728,6 +1728,8 @@ router.get('/api/unipile/account/:accountId/details', async (req, res) => {
 //   }
 // });
 router.post('/api/unipile/linkedin/invite', async (req, res) => {
+  let invitePayload = null; // Declare at function scope for error handling
+  
   try {
     const {
       account_id,
@@ -1748,16 +1750,30 @@ router.post('/api/unipile/linkedin/invite', async (req, res) => {
 
     // Validation
     if (!finalAccountId) {
+      // Build partial invitePayload for error response
+      invitePayload = {
+        account_id: finalAccountId || null,
+        provider_id: null,
+        ...(message && message.trim() ? { message: message.trim() } : {})
+      };
       return res.status(400).json({
         success: false,
-        error: 'account_id or user_id is required'
+        error: 'account_id or user_id is required',
+        invitePayload: invitePayload
       });
     }
 
     if (!profile_url && !profile_identifier) {
+      // Build partial invitePayload for error response
+      invitePayload = {
+        account_id: finalAccountId,
+        provider_id: null,
+        ...(message && message.trim() ? { message: message.trim() } : {})
+      };
       return res.status(400).json({
         success: false,
-        error: 'Either profile_url or profile_identifier is required'
+        error: 'Either profile_url or profile_identifier is required',
+        invitePayload: invitePayload
       });
     }
 
@@ -1780,9 +1796,16 @@ router.post('/api/unipile/linkedin/invite', async (req, res) => {
       }
 
       if (!match) {
+        // Build partial invitePayload for error response
+        invitePayload = {
+          account_id: finalAccountId,
+          provider_id: null,
+          ...(message && message.trim() ? { message: message.trim() } : {})
+        };
         return res.status(400).json({
           success: false,
-          error: 'Invalid LinkedIn profile URL format. Expected: https://linkedin.com/in/username'
+          error: 'Invalid LinkedIn profile URL format. Expected: https://linkedin.com/in/username',
+          invitePayload: invitePayload
         });
       }
     }
@@ -1796,11 +1819,18 @@ router.post('/api/unipile/linkedin/invite', async (req, res) => {
     );
 
     if (!userResponse.data || !userResponse.data.provider_id) {
+      // Build partial invitePayload for error response
+      invitePayload = {
+        account_id: finalAccountId,
+        provider_id: null,
+        ...(message && message.trim() ? { message: message.trim() } : {})
+      };
       return res.status(404).json({
         success: false,
         error: 'Could not find LinkedIn user or retrieve provider_id',
         identifier: recipientIdentifier,
-        user_response: userResponse.data
+        user_response: userResponse.data,
+        invitePayload: invitePayload
       });
     }
 
@@ -1808,7 +1838,7 @@ router.post('/api/unipile/linkedin/invite', async (req, res) => {
     console.log('Step 2: Found provider_id:', providerUserId);
 
     // STEP 2: Send invitation - Build JSON payload
-    const invitePayload = {
+    invitePayload = {
       account_id: finalAccountId,
       provider_id: providerUserId
     };
@@ -1835,6 +1865,7 @@ router.post('/api/unipile/linkedin/invite', async (req, res) => {
       success: true,
       data: inviteResponse.data,
       message: 'Connection request sent successfully',
+      invitePayload: invitePayload,
       recipient: {
         identifier: recipientIdentifier,
         provider_id: providerUserId,
@@ -1856,6 +1887,34 @@ router.post('/api/unipile/linkedin/invite', async (req, res) => {
       url: err.config?.url
     });
 
+    // If invitePayload is null, try to reconstruct it from request body
+    if (!invitePayload) {
+      const {
+        account_id,
+        user_id,
+        message
+      } = req.body;
+      
+      // Try to get account_id from user_id if not provided
+      let finalAccountId = account_id;
+      if (!finalAccountId && user_id) {
+        try {
+          const dbResult = await getLinkedInAccountStatus(user_id);
+          if (dbResult.success && dbResult.account_id) {
+            finalAccountId = dbResult.account_id;
+          }
+        } catch (dbErr) {
+          // Ignore DB errors during error reconstruction
+        }
+      }
+      
+      invitePayload = {
+        account_id: finalAccountId || null,
+        provider_id: null,
+        ...(message && message.trim() ? { message: message.trim() } : {})
+      };
+    }
+
     // If Unipile returned an error response, forward it directly
     if (err.response?.data) {
       const unipileError = err.response.data;
@@ -1867,14 +1926,86 @@ router.post('/api/unipile/linkedin/invite', async (req, res) => {
         statusText: err.response?.statusText,
         error: unipileError,
         message: err.message,
-        url: err.config?.url
+        url: err.config?.url,
+        invitePayload: invitePayload
       });
     }
 
     // Handle network errors or other non-Unipile errors
+    // Modify handleError to include invitePayload by using a custom response
+    const status = err.response?.status || 500;
+    const errorMessage = err.response?.data?.error || err.message || 'Internal server error';
+    
+    res.status(status).json({
+      success: false,
+      error: errorMessage,
+      invitePayload: invitePayload
+    });
+  }
+});
+
+
+/**
+ * Direct LinkedIn Invite API
+ * Used when provider_id and account_id are already known.
+ * Simply calls Unipile /users/invite directly.
+ */
+router.post('/api/unipile/linkedin/directinvite', async (req, res) => {
+  try {
+    const { provider_id, account_id } = req.body;
+
+    // Basic validation
+    if (!provider_id || !account_id) {
+      return res.status(400).json({
+        success: false,
+        error: 'provider_id and account_id are required'
+      });
+    }
+
+    console.log('🚀 Direct invite triggered:', { provider_id, account_id });
+
+    const payload = {
+      provider_id,
+      account_id
+    };
+
+    // Make Unipile API call
+    const response = await axios.post(
+      `${getBaseUrl()}/users/invite`,
+      payload,
+      { headers: getHeaders('application/json') }
+    );
+
+    console.log('✅ Direct invite success:', response.data);
+
+    res.json({
+      success: true,
+      data: response.data,
+      message: 'Direct connection request sent successfully',
+      payload_sent: payload,
+      invited_at: new Date()
+    });
+  } catch (err) {
+    console.error('❌ Direct invite error:', {
+      status: err.response?.status,
+      data: err.response?.data,
+      message: err.message,
+      url: err.config?.url
+    });
+
+    if (err.response?.data) {
+      return res.status(err.response.status || 500).json({
+        success: false,
+        error: err.response.data,
+        message: err.message,
+        url: err.config?.url
+      });
+    }
+
     handleError(err, res);
   }
 });
+
 
 // ==================== CHECK CONNECTION STATUS ====================
 
