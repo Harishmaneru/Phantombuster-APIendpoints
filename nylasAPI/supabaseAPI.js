@@ -53,22 +53,42 @@ async function getAppAccountById(supabase, appAccountId, userId) {
     .eq('user_id', userId)
     .single();
 
-  if (error || !data) return null;
+  if (!error && data) {
+    const provider = data.app_id === '114' && data.oauth_mode === '1'
+      ? 'nylas'
+      : data.app_id === '114' && data.oauth_mode === '0'
+        ? 'smtp'
+        : 'unknown';
 
-  const provider = data.app_id === '114' && data.oauth_mode === '1'
-    ? 'nylas'
-    : data.app_id === '114' && data.oauth_mode === '0'
-      ? 'smtp'
-      : 'unknown';
+    return {
+      id: data.app_account_id,
+      user_id: data.user_id,
+      provider: provider,
+      oauth_refresh_token: data.oauth_refresh_token,
+      app_username: data.app_username,
+      email: data.email || data.app_username,
+      provider_external_id: data.provider_external_id
+    };
+  }
+
+  // Fallback: attempt to resolve basic account info from email_inboxes if app_accounts missing
+  const { data: inboxData, error: inboxError } = await supabase
+    .from('email_inboxes')
+    .select('app_account_id, user_id, provider, owner_email, mailbox_name')
+    .eq('app_account_id', appAccountId)
+    .eq('user_id', userId)
+    .maybeSingle();
+
+  if (inboxError || !inboxData) return null;
 
   return {
-    id: data.app_account_id,
-    user_id: data.user_id,
-    provider: provider,
-    oauth_refresh_token: data.oauth_refresh_token,
-    app_username: data.app_username,
-    email: data.email || data.app_username,
-    provider_external_id: data.provider_external_id
+    id: inboxData.app_account_id,
+    user_id: inboxData.user_id,
+    provider: inboxData.provider || 'smtp',
+    oauth_refresh_token: null,
+    app_username: inboxData.owner_email,
+    email: inboxData.owner_email,
+    provider_external_id: null
   };
 }
 
@@ -332,7 +352,17 @@ router.get('/api/email/check', async (req, res) => {
 
     const account = await getAppAccountById(supabase, appAccountId, userId);
     if (!account) {
-      return res.status(404).json({ success: false, message: 'Account not found' });
+      console.warn('[EmailCheck] Account metadata not found', { userId, appAccountId });
+      return res.json({
+        success: true,
+        data: {
+          hasData: false,
+          lastSyncAt: inbox?.last_sync_at || null,
+          syncCursor: inbox?.sync_cursor || null,
+          provider: null,
+          note: 'Account metadata not found; ensure initial store call seeds data'
+        }
+      });
     }
 
     let hasData = false;
@@ -576,17 +606,29 @@ router.post('/api/email/store', async (req, res) => {
 
     const supabase = getSupabaseAdmin();
 
-    // Verify account exists and belongs to user
+    // Verify account exists and belongs to user (fallback to request payload if missing metadata)
     const account = await getAppAccountById(supabase, appAccountId, userId);
-    if (!account) {
-      console.warn('[EmailStore] Account lookup failed', { userId, appAccountId });
-      return res.status(404).json({ success: false, message: 'Account not found' });
+    let resolvedAccount = account;
+    if (!resolvedAccount) {
+      console.warn('[EmailStore] Account lookup failed, using request payload fallback', { userId, appAccountId });
+      if (!token || !email) {
+        return res.status(404).json({ success: false, message: 'Account not found and credentials missing' });
+      }
+      resolvedAccount = {
+        id: appAccountId,
+        user_id: userId,
+        provider: provider,
+        oauth_refresh_token: token,
+        app_username: email,
+        email: email,
+        provider_external_id: null
+      };
     }
     console.log('[EmailStore] Account lookup success', {
-      appAccountId: account.id,
-      provider: account.provider,
-      accountEmail: account.email,
-      providerExternalId: account.provider_external_id ? `${account.provider_external_id.slice(0, 6)}***` : null
+      appAccountId: resolvedAccount.id,
+      provider: resolvedAccount.provider,
+      accountEmail: resolvedAccount.email,
+      providerExternalId: resolvedAccount.provider_external_id ? `${resolvedAccount.provider_external_id.slice(0, 6)}***` : null
     });
 
     let emails = [];
@@ -594,7 +636,12 @@ router.post('/api/email/store', async (req, res) => {
 
     if (provider === 'smtp') {
       // Step 1: Call SMTP fetchinbox API
-      const smtpResp = await fetchSmtpInbox({ token, email, sinceIso: null, page, limit });
+      const effectiveToken = resolvedAccount.oauth_refresh_token || token;
+      const effectiveEmail = resolvedAccount.app_username || email;
+      if (!effectiveToken || !effectiveEmail) {
+        throw new Error('Missing SMTP credentials for store operation');
+      }
+      const smtpResp = await fetchSmtpInbox({ token: effectiveToken, email: effectiveEmail, sinceIso: null, page, limit });
       emails = Array.isArray(smtpResp?.messages) ? smtpResp.messages :
         Array.isArray(smtpResp?.inbox) ? smtpResp.inbox :
           Array.isArray(smtpResp?.emails) ? smtpResp.emails : [];
