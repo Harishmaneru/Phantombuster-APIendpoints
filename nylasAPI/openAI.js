@@ -181,8 +181,7 @@ router.post('/summarize', async (req, res) => {
             return res.json({
                 success: true,
                 task: "summary",
-                summary: summary,
-                usage: completion.usage
+                summary: summary
             });
         }
 
@@ -245,8 +244,8 @@ router.post('/summarize', async (req, res) => {
                 success: true,
                 task: "chat",
                 answer: answer,
-                chatHistory: updatedHistory, // Send back the full history
-                usage: completion.usage
+                chatHistory: updatedHistory // Send back the full history
+            
             });
         }
 
