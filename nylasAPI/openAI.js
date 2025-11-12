@@ -128,7 +128,7 @@ EMAIL REPLY:
  * ]
  * }
  */
-router.post('/api/email/summarize', async (req, res) => {
+router.post('/summarize', async (req, res) => {
     const { task, emailBody, emailSubject, userQuestion, chatHistory } = req.body;
 
     // --- 1. Basic Payload Validation ---
@@ -150,7 +150,7 @@ router.post('/api/email/summarize', async (req, res) => {
         // --- 2. Task: Summarize ---
         if (task === 'summarize') {
             const systemMessage = "You are an expert analysis AI. Your job is to read an email and extract the most essential points, action items, and key information. Format the output as a concise, easy-to-read bulleted list using Markdown.";
-            
+
             const userPrompt = `
                 Please provide a point-wise summary of the following email.
                 Focus on:
@@ -177,7 +177,7 @@ router.post('/api/email/summarize', async (req, res) => {
             });
 
             const summary = completion.choices[0].message.content;
-            
+
             return res.json({
                 success: true,
                 task: "summary",
@@ -230,14 +230,14 @@ router.post('/api/email/summarize', async (req, res) => {
             });
 
             const answer = completion.choices[0].message.content;
-            
+
             // Create the new history entry for the assistant's reply
             const newHistoryEntry = { role: "assistant", content: answer };
-            
+
             // Send back the *updated* history so the client can store it
             const updatedHistory = [
-                ...(chatHistory || []), 
-                { role: "user", content: userQuestion }, 
+                ...(chatHistory || []),
+                { role: "user", content: userQuestion },
                 newHistoryEntry
             ];
 
@@ -265,6 +265,6 @@ router.post('/api/email/summarize', async (req, res) => {
     }
 });
 
- 
+
 
 module.exports = router;
