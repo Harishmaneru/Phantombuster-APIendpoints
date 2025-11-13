@@ -143,7 +143,7 @@ EMAIL REPLY:
 
         const response = {
             success: true,
-            originalEmail: emailBody,
+            // originalEmail: emailBody,
             replies: responseReplies
             // usage: totalUsage
         };
