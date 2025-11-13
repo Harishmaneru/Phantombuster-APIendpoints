@@ -8,6 +8,7 @@ const openai = new OpenAI({
 });
 
 // Unified API endpoint for email reply generation
+// Returns all 3 reply types in a single response
 router.post('/generate-email-reply', async (req, res) => {
     try {
         const { emailBody, replyType } = req.body;
@@ -17,13 +18,6 @@ router.post('/generate-email-reply', async (req, res) => {
             return res.status(400).json({
                 success: false,
                 error: 'emailBody is required in the payload'
-            });
-        }
-
-        if (!replyType) {
-            return res.status(400).json({
-                success: false,
-                error: 'replyType is required. Valid types: "Direct & Concise", "Professional", "Detailed / Informative"'
             });
         }
 
@@ -46,21 +40,16 @@ router.post('/generate-email-reply', async (req, res) => {
             }
         };
 
-        // Check if replyType is valid
-        const typeConfig = replyTypeInstructions[replyType];
-        if (!typeConfig) {
-            return res.status(400).json({
-                success: false,
-                error: `Invalid replyType. Valid types are: "Direct & Concise", "Professional", "Detailed / Informative"`
-            });
-        }
-
-        // Build the prompt
-        const prompt = `
+        // Generate all three reply types in parallel
+        const replyTypes = ['Direct & Concise', 'Professional', 'Detailed / Informative'];
+        
+        const generateReply = async (type) => {
+            const typeConfig = replyTypeInstructions[type];
+            const prompt = `
 ORIGINAL EMAIL:
 ${emailBody}
 
-TASK: Generate a ${replyType} email reply based on the original email above.
+TASK: Generate a ${type} email reply based on the original email above.
 
 INSTRUCTIONS:
 ${typeConfig.instruction}
@@ -73,32 +62,62 @@ ${typeConfig.instruction}
 EMAIL REPLY:
 `;
 
-        // Generate reply using OpenAI
-        const completion = await openai.chat.completions.create({
-            model: "gpt-3.5-turbo",
-            messages: [
-                {
-                    role: "system",
-                    content: typeConfig.systemMessage
-                },
-                {
-                    role: "user",
-                    content: prompt
-                }
-            ],
-            max_tokens: typeConfig.maxTokens,
-            temperature: 0.7
-        });
+            const completion = await openai.chat.completions.create({
+                model: "gpt-3.5-turbo",
+                messages: [
+                    {
+                        role: "system",
+                        content: typeConfig.systemMessage
+                    },
+                    {
+                        role: "user",
+                        content: prompt
+                    }
+                ],
+                max_tokens: typeConfig.maxTokens,
+                temperature: 0.7
+            });
 
-        const generatedReply = completion.choices[0].message.content;
+            return {
+                replyType: type,
+                reply: completion.choices[0].message.content,
+                usage: completion.usage
+            };
+        };
 
-        res.json({
+        // Generate all replies in parallel for better performance
+        const replies = await Promise.all(
+            replyTypes.map(type => generateReply(type))
+        );
+
+        // Calculate total usage
+        const totalUsage = replies.reduce((acc, reply) => {
+            return {
+                prompt_tokens: acc.prompt_tokens + reply.usage.prompt_tokens,
+                completion_tokens: acc.completion_tokens + reply.usage.completion_tokens,
+                total_tokens: acc.total_tokens + reply.usage.total_tokens
+            };
+        }, { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 });
+        console.log('AI reply totalUsage', totalUsage);
+        // Build clean response structure
+        const response = {
             success: true,
-            replyType,
             originalEmail: emailBody,
-            generatedReply,
-            usage: completion.usage
-        });
+            replies: {
+                'Direct & Concise': replies.find(r => r.replyType === 'Direct & Concise')?.reply || '',
+                'Professional': replies.find(r => r.replyType === 'Professional')?.reply || '',
+                'Detailed / Informative': replies.find(r => r.replyType === 'Detailed / Informative')?.reply || ''
+            },
+            // usage: totalUsage
+        };
+
+        // If a specific replyType was requested, include it in response for backward compatibility
+        if (replyType && replyTypeInstructions[replyType]) {
+            response.requestedType = replyType;
+            response.requestedReply = response.replies[replyType];
+        }
+
+        res.json(response);
 
     } catch (error) {
         console.error('Error generating email reply:', error);
