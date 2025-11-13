@@ -8,7 +8,7 @@ const openai = new OpenAI({
 });
 
 // Unified API endpoint for email reply generation
-// Returns all 3 reply types in a single response
+// Returns reply types based on replyType parameter
 router.post('/generate-email-reply', async (req, res) => {
     try {
         const { emailBody, replyType } = req.body;
@@ -40,9 +40,43 @@ router.post('/generate-email-reply', async (req, res) => {
             }
         };
 
-        // Generate all three reply types in parallel
-        const replyTypes = ['Direct & Concise', 'Professional', 'Detailed / Informative'];
+        // All valid reply types
+        const allReplyTypes = ['Direct & Concise', 'Professional', 'Detailed / Informative'];
+
+        // Parse replyType to determine which types to generate
+        let typesToGenerate = [];
         
+        if (replyType) {
+            // Split by comma and clean up the types
+            const requestedTypes = replyType.split(',').map(type => type.trim());
+            
+            // Validate and match types (case-insensitive, handles whitespace)
+            for (const requestedType of requestedTypes) {
+                // Find matching type (case-insensitive comparison)
+                const matchedType = allReplyTypes.find(validType => {
+                    // Normalize both strings for comparison
+                    const normalize = (str) => str.toLowerCase().trim().replace(/\s+/g, ' ');
+                    return normalize(requestedType) === normalize(validType);
+                });
+                
+                if (matchedType && !typesToGenerate.includes(matchedType)) {
+                    typesToGenerate.push(matchedType);
+                }
+            }
+
+            // If no valid types found, return error
+            if (typesToGenerate.length === 0) {
+                return res.status(400).json({
+                    success: false,
+                    error: `Invalid replyType. Valid types are: "Direct & Concise", "Professional", "Detailed / Informative". You can request one or all three (comma-separated).`
+                });
+            }
+        } else {
+            // If no replyType provided, default to all three
+            typesToGenerate = [...allReplyTypes];
+        }
+
+        // Generate reply function
         const generateReply = async (type) => {
             const typeConfig = replyTypeInstructions[type];
             const prompt = `
@@ -85,9 +119,9 @@ EMAIL REPLY:
             };
         };
 
-        // Generate all replies in parallel for better performance
+        // Generate only the requested reply types in parallel
         const replies = await Promise.all(
-            replyTypes.map(type => generateReply(type))
+            typesToGenerate.map(type => generateReply(type))
         );
 
         // Calculate total usage
@@ -98,24 +132,21 @@ EMAIL REPLY:
                 total_tokens: acc.total_tokens + reply.usage.total_tokens
             };
         }, { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 });
+        
         console.log('AI reply totalUsage', totalUsage);
-        // Build clean response structure
+        
+        // Build clean response structure with only requested types
+        const responseReplies = {};
+        replies.forEach(reply => {
+            responseReplies[reply.replyType] = reply.reply;
+        });
+
         const response = {
             success: true,
             originalEmail: emailBody,
-            replies: {
-                'Direct & Concise': replies.find(r => r.replyType === 'Direct & Concise')?.reply || '',
-                'Professional': replies.find(r => r.replyType === 'Professional')?.reply || '',
-                'Detailed / Informative': replies.find(r => r.replyType === 'Detailed / Informative')?.reply || ''
-            },
+            replies: responseReplies
             // usage: totalUsage
         };
-
-        // If a specific replyType was requested, include it in response for backward compatibility
-        if (replyType && replyTypeInstructions[replyType]) {
-            response.requestedType = replyType;
-            response.requestedReply = response.replies[replyType];
-        }
 
         res.json(response);
 
