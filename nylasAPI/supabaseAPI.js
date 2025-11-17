@@ -235,11 +235,19 @@ function normalizeSmtpMessage(msg, userId, appAccountId, mailboxName) {
   };
 }
 
-async function syncAccountEmails({ supabase, userId, appAccountId, mailboxName = 'INBOX', limit = 50, forceFullResync = false }) {
+async function syncAccountEmails({
+  supabase,
+  userId,
+  appAccountId,
+  mailboxName = 'INBOX',
+  limit = 50,
+  forceFullResync = false,
+  overrideAccount = null
+}) {
   const lockKey = getLockKey(userId, appAccountId, mailboxName);
 
   return withInboxLock(lockKey, async () => {
-    const account = await getAppAccountById(supabase, appAccountId, userId);
+    const account = overrideAccount || await getAppAccountById(supabase, appAccountId, userId);
     if (!account) throw new Error('Account not found or access denied');
 
     const { data: inboxState } = await supabase
@@ -692,7 +700,8 @@ router.post('/api/email/store', async (req, res) => {
         appAccountId,
         mailboxName,
         limit,
-        forceFullResync: false
+        forceFullResync: false,
+        overrideAccount: resolvedAccount
       });
 
       // Fetch stored threads
