@@ -981,11 +981,11 @@ router.post('/api/email/store', async (req, res) => {
 
       return res.json({
         success: true,
-        data: emails || [],
+        // data: emails || [],
         synced: true,
         provider: 'nylas',
         summary: summary,
-        accountId: account.id // Return the auto-generated ID for future use
+        accountId: resolvedAppAccountId // Return the auto-generated ID for future use
       });
     }
 
@@ -1010,7 +1010,7 @@ router.post('/api/email/store', async (req, res) => {
 
     return res.json({
       success: true,
-      data: storedEmails || [],
+      // data: storedEmails || [],
       synced: true,
       messagesStored: messagesStored,
       lastSyncAt: lastSyncAtIso,
