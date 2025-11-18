@@ -156,15 +156,37 @@ async function fetchSmtpInbox({ token, email, sinceIso, page = 1, limit = 20 }) 
     { token, email, page, limit },
     { headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}`, 'X-API-Key': token } }
   );
+
   let messages = Array.isArray(resp.data?.inbox) ? resp.data.inbox
     : Array.isArray(resp.data?.emails) ? resp.data.emails
-      : Array.isArray(resp.data) ? resp.data
-        : [];
+      : Array.isArray(resp.data?.messages) ? resp.data.messages
+        : Array.isArray(resp.data) ? resp.data
+          : [];
+
   if (sinceIso) {
     const since = new Date(sinceIso).getTime();
     messages = messages.filter(m => m?.date && new Date(m.date).getTime() > since);
   }
-  return { messages, nextCursor: null };
+
+  const metaSource = (resp.data && typeof resp.data === 'object' && !Array.isArray(resp.data)) ? resp.data : {};
+  const pagination =
+    metaSource.pagination ||
+    metaSource.page_info ||
+    metaSource.pageInfo ||
+    metaSource.meta ||
+    {};
+
+  const meta = {
+    success: typeof metaSource.success === 'boolean' ? metaSource.success : null,
+    current_page: pagination.current_page ?? metaSource.current_page ?? metaSource.page ?? page ?? null,
+    total_pages: pagination.total_pages ?? metaSource.total_pages ?? null,
+    total_messages: pagination.total_messages ?? metaSource.total_messages ?? metaSource.total ?? null,
+    limit_per_page: pagination.limit_per_page ?? metaSource.limit_per_page ?? metaSource.per_page ?? metaSource.limit ?? limit ?? null,
+    has_next_page: pagination.has_next_page ?? metaSource.has_next_page ?? null,
+    has_prev_page: pagination.has_prev_page ?? metaSource.has_prev_page ?? null
+  };
+
+  return { messages, nextCursor: null, meta };
 }
 
 async function resolveThreadId(supabase, inboxId, externalThreadId) {
@@ -179,66 +201,31 @@ async function resolveThreadId(supabase, inboxId, externalThreadId) {
   return data.id;
 }
 
-function normalizeNylasThread(thread, inboxId) {
-  return {
-    inbox_id: inboxId,
-    external_thread_id: thread?.id,
-    subject: thread?.subject || null,
-    snippet: thread?.snippet || null,
-    participants: thread?.participants || null,
-    last_message_at: thread?.latest_message_received_date
-      ? new Date(thread.latest_message_received_date * 1000).toISOString()
-      : (thread?.last_message_timestamp ? new Date(thread.last_message_timestamp * 1000).toISOString() : null),
-    unread_count: thread?.unread ? 1 : 0, // Convert boolean to count
-    message_count: thread?.message_ids?.length || 1,
-    has_attachments: !!thread?.has_attachments
 
-  };
-}
 
-function normalizeNylasMessage(message, thread, inboxId) {
-  return {
-    inbox_id: inboxId,
-    external_message_id: message?.id,
-    thread_id: null, // Will be set after thread is created
-    direction: 'inbound',
-    from_email: message?.from?.[0]?.email || null,
-    from_name: message?.from?.[0]?.name || null,
-    to_emails: message?.to || null,
-    cc_emails: message?.cc || null,
-    bcc_emails: message?.bcc || null,
-    subject: message?.subject || thread?.subject || null,
-    body_html: message?.body || null,
-    body_text: message?.body ? message.body.replace(/<[^>]*>/g, '').substring(0, 500) : null,
-    snippet: message?.snippet || thread?.snippet || null,
-    is_read: !message?.unread,
-    is_starred: !!message?.starred,
-    has_attachments: !!message?.attachments?.length || false,
-    folders: message?.folders || null, // This will now work after adding the column
-    received_at: message?.date ? new Date(message.date * 1000).toISOString() : null
-  };
-}
 
-function normalizeNylasEmail(thread, message, inboxId, userId, emailAccount) {
+
+function normalizeNylasEmail(thread, message, inboxId, userId, emailAccount, appAccountId) {
   // Use the latest message data, fallback to thread data
   const latestMessage = message || thread?.latest_draft_or_message;
-  
+
   return {
     inbox_id: inboxId,
+    app_account_id: appAccountId,
     user_id: userId, // Add user_id
     email_account: emailAccount, // Add email_account
-    
+
     // Thread/Message identifiers
     external_thread_id: thread?.id || null,
     external_message_id: latestMessage?.id || thread?.id,
     grant_id: thread?.grant_id || latestMessage?.grant_id,
-    
+
     // Email content
     subject: latestMessage?.subject || thread?.subject || null,
     body_html: latestMessage?.body || null,
     body_text: latestMessage?.body ? latestMessage.body.replace(/<[^>]*>/g, '').substring(0, 500) : null,
     snippet: latestMessage?.snippet || thread?.snippet || null,
-    
+
     // Participants
     from_email: latestMessage?.from?.[0]?.email || null,
     from_name: latestMessage?.from?.[0]?.name || null,
@@ -247,19 +234,19 @@ function normalizeNylasEmail(thread, message, inboxId, userId, emailAccount) {
     bcc_emails: latestMessage?.bcc || null,
     reply_to: latestMessage?.reply_to || null,
     participants: thread?.participants || null,
-    
+
     // Metadata
     attachments: latestMessage?.attachments || null,
     message_ids: thread?.message_ids || null,
     draft_ids: thread?.draft_ids || null,
-    
+
     // Flags and status
     starred: !!(latestMessage?.starred || thread?.starred),
     unread: !!(latestMessage?.unread || thread?.unread),
     folders: latestMessage?.folders || thread?.folders || null,
     has_attachments: !!(latestMessage?.attachments?.length || thread?.has_attachments),
     has_drafts: !!thread?.has_drafts,
-    
+
     // Timestamps
     date: latestMessage?.date ? new Date(latestMessage.date * 1000).toISOString() : null,
     earliest_message_date: thread?.earliest_message_date ? new Date(thread.earliest_message_date * 1000).toISOString() : null,
@@ -269,54 +256,66 @@ function normalizeNylasEmail(thread, message, inboxId, userId, emailAccount) {
 }
 
 
-function normalizeSmtpMessage(msg, inboxId) {
+function normalizeSmtpEmail(msg, { userId, emailAccount, appAccountId, meta = {}, page, limit }) {
   // Extract email from "Name <email>" format if needed
   let fromEmail = msg.from || null;
   let fromName = null;
-  if (fromEmail && fromEmail.includes('<') && fromEmail.includes('>')) {
+  if (typeof fromEmail === 'string' && fromEmail.includes('<') && fromEmail.includes('>')) {
     const match = fromEmail.match(/^(.+?)\s*<(.+?)>$/);
     if (match) {
       fromName = match[1].trim().replace(/['"]/g, '');
       fromEmail = match[2].trim();
     }
+  } else if (Array.isArray(fromEmail) && fromEmail.length > 0) {
+    const primary = fromEmail[0];
+    fromName = primary?.name || null;
+    fromEmail = primary?.email || null;
   }
 
-  // Extract snippet from text/html if not provided
-  let snippet = msg.snippet || null;
-  if (!snippet && msg.text) {
-    snippet = msg.text.substring(0, 200).replace(/\s+/g, ' ').trim();
-  } else if (!snippet && msg.html) {
-    snippet = msg.html.replace(/<[^>]*>/g, '').substring(0, 200).replace(/\s+/g, ' ').trim();
-  }
-
-  // Convert to_emails to JSONB format if it's a string
-  let toEmails = null;
+  // Normalize recipients into comma-separated text
+  let toEmailsText = null;
   if (msg.to) {
     if (typeof msg.to === 'string') {
-      toEmails = [{ email: msg.to }];
+      toEmailsText = msg.to;
     } else if (Array.isArray(msg.to)) {
-      toEmails = msg.to.map(email => typeof email === 'string' ? { email } : email);
+      toEmailsText = msg.to
+        .map(recipient => {
+          if (typeof recipient === 'string') return recipient;
+          if (recipient?.email) {
+            return recipient.name ? `${recipient.name} <${recipient.email}>` : recipient.email;
+          }
+          return null;
+        })
+        .filter(Boolean)
+        .join(', ');
     }
   }
 
+  const resolvedDate = msg.date ? new Date(msg.date).toISOString() : null;
+  const messageId = msg.messageId || msg.id || msg.message_id || `smtp-${msg.uid || msg.seq || Date.now()}`;
+
   return {
-    inbox_id: inboxId,
-    external_message_id: msg.messageId || msg.id || `smtp-${msg.uid || msg.seq || Date.now()}`,
-    direction: 'inbound',
+    user_id: userId,
+    app_account_id: appAccountId,
+    email_account: emailAccount,
+    subject: msg.subject || null,
     from_email: fromEmail,
     from_name: fromName,
-    to_emails: toEmails,
-    cc_emails: null,
-    bcc_emails: null,
-    subject: msg.subject || null,
-    body_html: msg.html || msg.body || null,
-    body_text: msg.text || null,
-    snippet: snippet,
-    is_read: !msg.read, // Note: SMTP response uses 'read' not 'isRead'
-    is_starred: false, // SMTP response doesn't have this field
-    has_attachments: !!msg.hasAttachments || false,
-    folders: null,
-    received_at: msg.date || null
+    to_emails: toEmailsText,
+    date: resolvedDate,
+    uid: msg.uid ?? null,
+    seq: msg.seq ?? null,
+    read: !!msg.read,
+    message_id: messageId,
+    body_text: msg.text || msg.body_text || msg.body || null,
+    body_html: msg.html || msg.body_html || msg.body || null,
+    success: typeof meta.success === 'boolean' ? meta.success : null,
+    current_page: meta.current_page ?? page ?? null,
+    total_pages: meta.total_pages ?? null,
+    total_messages: meta.total_messages ?? null,
+    limit_per_page: meta.limit_per_page ?? limit ?? null,
+    has_next_page: meta.has_next_page ?? null,
+    has_prev_page: meta.has_prev_page ?? null
   };
 }
 
@@ -328,7 +327,8 @@ async function syncAccountEmails({
   limit = 50,
   forceFullResync = false,
   overrideAccount = null,
-  token = null
+  token = null,
+  requestedAppAccountId = null
 }) {
   // 1) Resolve inbox_id
   const inboxId = await getInboxId(supabase, appAccountId, mailboxName);
@@ -349,6 +349,8 @@ async function syncAccountEmails({
     let threadsUpserted = 0;
     let messagesUpserted = 0;
     let nextCursor = null;
+
+    const sourceAppAccountId = requestedAppAccountId || appAccountId;
 
     if (account.provider === 'nylas') {
       const grantId = token || account.oauth_refresh_token || account.provider_external_id;
@@ -372,16 +374,17 @@ async function syncAccountEmails({
         try {
           // Get the latest message from the thread
           const latestMessage = thread?.latest_draft_or_message;
-          
+
           // Create a single email record with user_id and email_account
           const emailRow = normalizeNylasEmail(
-            thread, 
-            latestMessage, 
-            inboxId, 
-            userId,           // Pass user_id from API
-            account.email     // Pass email_account from account
+            thread,
+            latestMessage,
+            inboxId,
+            userId,            // Pass user_id from API
+            account.email,     // Pass email_account from account
+            sourceAppAccountId // Store caller-provided accountId when available
           );
-          
+
           const { error: emailError } = await supabase
             .from('nylas_emails')
             .upsert(emailRow, { onConflict: 'inbox_id,external_message_id' });
@@ -407,18 +410,23 @@ async function syncAccountEmails({
       const sinceIso = (!forceFullResync && lastSyncAt) ? lastSyncAt : null;
       const smtpResp = await fetchSmtpInbox({ token, email, sinceIso, limit });
       const messages = Array.isArray(smtpResp?.messages) ? smtpResp.messages : [];
+      const meta = smtpResp?.meta || {};
 
       for (const msg of messages) {
-        const messageRow = normalizeSmtpMessage(msg, inboxId);
-        if (msg.threadId) {
-          const threadId = await resolveThreadId(supabase, inboxId, msg.threadId);
-          messageRow.thread_id = threadId;
-        }
+        const emailRow = normalizeSmtpEmail(msg, {
+          userId,
+          emailAccount: account.email || email,
+          appAccountId: sourceAppAccountId,
+          meta,
+          page: meta.current_page,
+          limit
+        });
 
-        const { error: messageError } = await supabase
-          .from('email_messages')
-          .upsert(messageRow, { onConflict: 'inbox_id,external_message_id' });
-        if (!messageError) messagesUpserted++;
+        const { error: emailError } = await supabase
+          .from('smtp_emails')
+          .upsert(emailRow, { onConflict: 'message_id' });
+        if (!emailError) messagesUpserted++;
+        else console.error('[SmtpSync] Email upsert error:', emailError);
       }
     } else {
       throw new Error(`Unsupported provider: ${account.provider}`);
@@ -440,6 +448,54 @@ async function syncAccountEmails({
 }
 
 // ==================== API ENDPOINTS ====================
+router.get('/api/email/exists', async (req, res) => {
+  try {
+    const userId = requireAuth(req);
+    const { email, provider } = req.query;
+
+    if (!email || !provider) {
+      return res.status(400).json({
+        success: false,
+        message: 'email and provider are required'
+      });
+    }
+
+    const supabase = getSupabaseAdmin();
+
+    let table = null;
+    if (provider === 'nylas') table = 'nylas_emails';
+    else if (provider === 'smtp') table = 'smtp_emails';
+    else {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid provider'
+      });
+    }
+
+    const { count, error } = await supabase
+      .from(table)
+      .select('*', { count: 'exact', head: true })
+      .eq('user_id', userId)
+      .eq('email_account', email);
+
+    if (error) throw error;
+
+    return res.json({
+      success: true,
+      exists: (count || 0) > 0,
+      email,
+      provider
+    });
+  } catch (err) {
+    console.error('Exists check error:', err);
+    return res.status(500).json({
+      success: false,
+      message: err.message || 'Check failed'
+    });
+  }
+});
+
+
 
 // 1) GET /api/email/check - Check if emails exist
 router.get('/api/email/check', async (req, res) => {
@@ -697,6 +753,7 @@ router.post('/api/email/store', async (req, res) => {
 
     // 2. Now get or create the inbox using the auto-generated account ID
     const inboxId = await getInboxId(supabase, account.id, mailboxName);
+    const resolvedAppAccountId = appAccountId || account.id;
 
     console.log('[EmailStore] Using account:', {
       accountId: account.id,
@@ -709,20 +766,29 @@ router.post('/api/email/store', async (req, res) => {
     let messagesStored = 0;
 
     if (provider === 'smtp') {
-      // Your existing SMTP logic
       const smtpResp = await fetchSmtpInbox({ token, email, sinceIso: null, page, limit });
       emails = Array.isArray(smtpResp?.messages) ? smtpResp.messages : [];
+      const meta = smtpResp?.meta || {};
 
       for (const msg of emails) {
-        const messageRow = normalizeSmtpMessage(msg, inboxId);
+        const emailRow = normalizeSmtpEmail(msg, {
+          userId,
+          emailAccount: account.email,
+          appAccountId: resolvedAppAccountId,
+          meta,
+          page,
+          limit
+        });
 
-        const { error: messageError } = await supabase
-          .from('email_messages')
-          .upsert(messageRow, {
-            onConflict: 'inbox_id,external_message_id'
-          });
+        const { error: emailError } = await supabase
+          .from('smtp_emails')
+          .upsert(emailRow, { onConflict: 'message_id' });
 
-        if (!messageError) messagesStored++;
+        if (!emailError) {
+          messagesStored++;
+        } else {
+          console.error('[SMTPStore] Email upsert error:', emailError);
+        }
       }
     } else if (provider === 'nylas') {
       // Your existing Nylas logic
@@ -734,7 +800,8 @@ router.post('/api/email/store', async (req, res) => {
         limit,
         forceFullResync: false,
         overrideAccount: account,
-        token: token
+        token: token,
+        requestedAppAccountId: resolvedAppAccountId
       });
 
       // Fetch stored emails from nylas_emails table
@@ -743,6 +810,7 @@ router.post('/api/email/store', async (req, res) => {
         .select('*')
         .eq('inbox_id', inboxId)
         .eq('user_id', userId)
+        .eq('app_account_id', resolvedAppAccountId)
         .order('received_at', { ascending: false })
         .limit(limit);
 
@@ -766,21 +834,23 @@ router.post('/api/email/store', async (req, res) => {
       })
       .eq('id', inboxId);
 
-    const { data: storedMessages } = await supabase
-      .from('email_messages')
+    const { data: storedEmails } = await supabase
+      .from('smtp_emails')
       .select('*')
-      .eq('inbox_id', inboxId)
-      .order('received_at', { ascending: false })
+      .eq('user_id', userId)
+      .eq('email_account', account.email)
+      .eq('app_account_id', resolvedAppAccountId)
+      .order('date', { ascending: false })
       .limit(limit);
 
     return res.json({
       success: true,
-      data: storedMessages || [],
+      data: storedEmails || [],
       synced: true,
       messagesStored: messagesStored,
       lastSyncAt: lastSyncAtIso,
       provider: provider,
-      accountId: account.id // Return the auto-generated ID
+      accountId: resolvedAppAccountId // Return the requested/internal ID we stored
     });
 
   } catch (err) {
