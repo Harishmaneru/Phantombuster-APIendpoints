@@ -18,7 +18,7 @@ async function withInboxLock(supabase, inboxId, fn) {
   try {
     return await fn();
   } catch (err) {
-    console.error(`[EmailSync] Error processing inbox ${inboxId}:`, err);
+    // console.error(`[EmailSync] Error processing inbox ${inboxId}:`, err);
     throw err;
   }
 }
@@ -448,44 +448,69 @@ async function syncAccountEmails({
 }
 
 // ==================== API ENDPOINTS ====================
+
+
 router.get('/api/email/exists', async (req, res) => {
   try {
     const userId = requireAuth(req);
-    const { email, provider } = req.query;
+    const { appAccountId, email, provider } = req.query;
 
-    if (!email || !provider) {
+    if (!appAccountId || !email || !provider) {
       return res.status(400).json({
         success: false,
-        message: 'email and provider are required'
+        message: 'appAccountId, email and provider are required'
       });
     }
 
     const supabase = getSupabaseAdmin();
 
-    let table = null;
-    if (provider === 'nylas') table = 'nylas_emails';
-    else if (provider === 'smtp') table = 'smtp_emails';
-    else {
+    // Directly check the email storage tables without checking email_accounts first
+    let exists = false;
+    let checkedSource = null;
+    let count = 0;
+
+    if (provider === 'nylas') {
+      // Check nylas_emails table
+      const { count: nylasCount, error: nylasErr } = await supabase
+        .from('nylas_emails')
+        .select('*', { count: 'exact', head: true })
+        .eq('app_account_id', appAccountId)
+        .eq('user_id', userId);
+
+      if (nylasErr) throw nylasErr;
+      count = nylasCount || 0;
+      exists = count > 0;
+      checkedSource = 'nylas_emails';
+
+    } else if (provider === 'smtp') {
+      // Check smtp_emails table
+      const { count: smtpCount, error: smtpErr } = await supabase
+        .from('smtp_emails')
+        .select('*', { count: 'exact', head: true })
+        .eq('app_account_id', appAccountId)
+        .eq('user_id', userId);
+
+      if (smtpErr) throw smtpErr;
+      count = smtpCount || 0;
+      exists = count > 0;
+      checkedSource = 'smtp_emails';
+    } else {
       return res.status(400).json({
         success: false,
         message: 'Invalid provider'
       });
     }
 
-    const { count, error } = await supabase
-      .from(table)
-      .select('*', { count: 'exact', head: true })
-      .eq('user_id', userId)
-      .eq('email_account', email);
-
-    if (error) throw error;
-
     return res.json({
       success: true,
-      exists: (count || 0) > 0,
+      exists,
+      count,
+      provider,
       email,
-      provider
+      appAccountId,
+      source: checkedSource
     });
+
   } catch (err) {
     console.error('Exists check error:', err);
     return res.status(500).json({
@@ -494,7 +519,6 @@ router.get('/api/email/exists', async (req, res) => {
     });
   }
 });
-
 
 
 // 1) GET /api/email/check - Check if emails exist
