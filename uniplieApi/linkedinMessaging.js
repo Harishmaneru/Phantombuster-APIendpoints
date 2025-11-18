@@ -700,16 +700,21 @@ router.post('/api/unipile/linkedin/message', async (req, res) => {
 
 // Send LinkedIn message (user_id in URL path)
 router.post('/api/unipile/user/:userId/linkedin/message', async (req, res) => {
+  const { userId } = req.params;
+  const {
+    profile_url,
+    profile_identifier,
+    message,
+    subject,
+    use_inmail = false,
+    attachments
+  } = req.body;
+
+  let finalAccountId = null;
+  let recipientIdentifier = profile_identifier || null;
+  let recipientId = null;
+
   try {
-    const { userId } = req.params;
-    const {
-      profile_url,
-      profile_identifier,
-      message,
-      subject,
-      use_inmail = false,
-      attachments
-    } = req.body;
 
     // Get account_id from user_id
     const dbResult = await getLinkedInAccountStatus(userId);
@@ -720,7 +725,7 @@ router.post('/api/unipile/user/:userId/linkedin/message', async (req, res) => {
       });
     }
 
-    const finalAccountId = dbResult.account_id;
+    finalAccountId = dbResult.account_id;
 
     // Validation
     if (!message) {
@@ -730,7 +735,7 @@ router.post('/api/unipile/user/:userId/linkedin/message', async (req, res) => {
       });
     }
 
-    if (!profile_url && !profile_identifier) {
+    if (!profile_url && !recipientIdentifier) {
       return res.status(400).json({
         success: false,
         error: 'Either profile_url or profile_identifier is required'
@@ -738,8 +743,7 @@ router.post('/api/unipile/user/:userId/linkedin/message', async (req, res) => {
     }
 
     // Extract LinkedIn identifier from URL if provided
-    let recipientIdentifier = profile_identifier;
-    if (profile_url && !profile_identifier) {
+    if (profile_url && !recipientIdentifier) {
       // Handle various LinkedIn URL formats
       const patterns = [
         /linkedin\.com\/in\/([^\/\?#]+)/,           // Standard profile
@@ -764,8 +768,15 @@ router.post('/api/unipile/user/:userId/linkedin/message', async (req, res) => {
       }
     }
 
+    if (!recipientIdentifier) {
+      return res.status(400).json({
+        success: false,
+        error: 'Unable to determine LinkedIn recipient identifier'
+      });
+    }
+
     // Try to get provider_id from Unipile API (more reliable than public identifier)
-    let recipientId = recipientIdentifier;
+    recipientId = recipientIdentifier;
     try {
       const userResponse = await axios.get(
         `${getBaseUrl()}/users/${encodeURIComponent(recipientIdentifier)}?account_id=${finalAccountId}`,

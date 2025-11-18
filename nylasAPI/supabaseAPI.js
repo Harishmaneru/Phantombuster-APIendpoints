@@ -219,6 +219,55 @@ function normalizeNylasMessage(message, thread, inboxId) {
   };
 }
 
+function normalizeNylasEmail(thread, message, inboxId, userId, emailAccount) {
+  // Use the latest message data, fallback to thread data
+  const latestMessage = message || thread?.latest_draft_or_message;
+  
+  return {
+    inbox_id: inboxId,
+    user_id: userId, // Add user_id
+    email_account: emailAccount, // Add email_account
+    
+    // Thread/Message identifiers
+    external_thread_id: thread?.id || null,
+    external_message_id: latestMessage?.id || thread?.id,
+    grant_id: thread?.grant_id || latestMessage?.grant_id,
+    
+    // Email content
+    subject: latestMessage?.subject || thread?.subject || null,
+    body_html: latestMessage?.body || null,
+    body_text: latestMessage?.body ? latestMessage.body.replace(/<[^>]*>/g, '').substring(0, 500) : null,
+    snippet: latestMessage?.snippet || thread?.snippet || null,
+    
+    // Participants
+    from_email: latestMessage?.from?.[0]?.email || null,
+    from_name: latestMessage?.from?.[0]?.name || null,
+    to_emails: latestMessage?.to || null,
+    cc_emails: latestMessage?.cc || null,
+    bcc_emails: latestMessage?.bcc || null,
+    reply_to: latestMessage?.reply_to || null,
+    participants: thread?.participants || null,
+    
+    // Metadata
+    attachments: latestMessage?.attachments || null,
+    message_ids: thread?.message_ids || null,
+    draft_ids: thread?.draft_ids || null,
+    
+    // Flags and status
+    starred: !!(latestMessage?.starred || thread?.starred),
+    unread: !!(latestMessage?.unread || thread?.unread),
+    folders: latestMessage?.folders || thread?.folders || null,
+    has_attachments: !!(latestMessage?.attachments?.length || thread?.has_attachments),
+    has_drafts: !!thread?.has_drafts,
+    
+    // Timestamps
+    date: latestMessage?.date ? new Date(latestMessage.date * 1000).toISOString() : null,
+    earliest_message_date: thread?.earliest_message_date ? new Date(thread.earliest_message_date * 1000).toISOString() : null,
+    latest_message_received_date: thread?.latest_message_received_date ? new Date(thread.latest_message_received_date * 1000).toISOString() : null,
+    received_at: latestMessage?.date ? new Date(latestMessage.date * 1000).toISOString() : null
+  };
+}
+
 
 function normalizeSmtpMessage(msg, inboxId) {
   // Extract email from "Name <email>" format if needed
@@ -321,45 +370,35 @@ async function syncAccountEmails({
 
       for (const thread of threads) {
         try {
-          // First, create/update the thread
-          const threadRow = normalizeNylasThread(thread, inboxId);
-          const { data: threadData, error: threadError } = await supabase
-            .from('email_threads')
-            .upsert(threadRow, { onConflict: 'inbox_id,external_thread_id' })
-            .select('id')
-            .single();
+          // Get the latest message from the thread
+          const latestMessage = thread?.latest_draft_or_message;
+          
+          // Create a single email record with user_id and email_account
+          const emailRow = normalizeNylasEmail(
+            thread, 
+            latestMessage, 
+            inboxId, 
+            userId,           // Pass user_id from API
+            account.email     // Pass email_account from account
+          );
+          
+          const { error: emailError } = await supabase
+            .from('nylas_emails')
+            .upsert(emailRow, { onConflict: 'inbox_id,external_message_id' });
 
-          if (threadError) {
-            console.error('[NylasSync] Thread upsert error:', threadError);
-            continue;
-          }
-
-          if (threadData) threadsUpserted++;
-          const threadId = threadData?.id;
-
-          // Then process the latest message
-          const latestMessage = thread?.latest_draft_or_message || thread?.latest_message;
-          if (latestMessage) {
-            const messageRow = normalizeNylasMessage(latestMessage, thread, inboxId);
-            messageRow.thread_id = threadId; // Set the thread_id from the created thread
-
-            const { error: messageError } = await supabase
-              .from('email_messages')
-              .upsert(messageRow, { onConflict: 'inbox_id,external_message_id' });
-
-            if (!messageError) {
-              messagesUpserted++;
-              console.log(`[NylasSync] Stored message: ${messageRow.external_message_id}`);
-            } else {
-              console.error('[NylasSync] Message upsert error:', messageError);
-            }
+          if (!emailError) {
+            messagesUpserted++;
+            console.log(`[NylasSync] Stored email: ${emailRow.external_message_id}`);
+          } else {
+            console.error('[NylasSync] Email upsert error:', emailError);
           }
         } catch (err) {
           console.error('[NylasSync] Error processing thread:', err);
         }
       }
 
-      console.log(`[NylasSync] Completed: ${threadsUpserted} threads, ${messagesUpserted} messages`);
+      console.log(`[NylasSync] Completed: ${messagesUpserted} emails stored`);
+      threadsUpserted = 0; // Not tracking threads for Nylas, only emails
     } else if (account.provider === 'smtp') {
       const token = account.oauth_refresh_token;
       const email = account.app_username;
@@ -698,17 +737,18 @@ router.post('/api/email/store', async (req, res) => {
         token: token
       });
 
-      // Fetch stored threads
-      const { data: threads } = await supabase
-        .from('email_threads')
-        .select('*, email_messages(*)')
+      // Fetch stored emails from nylas_emails table
+      const { data: emails } = await supabase
+        .from('nylas_emails')
+        .select('*')
         .eq('inbox_id', inboxId)
-        .order('last_message_at', { ascending: false })
+        .eq('user_id', userId)
+        .order('received_at', { ascending: false })
         .limit(limit);
 
       return res.json({
         success: true,
-        data: threads || [],
+        data: emails || [],
         synced: true,
         provider: 'nylas',
         summary: summary,
