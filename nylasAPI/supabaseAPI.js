@@ -8,8 +8,7 @@ const router = express.Router();
 // Env
 const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
-const NYLAS_API_KEY = process.env.NYLAS_API_KEY;
-const NYLAS_API_BASE_URL = 'https://api.us.nylas.com/v3';
+const NYLAS_PROXY_BASE_URL = 'https://videoresponse.onepgr.com:3001/api/nylas';
 
 // Postgres advisory lock function
 async function withInboxLock(supabase, inboxId, fn) {
@@ -115,40 +114,38 @@ async function getAppAccountById(supabase, appAccountId, userId) {
 }
 
 // Provider fetchers
-// async function fetchNylasThreads({ grantId, limit, cursor }) {
-//   if (!NYLAS_API_KEY) throw new Error('NYLAS_API_KEY not configured');
-//   const params = new URLSearchParams();
-//   if (limit) params.set('limit', String(limit));
-//   if (cursor) params.set('cursor', String(cursor));
-//   const url = `${NYLAS_API_BASE_URL}/grants/${grantId}/threads${params.toString() ? `?${params}` : ''}`;
-//   const resp = await axios.get(url, {
-//     headers: {
-//       'Accept': 'application/json, application/gzip',
-//       'Authorization': `Bearer ${NYLAS_API_KEY}`,
-//       'Content-Type': 'application/json'
-//     }
-//   });
-//   return resp.data;
-// }
-async function fetchNylasThreads({ grantId, limit, cursor }) {
-  if (!NYLAS_API_KEY) throw new Error('NYLAS_API_KEY not configured');
+async function fetchNylasInbox({ grantId, limit = 50, cursor }) {
+  if (!grantId) throw new Error('Missing Nylas grantId');
   const params = new URLSearchParams();
   if (limit) params.set('limit', String(limit));
   if (cursor) params.set('cursor', String(cursor));
-  const url = `${NYLAS_API_BASE_URL}/grants/${grantId}/threads${params.toString() ? `?${params}` : ''}`;
+  const url = `${NYLAS_PROXY_BASE_URL}/allthreads/${grantId}${params.toString() ? `?${params}` : ''}`;
 
-  console.log('[NylasAPI] Fetching threads from:', url);
+  console.log('[NylasAPI] Fetching threads via proxy from:', url);
 
   const resp = await axios.get(url, {
     headers: {
-      'Accept': 'application/json, application/gzip',
-      'Authorization': `Bearer ${NYLAS_API_KEY}`,
+      'Accept': 'application/json',
       'Content-Type': 'application/json'
     }
   });
 
-  // console.log('[NylasAPI] Response data:', JSON.stringify(resp.data, null, 2));
-  return resp.data;
+  const payload = resp.data || {};
+  const dataWrapper = Array.isArray(payload.data)
+    ? { data: payload.data }
+    : (payload.data && typeof payload.data === 'object' ? payload.data : {});
+
+  const threads = Array.isArray(dataWrapper.data) ? dataWrapper.data : [];
+  const nextCursor = dataWrapper.next_cursor || payload.next_cursor || payload.nextCursor || null;
+
+  return {
+    threads,
+    nextCursor,
+    meta: {
+      requestId: dataWrapper.request_id || payload.request_id || null,
+      success: typeof payload.success === 'boolean' ? payload.success : null
+    }
+  };
 }
 async function fetchSmtpInbox({ token, email, sinceIso, page = 1, limit = 20 }) {
   const resp = await axios.post(
@@ -189,17 +186,7 @@ async function fetchSmtpInbox({ token, email, sinceIso, page = 1, limit = 20 }) 
   return { messages, nextCursor: null, meta };
 }
 
-async function resolveThreadId(supabase, inboxId, externalThreadId) {
-  if (!externalThreadId) return null;
-  const { data, error } = await supabase
-    .from('email_threads')
-    .select('id')
-    .eq('inbox_id', inboxId)
-    .eq('external_thread_id', externalThreadId)
-    .single();
-  if (error || !data) return null;
-  return data.id;
-}
+
 
 
 
@@ -356,8 +343,8 @@ async function syncAccountEmails({
       const grantId = token || account.oauth_refresh_token || account.provider_external_id;
       if (!grantId) throw new Error('Missing Nylas grantId');
       console.log('[NylasSync] Using grantId:', grantId);
-      const nylasResp = await fetchNylasThreads({ grantId, limit, cursor });
-      const threads = Array.isArray(nylasResp?.data) ? nylasResp.data : (Array.isArray(nylasResp?.threads) ? nylasResp.threads : []);
+      const { threads: nylasThreads, nextCursor: fetchedCursor } = await fetchNylasInbox({ grantId, limit, cursor });
+      const threads = Array.isArray(nylasThreads) ? nylasThreads : [];
 
       console.log(`[NylasSync] Found ${threads.length} threads`);
       console.log('[NylasSync] First thread sample:', {
@@ -366,7 +353,7 @@ async function syncAccountEmails({
         hasLatestMessage: !!threads[0]?.latest_draft_or_message
       });
 
-      nextCursor = nylasResp?.next_cursor || nylasResp?.nextCursor || null;
+      nextCursor = fetchedCursor || null;
 
       console.log(`[NylasSync] Processing ${threads.length} threads`);
 
@@ -447,72 +434,313 @@ async function syncAccountEmails({
   });
 }
 
+
+async function incrementalSyncAccountEmails({
+  supabase,
+  userId,
+  appAccountId,
+  mailboxName,
+  account,
+  lastSyncAt,
+  syncCursor,
+  limit = 50
+}) {
+  const inboxId = await getInboxId(supabase, appAccountId, mailboxName);
+
+  return withInboxLock(supabase, inboxId, async () => {
+    let newEmails = [];
+    let nextCursor = null;
+    let messagesUpserted = 0;
+
+    if (account.provider === 'nylas') {
+      // Nylas incremental sync using cursor or timestamp
+      const grantId = account.oauth_refresh_token || account.provider_external_id;
+      const { threads: nylasThreads, nextCursor: fetchedCursor } = await fetchNylasInbox({
+        grantId,
+        limit,
+        cursor: syncCursor // proxy handles cursor
+      });
+
+      const threads = Array.isArray(nylasThreads) ? nylasThreads : [];
+      nextCursor = fetchedCursor || null;
+
+      for (const thread of threads) {
+        const latestMessage = thread?.latest_draft_or_message;
+        const emailRow = normalizeNylasEmail(
+          thread,
+          latestMessage,
+          inboxId,
+          userId,
+          account.email,
+          appAccountId
+        );
+
+        const { error: emailError } = await supabase
+          .from('nylas_emails')
+          .upsert(emailRow, { onConflict: 'inbox_id,external_message_id' });
+
+        if (!emailError) {
+          messagesUpserted++;
+          newEmails.push(emailRow);
+        }
+      }
+
+    } else if (account.provider === 'smtp') {
+      // SMTP incremental sync using since timestamp
+      const token = account.oauth_refresh_token;
+      const email = account.app_username;
+
+      const smtpResp = await fetchSmtpInbox({
+        token,
+        email,
+        sinceIso: lastSyncAt, // Only fetch emails since last sync
+        limit
+      });
+
+      const messages = Array.isArray(smtpResp?.messages) ? smtpResp.messages : [];
+      const meta = smtpResp?.meta || {};
+
+      for (const msg of messages) {
+        const emailRow = normalizeSmtpEmail(msg, {
+          userId,
+          emailAccount: account.email,
+          appAccountId,
+          meta,
+          limit
+        });
+
+        const { error: emailError } = await supabase
+          .from('smtp_emails')
+          .upsert(emailRow, { onConflict: 'message_id' });
+
+        if (!emailError) {
+          messagesUpserted++;
+          newEmails.push(emailRow);
+        }
+      }
+    }
+
+    // Update sync state
+    const lastSyncAtIso = new Date().toISOString();
+    await supabase
+      .from('email_inboxes')
+      .update({
+        last_sync_at: lastSyncAtIso,
+        sync_cursor: nextCursor,
+        sync_state: 'synced'
+      })
+      .eq('id', inboxId);
+
+    return {
+      messagesUpserted,
+      newEmailsCount: newEmails.length,
+      lastSyncAt: lastSyncAtIso,
+      nextCursor,
+      newEmails: newEmails.slice(0, 10) // Return first 10 new emails for immediate update
+    };
+  });
+}
+
 // ==================== API ENDPOINTS ====================
 
-
-router.get('/api/email/exists', async (req, res) => {
+// POST /api/email/sync - Incremental sync for existing accounts
+router.post('/api/email/sync', async (req, res) => {
   try {
     const userId = requireAuth(req);
-    const { appAccountId, email, provider } = req.query;
+    const {
+      appAccountId,
+      mailboxName = 'INBOX',
+      limit = 50,
+      forceRefresh = false
+    } = req.body;
 
-    if (!appAccountId || !email || !provider) {
+    if (!appAccountId) {
       return res.status(400).json({
         success: false,
-        message: 'appAccountId, email and provider are required'
+        message: 'appAccountId is required'
       });
     }
 
     const supabase = getSupabaseAdmin();
 
-    // Directly check the email storage tables without checking email_accounts first
-    let exists = false;
-    let checkedSource = null;
-    let count = 0;
-
-    if (provider === 'nylas') {
-      // Check nylas_emails table
-      const { count: nylasCount, error: nylasErr } = await supabase
-        .from('nylas_emails')
-        .select('*', { count: 'exact', head: true })
-        .eq('app_account_id', appAccountId)
-        .eq('user_id', userId);
-
-      if (nylasErr) throw nylasErr;
-      count = nylasCount || 0;
-      exists = count > 0;
-      checkedSource = 'nylas_emails';
-
-    } else if (provider === 'smtp') {
-      // Check smtp_emails table
-      const { count: smtpCount, error: smtpErr } = await supabase
-        .from('smtp_emails')
-        .select('*', { count: 'exact', head: true })
-        .eq('app_account_id', appAccountId)
-        .eq('user_id', userId);
-
-      if (smtpErr) throw smtpErr;
-      count = smtpCount || 0;
-      exists = count > 0;
-      checkedSource = 'smtp_emails';
-    } else {
-      return res.status(400).json({
+    // Get account details
+    const account = await getAppAccountById(supabase, appAccountId, userId);
+    if (!account) {
+      return res.status(404).json({
         success: false,
-        message: 'Invalid provider'
+        message: 'Email account not found'
+      });
+    }
+
+    // Get inbox sync state
+    const inboxId = await getInboxId(supabase, appAccountId, mailboxName);
+    const { data: inboxState } = await supabase
+      .from('email_inboxes')
+      .select('last_sync_at, sync_cursor, sync_state')
+      .eq('id', inboxId)
+      .maybeSingle();
+
+    // Determine sync strategy
+    const lastSyncAt = inboxState?.last_sync_at;
+    const syncCursor = inboxState?.sync_cursor;
+
+    let syncSummary;
+
+    if (forceRefresh || !lastSyncAt) {
+      // Full resync
+      console.log(`[EmailSync] Performing full sync for account ${appAccountId}`);
+      syncSummary = await syncAccountEmails({
+        supabase,
+        userId,
+        appAccountId,
+        mailboxName,
+        limit: 100, // Higher limit for initial sync
+        forceFullResync: true
+      });
+    } else {
+      // Incremental sync - only fetch new emails since last sync
+      console.log(`[EmailSync] Performing incremental sync for account ${appAccountId} since ${lastSyncAt}`);
+      syncSummary = await incrementalSyncAccountEmails({
+        supabase,
+        userId,
+        appAccountId,
+        mailboxName,
+        account,
+        lastSyncAt,
+        syncCursor,
+        limit
       });
     }
 
     return res.json({
       success: true,
-      exists,
-      count,
-      provider,
-      email,
-      appAccountId,
-      source: checkedSource
+      data: {
+        syncType: forceRefresh || !lastSyncAt ? 'full' : 'incremental',
+        ...syncSummary,
+        accountId: appAccountId,
+        provider: account.provider
+      }
     });
 
   } catch (err) {
-    console.error('Exists check error:', err);
+    console.error('Sync error:', err);
+    return res.status(500).json({
+      success: false,
+      message: err.message || 'Sync failed'
+    });
+  }
+});
+
+
+
+
+
+// In your /api/email/exists endpoint, replace this part:
+router.get('/api/email/exists', async (req, res) => {
+  try {
+    const userId = requireAuth(req);
+    const { detailed = false } = req.query;
+
+    const supabase = getSupabaseAdmin();
+
+    // Get all user's email accounts
+    const { data: accounts } = await supabase
+      .from('email_accounts')
+      .select('id, email, provider, created_at')
+      .eq('user_id', userId);
+
+    if (!accounts || accounts.length === 0) {
+      return res.json({
+        success: true,
+        exists: false,
+        accounts: [],
+        syncRequired: true
+      });
+    }
+
+    let result = {
+      success: true,
+      exists: false,
+      accounts: [],
+      syncRequired: false
+    };
+
+    for (const account of accounts) {
+      let emailCount = 0;
+      let resolvedAppAccountId = account.id;
+      const table = account.provider === 'nylas'
+        ? 'nylas_emails'
+        : account.provider === 'smtp'
+          ? 'smtp_emails'
+          : null;
+
+      if (table) {
+        // Determine which app_account_id is actually stored for this user/account
+        const { data: storedIds, error: storedErr } = await supabase
+          .from(table)
+          .select('app_account_id')
+          .eq('user_id', userId)
+          .eq('email_account', account.email)
+          .not('app_account_id', 'is', null)
+          .limit(1);
+
+        if (!storedErr && storedIds && storedIds.length > 0) {
+          resolvedAppAccountId = storedIds[0].app_account_id || resolvedAppAccountId;
+        }
+
+        const { count, error } = await supabase
+          .from(table)
+          .select('*', { count: 'exact', head: true })
+          .eq('user_id', userId)
+          .eq('app_account_id', resolvedAppAccountId);
+
+        if (!error) emailCount = count || 0;
+      }
+
+      // Get last sync info from email_inboxes
+      const { data: inbox } = await supabase
+        .from('email_inboxes')
+        .select('last_sync_at')
+        .eq('account_id', account.id)
+        .eq('mailbox_name', 'INBOX')
+        .maybeSingle();
+
+      // Helper function to determine if sync is needed
+      const shouldSync = (lastSyncTime) => {
+        if (!lastSyncTime) return true;
+        const lastSync = new Date(lastSyncTime);
+        const now = new Date();
+        const hoursSinceLastSync = (now - lastSync) / (1000 * 60 * 60);
+        return hoursSinceLastSync > 1;
+      };
+
+      // In your /api/email/exists endpoint, update the accountInfo object:
+      const accountInfo = {
+        id: account.id,
+        appAccountId: resolvedAppAccountId,
+        email: account.email,
+        provider: account.provider,
+        emailCount,
+        lastSyncAt: inbox?.last_sync_at,
+        needsInitialSync: emailCount === 0,
+        needsIncrementalSync: inbox?.last_sync_at ? shouldSync(inbox.last_sync_at) : true
+      };
+
+      result.accounts.push(accountInfo);
+
+      if (emailCount > 0) {
+        result.exists = true;
+      }
+
+      if (accountInfo.needsInitialSync || accountInfo.needsIncrementalSync) {
+        result.syncRequired = true;
+      }
+    }
+
+    return res.json(result);
+
+  } catch (err) {
+    console.error('Enhanced exists check error:', err);
     return res.status(500).json({
       success: false,
       message: err.message || 'Check failed'
@@ -521,235 +749,84 @@ router.get('/api/email/exists', async (req, res) => {
 });
 
 
-// 1) GET /api/email/check - Check if emails exist
-router.get('/api/email/check', async (req, res) => {
-  try {
-    const userId = requireAuth(req);
-    const { appAccountId, mailboxName = 'INBOX' } = req.query;
-    if (!appAccountId) {
-      return res.status(400).json({ success: false, message: 'appAccountId is required' });
-    }
 
-    const supabase = getSupabaseAdmin();
-    const inboxId = await getInboxId(supabase, appAccountId, mailboxName);
+// router.get('/api/email/exists', async (req, res) => {
+//   try {
+//     const userId = requireAuth(req);
+//     const { appAccountId, email, provider } = req.query;
 
-    const { data: inbox } = await supabase
-      .from('email_inboxes')
-      .select('last_sync_at, sync_cursor, provider')
-      .eq('id', inboxId)
-      .maybeSingle();
+//     if (!appAccountId || !email || !provider) {
+//       return res.status(400).json({
+//         success: false,
+//         message: 'appAccountId, email and provider are required'
+//       });
+//     }
 
-    const account = await getAppAccountById(supabase, appAccountId, userId);
-    if (!account) {
-      console.warn('[EmailCheck] Account metadata not found', { userId, appAccountId });
-      return res.json({
-        success: true,
-        data: {
-          hasData: false,
-          lastSyncAt: inbox?.last_sync_at || null,
-          syncCursor: inbox?.sync_cursor || null,
-          provider: inbox?.provider || null,
-          note: 'Account metadata not found; ensure initial store call seeds data'
-        }
-      });
-    }
+//     const supabase = getSupabaseAdmin();
 
-    let hasData = false;
-    if (account.provider === 'nylas') {
-      const { count } = await supabase
-        .from('email_threads')
-        .select('*', { count: 'exact', head: true })
-        .eq('inbox_id', inboxId);
-      hasData = (count || 0) > 0;
-    } else if (account.provider === 'smtp') {
-      const { count } = await supabase
-        .from('email_messages')
-        .select('*', { count: 'exact', head: true })
-        .eq('inbox_id', inboxId);
-      hasData = (count || 0) > 0;
-    }
+//     // Directly check the email storage tables without checking email_accounts first
+//     let exists = false;
+//     let checkedSource = null;
+//     let count = 0;
 
-    return res.json({
-      success: true,
-      data: {
-        hasData,
-        lastSyncAt: inbox?.last_sync_at || null,
-        syncCursor: inbox?.sync_cursor || null,
-        provider: account.provider
-      }
-    });
-  } catch (err) {
-    console.error('Check error:', err);
-    return res.status(500).json({ success: false, message: err.message || 'Check failed' });
-  }
-});
+//     if (provider === 'nylas') {
+//       // Check nylas_emails table
+//       const { count: nylasCount, error: nylasErr } = await supabase
+//         .from('nylas_emails')
+//         .select('*', { count: 'exact', head: true })
+//         .eq('app_account_id', appAccountId)
+//         .eq('user_id', userId);
 
-// 2) POST /api/email/sync-and-fetch - MAIN ENDPOINT: Sync and return emails
-router.post('/api/email/sync-and-fetch', async (req, res) => {
-  try {
-    const userId = requireAuth(req);
-    const { appAccountId, mailboxName = 'INBOX', limit = 50, forceSync = false } = req.body;
-    if (!appAccountId) {
-      return res.status(400).json({ success: false, message: 'appAccountId is required' });
-    }
+//       if (nylasErr) throw nylasErr;
+//       count = nylasCount || 0;
+//       exists = count > 0;
+//       checkedSource = 'nylas_emails';
 
-    const supabase = getSupabaseAdmin();
-    const account = await getAppAccountById(supabase, appAccountId, userId);
-    if (!account) {
-      return res.status(404).json({ success: false, message: 'Account not found' });
-    }
+//     } else if (provider === 'smtp') {
+//       // Check smtp_emails table
+//       const { count: smtpCount, error: smtpErr } = await supabase
+//         .from('smtp_emails')
+//         .select('*', { count: 'exact', head: true })
+//         .eq('app_account_id', appAccountId)
+//         .eq('user_id', userId);
 
-    const inboxId = await getInboxId(supabase, appAccountId, mailboxName);
+//       if (smtpErr) throw smtpErr;
+//       count = smtpCount || 0;
+//       exists = count > 0;
+//       checkedSource = 'smtp_emails';
+//     } else {
+//       return res.status(400).json({
+//         success: false,
+//         message: 'Invalid provider'
+//       });
+//     }
 
-    let hasData = false;
-    if (!forceSync) {
-      if (account.provider === 'nylas') {
-        const { count } = await supabase
-          .from('email_threads')
-          .select('*', { count: 'exact', head: true })
-          .eq('inbox_id', inboxId);
-        hasData = (count || 0) > 0;
-      } else if (account.provider === 'smtp') {
-        const { count } = await supabase
-          .from('email_messages')
-          .select('*', { count: 'exact', head: true })
-          .eq('inbox_id', inboxId);
-        hasData = (count || 0) > 0;
-      }
-    }
+//     return res.json({
+//       success: true,
+//       exists,
+//       count,
+//       provider,
+//       email,
+//       appAccountId,
+//       source: checkedSource
+//     });
 
-    if (!hasData || forceSync) {
-      await syncAccountEmails({ supabase, userId, appAccountId, mailboxName, limit, forceFullResync: forceSync });
-    }
+//   } catch (err) {
+//     console.error('Exists check error:', err);
+//     return res.status(500).json({
+//       success: false,
+//       message: err.message || 'Check failed'
+//     });
+//   }
+// });
 
-    let data = [];
-    if (account.provider === 'nylas') {
-      const { data: threads, error } = await supabase
-        .from('email_threads')
-        .select('*, email_messages(*)')
-        .eq('inbox_id', inboxId)
-        .order('last_message_at', { ascending: false })
-        .limit(limit);
-      if (error) throw error;
-      data = threads || [];
-    } else if (account.provider === 'smtp') {
-      const { data: messages, error } = await supabase
-        .from('email_messages')
-        .select('*')
-        .eq('inbox_id', inboxId)
-        .order('received_at', { ascending: false })
-        .limit(limit);
-      if (error) throw error;
-      data = messages || [];
-    }
 
-    return res.json({
-      success: true,
-      data: data,
-      synced: !hasData || forceSync,
-      provider: account.provider
-    });
-  } catch (err) {
-    console.error('Sync and fetch error:', err);
-    return res.status(500).json({ success: false, message: err.message || 'Sync and fetch failed' });
-  }
-});
+//  GET /api/email/check - Check if emails exist
 
-// 3) POST /api/email/quick-sync - Background sync
-router.post('/api/email/quick-sync', async (req, res) => {
-  try {
-    const userId = requireAuth(req);
-    const { appAccountId, mailboxName = 'INBOX', limit = 50 } = req.body;
-    if (!appAccountId) {
-      return res.status(400).json({ success: false, message: 'appAccountId is required' });
-    }
 
-    const supabase = getSupabaseAdmin();
-    syncAccountEmails({ supabase, userId, appAccountId, mailboxName, limit, forceFullResync: false })
-      .then(summary => console.log(`Sync completed:`, summary))
-      .catch(err => console.error(`Sync failed:`, err));
 
-    return res.json({ success: true, message: 'Sync started in background', appAccountId });
-  } catch (err) {
-    console.error('Quick sync error:', err);
-    return res.status(500).json({ success: false, message: err.message || 'Sync failed' });
-  }
-});
 
-// 4) GET /api/email/messages - Get messages from Supabase
-router.get('/api/email/messages', async (req, res) => {
-  try {
-    const userId = requireAuth(req);
-    const { appAccountId, mailboxName = 'INBOX', limit = 20, offset = 0, threadExternalId, threadId, search, isRead, hasAttachments } = req.query;
-    if (!appAccountId) {
-      return res.status(400).json({ success: false, message: 'appAccountId is required' });
-    }
-
-    const supabase = getSupabaseAdmin();
-    const inboxId = await getInboxId(supabase, appAccountId, mailboxName);
-
-    let query = supabase
-      .from('email_messages')
-      .select('*', { count: 'exact' })
-      .eq('inbox_id', inboxId)
-      .order('received_at', { ascending: false })
-      .range(parseInt(offset), parseInt(offset) + parseInt(limit) - 1);
-
-    if (threadExternalId) {
-      const resolvedThreadId = await resolveThreadId(supabase, inboxId, threadExternalId);
-      if (resolvedThreadId) {
-        query = query.eq('thread_id', resolvedThreadId);
-      } else {
-        return res.json({ success: true, data: [], pagination: { limit: parseInt(limit), offset: parseInt(offset), total: 0 } });
-      }
-    }
-    if (threadId) query = query.eq('thread_id', threadId);
-    if (search) query = query.or(`subject.ilike.%${search}%,snippet.ilike.%${search}%,body_text.ilike.%${search}%`);
-    if (isRead !== undefined) query = query.eq('is_read', isRead === 'true');
-    if (hasAttachments !== undefined) query = query.eq('has_attachments', hasAttachments === 'true');
-
-    const { data, error, count } = await query;
-    if (error) throw error;
-
-    return res.json({ success: true, data: data || [], pagination: { limit: parseInt(limit), offset: parseInt(offset), total: count || 0 } });
-  } catch (err) {
-    console.error('Get messages error:', err);
-    return res.status(500).json({ success: false, message: err.message || 'Failed to fetch messages' });
-  }
-});
-
-// 5) GET /api/email/threads - Get threads from Supabase
-router.get('/api/email/threads', async (req, res) => {
-  try {
-    const userId = requireAuth(req);
-    const { appAccountId, mailboxName = 'INBOX', limit = 20, offset = 0, search } = req.query;
-    if (!appAccountId) {
-      return res.status(400).json({ success: false, message: 'appAccountId is required' });
-    }
-
-    const supabase = getSupabaseAdmin();
-    const inboxId = await getInboxId(supabase, appAccountId, mailboxName);
-
-    let query = supabase
-      .from('email_threads')
-      .select('*, email_messages(*)', { count: 'exact' })
-      .eq('inbox_id', inboxId)
-      .order('last_message_at', { ascending: false })
-      .range(parseInt(offset), parseInt(offset) + parseInt(limit) - 1);
-
-    if (search) query = query.or(`subject.ilike.%${search}%,snippet.ilike.%${search}%`);
-
-    const { data, error, count } = await query;
-    if (error) throw error;
-
-    return res.json({ success: true, data: data || [], pagination: { limit: parseInt(limit), offset: parseInt(offset), total: count || 0 } });
-  } catch (err) {
-    console.error('Get threads error:', err);
-    return res.status(500).json({ success: false, message: err.message || 'Failed to fetch threads' });
-  }
-});
-
-// 6) POST /api/email/store - Accept token/email, call SMTP API, store in Supabase
+// POST /api/email/store - Accept token/email, call SMTP API, store in Supabase
 router.post('/api/email/store', async (req, res) => {
   try {
     const userId = requireAuth(req);
@@ -942,46 +1019,6 @@ async function ensureOrCreateEmailAccount(supabase, appAccountId, userId, email,
 }
 
 
-// Add this test endpoint to debug permissions
-router.get('/api/email/test-permissions', async (req, res) => {
-  try {
-    const supabase = getSupabaseAdmin();
 
-    const tables = ['app_users', 'email_accounts', 'email_inboxes', 'email_threads', 'email_messages'];
-    const results = {};
-
-    for (const table of tables) {
-      try {
-        const { data, error } = await supabase
-          .from(table)
-          .select('count')
-          .limit(1);
-
-        results[table] = {
-          accessible: !error,
-          error: error ? `${error.code}: ${error.message}` : null
-        };
-      } catch (err) {
-        results[table] = {
-          accessible: false,
-          error: err.message
-        };
-      }
-    }
-
-    return res.json({
-      success: true,
-      message: 'Permission check completed',
-      results: results
-    });
-
-  } catch (err) {
-    console.error('Permission test error:', err);
-    return res.status(500).json({
-      success: false,
-      message: err.message
-    });
-  }
-});
 
 module.exports = router;
