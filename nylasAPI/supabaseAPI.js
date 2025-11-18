@@ -113,6 +113,58 @@ async function getAppAccountById(supabase, appAccountId, userId) {
   };
 }
 
+async function resolveAccountReference(supabase, userId, requestedAppAccountId) {
+  if (!requestedAppAccountId) return null;
+
+  const directAccount = await getAppAccountById(supabase, requestedAppAccountId, userId);
+  if (directAccount) {
+    return {
+      account: directAccount,
+      requestedAppAccountId: requestedAppAccountId
+    };
+  }
+
+  const sources = [
+    { table: 'nylas_emails', provider: 'nylas' },
+    { table: 'smtp_emails', provider: 'smtp' }
+  ];
+
+  for (const source of sources) {
+    const { data: emailRow, error: emailErr } = await supabase
+      .from(source.table)
+      .select('email_account')
+      .eq('user_id', userId)
+      .eq('app_account_id', requestedAppAccountId)
+      .not('email_account', 'is', null)
+      .limit(1)
+      .maybeSingle();
+
+    if (emailErr) throw emailErr;
+    if (emailRow?.email_account) {
+      const { data: accountRow, error: accountErr } = await supabase
+        .from('email_accounts')
+        .select('id')
+        .eq('user_id', userId)
+        .eq('email', emailRow.email_account)
+        .eq('provider', source.provider)
+        .maybeSingle();
+
+      if (accountErr) throw accountErr;
+      if (accountRow?.id) {
+        const resolvedAccount = await getAppAccountById(supabase, accountRow.id, userId);
+        if (resolvedAccount) {
+          return {
+            account: resolvedAccount,
+            requestedAppAccountId
+          };
+        }
+      }
+    }
+  }
+
+  return null;
+}
+
 // Provider fetchers
 async function fetchNylasInbox({ grantId, limit = 50, cursor }) {
   if (!grantId) throw new Error('Missing Nylas grantId');
@@ -443,7 +495,8 @@ async function incrementalSyncAccountEmails({
   account,
   lastSyncAt,
   syncCursor,
-  limit = 50
+  limit = 50,
+  requestedAppAccountId = null
 }) {
   const inboxId = await getInboxId(supabase, appAccountId, mailboxName);
 
@@ -451,6 +504,7 @@ async function incrementalSyncAccountEmails({
     let newEmails = [];
     let nextCursor = null;
     let messagesUpserted = 0;
+    const sourceAppAccountId = requestedAppAccountId || appAccountId;
 
     if (account.provider === 'nylas') {
       // Nylas incremental sync using cursor or timestamp
@@ -472,7 +526,7 @@ async function incrementalSyncAccountEmails({
           inboxId,
           userId,
           account.email,
-          appAccountId
+          sourceAppAccountId
         );
 
         const { error: emailError } = await supabase
@@ -504,7 +558,7 @@ async function incrementalSyncAccountEmails({
         const emailRow = normalizeSmtpEmail(msg, {
           userId,
           emailAccount: account.email,
-          appAccountId,
+          appAccountId: sourceAppAccountId,
           meta,
           limit
         });
@@ -563,17 +617,20 @@ router.post('/api/email/sync', async (req, res) => {
 
     const supabase = getSupabaseAdmin();
 
-    // Get account details
-    const account = await getAppAccountById(supabase, appAccountId, userId);
-    if (!account) {
+    // Resolve account details (supports external appAccountId)
+    const accountResolution = await resolveAccountReference(supabase, userId, appAccountId);
+    if (!accountResolution) {
       return res.status(404).json({
         success: false,
         message: 'Email account not found'
       });
     }
+    const account = accountResolution.account;
+    const requestedAppAccountId = accountResolution.requestedAppAccountId || appAccountId || account.id;
+    const internalAppAccountId = account.id;
 
     // Get inbox sync state
-    const inboxId = await getInboxId(supabase, appAccountId, mailboxName);
+    const inboxId = await getInboxId(supabase, internalAppAccountId, mailboxName);
     const { data: inboxState } = await supabase
       .from('email_inboxes')
       .select('last_sync_at, sync_cursor, sync_state')
@@ -588,27 +645,29 @@ router.post('/api/email/sync', async (req, res) => {
 
     if (forceRefresh || !lastSyncAt) {
       // Full resync
-      console.log(`[EmailSync] Performing full sync for account ${appAccountId}`);
+      console.log(`[EmailSync] Performing full sync for account ${requestedAppAccountId}`);
       syncSummary = await syncAccountEmails({
         supabase,
         userId,
-        appAccountId,
+        appAccountId: internalAppAccountId,
         mailboxName,
         limit: 100, // Higher limit for initial sync
-        forceFullResync: true
+        forceFullResync: true,
+        requestedAppAccountId
       });
     } else {
       // Incremental sync - only fetch new emails since last sync
-      console.log(`[EmailSync] Performing incremental sync for account ${appAccountId} since ${lastSyncAt}`);
+      console.log(`[EmailSync] Performing incremental sync for account ${requestedAppAccountId} since ${lastSyncAt}`);
       syncSummary = await incrementalSyncAccountEmails({
         supabase,
         userId,
-        appAccountId,
+        appAccountId: internalAppAccountId,
         mailboxName,
         account,
         lastSyncAt,
         syncCursor,
-        limit
+        limit,
+        requestedAppAccountId
       });
     }
 
@@ -617,7 +676,7 @@ router.post('/api/email/sync', async (req, res) => {
       data: {
         syncType: forceRefresh || !lastSyncAt ? 'full' : 'incremental',
         ...syncSummary,
-        accountId: appAccountId,
+          accountId: requestedAppAccountId,
         provider: account.provider
       }
     });
@@ -639,15 +698,20 @@ router.post('/api/email/sync', async (req, res) => {
 router.get('/api/email/exists', async (req, res) => {
   try {
     const userId = requireAuth(req);
-    const { detailed = false } = req.query;
+    const { detailed = false, email: emailFilter, provider: providerFilter } = req.query;
 
     const supabase = getSupabaseAdmin();
 
-    // Get all user's email accounts
-    const { data: accounts } = await supabase
+    // Get all user's email accounts, optionally filtered by email/provider
+    let accountsQuery = supabase
       .from('email_accounts')
       .select('id, email, provider, created_at')
       .eq('user_id', userId);
+
+    if (emailFilter) accountsQuery = accountsQuery.eq('email', emailFilter);
+    if (providerFilter) accountsQuery = accountsQuery.eq('provider', providerFilter);
+
+    const { data: accounts } = await accountsQuery;
 
     if (!accounts || accounts.length === 0) {
       return res.json({
