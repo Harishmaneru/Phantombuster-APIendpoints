@@ -620,7 +620,7 @@ router.post('/api/email/sync', async (req, res) => {
     // Resolve account details (supports external appAccountId)
     const accountResolution = await resolveAccountReference(supabase, userId, appAccountId);
     if (!accountResolution) {
-      return res.status(404).json({
+      return res.status(200).json({
         success: false,
         message: 'Email account not found'
       });
@@ -676,7 +676,7 @@ router.post('/api/email/sync', async (req, res) => {
       data: {
         syncType: forceRefresh || !lastSyncAt ? 'full' : 'incremental',
         ...syncSummary,
-          accountId: requestedAppAccountId,
+        accountId: requestedAppAccountId,
         provider: account.provider
       }
     });
@@ -811,83 +811,6 @@ router.get('/api/email/exists', async (req, res) => {
     });
   }
 });
-
-
-
-// router.get('/api/email/exists', async (req, res) => {
-//   try {
-//     const userId = requireAuth(req);
-//     const { appAccountId, email, provider } = req.query;
-
-//     if (!appAccountId || !email || !provider) {
-//       return res.status(400).json({
-//         success: false,
-//         message: 'appAccountId, email and provider are required'
-//       });
-//     }
-
-//     const supabase = getSupabaseAdmin();
-
-//     // Directly check the email storage tables without checking email_accounts first
-//     let exists = false;
-//     let checkedSource = null;
-//     let count = 0;
-
-//     if (provider === 'nylas') {
-//       // Check nylas_emails table
-//       const { count: nylasCount, error: nylasErr } = await supabase
-//         .from('nylas_emails')
-//         .select('*', { count: 'exact', head: true })
-//         .eq('app_account_id', appAccountId)
-//         .eq('user_id', userId);
-
-//       if (nylasErr) throw nylasErr;
-//       count = nylasCount || 0;
-//       exists = count > 0;
-//       checkedSource = 'nylas_emails';
-
-//     } else if (provider === 'smtp') {
-//       // Check smtp_emails table
-//       const { count: smtpCount, error: smtpErr } = await supabase
-//         .from('smtp_emails')
-//         .select('*', { count: 'exact', head: true })
-//         .eq('app_account_id', appAccountId)
-//         .eq('user_id', userId);
-
-//       if (smtpErr) throw smtpErr;
-//       count = smtpCount || 0;
-//       exists = count > 0;
-//       checkedSource = 'smtp_emails';
-//     } else {
-//       return res.status(400).json({
-//         success: false,
-//         message: 'Invalid provider'
-//       });
-//     }
-
-//     return res.json({
-//       success: true,
-//       exists,
-//       count,
-//       provider,
-//       email,
-//       appAccountId,
-//       source: checkedSource
-//     });
-
-//   } catch (err) {
-//     console.error('Exists check error:', err);
-//     return res.status(500).json({
-//       success: false,
-//       message: err.message || 'Check failed'
-//     });
-//   }
-// });
-
-
-//  GET /api/email/check - Check if emails exist
-
-
 
 
 // POST /api/email/store - Accept token/email, call SMTP API, store in Supabase
@@ -1082,6 +1005,80 @@ async function ensureOrCreateEmailAccount(supabase, appAccountId, userId, email,
   return newAccount;
 }
 
+router.post('/focus/save', async (req, res) => {
+  const supabase = createClient(SUPABASE_URL, req.headers.authorization);
+
+  const { email_id, priority, ai_suggested, reason, confidence } = req.body;
+
+  const owner_id = req.user.id;
+
+  // upsert logic
+  const { data, error } = await supabase
+    .from("email_focus")
+    .upsert([
+      {
+        email_id,
+        owner_id,
+        priority,
+        ai_suggested,
+        reason,
+        confidence
+      }
+    ])
+    .select()
+    .single();
+
+  if (error) return res.status(400).json({ error });
+  return res.json({ success: true, data });
+});
+
+
+router.post('/todos/create', async (req, res) => {
+  const supabase = createClient(SUPABASE_URL, req.headers.authorization);
+
+  const { email_id, title, task_type, due_date, priority, tags } = req.body;
+
+  const owner_id = req.user.id;
+
+  const { data, error } = await supabase
+    .from("email_todos")
+    .insert([
+      {
+        email_id,
+        owner_id,
+        title,
+        task_type,
+        due_date,
+        priority,
+        tags
+      }
+    ])
+    .select()
+    .single();
+
+  if (error) return res.status(400).json({ error });
+  return res.json({ success: true, data });
+});
+
+
+router.post('/todos/update', async (req, res) => {
+  const supabase = createClient(SUPABASE_URL, req.headers.authorization);
+
+  const { id, title, task_type, due_date, priority, tags } = req.body;
+
+  const owner_id = req.user.id;
+
+  const { data, error } = await supabase
+    .from("email_todos")
+    .update({ title, task_type, due_date, priority, tags })
+    .eq("id", id)
+    .eq("owner_id", owner_id)
+    .select()
+    .single();
+
+  if (error) return res.status(400).json({ error });
+  return res.json({ success: true, data });
+});
 
 
 
