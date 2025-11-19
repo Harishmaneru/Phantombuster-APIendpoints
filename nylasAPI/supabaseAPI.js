@@ -1006,78 +1006,84 @@ async function ensureOrCreateEmailAccount(supabase, appAccountId, userId, email,
 }
 
 router.post('/focus/save', async (req, res) => {
-  const supabase = createClient(SUPABASE_URL, req.headers.authorization);
+  try {
+    const owner_id = requireAuth(req);
+    const supabase = getSupabaseAdmin();
 
-  const { email_id, priority, ai_suggested, reason, confidence } = req.body;
+    const { email_id, priority, ai_suggested, reason, confidence } = req.body;
 
-  const owner_id = req.user.id;
+    const { data, error } = await supabase
+      .from("email_focus")
+      .upsert([
+        {
+          email_id,
+          owner_id,
+          priority,
+          ai_suggested,
+          reason,
+          confidence
+        }
+      ])
+      .select()
+      .single();
 
-  // upsert logic
-  const { data, error } = await supabase
-    .from("email_focus")
-    .upsert([
-      {
-        email_id,
-        owner_id,
-        priority,
-        ai_suggested,
-        reason,
-        confidence
-      }
-    ])
-    .select()
-    .single();
-
-  if (error) return res.status(400).json({ error });
-  return res.json({ success: true, data });
+    if (error) return res.status(400).json({ error });
+    return res.json({ success: true, data });
+  } catch (err) {
+    return res.status(err.status || 500).json({ error: err.message || 'Failed to save focus entry' });
+  }
 });
 
 
 router.post('/todos/create', async (req, res) => {
-  const supabase = createClient(SUPABASE_URL, req.headers.authorization);
+  try {
+    const owner_id = requireAuth(req);
+    const supabase = getSupabaseAdmin();
 
-  const { email_id, title, task_type, due_date, priority, tags } = req.body;
+    const { email_id, title, task_type, due_date, priority, tags } = req.body;
 
-  const owner_id = req.user.id;
-
-  const { data, error } = await supabase
-    .from("email_todos")
-    .insert([
-      {
-        email_id,
-        owner_id,
-        title,
-        task_type,
-        due_date,
-        priority,
-        tags
-      }
-    ])
-    .select()
-    .single();
-
-  if (error) return res.status(400).json({ error });
-  return res.json({ success: true, data });
+    const { data, error } = await supabase
+      .from("email_todos")
+      .insert([
+        {
+          email_id,
+          owner_id,
+          title,
+          task_type,
+          due_date,
+          priority,
+          tags
+        }
+      ])
+      .select()
+      .single();
+    if (error) return res.status(400).json({ error });
+    return res.json({ success: true, data });
+  } catch (err) {
+    return res.status(err.status || 500).json({ error: err.message || 'Failed to create todo' });
+  }
 });
 
 
 router.post('/todos/update', async (req, res) => {
-  const supabase = createClient(SUPABASE_URL, req.headers.authorization);
+  try {
+    const owner_id = requireAuth(req);
+    const supabase = getSupabaseAdmin();
 
-  const { id, title, task_type, due_date, priority, tags } = req.body;
+    const { id, title, task_type, due_date, priority, tags } = req.body;
 
-  const owner_id = req.user.id;
-
-  const { data, error } = await supabase
-    .from("email_todos")
-    .update({ title, task_type, due_date, priority, tags })
-    .eq("id", id)
-    .eq("owner_id", owner_id)
-    .select()
-    .single();
-
-  if (error) return res.status(400).json({ error });
-  return res.json({ success: true, data });
+    const { data, error } = await supabase
+      .from("email_todos")
+      .update({ title, task_type, due_date, priority, tags })
+      .eq("id", id)
+      .eq("owner_id", owner_id)
+      .select()
+      .single();
+    if (error) return res.status(400).json({ error });
+    return res.json({ success: true, data });
+  } catch (err) {
+    return res.status(err.status || 500).json({ error: err.message || 'Failed to update todo' });
+  }
 });
 
 
