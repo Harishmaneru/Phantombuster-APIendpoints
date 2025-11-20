@@ -2373,12 +2373,12 @@ router.get('/api/unipile/linkedin/user/me', async (req, res) => {
       }
     }
 
-    if (!finalAccountId) {
-      return res.status(400).json({
-        success: false,
-        error: 'account_id or user_id is required'
-      });
-    }
+    // if (!finalAccountId) {
+    //   return res.status(400).json({
+    //     success: false,
+    //     error: 'account_id or user_id is required'
+    //   });
+    // }
 
     // Call Unipile API to get current user's profile
     const response = await axios.get(
