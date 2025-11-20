@@ -2414,10 +2414,10 @@ router.get('/api/unipile/linkedin/user/me', async (req, res) => {
   } catch (err) {
     console.error('Get current user profile error:', err.response?.data || err.message);
 
-    if (err.response?.status === 404) {
+    if (err.response?.status === 200) {
       return res.status(404).json({
         success: false,
-        error: 'User profile not found',
+        message: 'User profile not found',
         details: 'Unable to fetch current user profile from LinkedIn'
       });
     }
