@@ -170,21 +170,21 @@ router.post('/generate-email-reply', async (req, res) => {
             });
         }
 
-        // Define reply type instructions
+        // Define reply type instructions (optimized for speed)
         const replyTypeInstructions = {
             'Direct & Concise': {
                 instruction: 'Write a direct and concise email reply. Get straight to the point without unnecessary formalities or filler words. Keep it brief and action-oriented. Focus on the essential information only.',
-                maxTokens: 300,
+                maxTokens: 200, // Reduced for faster responses
                 systemMessage: 'You are an expert at writing concise, direct email replies that get straight to the point.'
             },
             'Professional': {
                 instruction: 'Write a professional, formal email reply. Use proper business language, complete sentences, and maintain a respectful, professional tone. Include appropriate greetings and closing. Balance formality with clarity.',
-                maxTokens: 500,
+                maxTokens: 300, // Reduced for faster responses
                 systemMessage: 'You are an expert email writer who creates perfect professional email replies for business contexts.'
             },
             'Detailed / Informative': {
                 instruction: 'Write a detailed and informative email reply. Provide comprehensive information, context, and explanations. Include all relevant details that might be helpful. Use clear structure and organization. Ensure the recipient has all the information they need.',
-                maxTokens: 800,
+                maxTokens: 400, // Reduced for faster responses
                 systemMessage: 'You are an expert at writing detailed, informative email replies that provide comprehensive information and context.'
             }
         };
@@ -228,25 +228,12 @@ router.post('/generate-email-reply', async (req, res) => {
         // **OPTIMIZATION: Create all API calls at once for true parallel processing**
         const generateReply = (type) => {
             const typeConfig = replyTypeInstructions[type];
-            const prompt = `
-ORIGINAL EMAIL:
-${emailBody}
+            // Shorter, more efficient prompt for faster processing
+            const prompt = `Email: ${emailBody}\n\nGenerate a ${type} reply. ${typeConfig.instruction}`;
 
-TASK: Generate a ${type} email reply based on the original email above.
-
-INSTRUCTIONS:
-${typeConfig.instruction}
-- Keep the reply relevant to the original email
-- Include proper email etiquette
-- If the email contains questions, make sure to answer them
-- If it requires action, be clear about next steps
-- Maintain appropriate tone and formatting
-
-EMAIL REPLY:
-`;
-
-            return openai.chat.completions.create({
-                model: "gpt-3.5-turbo", // Using faster model
+            // Add timeout wrapper (30 seconds max per request)
+            const apiCall = openai.chat.completions.create({
+                model: "gpt-4o-mini", // Faster and cheaper than gpt-3.5-turbo
                 messages: [
                     {
                         role: "system",
@@ -257,10 +244,17 @@ EMAIL REPLY:
                         content: prompt
                     }
                 ],
-                max_tokens: typeConfig.maxTokens,
-                temperature: 0.7,
-                stream: false // Ensure streaming is off for faster response
-            }).then(completion => ({
+                max_tokens: typeConfig.maxTokens, // Already optimized values
+                temperature: 0.5, // Lower temp for faster, more deterministic responses
+                stream: false
+            });
+
+            // Timeout wrapper - 30 seconds max
+            const timeoutPromise = new Promise((_, reject) => 
+                setTimeout(() => reject(new Error(`Timeout: ${type} reply generation took too long`)), 30000)
+            );
+
+            return Promise.race([apiCall, timeoutPromise]).then(completion => ({
                 replyType: type,
                 reply: completion.choices[0].message.content,
                 usage: completion.usage
