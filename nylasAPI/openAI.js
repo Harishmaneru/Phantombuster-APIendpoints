@@ -162,6 +162,7 @@ router.post('/generate-email-reply', async (req, res) => {
     try {
         const { emailBody, replyType } = req.body;
 
+        // Validate required fields
         if (!emailBody) {
             return res.status(400).json({
                 success: false,
@@ -169,37 +170,50 @@ router.post('/generate-email-reply', async (req, res) => {
             });
         }
 
+        // Define reply type instructions
         const replyTypeInstructions = {
             'Direct & Concise': {
-                instruction: 'Write a direct, action-oriented reply. Skip filler, keep sentences short, and address any explicit asks immediately. Include a greeting and closing only if essential.',
-                maxTokens: 120
+                instruction: 'Write a direct and concise email reply. Get straight to the point without unnecessary formalities or filler words. Keep it brief and action-oriented. Focus on the essential information only.',
+                maxTokens: 300,
+                systemMessage: 'You are an expert at writing concise, direct email replies that get straight to the point.'
             },
             'Professional': {
-                instruction: 'Write a polished business reply. Use respectful tone, full sentences, include greeting, body, clear next steps, and a courteous closing.',
-                maxTokens: 220
+                instruction: 'Write a professional, formal email reply. Use proper business language, complete sentences, and maintain a respectful, professional tone. Include appropriate greetings and closing. Balance formality with clarity.',
+                maxTokens: 500,
+                systemMessage: 'You are an expert email writer who creates perfect professional email replies for business contexts.'
             },
             'Detailed / Informative': {
-                instruction: 'Write a thorough reply that explains reasoning, context, and next steps. Organize with short paragraphs or bullet points when useful, but keep the message readable and professional.',
-                maxTokens: 400
+                instruction: 'Write a detailed and informative email reply. Provide comprehensive information, context, and explanations. Include all relevant details that might be helpful. Use clear structure and organization. Ensure the recipient has all the information they need.',
+                maxTokens: 800,
+                systemMessage: 'You are an expert at writing detailed, informative email replies that provide comprehensive information and context.'
             }
         };
 
+        // All valid reply types
         const allReplyTypes = ['Direct & Concise', 'Professional', 'Detailed / Informative'];
-        let typesToGenerate = [];
 
+        // Parse replyType to determine which types to generate
+        let typesToGenerate = [];
+        
         if (replyType) {
+            // Split by comma and clean up the types
             const requestedTypes = replyType.split(',').map(type => type.trim());
+            
+            // Validate and match types (case-insensitive, handles whitespace)
             for (const requestedType of requestedTypes) {
+                // Find matching type (case-insensitive comparison)
                 const matchedType = allReplyTypes.find(validType => {
+                    // Normalize both strings for comparison
                     const normalize = (str) => str.toLowerCase().trim().replace(/\s+/g, ' ');
                     return normalize(requestedType) === normalize(validType);
                 });
-
+                
                 if (matchedType && !typesToGenerate.includes(matchedType)) {
                     typesToGenerate.push(matchedType);
                 }
             }
 
+            // If no valid types found, return error
             if (typesToGenerate.length === 0) {
                 return res.status(400).json({
                     success: false,
@@ -207,71 +221,81 @@ router.post('/generate-email-reply', async (req, res) => {
                 });
             }
         } else {
+            // If no replyType provided, default to all three
             typesToGenerate = [...allReplyTypes];
         }
 
-        const replyInstructionBlock = typesToGenerate
-            .map(type => `- ${type}: ${replyTypeInstructions[type].instruction}`)
-            .join('\n');
-
-        const userPrompt = `
+        // **OPTIMIZATION: Create all API calls at once for true parallel processing**
+        const generateReply = (type) => {
+            const typeConfig = replyTypeInstructions[type];
+            const prompt = `
 ORIGINAL EMAIL:
 ${emailBody}
 
-REPLY STYLES: ${typesToGenerate.join(', ')}
+TASK: Generate a ${type} email reply based on the original email above.
 
-INSTRUCTIONS PER STYLE:
-${replyInstructionBlock}
+INSTRUCTIONS:
+${typeConfig.instruction}
+- Keep the reply relevant to the original email
+- Include proper email etiquette
+- If the email contains questions, make sure to answer them
+- If it requires action, be clear about next steps
+- Maintain appropriate tone and formatting
 
-REQUIREMENTS:
-- Address any questions or requests from the original email.
-- Be explicit about next steps and timelines when relevant.
-- Maintain proper email etiquette (greeting, body, closing) appropriate to each style.
-- Respond in valid JSON with keys exactly matching the requested reply style names and values containing the email reply text.
+EMAIL REPLY:
 `;
 
-        const totalMaxTokens = Math.min(
-            700,
-            typesToGenerate.reduce((sum, type) => sum + replyTypeInstructions[type].maxTokens, 0)
-        );
+            return openai.chat.completions.create({
+                model: "gpt-3.5-turbo", // Using faster model
+                messages: [
+                    {
+                        role: "system",
+                        content: typeConfig.systemMessage
+                    },
+                    {
+                        role: "user",
+                        content: prompt
+                    }
+                ],
+                max_tokens: typeConfig.maxTokens,
+                temperature: 0.7,
+                stream: false // Ensure streaming is off for faster response
+            }).then(completion => ({
+                replyType: type,
+                reply: completion.choices[0].message.content,
+                usage: completion.usage
+            }));
+        };
 
-        const completion = await openai.chat.completions.create({
-            model: "gpt-4o-mini",
-            messages: [
-                {
-                    role: "system",
-                    content: 'You are an expert email replier. Respond with a strict JSON object whose keys exactly match the requested reply styles.'
-                },
-                {
-                    role: "user",
-                    content: userPrompt
-                }
-            ],
-            response_format: { type: 'json_object' },
-            max_tokens: totalMaxTokens,
-            temperature: 0.6
-        });
+        // **OPTIMIZATION: Use Promise.all for true parallel execution**
+        const replyPromises = typesToGenerate.map(type => generateReply(type));
+        
+        const replies = await Promise.all(replyPromises);
 
-        const rawContent = completion.choices[0].message.content;
-        let parsedReplies;
-
-        try {
-            parsedReplies = JSON.parse(rawContent);
-        } catch (parseError) {
-            console.warn('Failed to parse JSON email replies, returning raw content.', parseError);
-            parsedReplies = { [typesToGenerate[0]]: rawContent };
-        }
+        // **OPTIMIZATION: Calculate total usage more efficiently**
+        const totalUsage = {
+            prompt_tokens: 0,
+            completion_tokens: 0,
+            total_tokens: 0
+        };
 
         const responseReplies = {};
-        typesToGenerate.forEach(type => {
-            responseReplies[type] = parsedReplies[type] || '';
+        
+        replies.forEach(reply => {
+            responseReplies[reply.replyType] = reply.reply;
+            totalUsage.prompt_tokens += reply.usage.prompt_tokens;
+            totalUsage.completion_tokens += reply.usage.completion_tokens;
+            totalUsage.total_tokens += reply.usage.total_tokens;
         });
 
-        res.json({
+        console.log('AI reply totalUsage', totalUsage);
+        
+        const response = {
             success: true,
-            replies: responseReplies,
-            usage: completion.usage
-        });
+            replies: responseReplies
+        };
+
+        res.json(response);
 
     } catch (error) {
         console.error('Error generating email reply:', error);
