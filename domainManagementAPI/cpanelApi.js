@@ -10,7 +10,6 @@ const qs = require('qs');
 // - CPANEL_MASTER_USER: Master cPanel username
 // - CPANEL_TOKEN: cPanel API token for the master user
 // Note: DMARC operations now use cPanel UAPI (same as email operations) instead of WHM API
-
 // Import the NamecheapDomain model from the existing schema
 const { NamecheapDomain } = require('./nameCheapDomainApi.js');
 
