@@ -1,16 +1,10 @@
 const express = require('express');
-const https = require('https');
 const OpenAI = require('openai');
 const router = express.Router();
 
 // Initialize OpenAI
 const openai = new OpenAI({
     apiKey: process.env.OPENAI_API_KEY
-});
-
-const keepAliveAgent = new https.Agent({
-    keepAlive: true,
-    keepAliveMsecs: 1000
 });
 
 // Unified API endpoint for email reply generation
@@ -255,9 +249,7 @@ REQUIREMENTS:
             ],
             response_format: { type: 'json_object' },
             max_tokens: totalMaxTokens,
-            temperature: 0.6,
-            httpAgent: keepAliveAgent,
-            timeout: 10000
+            temperature: 0.6
         });
 
         const rawContent = completion.choices[0].message.content;
