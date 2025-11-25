@@ -706,6 +706,7 @@ router.post('/api/fetchinbox', async (req, res) => {
 });
 
 // 3️⃣.1️⃣ Fetch Single Email By Message ID
+// 3️⃣.1️⃣ Fetch Single Email By Message ID - Improved with consistent response format
 router.post('/api/fetch-email-by-id', async (req, res) => {
   let client;
   try {
@@ -761,7 +762,7 @@ router.post('/api/fetch-email-by-id', async (req, res) => {
       });
     }
 
-    // Fetch message with minimal fields for quick response
+    // Fetch message with same fields as fetchinbox
     let fetchedMessage = null;
     for await (let msg of client.fetch(messageSeq.slice(0, 1), {
       envelope: true,
@@ -819,10 +820,18 @@ router.post('/api/fetch-email-by-id', async (req, res) => {
       });
     }
 
-    // Return in same format as fetchinbox
-    return res.json({
-      success: true,
-      inbox: [fetchedMessage]
+    // Return in EXACTLY the same format as fetchinbox
+    return res.json({ 
+      success: true, 
+      inbox: [fetchedMessage], // Wrap in array like fetchinbox
+      pagination: {
+        currentPage: 1,
+        totalPages: 1,
+        totalMessages: 1,
+        limit: 1,
+        hasNextPage: false,
+        hasPrevPage: false
+      }
     });
   } catch (err) {
     console.error('Fetch email by ID error:', err);
