@@ -728,7 +728,6 @@ router.post('/api/fetch-email-by-id', async (req, res) => {
       return res.status(500).json({ success: false, error: 'Failed to decrypt stored credentials' });
     }
 
-    // Use same host as fetchinbox (smtp.host directly)
     client = new ImapFlow({
       host: smtp.host,
       port: 993,
@@ -738,51 +737,31 @@ router.post('/api/fetch-email-by-id', async (req, res) => {
     });
 
     await client.connect();
-    const lock = await client.mailboxOpen(mailbox);
+    await client.mailboxOpen(mailbox);
 
-    // Try multiple search strategies
-    let messageSeq = [];
-    const trimmedMessageId = messageId.trim();
-    const normalizedMessageId = trimmedMessageId.startsWith('<') ? trimmedMessageId : `<${trimmedMessageId}>`;
+    // Normalize message ID (add brackets if missing)
+    const normalizedMessageId = messageId.trim().startsWith('<') ? messageId.trim() : `<${messageId.trim()}>`;
 
-    // Strategy 1: Search with normalized Message-ID (with brackets)
-    try {
-      messageSeq = await client.search({
-        header: { 'Message-ID': normalizedMessageId }
-      });
-    } catch (searchError) {
-      console.log('Search with normalized Message-ID failed:', searchError.message);
-    }
+    // Search for message - try normalized first, then original
+    let messageSeq = await client.search({
+      header: { 'Message-ID': normalizedMessageId }
+    });
 
-    // Strategy 2: Search with original Message-ID (without brackets)
     if (!messageSeq.length) {
-      try {
-        messageSeq = await client.search({
-          header: { 'Message-ID': trimmedMessageId }
-        });
-      } catch (searchError) {
-        console.log('Search with original Message-ID failed:', searchError.message);
-      }
+      messageSeq = await client.search({
+        header: { 'Message-ID': messageId.trim() }
+      });
     }
 
     if (!messageSeq.length) {
       await client.logout();
-      return res.json({
+      return res.status(404).json({
         success: false,
-        error: 'Message not found',
-        inbox: [],
-        pagination: {
-          currentPage: 1,
-          totalPages: 0,
-          totalMessages: 0,
-          limit: 1,
-          hasNextPage: false,
-          hasPrevPage: false
-        }
+        error: 'Message not found'
       });
     }
 
-    // Fetch message with same fields as fetchinbox
+    // Fetch message with minimal fields for quick response
     let fetchedMessage = null;
     for await (let msg of client.fetch(messageSeq.slice(0, 1), {
       envelope: true,
@@ -817,15 +796,15 @@ router.post('/api/fetch-email-by-id', async (req, res) => {
       // Format message exactly like fetchinbox
       fetchedMessage = {
         subject: msg.envelope.subject,
-        from: msg.envelope.from ? msg.envelope.from.map(f => `${f.name || ''} <${f.address}>`).join(', ') : '',
+        from: msg.envelope.from.map(f => `${f.name || ''} <${f.address}>`).join(', '),
         date: msg.envelope.date,
         uid: msg.uid,
         seq: msg.seq,
         read: Array.isArray(msg.flags) ? msg.flags.includes('\\Seen') : false,
         text: cleanText,
         html: cleanHtml,
-        to: msg.envelope.to?.map(t => `${t.name || ''} <${t.address}>`).join(', ') || '',
-        cc: msg.envelope.cc?.map(c => `${c.name || ''} <${c.address}>`).join(', ') || '',
+        to: msg.envelope.to?.map(t => `${t.name || ''} <${t.address}>`).join(', '),
+        cc: msg.envelope.cc?.map(c => `${c.name || ''} <${c.address}>`).join(', '),
         messageId: msg.envelope.messageId
       };
       break; // Only process first match
@@ -834,52 +813,20 @@ router.post('/api/fetch-email-by-id', async (req, res) => {
     await client.logout();
 
     if (!fetchedMessage) {
-      return res.json({
+      return res.status(404).json({
         success: false,
-        error: 'Message fetch failed',
-        inbox: [],
-        pagination: {
-          currentPage: 1,
-          totalPages: 0,
-          totalMessages: 0,
-          limit: 1,
-          hasNextPage: false,
-          hasPrevPage: false
-        }
+        error: 'Message fetch failed'
       });
     }
 
-    // Return in EXACTLY the same format as fetchinbox
-    return res.json({ 
-      success: true, 
-      inbox: [fetchedMessage],
-      pagination: {
-        currentPage: 1,
-        totalPages: 1,
-        totalMessages: 1,
-        limit: 1,
-        hasNextPage: false,
-        hasPrevPage: false
-      }
+    // Return in same format as fetchinbox
+    return res.json({
+      success: true,
+      inbox: [fetchedMessage]
     });
   } catch (err) {
     console.error('Fetch email by ID error:', err);
-    // Always send a response, even on error
-    if (!res.headersSent) {
-      return res.status(500).json({ 
-        success: false, 
-        error: err.message || 'Internal server error',
-        inbox: [],
-        pagination: {
-          currentPage: 1,
-          totalPages: 0,
-          totalMessages: 0,
-          limit: 1,
-          hasNextPage: false,
-          hasPrevPage: false
-        }
-      });
-    }
+    return res.status(500).json({ success: false, error: err.message });
   } finally {
     if (client) {
       try {
