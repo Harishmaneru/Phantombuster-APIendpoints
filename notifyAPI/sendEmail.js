@@ -709,7 +709,7 @@ router.post('/api/fetchinbox', async (req, res) => {
 router.post('/api/fetch-email-by-id', async (req, res) => {
   let client;
   try {
-    const { token, email, messageId, mailbox = 'INBOX', markAsRead = false } = req.body;
+    const { token, email, messageId, mailbox = 'INBOX' } = req.body;
 
     if (!token || !email || !messageId) {
       return res.status(400).json({ success: false, error: 'Missing token, email, or messageId' });
@@ -739,27 +739,29 @@ router.post('/api/fetch-email-by-id', async (req, res) => {
     await client.connect();
     await client.mailboxOpen(mailbox);
 
+    // Normalize message ID (add brackets if missing)
     const normalizedMessageId = messageId.trim().startsWith('<') ? messageId.trim() : `<${messageId.trim()}>`;
 
+    // Search for message - try normalized first, then original
     let messageSeq = await client.search({
       header: { 'Message-ID': normalizedMessageId }
     });
 
-    // Fallback search without brackets if needed
-    if (!messageSeq.length && normalizedMessageId !== messageId.trim()) {
+    if (!messageSeq.length) {
       messageSeq = await client.search({
         header: { 'Message-ID': messageId.trim() }
       });
     }
 
     if (!messageSeq.length) {
+      await client.logout();
       return res.status(404).json({
         success: false,
-        error: 'Message not found',
-        details: { mailbox, messageId }
+        error: 'Message not found'
       });
     }
 
+    // Fetch message with minimal fields for quick response
     let fetchedMessage = null;
     for await (let msg of client.fetch(messageSeq.slice(0, 1), {
       envelope: true,
@@ -769,61 +771,58 @@ router.post('/api/fetch-email-by-id', async (req, res) => {
       bodyStructure: true
     })) {
       const parsed = await simpleParser(msg.source);
-      const flags = Array.isArray(msg.flags) ? msg.flags : [];
-      const isSeen = flags.includes('\\Seen') || flags.includes('Seen');
 
-      const attachments = (parsed.attachments || []).map(att => ({
-        filename: att.filename,
-        contentType: att.contentType,
-        size: att.size,
-        checksum: att.checksum,
-        contentDisposition: att.contentDisposition
-      }));
+      // Clean HTML content (same as fetchinbox)
+      let cleanHtml = parsed.html || '';
+      if (cleanHtml) {
+        cleanHtml = cleanHtml.replace(/https:\/\/tracking\.inflection\.io\/[^"']+/g, (url) => {
+          try {
+            const urlObj = new URL(url);
+            const redirect = urlObj.searchParams.get('redirect');
+            return redirect || url;
+          } catch {
+            return url;
+          }
+        });
+        cleanHtml = cleanHtml.replace(/<span[^>]*id="inflection-email-preheader"[^>]*>.*?<\/span>/gis, '');
+      }
 
+      // Extract clean text (same as fetchinbox)
+      let cleanText = parsed.text || '';
+      if (cleanText) {
+        cleanText = cleanText.replace(/https:\/\/tracking\.inflection\.io\/[^\s]+/g, '');
+      }
+
+      // Format message exactly like fetchinbox
       fetchedMessage = {
-        subject: msg.envelope.subject || '(No Subject)',
-        from: msg.envelope.from ? msg.envelope.from.map(f => `${f.name || ''} <${f.address}>`).join(', ') : null,
-        to: msg.envelope.to ? msg.envelope.to.map(t => `${t.name || ''} <${t.address}>`).join(', ') : null,
-        cc: msg.envelope.cc ? msg.envelope.cc.map(c => `${c.name || ''} <${c.address}>`).join(', ') : null,
-        bcc: parsed.bcc ? parsed.bcc.map(b => `${b.name || ''} <${b.address}>`).join(', ') : null,
+        subject: msg.envelope.subject,
+        from: msg.envelope.from.map(f => `${f.name || ''} <${f.address}>`).join(', '),
         date: msg.envelope.date,
         uid: msg.uid,
         seq: msg.seq,
-        read: isSeen,
-        flags,
-        messageId: parsed.messageId || msg.envelope.messageId,
-        inReplyTo: parsed.inReplyTo || null,
-        references: parsed.references || null,
-        html: parsed.html || null,
-        text: parsed.text || null,
-        attachments,
-        headers: Object.fromEntries(parsed.headers || []),
-        mailbox
+        read: Array.isArray(msg.flags) ? msg.flags.includes('\\Seen') : false,
+        text: cleanText,
+        html: cleanHtml,
+        to: msg.envelope.to?.map(t => `${t.name || ''} <${t.address}>`).join(', '),
+        cc: msg.envelope.cc?.map(c => `${c.name || ''} <${c.address}>`).join(', '),
+        messageId: msg.envelope.messageId
       };
-
-      if (markAsRead && !isSeen) {
-        try {
-          await client.messageFlagsAdd({ uid: msg.uid }, ['\\Seen'], { uid: true });
-          fetchedMessage.read = true;
-          fetchedMessage.flags = [...new Set([...(fetchedMessage.flags || []), '\\Seen'])];
-        } catch (flagError) {
-          console.log('Unable to mark message as read:', flagError.message);
-        }
-      }
+      break; // Only process first match
     }
+
+    await client.logout();
 
     if (!fetchedMessage) {
       return res.status(404).json({
         success: false,
-        error: 'Message fetch failed',
-        details: { mailbox, messageId }
+        error: 'Message fetch failed'
       });
     }
 
+    // Return in same format as fetchinbox
     return res.json({
       success: true,
-      data: fetchedMessage,
-      message: 'Message fetched successfully'
+      inbox: [fetchedMessage]
     });
   } catch (err) {
     console.error('Fetch email by ID error:', err);
@@ -833,7 +832,7 @@ router.post('/api/fetch-email-by-id', async (req, res) => {
       try {
         await client.logout();
       } catch (logoutError) {
-        console.log('Logout error:', logoutError.message);
+        // Ignore logout errors
       }
     }
   }
