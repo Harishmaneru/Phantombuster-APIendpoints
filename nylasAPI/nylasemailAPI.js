@@ -405,6 +405,51 @@ router.get('/fetchsentemails/:grantId', checkApiKey, async (req, res) => {
   }
 });
 
+/*_________________________GET SPECIFIC MESSAGE BY ID_________________________*/
+
+/**
+ * Get a single email message by its message ID
+ * GET /api/nylas/message/:grantId/:messageId
+ * Optional query params:
+ *   - view: raw | metadata | expanded (default: expanded)
+ */
+router.get('/message/:grantId/:messageId', checkApiKey, async (req, res) => {
+  try {
+    const { grantId, messageId } = req.params;
+    const { view } = req.query;
+
+    const queryParams = new URLSearchParams();
+    if (view) {
+      queryParams.append('view', view);
+    }
+
+    const url = `${NYLAS_API_BASE_URL}/grants/${grantId}/messages/${messageId}${queryParams.toString() ? `?${queryParams.toString()}` : ''}`;
+
+    const response = await axios.get(url, {
+      headers: {
+        'Accept': 'application/json, application/gzip',
+        'Authorization': `Bearer ${NYLAS_API_KEY}`,
+        'Content-Type': 'application/json'
+      }
+    });
+
+    res.json({
+      success: true,
+      data: response.data,
+      message: 'Message fetched successfully',
+      timestamp: new Date().toISOString()
+    });
+  } catch (error) {
+    console.error('Error fetching message:', error.response?.data || error.message);
+    res.status(error.response?.status || 500).json({
+      success: false,
+      message: error.response?.data?.message || error.message || 'Failed to fetch message',
+      data: error.response?.data || null,
+      timestamp: new Date().toISOString()
+    });
+  }
+});
+
 /*_________________________FOLDERS API_________________________*/
 
 /**
