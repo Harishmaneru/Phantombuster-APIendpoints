@@ -709,6 +709,7 @@ router.post('/api/fetchinbox', async (req, res) => {
 // 9️⃣ Fetch Specific Email by Message ID
 // 9️⃣ Fetch Single Email by Message ID
 // 9️⃣ Fetch Single Email by Message ID (With Debug Logs)
+// 9️⃣ Fetch Single Email by Message ID (Fixed: Response before Logout)
 router.post('/api/fetchsingleemail', async (req, res) => {
   let client;
   const startTime = Date.now();
@@ -717,102 +718,65 @@ router.post('/api/fetchsingleemail', async (req, res) => {
     const { token, email, messageId, mailbox = 'INBOX' } = req.body;
 
     console.log(`\n📥 [FetchSingle] START request for: ${email}`);
-    console.log(`👉 [FetchSingle] Looking for Message-ID: ${messageId} in Box: ${mailbox}`);
 
     if (!token || !email || !messageId) {
-      console.log('❌ [FetchSingle] Missing fields');
       return res.status(400).json({ success: false, error: 'Missing required fields' });
     }
 
     // 1. Validate Auth
-    console.log('🔍 [FetchSingle] Verifying DB credentials...');
     const smtp = await SMTPAuth.findOne({ email, token });
     if (!smtp) {
-      console.log('❌ [FetchSingle] Invalid token/email in DB');
       return res.status(403).json({ success: false, error: 'Invalid token or sender email' });
     }
 
-    // 2. Decrypt Password
+    // 2. Decrypt
     let decryptedPass;
     try {
       decryptedPass = decrypt(smtp.pass);
     } catch (decryptError) {
-      console.error('❌ [FetchSingle] Decryption failed:', decryptError);
       return res.status(500).json({ success: false, error: 'Failed to decrypt credentials' });
     }
 
-    // 3. Connect to IMAP
+    // 3. Connect
     const imapHost = smtp.host.replace('smtp.', 'imap.');
-    console.log(`🔌 [FetchSingle] Connecting to IMAP host: ${imapHost}:${993}...`);
+    console.log(`🔌 [FetchSingle] Connecting to ${imapHost}...`);
 
     client = new ImapFlow({
       host: imapHost,
       port: 993,
       secure: true,
       auth: { user: email, pass: decryptedPass },
-      logger: false, // Keep false to avoid flooding, we are using custom logs
+      logger: false,
       timeout: 30000 
     });
 
-    // Log connection progress
     await client.connect();
-    console.log('✅ [FetchSingle] IMAP Connected.');
-
-    // 4. Open Mailbox
-    console.log(`📂 [FetchSingle] Opening mailbox: ${mailbox}...`);
-    const lock = await client.mailboxOpen(mailbox);
-    console.log(`📂 [FetchSingle] Mailbox opened. Total messages: ${lock.exists}`);
-
-    // 5. Search
-    // NOTE: Sometimes Message-ID needs angle brackets <id>. We search exactly as provided.
-    console.log(`🔎 [FetchSingle] Searching header "Message-ID" for: ${messageId}`);
     
-    // Using 'header' search is faster than full text
+    // 4. Open & Search
+    await client.mailboxOpen(mailbox);
+    console.log(`🔎 [FetchSingle] Searching for ID: ${messageId}`);
+    
     const searchResult = await client.search({ header: { 'Message-ID': messageId } });
 
-    console.log(`🔢 [FetchSingle] Search returned ${searchResult ? searchResult.length : 0} match(es).`);
-
     if (!searchResult || searchResult.length === 0) {
-      console.warn('⚠️ [FetchSingle] No matches found. Attempting fallback search (cleaning ID)...');
+      console.log('❌ [FetchSingle] Not found.');
+      // Send response immediately
+      res.status(404).json({ success: false, error: 'Email not found' });
       
-      // OPTIONAL FALLBACK: If user sent ID without <>, try adding them, or vice versa
-      // This helps if the frontend sends "xyz" but server stores "<xyz>"
-      let fallbackId = messageId;
-      if (!messageId.startsWith('<')) fallbackId = `<${messageId}>`;
-      else fallbackId = messageId.replace(/[<>]/g, '');
-
-      if (fallbackId !== messageId) {
-          console.log(`🔎 [FetchSingle] Trying fallback ID: ${fallbackId}`);
-          const fallbackResult = await client.search({ header: { 'Message-ID': fallbackId } });
-          if (fallbackResult && fallbackResult.length > 0) {
-              console.log('✅ [FetchSingle] Found via fallback ID!');
-              searchResult.push(fallbackResult[0]);
-          }
-      }
-    }
-
-    if (!searchResult || searchResult.length === 0) {
-      console.log('❌ [FetchSingle] Email not found after search.');
-      await client.logout();
-      return res.status(404).json({ success: false, error: 'Email not found. Check Message-ID format.' });
+      // Cleanup silently
+      try { await client.logout(); } catch(e){}
+      return;
     }
 
     const seqNum = searchResult[0];
-    console.log(`📦 [FetchSingle] Fetching content for Seq: ${seqNum}...`);
-
     let foundEmail = null;
 
+    // 5. Fetch Content
     for await (let msg of client.fetch(seqNum, { 
-      envelope: true, 
-      uid: true, 
-      flags: true, 
-      source: true,
-      bodyStructure: true 
+      envelope: true, uid: true, flags: true, source: true, bodyStructure: true 
     })) {
-      console.log(`📝 [FetchSingle] Parsing source for UID: ${msg.uid}...`);
       const parsed = await simpleParser(msg.source);
-      console.log('✨ [FetchSingle] Parsed successfully. cleaning HTML...');
-
+      
       // Content Cleaning
       let cleanHtml = parsed.html || '';
       if (cleanHtml) {
@@ -843,28 +807,32 @@ router.post('/api/fetchsingleemail', async (req, res) => {
       break; 
     }
 
-    console.log('🚪 [FetchSingle] Logging out...');
-    await client.logout();
-
     if (!foundEmail) {
-      console.log('❌ [FetchSingle] Failed to process email content.');
-      return res.status(404).json({ success: false, error: 'Content processing failed' });
+      res.status(404).json({ success: false, error: 'Content processing failed' });
+      try { await client.logout(); } catch(e){}
+      return;
     }
 
-    const duration = Date.now() - startTime;
-    console.log(`🚀 [FetchSingle] SUCCESS! Sending response. (Duration: ${duration}ms)\n`);
+    console.log('🚀 [FetchSingle] Data ready. Sending response to client FIRST.');
     
-    return res.json({
+    // ✅ CRITICAL CHANGE: Send response BEFORE logout
+    res.json({
       success: true,
       email: foundEmail
     });
 
+    // 6. Logout in background (don't await this to hold up response)
+    console.log('🚪 [FetchSingle] Initiating background logout...');
+    client.logout().catch(e => console.log('Background logout ignored:', e.message));
+
   } catch (error) {
-    console.error(`❌ [FetchSingle] CRITICAL ERROR:`, error.message);
-    if (client) {
-      try { await client.logout(); } catch (e) { console.log('Error forcing logout:', e.message); }
+    console.error(`❌ [FetchSingle] Error:`, error.message);
+    if (!res.headersSent) {
+        res.status(500).json({ success: false, error: error.message });
     }
-    return res.status(500).json({ success: false, error: error.message });
+    if (client) {
+      try { client.logout().catch(() => {}); } catch (e) {}
+    }
   }
 });
 
