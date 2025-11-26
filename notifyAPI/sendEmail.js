@@ -707,9 +707,6 @@ router.post('/api/fetchinbox', async (req, res) => {
 
 
 // 9️⃣ Fetch Specific Email by Message ID
-// 9️⃣ Fetch Single Email by Message ID
-// 9️⃣ Fetch Single Email by Message ID (With Debug Logs)
-// 9️⃣ Fetch Single Email by Message ID (Fixed: Response before Logout)
 router.post('/api/fetchsingleemail', async (req, res) => {
   let client;
   const startTime = Date.now();
@@ -718,12 +715,14 @@ router.post('/api/fetchsingleemail', async (req, res) => {
     const { token, email, messageId, mailbox = 'INBOX' } = req.body;
 
     console.log(`\n📥 [FetchSingle] START request for: ${email}`);
+    console.log(`👉 [FetchSingle] Looking for Message-ID: ${messageId} in Box: ${mailbox}`);
 
     if (!token || !email || !messageId) {
       return res.status(400).json({ success: false, error: 'Missing required fields' });
     }
 
     // 1. Validate Auth
+    console.log(`🔍 [FetchSingle] Verifying DB credentials...`);
     const smtp = await SMTPAuth.findOne({ email, token });
     if (!smtp) {
       return res.status(403).json({ success: false, error: 'Invalid token or sender email' });
@@ -739,7 +738,7 @@ router.post('/api/fetchsingleemail', async (req, res) => {
 
     // 3. Connect
     const imapHost = smtp.host.replace('smtp.', 'imap.');
-    console.log(`🔌 [FetchSingle] Connecting to ${imapHost}...`);
+    console.log(`🔌 [FetchSingle] Connecting to IMAP host: ${imapHost}:993...`);
 
     client = new ImapFlow({
       host: imapHost,
@@ -751,42 +750,48 @@ router.post('/api/fetchsingleemail', async (req, res) => {
     });
 
     await client.connect();
+    console.log(`✅ [FetchSingle] IMAP Connected.`);
     
     // 4. Open & Search
-    await client.mailboxOpen(mailbox);
-    console.log(`🔎 [FetchSingle] Searching for ID: ${messageId}`);
+    console.log(`📂 [FetchSingle] Opening mailbox: ${mailbox}...`);
+    const mailboxInfo = await client.mailboxOpen(mailbox);
+    console.log(`📂 [FetchSingle] Mailbox opened. Total messages: ${mailboxInfo.exists}`);
     
+    console.log(`🔎 [FetchSingle] Searching header "Message-ID" for: ${messageId}`);
     const searchResult = await client.search({ header: { 'Message-ID': messageId } });
+    console.log(`🔢 [FetchSingle] Search returned ${searchResult.length} match(es).`);
 
     if (!searchResult || searchResult.length === 0) {
       console.log('❌ [FetchSingle] Not found.');
-      // Send response immediately
-      res.status(404).json({ success: false, error: 'Email not found' });
-      
-      // Cleanup silently
-      try { await client.logout(); } catch(e){}
-      return;
+      await client.logout();
+      return res.status(404).json({ success: false, error: 'Email not found' });
     }
 
     const seqNum = searchResult[0];
     let foundEmail = null;
 
     // 5. Fetch Content
+    console.log(`📦 [FetchSingle] Fetching content for Seq: ${seqNum}...`);
     for await (let msg of client.fetch(seqNum, { 
       envelope: true, uid: true, flags: true, source: true, bodyStructure: true 
     })) {
+      console.log(`📝 [FetchSingle] Parsing source for UID: ${msg.uid}...`);
       const parsed = await simpleParser(msg.source);
       
       // Content Cleaning
       let cleanHtml = parsed.html || '';
       if (cleanHtml) {
+        console.log(`✨ [FetchSingle] Cleaning HTML...`);
         cleanHtml = cleanHtml.replace(/https:\/\/tracking\.inflection\.io\/[^"']+/g, (url) => {
             try { return new URL(url).searchParams.get('redirect') || url; } catch { return url; }
         });
         cleanHtml = cleanHtml.replace(/<span[^>]*id="inflection-email-preheader"[^>]*>.*?<\/span>/gis, '');
       }
+      
       let cleanText = parsed.text || '';
-      if (cleanText) cleanText = cleanText.replace(/https:\/\/tracking\.inflection\.io\/[^\s]+/g, '');
+      if (cleanText) {
+        cleanText = cleanText.replace(/https:\/\/tracking\.inflection\.io\/[^\s]+/g, '');
+      }
 
       foundEmail = {
         subject: msg.envelope.subject || '(No Subject)',
@@ -795,6 +800,7 @@ router.post('/api/fetchsingleemail', async (req, res) => {
         cc: msg.envelope.cc?.map(c => `${c.name || ''} <${c.address}>`).join(', '),
         date: msg.envelope.date,
         messageId: msg.envelope.messageId,
+        uid: msg.uid,
         read: Array.isArray(msg.flags) ? msg.flags.includes('\\Seen') : false,
         text: cleanText,
         html: cleanHtml,
@@ -808,33 +814,48 @@ router.post('/api/fetchsingleemail', async (req, res) => {
     }
 
     if (!foundEmail) {
-      res.status(404).json({ success: false, error: 'Content processing failed' });
-      try { await client.logout(); } catch(e){}
-      return;
+      await client.logout();
+      return res.status(404).json({ success: false, error: 'Content processing failed' });
     }
 
-    console.log('🚀 [FetchSingle] Data ready. Sending response to client FIRST.');
-    
-    // ✅ CRITICAL CHANGE: Send response BEFORE logout
+    // 6. LOGOUT FIRST, then send response
+    console.log(`🚪 [FetchSingle] Logging out...`);
+    await client.logout();
+    console.log(`✅ [FetchSingle] Logout successful.`);
+
+    // 7. NOW send response
+    console.log(`🚀 [FetchSingle] Sending response to client...`);
+    const responseTime = Date.now() - startTime;
+    console.log(`⏱️ [FetchSingle] Request completed in ${responseTime}ms`);
+
     res.json({
       success: true,
-      email: foundEmail
+      email: foundEmail,
+      responseTime: `${responseTime}ms`
     });
-
-    // 6. Logout in background (don't await this to hold up response)
-    console.log('🚪 [FetchSingle] Initiating background logout...');
-    client.logout().catch(e => console.log('Background logout ignored:', e.message));
 
   } catch (error) {
     console.error(`❌ [FetchSingle] Error:`, error.message);
-    if (!res.headersSent) {
-        res.status(500).json({ success: false, error: error.message });
-    }
+    
+    // Clean up client if it exists
     if (client) {
-      try { client.logout().catch(() => {}); } catch (e) {}
+      try { 
+        await client.logout(); 
+      } catch (logoutError) {
+        console.log('Logout error (ignored):', logoutError.message);
+      }
+    }
+    
+    if (!res.headersSent) {
+      res.status(500).json({ 
+        success: false, 
+        error: error.message,
+        details: 'Failed to fetch email'
+      });
     }
   }
 });
+
 
 //_________________________Tracking API's_________________________
 
