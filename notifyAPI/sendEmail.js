@@ -708,18 +708,27 @@ router.post('/api/fetchinbox', async (req, res) => {
 
 // 9️⃣ Fetch Specific Email by Message ID
 // 9️⃣ Fetch Single Email by Message ID
+// 9️⃣ Fetch Single Email by Message ID (With Debug Logs)
 router.post('/api/fetchsingleemail', async (req, res) => {
   let client;
+  const startTime = Date.now();
+  
   try {
     const { token, email, messageId, mailbox = 'INBOX' } = req.body;
 
+    console.log(`\n📥 [FetchSingle] START request for: ${email}`);
+    console.log(`👉 [FetchSingle] Looking for Message-ID: ${messageId} in Box: ${mailbox}`);
+
     if (!token || !email || !messageId) {
-      return res.status(400).json({ success: false, error: 'Missing required fields: token, email, messageId' });
+      console.log('❌ [FetchSingle] Missing fields');
+      return res.status(400).json({ success: false, error: 'Missing required fields' });
     }
 
     // 1. Validate Auth
+    console.log('🔍 [FetchSingle] Verifying DB credentials...');
     const smtp = await SMTPAuth.findOne({ email, token });
     if (!smtp) {
+      console.log('❌ [FetchSingle] Invalid token/email in DB');
       return res.status(403).json({ success: false, error: 'Invalid token or sender email' });
     }
 
@@ -728,40 +737,69 @@ router.post('/api/fetchsingleemail', async (req, res) => {
     try {
       decryptedPass = decrypt(smtp.pass);
     } catch (decryptError) {
-      return res.status(500).json({ success: false, error: 'Failed to decrypt stored credentials' });
+      console.error('❌ [FetchSingle] Decryption failed:', decryptError);
+      return res.status(500).json({ success: false, error: 'Failed to decrypt credentials' });
     }
 
     // 3. Connect to IMAP
+    const imapHost = smtp.host.replace('smtp.', 'imap.');
+    console.log(`🔌 [FetchSingle] Connecting to IMAP host: ${imapHost}:${993}...`);
+
     client = new ImapFlow({
-      host: smtp.host.replace('smtp.', 'imap.'),
+      host: imapHost,
       port: 993,
       secure: true,
       auth: { user: email, pass: decryptedPass },
-      logger: false,
-      timeout: 30000
+      logger: false, // Keep false to avoid flooding, we are using custom logs
+      timeout: 30000 
     });
 
+    // Log connection progress
     await client.connect();
+    console.log('✅ [FetchSingle] IMAP Connected.');
 
     // 4. Open Mailbox
-    await client.mailboxOpen(mailbox);
+    console.log(`📂 [FetchSingle] Opening mailbox: ${mailbox}...`);
+    const lock = await client.mailboxOpen(mailbox);
+    console.log(`📂 [FetchSingle] Mailbox opened. Total messages: ${lock.exists}`);
 
-    // 5. Search for the specific Message-ID
-    // Note: ensure messageId includes brackets if the server expects them, 
-    // though usually searching the header content works partially too.
-    const searchCriteria = { header: { 'Message-ID': messageId } };
+    // 5. Search
+    // NOTE: Sometimes Message-ID needs angle brackets <id>. We search exactly as provided.
+    console.log(`🔎 [FetchSingle] Searching header "Message-ID" for: ${messageId}`);
     
-    // We use fetchOne since we expect a unique ID, but we handle the search sequence
-    const searchResult = await client.search(searchCriteria);
+    // Using 'header' search is faster than full text
+    const searchResult = await client.search({ header: { 'Message-ID': messageId } });
+
+    console.log(`🔢 [FetchSingle] Search returned ${searchResult ? searchResult.length : 0} match(es).`);
 
     if (!searchResult || searchResult.length === 0) {
-      await client.logout();
-      return res.status(404).json({ success: false, error: 'Email not found with this Message ID' });
+      console.warn('⚠️ [FetchSingle] No matches found. Attempting fallback search (cleaning ID)...');
+      
+      // OPTIONAL FALLBACK: If user sent ID without <>, try adding them, or vice versa
+      // This helps if the frontend sends "xyz" but server stores "<xyz>"
+      let fallbackId = messageId;
+      if (!messageId.startsWith('<')) fallbackId = `<${messageId}>`;
+      else fallbackId = messageId.replace(/[<>]/g, '');
+
+      if (fallbackId !== messageId) {
+          console.log(`🔎 [FetchSingle] Trying fallback ID: ${fallbackId}`);
+          const fallbackResult = await client.search({ header: { 'Message-ID': fallbackId } });
+          if (fallbackResult && fallbackResult.length > 0) {
+              console.log('✅ [FetchSingle] Found via fallback ID!');
+              searchResult.push(fallbackResult[0]);
+          }
+      }
     }
 
-    // Fetch the specific sequence number found
-    const seqNum = searchResult[0]; // Take the first match
-    
+    if (!searchResult || searchResult.length === 0) {
+      console.log('❌ [FetchSingle] Email not found after search.');
+      await client.logout();
+      return res.status(404).json({ success: false, error: 'Email not found. Check Message-ID format.' });
+    }
+
+    const seqNum = searchResult[0];
+    console.log(`📦 [FetchSingle] Fetching content for Seq: ${seqNum}...`);
+
     let foundEmail = null;
 
     for await (let msg of client.fetch(seqNum, { 
@@ -771,76 +809,60 @@ router.post('/api/fetchsingleemail', async (req, res) => {
       source: true,
       bodyStructure: true 
     })) {
+      console.log(`📝 [FetchSingle] Parsing source for UID: ${msg.uid}...`);
       const parsed = await simpleParser(msg.source);
-      
-      // --- Content Cleaning Logic (Same as your Inbox fetch) ---
+      console.log('✨ [FetchSingle] Parsed successfully. cleaning HTML...');
+
+      // Content Cleaning
       let cleanHtml = parsed.html || '';
       if (cleanHtml) {
         cleanHtml = cleanHtml.replace(/https:\/\/tracking\.inflection\.io\/[^"']+/g, (url) => {
-          try {
-            const urlObj = new URL(url);
-            const redirect = urlObj.searchParams.get('redirect');
-            return redirect || url;
-          } catch {
-            return url;
-          }
+            try { return new URL(url).searchParams.get('redirect') || url; } catch { return url; }
         });
         cleanHtml = cleanHtml.replace(/<span[^>]*id="inflection-email-preheader"[^>]*>.*?<\/span>/gis, '');
       }
-
       let cleanText = parsed.text || '';
-      if (cleanText) {
-        cleanText = cleanText.replace(/https:\/\/tracking\.inflection\.io\/[^\s]+/g, '');
-      }
-      // --------------------------------------------------------
+      if (cleanText) cleanText = cleanText.replace(/https:\/\/tracking\.inflection\.io\/[^\s]+/g, '');
 
       foundEmail = {
         subject: msg.envelope.subject || '(No Subject)',
         from: msg.envelope.from?.map(f => `${f.name || ''} <${f.address}>`).join(', '),
         to: msg.envelope.to?.map(t => `${t.name || ''} <${t.address}>`).join(', '),
         cc: msg.envelope.cc?.map(c => `${c.name || ''} <${c.address}>`).join(', '),
-        bcc: msg.envelope.bcc?.map(b => `${b.name || ''} <${b.address}>`).join(', '),
         date: msg.envelope.date,
-        uid: msg.uid,
-        seq: msg.seq,
         messageId: msg.envelope.messageId,
-        inReplyTo: msg.envelope.inReplyTo,
-        references: msg.envelope.references,
-        flags: Array.from(msg.flags || []),
         read: Array.isArray(msg.flags) ? msg.flags.includes('\\Seen') : false,
         text: cleanText,
         html: cleanHtml,
-        // Include attachment info if needed
         attachments: parsed.attachments ? parsed.attachments.map(att => ({
           filename: att.filename,
           contentType: att.contentType,
-          size: att.size,
-          checksum: att.checksum,
-          contentId: att.contentId
-          // Note: We are not sending the buffer 'content' to keep payload light, 
-          // unless you specifically need to download them here.
+          size: att.size
         })) : []
       };
-      
-      // Break after first message (should only be one)
       break; 
     }
 
+    console.log('🚪 [FetchSingle] Logging out...');
     await client.logout();
 
     if (!foundEmail) {
-      return res.status(404).json({ success: false, error: 'Email content could not be retrieved' });
+      console.log('❌ [FetchSingle] Failed to process email content.');
+      return res.status(404).json({ success: false, error: 'Content processing failed' });
     }
 
+    const duration = Date.now() - startTime;
+    console.log(`🚀 [FetchSingle] SUCCESS! Sending response. (Duration: ${duration}ms)\n`);
+    
     return res.json({
       success: true,
       email: foundEmail
     });
 
   } catch (error) {
-    console.error('Fetch Single Email Error:', error);
+    console.error(`❌ [FetchSingle] CRITICAL ERROR:`, error.message);
     if (client) {
-      try { await client.logout(); } catch (e) {}
+      try { await client.logout(); } catch (e) { console.log('Error forcing logout:', e.message); }
     }
     return res.status(500).json({ success: false, error: error.message });
   }
