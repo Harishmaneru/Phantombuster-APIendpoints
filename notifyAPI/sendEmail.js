@@ -707,38 +707,31 @@ router.post('/api/fetchinbox', async (req, res) => {
 
 
 // 9️⃣ Fetch Specific Email by Message ID
-router.post('/api/fetch-email', async (req, res) => {
+// 9️⃣ Fetch Single Email by Message ID
+router.post('/api/fetchsingleemail', async (req, res) => {
   let client;
   try {
     const { token, email, messageId, mailbox = 'INBOX' } = req.body;
-    
+
     if (!token || !email || !messageId) {
-      return res.status(400).json({ 
-        success: false, 
-        error: 'Missing required fields: token, email, messageId' 
-      });
+      return res.status(400).json({ success: false, error: 'Missing required fields: token, email, messageId' });
     }
 
+    // 1. Validate Auth
     const smtp = await SMTPAuth.findOne({ email, token });
     if (!smtp) {
-      return res.status(403).json({ 
-        success: false, 
-        error: 'Invalid token or sender email' 
-      });
+      return res.status(403).json({ success: false, error: 'Invalid token or sender email' });
     }
 
-    // Decrypt the password
+    // 2. Decrypt Password
     let decryptedPass;
     try {
       decryptedPass = decrypt(smtp.pass);
     } catch (decryptError) {
-      console.error('Password decryption failed:', decryptError);
-      return res.status(500).json({ 
-        success: false, 
-        error: 'Failed to decrypt stored credentials' 
-      });
+      return res.status(500).json({ success: false, error: 'Failed to decrypt stored credentials' });
     }
 
+    // 3. Connect to IMAP
     client = new ImapFlow({
       host: smtp.host.replace('smtp.', 'imap.'),
       port: 993,
@@ -750,426 +743,106 @@ router.post('/api/fetch-email', async (req, res) => {
 
     await client.connect();
 
-    // Try to open the specified mailbox
-    let mailboxLock;
-    try {
-      mailboxLock = await client.mailboxOpen(mailbox);
-    } catch (mailboxError) {
-      console.log(`Mailbox ${mailbox} not found, trying INBOX:`, mailboxError.message);
-      try {
-        mailboxLock = await client.mailboxOpen('INBOX');
-      } catch (inboxError) {
-        await client.logout();
-        return res.status(404).json({ 
-          success: false, 
-          error: `Could not open mailbox: ${mailbox} or INBOX` 
+    // 4. Open Mailbox
+    await client.mailboxOpen(mailbox);
+
+    // 5. Search for the specific Message-ID
+    // Note: ensure messageId includes brackets if the server expects them, 
+    // though usually searching the header content works partially too.
+    const searchCriteria = { header: { 'Message-ID': messageId } };
+    
+    // We use fetchOne since we expect a unique ID, but we handle the search sequence
+    const searchResult = await client.search(searchCriteria);
+
+    if (!searchResult || searchResult.length === 0) {
+      await client.logout();
+      return res.status(404).json({ success: false, error: 'Email not found with this Message ID' });
+    }
+
+    // Fetch the specific sequence number found
+    const seqNum = searchResult[0]; // Take the first match
+    
+    let foundEmail = null;
+
+    for await (let msg of client.fetch(seqNum, { 
+      envelope: true, 
+      uid: true, 
+      flags: true, 
+      source: true,
+      bodyStructure: true 
+    })) {
+      const parsed = await simpleParser(msg.source);
+      
+      // --- Content Cleaning Logic (Same as your Inbox fetch) ---
+      let cleanHtml = parsed.html || '';
+      if (cleanHtml) {
+        cleanHtml = cleanHtml.replace(/https:\/\/tracking\.inflection\.io\/[^"']+/g, (url) => {
+          try {
+            const urlObj = new URL(url);
+            const redirect = urlObj.searchParams.get('redirect');
+            return redirect || url;
+          } catch {
+            return url;
+          }
         });
+        cleanHtml = cleanHtml.replace(/<span[^>]*id="inflection-email-preheader"[^>]*>.*?<\/span>/gis, '');
       }
-    }
 
-    // Search for the message by Message-ID header
-    let messageUids;
-    try {
-      messageUids = await client.search({
-        header: { 'Message-ID': messageId }
-      });
-    } catch (searchError) {
-      console.error('Message search error:', searchError);
-      await client.logout();
-      return res.status(500).json({ 
-        success: false, 
-        error: 'Failed to search for message' 
-      });
-    }
-
-    if (!messageUids || messageUids.length === 0) {
-      await client.logout();
-      return res.status(404).json({ 
-        success: false, 
-        error: 'Message not found with the provided Message ID' 
-      });
-    }
-
-    // Get the first matching message (should be unique)
-    const messageUid = messageUids[0];
-    let messageData = null;
-
-    try {
-      for await (let msg of client.fetch(messageUid, {
-        envelope: true,
-        uid: true,
-        flags: true,
-        source: true,
-        bodyStructure: true,
-        headers: true
-      })) {
-        const parsed = await simpleParser(msg.source);
-
-        // Clean HTML content
-        let cleanHtml = parsed.html || '';
-        if (cleanHtml) {
-          cleanHtml = cleanHtml.replace(/https:\/\/tracking\.inflection\.io\/[^"']+/g, (url) => {
-            try {
-              const urlObj = new URL(url);
-              const redirect = urlObj.searchParams.get('redirect');
-              return redirect || url;
-            } catch {
-              return url;
-            }
-          });
-          
-          cleanHtml = cleanHtml.replace(/<span[^>]*id="inflection-email-preheader"[^>]*>.*?<\/span>/gis, '');
-        }
-
-        // Extract clean text
-        let cleanText = parsed.text || '';
-        if (cleanText) {
-          cleanText = cleanText.replace(/https:\/\/tracking\.inflection\.io\/[^\s]+/g, '');
-        }
-
-        // Determine read status
-        let isRead = false;
-        let flagsArray = [];
-        
-        if (msg.flags) {
-          if (Array.isArray(msg.flags)) {
-            flagsArray = msg.flags;
-            isRead = flagsArray.includes('\\Seen') || flagsArray.includes('Seen');
-          } else if (msg.flags instanceof Set) {
-            flagsArray = Array.from(msg.flags);
-            isRead = flagsArray.includes('\\Seen') || flagsArray.includes('Seen');
-          } else if (typeof msg.flags === 'object') {
-            flagsArray = Object.keys(msg.flags);
-            isRead = flagsArray.includes('\\Seen') || flagsArray.includes('Seen');
-          }
-        }
-
-        messageData = {
-          // Basic envelope info
-          subject: msg.envelope.subject || '(No Subject)',
-          from: msg.envelope.from?.map(f => ({
-            name: f.name || '',
-            address: f.address || '',
-            full: `${f.name || ''} <${f.address}>`
-          })) || [],
-          to: msg.envelope.to?.map(t => ({
-            name: t.name || '',
-            address: t.address || '',
-            full: `${t.name || ''} <${t.address}>`
-          })) || [],
-          cc: msg.envelope.cc?.map(c => ({
-            name: c.name || '',
-            address: c.address || '',
-            full: `${c.name || ''} <${c.address}>`
-          })) || [],
-          bcc: msg.envelope.bcc?.map(b => ({
-            name: b.name || '',
-            address: b.address || '',
-            full: `${b.name || ''} <${b.address}>`
-          })) || [],
-          date: msg.envelope.date || new Date(),
-          
-          // Message identifiers
-          uid: msg.uid,
-          messageId: msg.envelope.messageId,
-          inReplyTo: msg.envelope.inReplyTo,
-          references: msg.envelope.references,
-          
-          // Status
-          read: isRead,
-          flags: flagsArray,
-          
-          // Content
-          text: cleanText,
-          html: cleanHtml,
-          
-          // Full parsed data
-          parsed: {
-            subject: parsed.subject,
-            from: parsed.from,
-            to: parsed.to,
-            cc: parsed.cc,
-            bcc: parsed.bcc,
-            date: parsed.date,
-            messageId: parsed.messageId,
-            inReplyTo: parsed.inReplyTo,
-            references: parsed.references,
-            replyTo: parsed.replyTo,
-            priority: parsed.priority,
-            attachments: parsed.attachments ? parsed.attachments.map(att => ({
-              filename: att.filename,
-              contentType: att.contentType,
-              size: att.size,
-              contentId: att.contentId
-            })) : []
-          }
-        };
-        
-        break; // We only need the first message
+      let cleanText = parsed.text || '';
+      if (cleanText) {
+        cleanText = cleanText.replace(/https:\/\/tracking\.inflection\.io\/[^\s]+/g, '');
       }
-    } catch (fetchError) {
-      console.error('Error fetching message content:', fetchError);
-      await client.logout();
-      return res.status(500).json({ 
-        success: false, 
-        error: 'Failed to fetch message content' 
-      });
+      // --------------------------------------------------------
+
+      foundEmail = {
+        subject: msg.envelope.subject || '(No Subject)',
+        from: msg.envelope.from?.map(f => `${f.name || ''} <${f.address}>`).join(', '),
+        to: msg.envelope.to?.map(t => `${t.name || ''} <${t.address}>`).join(', '),
+        cc: msg.envelope.cc?.map(c => `${c.name || ''} <${c.address}>`).join(', '),
+        bcc: msg.envelope.bcc?.map(b => `${b.name || ''} <${b.address}>`).join(', '),
+        date: msg.envelope.date,
+        uid: msg.uid,
+        seq: msg.seq,
+        messageId: msg.envelope.messageId,
+        inReplyTo: msg.envelope.inReplyTo,
+        references: msg.envelope.references,
+        flags: Array.from(msg.flags || []),
+        read: Array.isArray(msg.flags) ? msg.flags.includes('\\Seen') : false,
+        text: cleanText,
+        html: cleanHtml,
+        // Include attachment info if needed
+        attachments: parsed.attachments ? parsed.attachments.map(att => ({
+          filename: att.filename,
+          contentType: att.contentType,
+          size: att.size,
+          checksum: att.checksum,
+          contentId: att.contentId
+          // Note: We are not sending the buffer 'content' to keep payload light, 
+          // unless you specifically need to download them here.
+        })) : []
+      };
+      
+      // Break after first message (should only be one)
+      break; 
     }
 
     await client.logout();
 
-    if (!messageData) {
-      return res.status(404).json({ 
-        success: false, 
-        error: 'Message found but could not be parsed' 
-      });
+    if (!foundEmail) {
+      return res.status(404).json({ success: false, error: 'Email content could not be retrieved' });
     }
 
     return res.json({
       success: true,
-      message: messageData,
-      mailbox: mailboxLock.name,
-      found: true
+      email: foundEmail
     });
 
-  } catch (err) {
-    console.error('Fetch Email Error:', err);
-    
-    // Ensure client is properly closed even on error
+  } catch (error) {
+    console.error('Fetch Single Email Error:', error);
     if (client) {
-      try {
-        await client.logout();
-      } catch (logoutError) {
-        console.error('Error during logout:', logoutError);
-      }
+      try { await client.logout(); } catch (e) {}
     }
-    
-    return res.status(500).json({ 
-      success: false, 
-      error: err.message,
-      details: 'Failed to fetch email. Please check your credentials and try again.'
-    });
-  }
-});
-
-// 9️⃣.1️⃣ Alternative: Fetch Email by UID (useful when you have the UID from inbox/sent lists)
-router.post('/api/fetch-email-by-uid', async (req, res) => {
-  let client;
-  try {
-    const { token, email, uid, mailbox = 'INBOX' } = req.body;
-    
-    if (!token || !email || !uid) {
-      return res.status(400).json({ 
-        success: false, 
-        error: 'Missing required fields: token, email, uid' 
-      });
-    }
-
-    const smtp = await SMTPAuth.findOne({ email, token });
-    if (!smtp) {
-      return res.status(403).json({ 
-        success: false, 
-        error: 'Invalid token or sender email' 
-      });
-    }
-
-    // Decrypt the password
-    let decryptedPass;
-    try {
-      decryptedPass = decrypt(smtp.pass);
-    } catch (decryptError) {
-      console.error('Password decryption failed:', decryptError);
-      return res.status(500).json({ 
-        success: false, 
-        error: 'Failed to decrypt stored credentials' 
-      });
-    }
-
-    client = new ImapFlow({
-      host: smtp.host.replace('smtp.', 'imap.'),
-      port: 993,
-      secure: true,
-      auth: { user: email, pass: decryptedPass },
-      logger: false,
-      timeout: 30000
-    });
-
-    await client.connect();
-
-    // Try to open the specified mailbox
-    let mailboxLock;
-    try {
-      mailboxLock = await client.mailboxOpen(mailbox);
-    } catch (mailboxError) {
-      console.log(`Mailbox ${mailbox} not found, trying INBOX:`, mailboxError.message);
-      try {
-        mailboxLock = await client.mailboxOpen('INBOX');
-      } catch (inboxError) {
-        await client.logout();
-        return res.status(404).json({ 
-          success: false, 
-          error: `Could not open mailbox: ${mailbox} or INBOX` 
-        });
-      }
-    }
-
-    let messageData = null;
-
-    try {
-      for await (let msg of client.fetch(uid, {
-        envelope: true,
-        uid: true,
-        flags: true,
-        source: true,
-        bodyStructure: true,
-        headers: true
-      })) {
-        const parsed = await simpleParser(msg.source);
-
-        // Clean HTML content
-        let cleanHtml = parsed.html || '';
-        if (cleanHtml) {
-          cleanHtml = cleanHtml.replace(/https:\/\/tracking\.inflection\.io\/[^"']+/g, (url) => {
-            try {
-              const urlObj = new URL(url);
-              const redirect = urlObj.searchParams.get('redirect');
-              return redirect || url;
-            } catch {
-              return url;
-            }
-          });
-          
-          cleanHtml = cleanHtml.replace(/<span[^>]*id="inflection-email-preheader"[^>]*>.*?<\/span>/gis, '');
-        }
-
-        // Extract clean text
-        let cleanText = parsed.text || '';
-        if (cleanText) {
-          cleanText = cleanText.replace(/https:\/\/tracking\.inflection\.io\/[^\s]+/g, '');
-        }
-
-        // Determine read status
-        let isRead = false;
-        let flagsArray = [];
-        
-        if (msg.flags) {
-          if (Array.isArray(msg.flags)) {
-            flagsArray = msg.flags;
-            isRead = flagsArray.includes('\\Seen') || flagsArray.includes('Seen');
-          } else if (msg.flags instanceof Set) {
-            flagsArray = Array.from(msg.flags);
-            isRead = flagsArray.includes('\\Seen') || flagsArray.includes('Seen');
-          } else if (typeof msg.flags === 'object') {
-            flagsArray = Object.keys(msg.flags);
-            isRead = flagsArray.includes('\\Seen') || flagsArray.includes('Seen');
-          }
-        }
-
-        messageData = {
-          // Basic envelope info
-          subject: msg.envelope.subject || '(No Subject)',
-          from: msg.envelope.from?.map(f => ({
-            name: f.name || '',
-            address: f.address || '',
-            full: `${f.name || ''} <${f.address}>`
-          })) || [],
-          to: msg.envelope.to?.map(t => ({
-            name: t.name || '',
-            address: t.address || '',
-            full: `${t.name || ''} <${t.address}>`
-          })) || [],
-          cc: msg.envelope.cc?.map(c => ({
-            name: c.name || '',
-            address: c.address || '',
-            full: `${c.name || ''} <${c.address}>`
-          })) || [],
-          bcc: msg.envelope.bcc?.map(b => ({
-            name: b.name || '',
-            address: b.address || '',
-            full: `${b.name || ''} <${b.address}>`
-          })) || [],
-          date: msg.envelope.date || new Date(),
-          
-          // Message identifiers
-          uid: msg.uid,
-          messageId: msg.envelope.messageId,
-          inReplyTo: msg.envelope.inReplyTo,
-          references: msg.envelope.references,
-          
-          // Status
-          read: isRead,
-          flags: flagsArray,
-          
-          // Content
-          text: cleanText,
-          html: cleanHtml,
-          
-          // Full parsed data
-          parsed: {
-            subject: parsed.subject,
-            from: parsed.from,
-            to: parsed.to,
-            cc: parsed.cc,
-            bcc: parsed.bcc,
-            date: parsed.date,
-            messageId: parsed.messageId,
-            inReplyTo: parsed.inReplyTo,
-            references: parsed.references,
-            replyTo: parsed.replyTo,
-            priority: parsed.priority,
-            attachments: parsed.attachments ? parsed.attachments.map(att => ({
-              filename: att.filename,
-              contentType: att.contentType,
-              size: att.size,
-              contentId: att.contentId
-            })) : []
-          }
-        };
-        
-        break; // We only need the first message
-      }
-    } catch (fetchError) {
-      console.error('Error fetching message content:', fetchError);
-      await client.logout();
-      return res.status(500).json({ 
-        success: false, 
-        error: 'Failed to fetch message content' 
-      });
-    }
-
-    await client.logout();
-
-    if (!messageData) {
-      return res.status(404).json({ 
-        success: false, 
-        error: 'Message not found with the provided UID' 
-      });
-    }
-
-    return res.json({
-      success: true,
-      message: messageData,
-      mailbox: mailboxLock.name,
-      found: true
-    });
-
-  } catch (err) {
-    console.error('Fetch Email by UID Error:', err);
-    
-    // Ensure client is properly closed even on error
-    if (client) {
-      try {
-        await client.logout();
-      } catch (logoutError) {
-        console.error('Error during logout:', logoutError);
-      }
-    }
-    
-    return res.status(500).json({ 
-      success: false, 
-      error: err.message,
-      details: 'Failed to fetch email by UID. Please check your credentials and try again.'
-    });
+    return res.status(500).json({ success: false, error: error.message });
   }
 });
 
