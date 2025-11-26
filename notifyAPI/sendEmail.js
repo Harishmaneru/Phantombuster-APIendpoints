@@ -707,8 +707,7 @@ router.post('/api/fetchinbox', async (req, res) => {
 
 
 // 9️⃣ Fetch Specific Email by Message ID
-// 9️⃣ Fetch Specific Email by Message ID
-// 9️⃣ Fetch Specific Email by Message ID
+// 9️⃣ Fetch Specific Email by Message ID - Fixed version
 router.post('/api/fetchsingleemail', async (req, res) => {
   let client;
   try {
@@ -737,7 +736,6 @@ router.post('/api/fetchsingleemail', async (req, res) => {
 
     console.log(`🔌 [FetchSingle] Using SMTP Host for IMAP: ${smtp.host}`);
 
-    // Use minimal logger to avoid [object Object] issues
     client = new ImapFlow({
       host: smtp.host,
       port: 993,
@@ -746,8 +744,8 @@ router.post('/api/fetchsingleemail', async (req, res) => {
         user: email, 
         pass: decryptedPass 
       },
-      logger: false, // Disable detailed logging to avoid [object Object]
-      timeout: 30000
+      logger: false,
+      timeout: 45000 // Increased timeout
     });
 
     console.log(`🔌 [FetchSingle] Attempting IMAP connection...`);
@@ -767,7 +765,12 @@ router.post('/api/fetchsingleemail', async (req, res) => {
     console.log(`🔢 [FetchSingle] Found ${messageUids.length} matching message(s)`);
 
     if (!messageUids || messageUids.length === 0) {
-      await client.logout();
+      // Quick logout for not found case
+      try {
+        await client.logout(); 
+      } catch (e) {
+        await client.close();
+      }
       return res.status(404).json({ 
         success: false, 
         error: 'Email not found with the provided Message-ID' 
@@ -779,7 +782,7 @@ router.post('/api/fetchsingleemail', async (req, res) => {
 
     console.log(`📨 [FetchSingle] Starting to fetch message with UID: ${messageUids[0]}`);
 
-    // Fetch the message - use byUid: true since we have UIDs from search
+    // Fetch the message
     for await (let msg of client.fetch(messageUids, { 
       byUid: true,
       envelope: true, 
@@ -789,111 +792,116 @@ router.post('/api/fetchsingleemail', async (req, res) => {
     })) {
       console.log(`🔄 [FetchSingle] Processing message ${++processedCount}`);
       
-      try {
-        const parsed = await simpleParser(msg.source);
-        console.log(`📝 [FetchSingle] Email parsed successfully, subject: "${msg.envelope.subject}"`);
+      const parsed = await simpleParser(msg.source);
+      console.log(`📝 [FetchSingle] Email parsed successfully, subject: "${msg.envelope.subject}"`);
+      
+      // Clean HTML content
+      let cleanHtml = parsed.html || '';
+      if (cleanHtml) {
+        console.log(`🧹 [FetchSingle] Cleaning HTML content...`);
+        cleanHtml = cleanHtml.replace(/https:\/\/tracking\.inflection\.io\/[^"']+/g, (url) => {
+          try {
+            const urlObj = new URL(url);
+            const redirect = urlObj.searchParams.get('redirect');
+            return redirect || url;
+          } catch {
+            return url;
+          }
+        });
         
-        // Clean HTML content
-        let cleanHtml = parsed.html || '';
-        if (cleanHtml) {
-          console.log(`🧹 [FetchSingle] Cleaning HTML content...`);
-          cleanHtml = cleanHtml.replace(/https:\/\/tracking\.inflection\.io\/[^"']+/g, (url) => {
-            try {
-              const urlObj = new URL(url);
-              const redirect = urlObj.searchParams.get('redirect');
-              return redirect || url;
-            } catch {
-              return url;
-            }
-          });
-          
-          cleanHtml = cleanHtml.replace(/<span[^>]*id="inflection-email-preheader"[^>]*>.*?<\/span>/gis, '');
-        }
-
-        // Extract clean text
-        let cleanText = parsed.text || '';
-        if (cleanText) {
-          cleanText = cleanText.replace(/https:\/\/tracking\.inflection\.io\/[^\s]+/g, '');
-        }
-
-        foundEmail = {
-          subject: msg.envelope.subject,
-          from: msg.envelope.from.map(f => ({ 
-            name: f.name || '', 
-            address: f.address 
-          })),
-          date: msg.envelope.date,
-          uid: msg.uid,
-          read: Array.isArray(msg.flags) ? msg.flags.includes('\\Seen') : false,
-          text: cleanText,
-          html: cleanHtml,
-          to: msg.envelope.to?.map(t => ({ 
-            name: t.name || '', 
-            address: t.address 
-          })) || [],
-          cc: msg.envelope.cc?.map(c => ({ 
-            name: c.name || '', 
-            address: c.address 
-          })) || [],
-          messageId: msg.envelope.messageId,
-          attachments: parsed.attachments ? parsed.attachments.map(att => ({
-            filename: att.filename,
-            contentType: att.contentType,
-            size: att.size
-          })) : []
-        };
-
-        console.log(`✅ [FetchSingle] Message processed successfully`);
-        break; // Only process the first match
-
-      } catch (parseError) {
-        console.error('❌ [FetchSingle] Error parsing message:', parseError);
-        continue; // Try next message if parsing fails
+        cleanHtml = cleanHtml.replace(/<span[^>]*id="inflection-email-preheader"[^>]*>.*?<\/span>/gis, '');
       }
+
+      // Extract clean text
+      let cleanText = parsed.text || '';
+      if (cleanText) {
+        cleanText = cleanText.replace(/https:\/\/tracking\.inflection\.io\/[^\s]+/g, '');
+      }
+
+      foundEmail = {
+        subject: msg.envelope.subject,
+        from: msg.envelope.from.map(f => ({ 
+          name: f.name || '', 
+          address: f.address 
+        })),
+        date: msg.envelope.date,
+        uid: msg.uid,
+        read: Array.isArray(msg.flags) ? msg.flags.includes('\\Seen') : false,
+        text: cleanText,
+        html: cleanHtml,
+        to: msg.envelope.to?.map(t => ({ 
+          name: t.name || '', 
+          address: t.address 
+        })) || [],
+        cc: msg.envelope.cc?.map(c => ({ 
+          name: c.name || '', 
+          address: c.address 
+        })) || [],
+        messageId: msg.envelope.messageId,
+        attachments: parsed.attachments ? parsed.attachments.map(att => ({
+          filename: att.filename,
+          contentType: att.contentType,
+          size: att.size
+        })) : []
+      };
+
+      console.log(`✅ [FetchSingle] Message processed successfully`);
+      break;
     }
 
-    await client.logout();
-    console.log(`🔒 [FetchSingle] IMAP connection closed`);
-
-    if (!foundEmail) {
-      return res.status(404).json({ 
-        success: false, 
-        error: 'Message found but could not be processed' 
-      });
-    }
-
-    console.log(`🎉 [FetchSingle] SUCCESS - Returning email: "${foundEmail.subject}"`);
-
-    return res.json({ 
+    // SEND RESPONSE FIRST, then cleanup connection
+    console.log(`🎉 [FetchSingle] SUCCESS - Sending response first for: "${foundEmail.subject}"`);
+    
+    // Send response immediately
+    res.json({ 
       success: true, 
       email: foundEmail 
     });
 
+    console.log(`✅ [FetchSingle] Response sent to client, now cleaning up connection...`);
+
+    // Then cleanup connection in background
+    try {
+      await client.logout();
+      console.log(`🔒 [FetchSingle] IMAP connection closed gracefully`);
+    } catch (logoutError) {
+      console.log(`⚠️ [FetchSingle] Logout failed, forcing close:`, logoutError.message);
+      try {
+        await client.close();
+        console.log(`🔒 [FetchSingle] IMAP connection force-closed`);
+      } catch (closeError) {
+        console.log(`⚠️ [FetchSingle] Close also failed:`, closeError.message);
+      }
+    }
+
   } catch (err) {
     console.error('❌ [FetchSingle] Final Error:', err);
     
-    // Clean up connection if it exists
+    // Send error response first
+    if (!res.headersSent) {
+      if (err.code === 'ETIMEDOUT' || err.code === 'ETIMEOUT') {
+        return res.status(408).json({ 
+          success: false, 
+          error: 'Connection timeout' 
+        });
+      }
+      
+      return res.status(500).json({ 
+        success: false, 
+        error: err.message 
+      });
+    } else {
+      console.log('⚠️ [FetchSingle] Response already sent, but error occurred during cleanup');
+    }
+    
+    // Then cleanup connection
     if (client) {
       try {
-        await client.logout();
-      } catch (logoutErr) {
-        console.error('Error during logout:', logoutErr);
+        await client.close();
+      } catch (closeErr) {
+        // Ignore cleanup errors
       }
     }
-    
-    // Handle specific error types
-    if (err.code === 'ETIMEDOUT' || err.code === 'ETIMEOUT') {
-      return res.status(408).json({ 
-        success: false, 
-        error: 'Connection timeout - server took too long to respond'
-      });
-    }
-    
-    return res.status(500).json({ 
-      success: false, 
-      error: err.message,
-      details: 'IMAP processing failed'
-    });
   }
 });
 
