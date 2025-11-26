@@ -711,8 +711,7 @@ router.post('/api/fetchsingleemail', async (req, res) => {
   try {
     const { token, email, messageId, mailbox = 'INBOX' } = req.body;
 
-    console.log(`\n[FetchSingle] START request for: ${email}`);
-    console.log(`[FetchSingle] Looking for Message-ID: ${messageId} in Box: ${mailbox}`);
+    console.log(`📥 [FetchSingle] Trying common IMAP hosts for: ${email}`);
 
     if (!token || !email || !messageId) {
       return res.status(400).json({ success: false, error: 'Missing required fields' });
@@ -723,103 +722,93 @@ router.post('/api/fetchsingleemail', async (req, res) => {
       return res.status(403).json({ success: false, error: 'Invalid token or sender email' });
     }
 
-    // Decrypt the password
     let decryptedPass;
     try {
       decryptedPass = decrypt(smtp.pass);
     } catch (decryptError) {
-      console.error('Password decryption failed:', decryptError);
-      return res.status(500).json({ success: false, error: 'Failed to decrypt stored credentials' });
+      return res.status(500).json({ success: false, error: 'Failed to decrypt credentials' });
     }
 
-    // Use the same host as fetchinbox (don't replace smtp. with imap.)
-    const client = new ImapFlow({
-      host: smtp.host,  // ← KEY CHANGE: Use smtp.host directly
-      port: 993,
-      secure: true,
-      auth: { user: email, pass: decryptedPass },
-      logger: false
-    });
-
-    await client.connect();
-    const lock = await client.mailboxOpen(mailbox);
-    
-    console.log(` [FetchSingle] Mailbox opened. Total messages: ${lock.exists}`);
-    console.log(` [FetchSingle] Searching for Message-ID: ${messageId}`);
-
-    // Search for the message
-    const messageUids = await client.search({
-      header: { 'Message-ID': messageId }
-    });
-
-    if (!messageUids || messageUids.length === 0) {
-      await client.logout();
-      return res.status(404).json({ success: false, error: 'Email not found' });
-    }
-
-    console.log(`[FetchSingle] Found ${messageUids.length} matching message(s)`);
+    // Common IMAP hosts to try
+    const imapHosts = [
+      smtp.host, // Try the SMTP host first
+      smtp.host.replace('smtp.', 'imap.'),
+      smtp.host.replace('smtp.', ''),
+      'mail.' + email.split('@')[1], // mail.domain.com
+      'imap.' + email.split('@')[1], // imap.domain.com
+    ];
 
     let foundEmail = null;
+    let lastError = null;
 
-    // Fetch the message - use the same pattern as fetchinbox
-    for await (let msg of client.fetch(messageUids[0], { 
-      envelope: true, 
-      uid: true, 
-      flags: true, 
-      source: true,
-      bodyStructure: true 
-    })) {
-      const parsed = await simpleParser(msg.source);
+    // Try each IMAP host until one works
+    for (const imapHost of imapHosts) {
+      console.log(`🔌 [FetchSingle] Trying IMAP host: ${imapHost}`);
       
-      // Use the same cleaning logic as fetchinbox
-      let cleanHtml = parsed.html || '';
-      if (cleanHtml) {
-        cleanHtml = cleanHtml.replace(/https:\/\/tracking\.inflection\.io\/[^"']+/g, (url) => {
-          try {
-            const urlObj = new URL(url);
-            const redirect = urlObj.searchParams.get('redirect');
-            return redirect || url;
-          } catch {
-            return url;
-          }
+      try {
+        const client = new ImapFlow({
+          host: imapHost,
+          port: 993,
+          secure: true,
+          auth: { user: email, pass: decryptedPass },
+          logger: false,
+          timeout: 30000
         });
+
+        await client.connect();
+        await client.mailboxOpen(mailbox);
+
+        const messageUids = await client.search({
+          header: { 'Message-ID': messageId }
+        });
+
+        if (messageUids && messageUids.length > 0) {
+          for await (let msg of client.fetch(messageUids[0], { 
+            envelope: true, 
+            uid: true, 
+            flags: true, 
+            source: true
+          })) {
+            const parsed = await simpleParser(msg.source);
+            
+            foundEmail = {
+              subject: msg.envelope.subject,
+              from: msg.envelope.from.map(f => `${f.name || ''} <${f.address}>`).join(', '),
+              date: msg.envelope.date,
+              uid: msg.uid,
+              read: Array.isArray(msg.flags) ? msg.flags.includes('\\Seen') : false,
+              text: parsed.text || '',
+              html: parsed.html || '',
+              to: msg.envelope.to?.map(t => `${t.name || ''} <${t.address}>`).join(', '),
+              messageId: msg.envelope.messageId
+            };
+            break;
+          }
+        }
+
+        await client.logout();
         
-        cleanHtml = cleanHtml.replace(/<span[^>]*id="inflection-email-preheader"[^>]*>.*?<\/span>/gis, '');
-      }
+        if (foundEmail) {
+          console.log(`✅ [FetchSingle] Success with host: ${imapHost}`);
+          break;
+        } else {
+          console.log(`❌ [FetchSingle] Message not found with host: ${imapHost}`);
+        }
 
-      let cleanText = parsed.text || '';
-      if (cleanText) {
-        cleanText = cleanText.replace(/https:\/\/tracking\.inflection\.io\/[^\s]+/g, '');
+      } catch (hostError) {
+        console.log(`❌ [FetchSingle] Failed with host ${imapHost}:`, hostError.message);
+        lastError = hostError;
+        continue; // Try next host
       }
-
-      foundEmail = {
-        subject: msg.envelope.subject,
-        from: msg.envelope.from.map(f => `${f.name || ''} <${f.address}>`).join(', '),
-        date: msg.envelope.date,
-        uid: msg.uid,
-        seq: msg.seq,
-        read: Array.isArray(msg.flags) ? msg.flags.includes('\\Seen') : false,
-        text: cleanText,
-        html: cleanHtml,
-        to: msg.envelope.to?.map(t => `${t.name || ''} <${t.address}>`).join(', '),
-        cc: msg.envelope.cc?.map(c => `${c.name || ''} <${c.address}>`).join(', '),
-        messageId: msg.envelope.messageId,
-        attachments: parsed.attachments ? parsed.attachments.map(att => ({
-          filename: att.filename,
-          contentType: att.contentType,
-          size: att.size
-        })) : []
-      };
-      break; // We only need the first match
     }
-
-    await client.logout();
 
     if (!foundEmail) {
-      return res.status(404).json({ success: false, error: 'Message found but could not be processed' });
+      return res.status(404).json({ 
+        success: false, 
+        error: 'Email not found or IMAP connection failed',
+        details: lastError?.message 
+      });
     }
-
-    console.log(`[FetchSingle] Successfully fetched email: ${foundEmail.subject}`);
 
     return res.json({ 
       success: true, 
