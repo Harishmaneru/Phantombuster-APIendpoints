@@ -708,6 +708,7 @@ router.post('/api/fetchinbox', async (req, res) => {
 
 // 9️⃣ Fetch Specific Email by Message ID
 // 9️⃣ Fetch Specific Email by Message ID
+// 9️⃣ Fetch Specific Email by Message ID
 router.post('/api/fetchsingleemail', async (req, res) => {
   let client;
   try {
@@ -736,31 +737,21 @@ router.post('/api/fetchsingleemail', async (req, res) => {
 
     console.log(`🔌 [FetchSingle] Using SMTP Host for IMAP: ${smtp.host}`);
 
-    // FIX: Use the SAME configuration as the working /fetchinbox endpoint
+    // Use minimal logger to avoid [object Object] issues
     client = new ImapFlow({
-      host: smtp.host, // Use the same host as SMTP (proven to work)
+      host: smtp.host,
       port: 993,
       secure: true,
       auth: { 
         user: email, 
         pass: decryptedPass 
       },
-      logger: {
-        debug: (msg) => console.log(`[IMAP Debug] ${msg}`),
-        info: (msg) => console.log(`[IMAP Info] ${msg}`),
-        error: (msg) => console.log(`[IMAP Error] ${msg}`)
-      },
-      // Enhanced connection options
-      timeout: 30000, // 30 seconds timeout
-      retries: 3, // Retry connection 3 times
-      tls: {
-        rejectUnauthorized: false // Allow self-signed certificates if needed
-      }
+      logger: false, // Disable detailed logging to avoid [object Object]
+      timeout: 30000
     });
 
-    console.log(`🔌 [FetchSingle] Attempting IMAP connection to: ${smtp.host}:993`);
+    console.log(`🔌 [FetchSingle] Attempting IMAP connection...`);
     
-    // Connect with timeout handling
     await client.connect();
     console.log(`✅ [FetchSingle] IMAP connection successful`);
 
@@ -768,13 +759,9 @@ router.post('/api/fetchsingleemail', async (req, res) => {
     console.log(`📂 [FetchSingle] Mailbox opened. Total messages: ${lock.exists}`);
     console.log(`🔎 [FetchSingle] Searching for Message-ID: ${messageId}`);
 
-    // Search for the message using header
+    // Search for the message
     const messageUids = await client.search({
-      or: [
-        { header: { 'Message-ID': messageId } },
-        { header: { 'Message-Id': messageId } }, // Try both capitalizations
-        { header: { 'message-id': messageId } }  // Try lowercase
-      ]
+      header: { 'Message-ID': messageId }
     });
 
     console.log(`🔢 [FetchSingle] Found ${messageUids.length} matching message(s)`);
@@ -788,69 +775,85 @@ router.post('/api/fetchsingleemail', async (req, res) => {
     }
 
     let foundEmail = null;
+    let processedCount = 0;
 
-    // Fetch the first matching message
+    console.log(`📨 [FetchSingle] Starting to fetch message with UID: ${messageUids[0]}`);
+
+    // Fetch the message - use byUid: true since we have UIDs from search
     for await (let msg of client.fetch(messageUids, { 
+      byUid: true,
       envelope: true, 
       uid: true, 
       flags: true, 
-      source: true,
-      bodyStructure: true 
+      source: true
     })) {
-      const parsed = await simpleParser(msg.source);
+      console.log(`🔄 [FetchSingle] Processing message ${++processedCount}`);
       
-      // Clean HTML content (same logic as /fetchinbox)
-      let cleanHtml = parsed.html || '';
-      if (cleanHtml) {
-        cleanHtml = cleanHtml.replace(/https:\/\/tracking\.inflection\.io\/[^"']+/g, (url) => {
-          try {
-            const urlObj = new URL(url);
-            const redirect = urlObj.searchParams.get('redirect');
-            return redirect || url;
-          } catch {
-            return url;
-          }
-        });
+      try {
+        const parsed = await simpleParser(msg.source);
+        console.log(`📝 [FetchSingle] Email parsed successfully, subject: "${msg.envelope.subject}"`);
         
-        cleanHtml = cleanHtml.replace(/<span[^>]*id="inflection-email-preheader"[^>]*>.*?<\/span>/gis, '');
-      }
+        // Clean HTML content
+        let cleanHtml = parsed.html || '';
+        if (cleanHtml) {
+          console.log(`🧹 [FetchSingle] Cleaning HTML content...`);
+          cleanHtml = cleanHtml.replace(/https:\/\/tracking\.inflection\.io\/[^"']+/g, (url) => {
+            try {
+              const urlObj = new URL(url);
+              const redirect = urlObj.searchParams.get('redirect');
+              return redirect || url;
+            } catch {
+              return url;
+            }
+          });
+          
+          cleanHtml = cleanHtml.replace(/<span[^>]*id="inflection-email-preheader"[^>]*>.*?<\/span>/gis, '');
+        }
 
-      // Extract clean text
-      let cleanText = parsed.text || '';
-      if (cleanText) {
-        cleanText = cleanText.replace(/https:\/\/tracking\.inflection\.io\/[^\s]+/g, '');
-      }
+        // Extract clean text
+        let cleanText = parsed.text || '';
+        if (cleanText) {
+          cleanText = cleanText.replace(/https:\/\/tracking\.inflection\.io\/[^\s]+/g, '');
+        }
 
-      foundEmail = {
-        subject: msg.envelope.subject,
-        from: msg.envelope.from.map(f => ({ 
-          name: f.name || '', 
-          address: f.address 
-        })),
-        date: msg.envelope.date,
-        uid: msg.uid,
-        read: Array.isArray(msg.flags) ? msg.flags.includes('\\Seen') : false,
-        text: cleanText,
-        html: cleanHtml,
-        to: msg.envelope.to?.map(t => ({ 
-          name: t.name || '', 
-          address: t.address 
-        })) || [],
-        cc: msg.envelope.cc?.map(c => ({ 
-          name: c.name || '', 
-          address: c.address 
-        })) || [],
-        messageId: msg.envelope.messageId,
-        attachments: parsed.attachments ? parsed.attachments.map(att => ({
-          filename: att.filename,
-          contentType: att.contentType,
-          size: att.size
-        })) : []
-      };
-      break; // Only process the first match
+        foundEmail = {
+          subject: msg.envelope.subject,
+          from: msg.envelope.from.map(f => ({ 
+            name: f.name || '', 
+            address: f.address 
+          })),
+          date: msg.envelope.date,
+          uid: msg.uid,
+          read: Array.isArray(msg.flags) ? msg.flags.includes('\\Seen') : false,
+          text: cleanText,
+          html: cleanHtml,
+          to: msg.envelope.to?.map(t => ({ 
+            name: t.name || '', 
+            address: t.address 
+          })) || [],
+          cc: msg.envelope.cc?.map(c => ({ 
+            name: c.name || '', 
+            address: c.address 
+          })) || [],
+          messageId: msg.envelope.messageId,
+          attachments: parsed.attachments ? parsed.attachments.map(att => ({
+            filename: att.filename,
+            contentType: att.contentType,
+            size: att.size
+          })) : []
+        };
+
+        console.log(`✅ [FetchSingle] Message processed successfully`);
+        break; // Only process the first match
+
+      } catch (parseError) {
+        console.error('❌ [FetchSingle] Error parsing message:', parseError);
+        continue; // Try next message if parsing fails
+      }
     }
 
     await client.logout();
+    console.log(`🔒 [FetchSingle] IMAP connection closed`);
 
     if (!foundEmail) {
       return res.status(404).json({ 
@@ -859,7 +862,7 @@ router.post('/api/fetchsingleemail', async (req, res) => {
       });
     }
 
-    console.log(`✅ [FetchSingle] Successfully fetched email: "${foundEmail.subject}"`);
+    console.log(`🎉 [FetchSingle] SUCCESS - Returning email: "${foundEmail.subject}"`);
 
     return res.json({ 
       success: true, 
@@ -867,7 +870,7 @@ router.post('/api/fetchsingleemail', async (req, res) => {
     });
 
   } catch (err) {
-    console.error('Fetch Single Email Error:', err);
+    console.error('❌ [FetchSingle] Final Error:', err);
     
     // Clean up connection if it exists
     if (client) {
@@ -886,24 +889,10 @@ router.post('/api/fetchsingleemail', async (req, res) => {
       });
     }
     
-    if (err.code === 'ECONNREFUSED') {
-      return res.status(503).json({ 
-        success: false, 
-        error: 'Connection refused - check IMAP server availability'
-      });
-    }
-    
-    if (err.code === 'EAUTH') {
-      return res.status(401).json({ 
-        success: false, 
-        error: 'Authentication failed - check email and password'
-      });
-    }
-    
     return res.status(500).json({ 
       success: false, 
       error: err.message,
-      details: 'IMAP connection failed. Please check your server settings.'
+      details: 'IMAP processing failed'
     });
   }
 });
