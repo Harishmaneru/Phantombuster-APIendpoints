@@ -585,6 +585,226 @@ router.post('/api/emailsend', async (req, res) => {
   }
 });
 
+// 2️⃣.5️⃣ Forward Email
+router.post('/api/emailforward', async (req, res) => {
+  try {
+    const {
+      token,
+      from,
+      to,
+      cc,
+      bcc,
+      originalMessageId,
+      additionalHtml,
+      additionalText,
+      trackLinks,
+      sender_name,
+      trackingPayload
+    } = req.body;
+
+    if (!token || !from || !to || !originalMessageId) {
+      return res.status(400).json({ success: false, error: 'Missing required fields: token, from, to, originalMessageId' });
+    }
+
+    const smtp = await SMTPAuth.findOne({ email: from, token });
+    if (!smtp) {
+      return res.status(403).json({ success: false, error: 'Invalid token or sender email' });
+    }
+
+    const decryptedPass = decrypt(smtp.pass);
+
+    // --- Fetch Original Email ---
+    let originalEmail = null;
+    // Use heuristic to guess IMAP host from SMTP host
+    const imapHost = smtp.host.startsWith('smtp.') ? smtp.host.replace('smtp.', 'imap.') : smtp.host;
+
+    const client = new ImapFlow({
+      host: imapHost,
+      port: 993,
+      secure: true,
+      auth: { user: from, pass: decryptedPass },
+      logger: false,
+      timeout: 30000
+    });
+
+    try {
+      await client.connect();
+      await client.mailboxOpen('INBOX');
+
+      const messageUids = await client.search({
+        header: { 'Message-ID': originalMessageId }
+      });
+
+      if (messageUids.length > 0) {
+        // Fetch the most recent one if duplicates exist
+        const uid = messageUids[messageUids.length - 1];
+        for await (let msg of client.fetch(uid, { envelope: true, source: true })) {
+          const parsed = await simpleParser(msg.source);
+
+          // Clean HTML content similar to fetchsingleemail
+          let cleanHtml = parsed.html || '';
+          if (cleanHtml) {
+            cleanHtml = cleanHtml.replace(/https:\/\/tracking\.inflection\.io\/[^"']+/g, (url) => {
+              try { return new URL(url).searchParams.get('redirect') || url; } catch { return url; }
+            });
+            cleanHtml = cleanHtml.replace(/<span[^>]*id="inflection-email-preheader"[^>]*>.*?<\/span>/gis, '');
+          }
+
+          originalEmail = {
+            subject: msg.envelope.subject,
+            from: msg.envelope.from.map(f => `${f.name || ''} <${f.address}>`).join(', '),
+            to: msg.envelope.to?.map(t => `${t.name || ''} <${t.address}>`).join(', ') || '',
+            date: msg.envelope.date,
+            html: cleanHtml,
+            text: parsed.text || ''
+          };
+          break;
+        }
+      }
+      await client.logout();
+    } catch (imapError) {
+      console.error('IMAP Fetch Error during forward:', imapError);
+      // Try to close if logout failed
+      try { await client.close(); } catch (e) { }
+      return res.status(500).json({ success: false, error: 'Failed to fetch original email: ' + imapError.message });
+    }
+
+    if (!originalEmail) {
+      return res.status(404).json({ success: false, error: 'Original email not found' });
+    }
+
+    // --- Construct Forwarded Content ---
+    const subject = `Fwd: ${originalEmail.subject}`;
+
+    // Format date nicely
+    const formattedDate = new Date(originalEmail.date).toLocaleString('en-US', {
+      weekday: 'short', month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: 'numeric', hour12: true
+    });
+
+    const forwardHeaderHtml = `
+      <br><br>
+      <div class="gmail_quote">
+        ---------- Forwarded message ---------<br>
+        From: <strong class="gmail_sendername" dir="auto">${originalEmail.from}</strong><br>
+        Date: ${formattedDate}<br>
+        Subject: ${originalEmail.subject}<br>
+        To: ${originalEmail.to}<br>
+        <br>
+      </div>
+    `;
+
+    const forwardHeaderText = `
+      \n\n
+      ---------- Forwarded message ---------
+      From: ${originalEmail.from}
+      Date: ${formattedDate}
+      Subject: ${originalEmail.subject}
+      To: ${originalEmail.to}
+      \n
+    `;
+
+    let emailHtml = (additionalHtml || '') + forwardHeaderHtml + (originalEmail.html || originalEmail.text || '');
+    let emailText = (additionalText || '') + forwardHeaderText + (originalEmail.text || '');
+
+    // --- Send Email ---
+    const transporter = nodemailer.createTransport({
+      host: smtp.host,
+      port: smtp.port,
+      secure: smtp.port === 465,
+      auth: { user: from, pass: decryptedPass },
+      tls: { rejectUnauthorized: false }
+    });
+
+    await transporter.verify();
+
+    const trackingId = crypto.randomBytes(16).toString('hex');
+    const baseUrl = process.env.BASE_URL || 'https://videoresponse.onepgr.com:3001';
+    const trackingPixelUrl = `${baseUrl}/api/track/open/${trackingId}`;
+
+    if (emailHtml) {
+      emailHtml += `<img src="${trackingPixelUrl}" width="1" height="1" style="display:none;border:0;" alt=""/>\n`;
+    }
+
+    if (emailHtml && trackLinks) {
+      emailHtml = emailHtml.replace(/href=["'](.*?)["']/g, (match, url) => {
+        if (url.startsWith('http') && !url.includes(baseUrl)) {
+          const encodedUrl = encodeURIComponent(url);
+          return `href="${baseUrl}/api/track/click/${trackingId}?url=${encodedUrl}"`;
+        }
+        return match;
+      });
+    }
+
+    const fromField = sender_name ? `${sender_name} <${from}>` : from;
+    const encodedSubject = encodeSubjectForEmail(subject);
+
+    const emailOptions = {
+      from: fromField,
+      to,
+      subject: encodedSubject,
+      html: emailHtml,
+      text: emailText,
+      messageId: `<${trackingId}@${from.split('@')[1]}>`,
+      headers: {
+        'X-Tracking-ID': trackingId,
+        'References': `<${trackingId}@${from.split('@')[1]}>`,
+        'In-Reply-To': originalMessageId
+      }
+    };
+
+    if (cc) emailOptions.cc = cc;
+    if (bcc) emailOptions.bcc = bcc;
+
+    const info = await transporter.sendMail(emailOptions);
+
+    // --- Logging & Tracking ---
+    const webhookUrl = 'https://meet.onepgr.com/session/smatpTracking';
+
+    const trackingRecord = new EmailTracking({
+      messageId: trackingId,
+      originalMessageId: info.messageId,
+      fromEmail: from,
+      toEmail: to,
+      subject,
+      webhookUrl,
+      emailContent: { html: emailHtml, text: emailText },
+      trackingPayload: trackingPayload || null
+    });
+
+    await trackingRecord.save();
+
+    await sendWebhookNotification(webhookUrl, {
+      event: 'sent',
+      trackingId,
+      email: to,
+      from,
+      subject,
+      timestamp: new Date(),
+      messageId: info.messageId,
+      recipients: { to, cc: cc || null, bcc: bcc || null },
+      contentUsed: { html: !!emailHtml, text: !!emailText, trackingEnabled: !!trackLinks },
+      trackingPayload: trackingPayload || null,
+      senderName: sender_name || null,
+      isForward: true,
+      originalMessageId
+    });
+
+    return res.json({
+      success: true,
+      messageId: info.messageId,
+      trackingId,
+      recipients: { to, cc: cc || null, bcc: bcc || null },
+      contentUsed: { html: !!emailHtml, text: !!emailText, trackingEnabled: !!trackLinks },
+      trackingPayload: trackingPayload || null,
+      senderName: sender_name || null
+    });
+
+  } catch (err) {
+    console.error('Email Forward Error:', err);
+    return res.status(500).json({ success: false, error: err.message });
+  }
+});
+
 // 3️⃣ Inbox Fetch with Read/Unread
 
 
@@ -620,30 +840,30 @@ router.post('/api/fetchinbox', async (req, res) => {
     await client.connect();
     const lock = await client.mailboxOpen('INBOX');
     const totalMessages = lock.exists;
-    
+
     // Calculate pagination
     const maxLimit = Math.min(limit, 50); // Max 50 per page
     const currentPage = Math.max(parseInt(page), 1);
     const totalPages = Math.ceil(totalMessages / maxLimit);
-    
+
     // Calculate message range (IMAP uses 1-based indexing, newest first)
     const startSeq = Math.max(totalMessages - (currentPage * maxLimit) + 1, 1);
     const endSeq = Math.max(totalMessages - ((currentPage - 1) * maxLimit), 1);
-    
+
     console.log(`Fetching messages ${startSeq}:${endSeq} (Page ${currentPage}, Limit ${maxLimit})`);
 
     const messages = [];
-    
+
     if (startSeq <= endSeq) {
-      for await (let msg of client.fetch(`${startSeq}:${endSeq}`, { 
-        envelope: true, 
-        uid: true, 
-        flags: true, 
+      for await (let msg of client.fetch(`${startSeq}:${endSeq}`, {
+        envelope: true,
+        uid: true,
+        flags: true,
         source: true,
-        bodyStructure: true 
+        bodyStructure: true
       })) {
         const parsed = await simpleParser(msg.source);
-        
+
         // Clean HTML content
         let cleanHtml = parsed.html || '';
         if (cleanHtml) {
@@ -656,7 +876,7 @@ router.post('/api/fetchinbox', async (req, res) => {
               return url;
             }
           });
-          
+
           cleanHtml = cleanHtml.replace(/<span[^>]*id="inflection-email-preheader"[^>]*>.*?<\/span>/gis, '');
         }
 
@@ -687,8 +907,8 @@ router.post('/api/fetchinbox', async (req, res) => {
     // Reverse to show newest first in the array
     const sortedMessages = messages.reverse();
 
-    return res.json({ 
-      success: true, 
+    return res.json({
+      success: true,
       inbox: sortedMessages,
       pagination: {
         currentPage,
@@ -740,16 +960,16 @@ router.post('/api/fetchsingleemail', async (req, res) => {
       host: smtp.host,
       port: 993,
       secure: true,
-      auth: { 
-        user: email, 
-        pass: decryptedPass 
+      auth: {
+        user: email,
+        pass: decryptedPass
       },
       logger: false,
       timeout: 45000 // Increased timeout
     });
 
     console.log(`🔌 [FetchSingle] Attempting IMAP connection...`);
-    
+
     await client.connect();
     console.log(`✅ [FetchSingle] IMAP connection successful`);
 
@@ -767,13 +987,13 @@ router.post('/api/fetchsingleemail', async (req, res) => {
     if (!messageUids || messageUids.length === 0) {
       // Quick logout for not found case
       try {
-        await client.logout(); 
+        await client.logout();
       } catch (e) {
         await client.close();
       }
-      return res.status(404).json({ 
-        success: false, 
-        error: 'Email not found with the provided Message-ID' 
+      return res.status(404).json({
+        success: false,
+        error: 'Email not found with the provided Message-ID'
       });
     }
 
@@ -783,18 +1003,18 @@ router.post('/api/fetchsingleemail', async (req, res) => {
     console.log(`📨 [FetchSingle] Starting to fetch message with UID: ${messageUids[0]}`);
 
     // Fetch the message
-    for await (let msg of client.fetch(messageUids, { 
+    for await (let msg of client.fetch(messageUids, {
       byUid: true,
-      envelope: true, 
-      uid: true, 
-      flags: true, 
+      envelope: true,
+      uid: true,
+      flags: true,
       source: true
     })) {
       console.log(`🔄 [FetchSingle] Processing message ${++processedCount}`);
-      
+
       const parsed = await simpleParser(msg.source);
       console.log(`📝 [FetchSingle] Email parsed successfully, subject: "${msg.envelope.subject}"`);
-      
+
       // Clean HTML content
       let cleanHtml = parsed.html || '';
       if (cleanHtml) {
@@ -808,7 +1028,7 @@ router.post('/api/fetchsingleemail', async (req, res) => {
             return url;
           }
         });
-        
+
         cleanHtml = cleanHtml.replace(/<span[^>]*id="inflection-email-preheader"[^>]*>.*?<\/span>/gis, '');
       }
 
@@ -820,22 +1040,22 @@ router.post('/api/fetchsingleemail', async (req, res) => {
 
       foundEmail = {
         subject: msg.envelope.subject,
-        from: msg.envelope.from.map(f => ({ 
-          name: f.name || '', 
-          address: f.address 
+        from: msg.envelope.from.map(f => ({
+          name: f.name || '',
+          address: f.address
         })),
         date: msg.envelope.date,
         uid: msg.uid,
         read: Array.isArray(msg.flags) ? msg.flags.includes('\\Seen') : false,
         text: cleanText,
         html: cleanHtml,
-        to: msg.envelope.to?.map(t => ({ 
-          name: t.name || '', 
-          address: t.address 
+        to: msg.envelope.to?.map(t => ({
+          name: t.name || '',
+          address: t.address
         })) || [],
-        cc: msg.envelope.cc?.map(c => ({ 
-          name: c.name || '', 
-          address: c.address 
+        cc: msg.envelope.cc?.map(c => ({
+          name: c.name || '',
+          address: c.address
         })) || [],
         messageId: msg.envelope.messageId,
         attachments: parsed.attachments ? parsed.attachments.map(att => ({
@@ -851,11 +1071,11 @@ router.post('/api/fetchsingleemail', async (req, res) => {
 
     // SEND RESPONSE FIRST, then cleanup connection
     console.log(`🎉 [FetchSingle] SUCCESS - Sending response first for: "${foundEmail.subject}"`);
-    
+
     // Send response immediately
-    res.json({ 
-      success: true, 
-      email: foundEmail 
+    res.json({
+      success: true,
+      email: foundEmail
     });
 
     console.log(`✅ [FetchSingle] Response sent to client, now cleaning up connection...`);
@@ -876,24 +1096,24 @@ router.post('/api/fetchsingleemail', async (req, res) => {
 
   } catch (err) {
     console.error('❌ [FetchSingle] Final Error:', err);
-    
+
     // Send error response first
     if (!res.headersSent) {
       if (err.code === 'ETIMEDOUT' || err.code === 'ETIMEOUT') {
-        return res.status(408).json({ 
-          success: false, 
-          error: 'Connection timeout' 
+        return res.status(408).json({
+          success: false,
+          error: 'Connection timeout'
         });
       }
-      
-      return res.status(500).json({ 
-        success: false, 
-        error: err.message 
+
+      return res.status(500).json({
+        success: false,
+        error: err.message
       });
     } else {
       console.log('⚠️ [FetchSingle] Response already sent, but error occurred during cleanup');
     }
-    
+
     // Then cleanup connection
     if (client) {
       try {
@@ -2539,7 +2759,7 @@ router.post('/api/fetchcalendar', async (req, res) => {
 //     const totalMessages = selectedBox.lock.exists;
 //     const maxLimit = Math.min(limit, 50);
 //     const currentPage = Math.max(parseInt(page), 1);
-    
+
 //     // Fix: Handle empty mailbox case
 //     if (totalMessages === 0) {
 //       await client.logout();
@@ -2645,7 +2865,7 @@ router.post('/api/fetchcalendar', async (req, res) => {
 //     });
 //   } catch (err) {
 //     console.error('Sent Fetch Error:', err);
-    
+
 //     // Ensure client is properly closed even on error
 //     if (client) {
 //       try {
@@ -2654,7 +2874,7 @@ router.post('/api/fetchcalendar', async (req, res) => {
 //         console.error('Error during logout:', logoutError);
 //       }
 //     }
-    
+
 //     return res.status(500).json({ 
 //       success: false, 
 //       error: err.message,
@@ -2762,7 +2982,7 @@ router.post('/api/fetchsent', async (req, res) => {
     const totalMessages = selectedBox.lock.exists;
     const maxLimit = Math.min(limit, 50);
     const currentPage = Math.max(parseInt(page), 1);
-    
+
     // Fix: Handle empty mailbox case
     if (totalMessages === 0) {
       await client.logout();
@@ -2828,7 +3048,7 @@ router.post('/api/fetchsent', async (req, res) => {
             // FIXED: Proper read status detection for different flag types
             let isRead = false;
             let flagsArray = [];
-            
+
             // Handle different types of flags object
             if (msg.flags) {
               if (Array.isArray(msg.flags)) {
@@ -2893,7 +3113,7 @@ router.post('/api/fetchsent', async (req, res) => {
     });
   } catch (err) {
     console.error('Sent Fetch Error:', err);
-    
+
     // Ensure client is properly closed even on error
     if (client) {
       try {
@@ -2902,9 +3122,9 @@ router.post('/api/fetchsent', async (req, res) => {
         console.error('Error during logout:', logoutError);
       }
     }
-    
-    return res.status(500).json({ 
-      success: false, 
+
+    return res.status(500).json({
+      success: false,
       error: err.message,
       details: 'Failed to fetch sent emails. Please check your credentials and try again.'
     });
