@@ -280,6 +280,191 @@ router.post('/sendemail/:grantId', checkApiKey, async (req, res) => {
   }
 });
 
+/*_________________________FORWARD EMAIL_________________________*/
+
+/**
+ * Forward an email via Nylas
+ * POST /api/nylas/forwardemail/:grantId/:messageId
+ * Body: {
+ *   to,                    // Required: array or string
+ *   from,                  // Optional: array or string (defaults to user's email if not provided)
+ *   cc,                    // Optional: array or string
+ *   bcc,                   // Optional: array or string
+ *   additional_body,       // Optional: text to add above forwarded content
+ *   additional_html,       // Optional: HTML to add above forwarded content
+ *   tracking_options       // Optional: tracking options object
+ * }
+ */
+router.post('/forwardemail/:grantId/:messageId', checkApiKey, async (req, res) => {
+  try {
+    const { grantId, messageId } = req.params;
+    const {
+      to,
+      from,
+      cc,
+      bcc,
+      additional_body,
+      additional_html,
+      tracking_options
+    } = req.body;
+
+    if (!to) {
+      return res.status(400).json({
+        success: false,
+        message: 'To field is required',
+        data: null,
+        timestamp: new Date().toISOString()
+      });
+    }
+
+    // 1. Fetch original message
+    const messageUrl = `${NYLAS_API_BASE_URL}/grants/${grantId}/messages/${messageId}`;
+    const messageResponse = await axios.get(messageUrl, {
+      headers: {
+        'Accept': 'application/json, application/gzip',
+        'Authorization': `Bearer ${NYLAS_API_KEY}`,
+        'Content-Type': 'application/json'
+      }
+    });
+
+    const originalMessage = messageResponse.data?.data || messageResponse.data;
+
+    if (!originalMessage) {
+      return res.status(404).json({
+        success: false,
+        message: 'Original message not found',
+        data: null,
+        timestamp: new Date().toISOString()
+      });
+    }
+
+    // 2. Construct Forwarded Content
+    const subject = originalMessage.subject?.startsWith('Fwd:')
+      ? originalMessage.subject
+      : `Fwd: ${originalMessage.subject || 'No Subject'}`;
+
+    const formattedDate = new Date(originalMessage.date * 1000).toLocaleString('en-US', {
+      weekday: 'short', month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: 'numeric', hour12: true
+    });
+
+    // Format Original Sender
+    const originalFrom = originalMessage.from?.map(f => `${f.name || ''} <${f.email}>`).join(', ') || 'Unknown';
+    const originalTo = originalMessage.to?.map(t => `${t.name || ''} <${t.email}>`).join(', ') || '';
+
+    const forwardHeaderHtml = `
+      <br><br>
+      <div class="gmail_quote">
+        ---------- Forwarded message ---------<br>
+        From: <strong class="gmail_sendername" dir="auto">${originalFrom}</strong><br>
+        Date: ${formattedDate}<br>
+        Subject: ${originalMessage.subject}<br>
+        To: ${originalTo}<br>
+        <br>
+      </div>
+    `;
+
+    const forwardHeaderText = `
+      \n\n
+      ---------- Forwarded message ---------
+      From: ${originalFrom}
+      Date: ${formattedDate}
+      Subject: ${originalMessage.subject}
+      To: ${originalTo}
+      \n
+    `;
+
+    const newBody = (additional_body || '') + forwardHeaderText + (originalMessage.body || '');
+    const newHtml = (additional_html || additional_body || '') + forwardHeaderHtml + (originalMessage.body || '');
+
+    // 3. Prepare Send Payload
+    // Helper to format recipients (reused from sendemail)
+    const formatRecipients = (recipients) => {
+      if (!recipients) return [];
+      if (typeof recipients === 'string') {
+        const match = recipients.match(/^(.+?)\s*<(.+?)>$/);
+        if (match) {
+          return [{ name: match[1].trim(), email: match[2].trim() }];
+        }
+        return [{ email: recipients.trim() }];
+      }
+      if (Array.isArray(recipients)) {
+        return recipients.map(r => {
+          if (typeof r === 'string') {
+            const match = r.match(/^(.+?)\s*<(.+?)>$/);
+            return match ? { name: match[1].trim(), email: match[2].trim() } : { email: r.trim() };
+          }
+          return r;
+        });
+      }
+      return [];
+    };
+
+    const payload = {
+      subject: subject,
+      to: formatRecipients(to),
+      body: newBody,
+      body_html: newHtml
+    };
+
+    if (from) {
+      const fromArray = formatRecipients(from);
+      if (fromArray.length > 0) payload.from = fromArray;
+    }
+
+    if (cc) payload.cc = formatRecipients(cc);
+    if (bcc) payload.bcc = formatRecipients(bcc);
+
+    // Pass through attachments if they exist in original message? 
+    // Note: Nylas API doesn't automatically attach files from original message when sending a new one.
+    // You would typically need to download and re-upload them, or just forward the content.
+    // For this implementation, we are forwarding the CONTENT. 
+    // If original message had attachments, they are NOT automatically included here unless we implement file handling.
+    // Given the complexity of downloading/re-uploading, we'll start with content forwarding.
+
+    if (tracking_options) {
+      const validTrackingOptions = {};
+      if (tracking_options.opens !== undefined) validTrackingOptions.opens = Boolean(tracking_options.opens);
+      if (tracking_options.links !== undefined) validTrackingOptions.links = Boolean(tracking_options.links);
+      if (tracking_options.thread_replies !== undefined) validTrackingOptions.thread_replies = Boolean(tracking_options.thread_replies);
+      if (tracking_options.payload !== undefined) validTrackingOptions.payload = String(tracking_options.payload);
+      if (tracking_options.label !== undefined) validTrackingOptions.label = String(tracking_options.label);
+
+      if (Object.keys(validTrackingOptions).length > 0) {
+        payload.tracking_options = validTrackingOptions;
+      }
+    }
+
+    // 4. Send Email
+    const sendUrl = `${NYLAS_API_BASE_URL}/grants/${grantId}/messages/send`;
+    console.log('Sending forwarded email payload:', JSON.stringify(payload, null, 2));
+
+    const sendResponse = await axios.post(sendUrl, payload, {
+      headers: {
+        'Accept': 'application/json, application/gzip',
+        'Authorization': `Bearer ${NYLAS_API_KEY}`,
+        'Content-Type': 'application/json'
+      },
+      timeout: 150000
+    });
+
+    res.json({
+      success: true,
+      data: sendResponse.data,
+      message: 'Email forwarded successfully',
+      timestamp: new Date().toISOString()
+    });
+
+  } catch (error) {
+    console.error('Error forwarding email:', error.response?.data || error.message);
+    res.status(error.response?.status || 500).json({
+      success: false,
+      message: error.response?.data?.message || error.message || 'Failed to forward email',
+      data: error.response?.data || null,
+      timestamp: new Date().toISOString()
+    });
+  }
+});
+
 router.get('/fetchsentemails/:grantId', checkApiKey, async (req, res) => {
   try {
     const { grantId } = req.params;
@@ -309,10 +494,10 @@ router.get('/fetchsentemails/:grantId', checkApiKey, async (req, res) => {
         });
 
         const folders = foldersResponse.data?.data || foldersResponse.data || [];
-        
+
         // Find sent folder by role or name
-        const sentFolder = folders.find(folder => 
-          folder.role === 'sent' || 
+        const sentFolder = folders.find(folder =>
+          folder.role === 'sent' ||
           folder.role === 'sent_items' ||
           folder.name?.toLowerCase().includes('sent')
         );
@@ -322,7 +507,7 @@ router.get('/fetchsentemails/:grantId', checkApiKey, async (req, res) => {
         } else {
           // If no sent folder found, try common names
           const commonNames = ['Sent', 'Sent Mail', 'Sent Items', 'Sent Messages'];
-          const folderByName = folders.find(folder => 
+          const folderByName = folders.find(folder =>
             commonNames.some(name => folder.name?.toLowerCase() === name.toLowerCase())
           );
           if (folderByName) {
