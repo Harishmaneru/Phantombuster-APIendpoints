@@ -449,7 +449,8 @@ router.post('/api/emailsend', async (req, res) => {
       text,
       trackLinks,
       sender_name,
-      trackingPayload
+      trackingPayload,
+      attachments
     } = req.body;
 
     if (!token || !from || !to) {
@@ -525,6 +526,9 @@ router.post('/api/emailsend', async (req, res) => {
 
     if (cc) emailOptions.cc = cc;
     if (bcc) emailOptions.bcc = bcc;
+    if (attachments && Array.isArray(attachments) && attachments.length > 0) {
+      emailOptions.attachments = attachments;
+    }
 
     const info = await transporter.sendMail(emailOptions);
 
@@ -560,7 +564,8 @@ router.post('/api/emailsend', async (req, res) => {
       contentUsed: {
         html: !!html,
         text: !!text,
-        trackingEnabled: !!trackLinks
+        trackingEnabled: !!trackLinks,
+        attachmentsCount: attachments ? attachments.length : 0
       },
       trackingPayload: trackingPayload || null,
       senderName: sender_name || null
@@ -574,7 +579,8 @@ router.post('/api/emailsend', async (req, res) => {
       contentUsed: {
         html: !!html,
         text: !!text,
-        trackingEnabled: !!trackLinks
+        trackingEnabled: !!trackLinks,
+        attachmentsCount: attachments ? attachments.length : 0
       },
       trackingPayload: trackingPayload || null,
       senderName: sender_name || null
