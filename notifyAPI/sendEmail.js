@@ -593,7 +593,6 @@ router.post('/api/emailsend', async (req, res) => {
 
 //  Forward Email
 // Fixed Email Forward API - Gmail-style forwarding
-// Fixed Email Forward API - Gmail-style forwarding
 router.post('/api/emailforward', async (req, res) => {
   let imapClient;
 
@@ -694,7 +693,7 @@ router.post('/api/emailforward', async (req, res) => {
             break; // Critical: exit loop immediately
           }
 
-          console.log('✅ Breaking from mailbox search loop');
+          console.log('✅ Message retrieved, breaking from mailbox search');
           break; // Exit mailbox search loop
         }
       } catch (err) {
@@ -703,21 +702,30 @@ router.post('/api/emailforward', async (req, res) => {
       }
     }
 
-    // Close IMAP connection immediately after fetching
-    console.log('🔒 Closing IMAP connection...');
-    try {
-      await imapClient.logout();
-      console.log('✅ IMAP connection closed gracefully');
-    } catch (logoutErr) {
-      console.log('⚠️ IMAP logout failed, forcing close:', logoutErr.message);
+    // Close IMAP connection in background - don't wait
+    console.log('🔒 Closing IMAP connection in background...');
+    const closeImapPromise = (async () => {
       try {
-        await imapClient.close();
-        console.log('✅ IMAP connection force-closed');
-      } catch (closeErr) {
-        console.log('⚠️ IMAP force-close failed:', closeErr.message);
+        await Promise.race([
+          imapClient.logout(),
+          new Promise((_, reject) => setTimeout(() => reject(new Error('Logout timeout')), 5000))
+        ]);
+        console.log('✅ IMAP connection closed gracefully');
+      } catch (logoutErr) {
+        console.log('⚠️ IMAP logout failed/timeout, forcing close');
+        try {
+          await imapClient.close();
+          console.log('✅ IMAP connection force-closed');
+        } catch (closeErr) {
+          console.log('⚠️ IMAP force-close failed, destroying connection');
+          try {
+            imapClient.connection?.destroy();
+          } catch (e) { }
+        }
       }
-    }
-    imapClient = null;
+    })();
+
+    imapClient = null; // Unset reference immediately
 
     if (!originalEmail) {
       return res.status(404).json({
@@ -726,7 +734,7 @@ router.post('/api/emailforward', async (req, res) => {
       });
     }
 
-    console.log('📝 Building forwarded email content...');
+    console.log('📝 Building forwarded email content (IMAP closing in background)...');
 
     // Step 2: Build the forwarded email (Gmail-style)
     const original = originalEmail.parsed;
@@ -951,14 +959,13 @@ ${original.text || 'No text content'}
 
     // Cleanup IMAP connection if still open
     if (imapClient) {
+      console.log('🔒 Force closing IMAP on error...');
       try {
-        await imapClient.logout();
-      } catch (logoutErr) {
-        try {
-          await imapClient.close();
-        } catch (closeErr) {
-          // Ignore cleanup errors
-        }
+        // Force close immediately on error - don't wait
+        imapClient.close().catch(() => { });
+        imapClient.connection?.destroy();
+      } catch (e) {
+        // Ignore cleanup errors
       }
     }
 
