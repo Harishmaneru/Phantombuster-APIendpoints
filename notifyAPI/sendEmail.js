@@ -1166,13 +1166,12 @@ function extractAttachmentsFromStructure(structure, uid, email, token) {
 
 
 // 9️⃣ Fetch Specific Email by Message ID
-// Endpoint to download attachments
 router.get('/api/email/attachment', async (req, res) => {
   try {
-    const { email, token, uid, filename, part } = req.query;
+    const { email, token, uid, filename } = req.query;
 
-    if (!email || !token || !uid) {
-      return res.status(400).json({ success: false, error: 'Missing parameters' });
+    if (!email || !token || !uid || !filename) {
+      return res.status(400).json({ success: false, error: 'Missing required parameters' });
     }
 
     // Verify token
@@ -1195,30 +1194,51 @@ router.get('/api/email/attachment', async (req, res) => {
     await client.connect();
     await client.mailboxOpen('INBOX');
 
-    // Fetch the specific message by UID
-    const messages = [];
-    for await (let msg of client.fetch(uid, { uid: true, source: true, bodyStructure: true }, { uid: true })) {
+    // Fetch message by UID directly (more efficient)
+    const fetchResult = client.fetch(parseInt(uid), {
+      source: true
+    }, { uid: true });
+
+    let foundAttachment = null;
+
+    for await (let msg of fetchResult) {
       const parsed = await simpleParser(msg.source);
 
-      // Find the specific attachment
       if (parsed.attachments && Array.isArray(parsed.attachments)) {
-        const attachment = parsed.attachments.find(att =>
-          att.filename === filename || (part && att.contentId === part)
+        const decodedFilename = decodeURIComponent(filename);
+        foundAttachment = parsed.attachments.find(att =>
+          att.filename === decodedFilename || att.filename === filename
         );
 
-        if (attachment) {
-          // Set appropriate headers
-          res.setHeader('Content-Type', attachment.contentType || 'application/octet-stream');
-          res.setHeader('Content-Disposition', `attachment; filename="${attachment.filename}"`);
-          res.setHeader('Content-Length', attachment.size);
-
-          // Send the attachment content
-          return res.send(attachment.content);
+        if (!foundAttachment) {
+          // Try to find by contentId if filename doesn't match
+          const contentId = req.query.contentId;
+          if (contentId) {
+            foundAttachment = parsed.attachments.find(att =>
+              att.contentId === contentId ||
+              (att.contentId && att.contentId.includes(contentId.replace(/[<>]/g, '')))
+            );
+          }
         }
+        break;
       }
     }
 
     await client.logout();
+
+    if (foundAttachment) {
+      // Set appropriate headers
+      res.setHeader('Content-Type', foundAttachment.contentType || 'application/octet-stream');
+      res.setHeader('Content-Disposition', `attachment; filename="${encodeURIComponent(foundAttachment.filename)}"`);
+      res.setHeader('Content-Length', foundAttachment.size);
+
+      // Send the attachment content
+      if (foundAttachment.content) {
+        return res.send(foundAttachment.content);
+      } else {
+        return res.status(500).json({ success: false, error: 'Attachment content is empty' });
+      }
+    }
 
     return res.status(404).json({ success: false, error: 'Attachment not found' });
   } catch (err) {
