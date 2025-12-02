@@ -592,7 +592,10 @@ router.post('/api/emailsend', async (req, res) => {
 });
 
 // 2️⃣.5️⃣ Forward Email
+// 2️⃣.5️⃣ Forward Email - Fixed Version
 router.post('/api/emailforward', async (req, res) => {
+  let client = null;
+
   try {
     const {
       token,
@@ -601,26 +604,44 @@ router.post('/api/emailforward', async (req, res) => {
       cc,
       bcc,
       originalMessageId,
-      additionalHtml,
-      additionalText,
+      additionalHtml = '',
+      additionalText = '',
       trackLinks,
       sender_name,
-      trackingPayload
+      trackingPayload,
+      attachments = []
     } = req.body;
 
+    console.log(`📧 Forward Email Request:`, {
+      from,
+      to,
+      originalMessageId,
+      attachmentsCount: attachments?.length || 0
+    });
+
     if (!token || !from || !to || !originalMessageId) {
-      return res.status(400).json({ success: false, error: 'Missing required fields: token, from, to, originalMessageId' });
+      return res.status(400).json({
+        success: false,
+        error: 'Missing required fields: token, from, to, originalMessageId'
+      });
     }
+
+    // Validate and sanitize originalMessageId
+    const cleanMessageId = originalMessageId.replace(/[<>]/g, '');
 
     const smtp = await SMTPAuth.findOne({ email: from, token });
     if (!smtp) {
-      return res.status(403).json({ success: false, error: 'Invalid token or sender email' });
+      return res.status(403).json({
+        success: false,
+        error: 'Invalid token or sender email'
+      });
     }
 
     const decryptedPass = decrypt(smtp.pass);
 
     // --- Fetch Original Email ---
     let originalEmail = null;
+    let originalAttachments = [];
 
     // Helper to determine IMAP host
     function getImapHost(smtpHost) {
@@ -639,102 +660,215 @@ router.post('/api/emailforward', async (req, res) => {
       if (smtpHost.startsWith('smtp.')) {
         return smtpHost.replace('smtp.', 'imap.');
       }
-      return `imap.${smtpHost}`; // Fallback for bare domains or others
+      return `imap.${smtpHost}`;
     }
 
     const imapHost = getImapHost(smtp.host);
-    console.log(`Attempting IMAP connection to: ${imapHost} for user ${from}`);
+    console.log(`🔍 Attempting IMAP connection to: ${imapHost} for user ${from}`);
 
-    const client = new ImapFlow({
+    client = new ImapFlow({
       host: imapHost,
       port: 993,
       secure: true,
       auth: { user: from, pass: decryptedPass },
       logger: false,
       timeout: 30000,
-      tls: { rejectUnauthorized: false } // Match nodemailer settings
+      tls: { rejectUnauthorized: false }
     });
 
     try {
       await client.connect();
-      await client.mailboxOpen('INBOX');
+      console.log('✅ IMAP connected successfully');
 
-      const messageUids = await client.search({
-        header: { 'Message-ID': originalMessageId }
-      });
+      // Try common mailbox names
+      const mailboxes = ['INBOX', 'Sent', 'Sent Items', '[Gmail]/Sent Mail'];
+      let mailboxFound = false;
 
-      if (messageUids.length > 0) {
-        // Fetch the most recent one if duplicates exist
-        const uid = messageUids[messageUids.length - 1];
-        for await (let msg of client.fetch(uid, { envelope: true, source: true })) {
-          const parsed = await simpleParser(msg.source);
-
-          // Clean HTML content similar to fetchsingleemail
-          let cleanHtml = parsed.html || '';
-          if (cleanHtml) {
-            cleanHtml = cleanHtml.replace(/https:\/\/tracking\.inflection\.io\/[^"']+/g, (url) => {
-              try { return new URL(url).searchParams.get('redirect') || url; } catch { return url; }
-            });
-            cleanHtml = cleanHtml.replace(/<span[^>]*id="inflection-email-preheader"[^>]*>.*?<\/span>/gis, '');
-          }
-
-          originalEmail = {
-            subject: msg.envelope.subject,
-            from: msg.envelope.from.map(f => `${f.name || ''} <${f.address}>`).join(', '),
-            to: msg.envelope.to?.map(t => `${t.name || ''} <${t.address}>`).join(', ') || '',
-            date: msg.envelope.date,
-            html: cleanHtml,
-            text: parsed.text || ''
-          };
+      for (const mailboxName of mailboxes) {
+        try {
+          await client.mailboxOpen(mailboxName);
+          mailboxFound = true;
+          console.log(`✅ Opened mailbox: ${mailboxName}`);
           break;
+        } catch (e) {
+          console.log(`⚠️ Could not open mailbox ${mailboxName}: ${e.message}`);
         }
       }
+
+      if (!mailboxFound) {
+        await client.mailboxOpen('INBOX');
+      }
+
+      // Search for the message with multiple header patterns
+      const searchPatterns = [
+        { header: { 'Message-ID': cleanMessageId } },
+        { header: { 'Message-ID': `<${cleanMessageId}>` } },
+        { header: { 'Message-ID': originalMessageId } },
+        { header: { 'Message-ID': `<${originalMessageId}>` } }
+      ];
+
+      let messageUids = [];
+
+      for (const pattern of searchPatterns) {
+        try {
+          const uids = await client.search(pattern);
+          if (uids && uids.length > 0) {
+            messageUids = uids;
+            console.log(`✅ Found message with pattern: ${JSON.stringify(pattern)}`);
+            break;
+          }
+        } catch (searchError) {
+          console.log(`Search error: ${searchError.message}`);
+        }
+      }
+
+      if (messageUids.length === 0) {
+        console.log(`❌ No message found with Message-ID: ${cleanMessageId}`);
+        // Try searching by subject or other criteria as fallback
+        // This would require additional logic
+        throw new Error(`Original email not found with Message-ID: ${cleanMessageId}`);
+      }
+
+      // Fetch the most recent one if duplicates exist
+      const uid = messageUids[messageUids.length - 1];
+      console.log(`📨 Fetching message with UID: ${uid}`);
+
+      for await (let msg of client.fetch(uid, {
+        byUid: true,
+        envelope: true,
+        source: true,
+        bodyStructure: true
+      })) {
+        const parsed = await simpleParser(msg.source);
+
+        console.log(`📝 Original email subject: "${msg.envelope.subject}"`);
+
+        // Clean HTML content
+        let cleanHtml = parsed.html || '';
+        if (cleanHtml) {
+          cleanHtml = cleanHtml.replace(/https:\/\/tracking\.inflection\.io\/[^"']+/g, (url) => {
+            try {
+              return new URL(url).searchParams.get('redirect') || url;
+            } catch {
+              return url;
+            }
+          });
+          cleanHtml = cleanHtml.replace(/<span[^>]*id="inflection-email-preheader"[^>]*>.*?<\/span>/gis, '');
+        }
+
+        // Extract clean text
+        let cleanText = parsed.text || '';
+        if (cleanText) {
+          cleanText = cleanText.replace(/https:\/\/tracking\.inflection\.io\/[^\s]+/g, '');
+        }
+
+        // Extract original attachments if they exist
+        if (parsed.attachments && parsed.attachments.length > 0) {
+          console.log(`📎 Found ${parsed.attachments.length} attachments in original email`);
+          originalAttachments = parsed.attachments.map(att => ({
+            filename: att.filename || `attachment_${Date.now()}.${att.contentType.split('/')[1] || 'bin'}`,
+            content: att.content,
+            contentType: att.contentType,
+            encoding: 'base64',
+            cid: att.cid
+          }));
+        }
+
+        originalEmail = {
+          subject: msg.envelope.subject,
+          from: msg.envelope.from.map(f => ({
+            name: f.name || '',
+            address: f.address
+          })),
+          to: msg.envelope.to?.map(t => ({
+            name: t.name || '',
+            address: t.address
+          })) || [],
+          date: msg.envelope.date,
+          html: cleanHtml,
+          text: cleanText,
+          attachments: originalAttachments
+        };
+        break;
+      }
+
       await client.logout();
+      client = null;
+
     } catch (imapError) {
-      console.error('IMAP Fetch Error during forward:', imapError);
-      // Try to close if logout failed
-      try { await client.close(); } catch (e) { }
-      return res.status(500).json({ success: false, error: 'Failed to fetch original email: ' + imapError.message });
+      console.error('IMAP Fetch Error:', imapError);
+      if (client) {
+        try {
+          await client.close();
+        } catch (e) {
+          console.error('Error closing IMAP client:', e);
+        }
+      }
+      return res.status(500).json({
+        success: false,
+        error: 'Failed to fetch original email: ' + imapError.message
+      });
     }
 
     if (!originalEmail) {
-      return res.status(404).json({ success: false, error: 'Original email not found' });
+      return res.status(404).json({
+        success: false,
+        error: 'Original email not found or could not be parsed'
+      });
     }
 
     // --- Construct Forwarded Content ---
     const subject = `Fwd: ${originalEmail.subject}`;
 
     // Format date nicely
-    const formattedDate = new Date(originalEmail.date).toLocaleString('en-US', {
-      weekday: 'short', month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: 'numeric', hour12: true
-    });
+    const formattedDate = originalEmail.date
+      ? new Date(originalEmail.date).toLocaleString('en-US', {
+        weekday: 'short',
+        month: 'short',
+        day: 'numeric',
+        year: 'numeric',
+        hour: 'numeric',
+        minute: 'numeric',
+        hour12: true
+      })
+      : 'Date not available';
+
+    // Format sender info
+    const fromString = originalEmail.from
+      .map(f => f.name ? `${f.name} <${f.address}>` : f.address)
+      .join(', ');
+
+    // Format recipient info
+    const toString = originalEmail.to
+      .map(t => t.name ? `${t.name} <${t.address}>` : t.address)
+      .join(', ');
 
     const forwardHeaderHtml = `
       <br><br>
-      <div class="gmail_quote">
-        ---------- Forwarded message ---------<br>
-        From: <strong class="gmail_sendername" dir="auto">${originalEmail.from}</strong><br>
-        Date: ${formattedDate}<br>
-        Subject: ${originalEmail.subject}<br>
-        To: ${originalEmail.to}<br>
-        <br>
+      <div style="border-left: 3px solid #ccc; padding-left: 15px; margin-left: 10px; color: #666; font-style: italic;">
+        <p>---------- Forwarded message ---------</p>
+        <p><strong>From:</strong> ${fromString}</p>
+        <p><strong>Date:</strong> ${formattedDate}</p>
+        <p><strong>Subject:</strong> ${originalEmail.subject}</p>
+        <p><strong>To:</strong> ${toString}</p>
       </div>
+      <br>
     `;
 
     const forwardHeaderText = `
-      \n\n
-      ---------- Forwarded message ---------
-      From: ${originalEmail.from}
-      Date: ${formattedDate}
-      Subject: ${originalEmail.subject}
-      To: ${originalEmail.to}
-      \n
-    `;
 
-    let emailHtml = (additionalHtml || '') + forwardHeaderHtml + (originalEmail.html || originalEmail.text || '');
-    let emailText = (additionalText || '') + forwardHeaderText + (originalEmail.text || '');
+---------- Forwarded message ---------
+From: ${fromString}
+Date: ${formattedDate}
+Subject: ${originalEmail.subject}
+To: ${toString}
 
-    // --- Send Email ---
+`;
+
+    let emailHtml = additionalHtml + forwardHeaderHtml + (originalEmail.html || originalEmail.text || '');
+    let emailText = additionalText + forwardHeaderText + (originalEmail.text || '');
+
+    // --- Send Forwarded Email ---
     const transporter = nodemailer.createTransport({
       host: smtp.host,
       port: smtp.port,
@@ -749,13 +883,15 @@ router.post('/api/emailforward', async (req, res) => {
     const baseUrl = process.env.BASE_URL || 'https://videoresponse.onepgr.com:3001';
     const trackingPixelUrl = `${baseUrl}/api/track/open/${trackingId}`;
 
+    // Add tracking pixel if HTML exists
     if (emailHtml) {
       emailHtml += `<img src="${trackingPixelUrl}" width="1" height="1" style="display:none;border:0;" alt=""/>\n`;
     }
 
+    // Track links if requested
     if (emailHtml && trackLinks) {
       emailHtml = emailHtml.replace(/href=["'](.*?)["']/g, (match, url) => {
-        if (url.startsWith('http') && !url.includes(baseUrl)) {
+        if (url.startsWith('http') && !url.includes(baseUrl) && !url.includes('mailto:')) {
           const encodedUrl = encodeURIComponent(url);
           return `href="${baseUrl}/api/track/click/${trackingId}?url=${encodedUrl}"`;
         }
@@ -765,6 +901,36 @@ router.post('/api/emailforward', async (req, res) => {
 
     const fromField = sender_name ? `${sender_name} <${from}>` : from;
     const encodedSubject = encodeSubjectForEmail(subject);
+
+    // Prepare all attachments (original + new)
+    const allAttachments = [...originalAttachments, ...(attachments || [])].map(att => {
+      // Handle different attachment formats
+      if (att.content) {
+        // Already has content (from original email)
+        return {
+          filename: att.filename,
+          content: att.content,
+          contentType: att.contentType,
+          encoding: att.encoding || 'base64',
+          cid: att.cid
+        };
+      } else if (att.path) {
+        // File path
+        return {
+          filename: att.filename,
+          path: att.path
+        };
+      } else if (att.url) {
+        // URL
+        return {
+          filename: att.filename,
+          path: att.url
+        };
+      }
+      return att;
+    });
+
+    console.log(`📎 Total attachments to forward: ${allAttachments.length}`);
 
     const emailOptions = {
       from: fromField,
@@ -782,8 +948,13 @@ router.post('/api/emailforward', async (req, res) => {
 
     if (cc) emailOptions.cc = cc;
     if (bcc) emailOptions.bcc = bcc;
+    if (allAttachments.length > 0) {
+      emailOptions.attachments = allAttachments;
+    }
 
+    console.log(`📤 Sending forwarded email...`);
     const info = await transporter.sendMail(emailOptions);
+    console.log(`✅ Forwarded email sent successfully: ${info.messageId}`);
 
     // --- Logging & Tracking ---
     const webhookUrl = 'https://meet.onepgr.com/session/smatpTracking';
@@ -795,7 +966,10 @@ router.post('/api/emailforward', async (req, res) => {
       toEmail: to,
       subject,
       webhookUrl,
-      emailContent: { html: emailHtml, text: emailText },
+      emailContent: {
+        html: emailHtml,
+        text: emailText
+      },
       trackingPayload: trackingPayload || null
     });
 
@@ -810,11 +984,16 @@ router.post('/api/emailforward', async (req, res) => {
       timestamp: new Date(),
       messageId: info.messageId,
       recipients: { to, cc: cc || null, bcc: bcc || null },
-      contentUsed: { html: !!emailHtml, text: !!emailText, trackingEnabled: !!trackLinks },
+      contentUsed: {
+        html: !!emailHtml,
+        text: !!emailText,
+        trackingEnabled: !!trackLinks
+      },
       trackingPayload: trackingPayload || null,
       senderName: sender_name || null,
       isForward: true,
-      originalMessageId
+      originalMessageId,
+      attachmentsCount: allAttachments.length
     });
 
     return res.json({
@@ -822,20 +1001,37 @@ router.post('/api/emailforward', async (req, res) => {
       messageId: info.messageId,
       trackingId,
       recipients: { to, cc: cc || null, bcc: bcc || null },
-      contentUsed: { html: !!emailHtml, text: !!emailText, trackingEnabled: !!trackLinks },
+      contentUsed: {
+        html: !!emailHtml,
+        text: !!emailText,
+        trackingEnabled: !!trackLinks
+      },
       trackingPayload: trackingPayload || null,
-      senderName: sender_name || null
+      senderName: sender_name || null,
+      attachmentsCount: allAttachments.length
     });
 
   } catch (err) {
-    console.error('Email Forward Error:', err);
-    return res.status(500).json({ success: false, error: err.message });
+    console.error('❌ Email Forward Error:', err);
+
+    // Clean up IMAP connection if still open
+    if (client) {
+      try {
+        await client.close();
+      } catch (closeError) {
+        console.error('Error closing IMAP client:', closeError);
+      }
+    }
+
+    return res.status(500).json({
+      success: false,
+      error: err.message,
+      details: 'Failed to forward email. Please check the original message ID and try again.'
+    });
   }
 });
 
 // 3️⃣ Inbox Fetch with Read/Unread
-
-
 router.post('/api/fetchinbox', async (req, res) => {
   try {
     const { token, email, page = 1, limit = 20 } = req.body;
@@ -2687,229 +2883,6 @@ router.post('/api/fetchcalendar', async (req, res) => {
   }
 });
 
-// 3️⃣.1️⃣ Sent Items Fetch with Mailbox Autodetection
-// router.post('/api/fetchsent', async (req, res) => {
-//   let client;
-//   try {
-//     const { token, email, page = 1, limit = 20 } = req.body;
-//     if (!token || !email) {
-//       return res.status(400).json({ success: false, error: 'Missing token or email' });
-//     }
-
-//     const smtp = await SMTPAuth.findOne({ email, token });
-//     if (!smtp) {
-//       return res.status(403).json({ success: false, error: 'Invalid token or sender email' });
-//     }
-
-//     // Decrypt the password
-//     let decryptedPass;
-//     try {
-//       decryptedPass = decrypt(smtp.pass);
-//     } catch (decryptError) {
-//       console.error('Password decryption failed:', decryptError);
-//       return res.status(500).json({ success: false, error: 'Failed to decrypt stored credentials' });
-//     }
-
-//     client = new ImapFlow({
-//       host: smtp.host.replace('smtp.', 'imap.'), // Use IMAP host, not SMTP
-//       port: 993,
-//       secure: true,
-//       auth: { user: email, pass: decryptedPass },
-//       logger: false,
-//       timeout: 30000 // Add timeout to prevent hanging
-//     });
-
-//     await client.connect();
-
-//     // Try common Sent mailbox names across providers
-//     const candidateMailboxes = [
-//       '[Gmail]/Sent Mail', // Gmail
-//       'Sent Mail',
-//       'Sent Items',        // Outlook / Microsoft 365
-//       'Sent',              // cPanel/self-hosted
-//       'Sent Messages',
-//       'INBOX.Sent'
-//     ];
-
-//     let selectedBox = null;
-//     for (const box of candidateMailboxes) {
-//       try {
-//         const lock = await client.mailboxOpen(box);
-//         if (lock && typeof lock.exists === 'number') {
-//           selectedBox = { name: box, lock };
-//           console.log(`Found sent mailbox: ${box} with ${lock.exists} messages`);
-//           break;
-//         }
-//       } catch (error) {
-//         console.log(`Mailbox ${box} not found: ${error.message}`);
-//         // continue trying next mailbox
-//       }
-//     }
-
-//     if (!selectedBox) {
-//       // As a last resort, list mailboxes and try first containing 'Sent'
-//       try {
-//         for await (let mailbox of client.list()) {
-//           if (/sent/i.test(mailbox.name)) {
-//             try {
-//               const lock = await client.mailboxOpen(mailbox.name);
-//               selectedBox = { name: mailbox.name, lock };
-//               console.log(`Found sent mailbox via listing: ${mailbox.name} with ${lock.exists} messages`);
-//               break;
-//             } catch (error) {
-//               console.log(`Mailbox ${mailbox.name} failed: ${error.message}`);
-//             }
-//           }
-//         }
-//       } catch (error) {
-//         console.log('Mailbox listing failed:', error.message);
-//       }
-//     }
-
-//     if (!selectedBox) {
-//       await client.logout();
-//       return res.json({
-//         success: true,
-//         mailbox: null,
-//         sent: [],
-//         pagination: {
-//           currentPage: 1,
-//           totalPages: 0,
-//           totalMessages: 0,
-//           limit: Math.min(limit, 50),
-//           hasNextPage: false,
-//           hasPrevPage: false
-//         },
-//         message: 'No sent mailbox found or sent mailbox is empty'
-//       });
-//     }
-
-//     const totalMessages = selectedBox.lock.exists;
-//     const maxLimit = Math.min(limit, 50);
-//     const currentPage = Math.max(parseInt(page), 1);
-
-//     // Fix: Handle empty mailbox case
-//     if (totalMessages === 0) {
-//       await client.logout();
-//       return res.json({
-//         success: true,
-//         mailbox: selectedBox.name,
-//         sent: [],
-//         pagination: {
-//           currentPage: 1,
-//           totalPages: 0,
-//           totalMessages: 0,
-//           limit: maxLimit,
-//           hasNextPage: false,
-//           hasPrevPage: false
-//         }
-//       });
-//     }
-
-//     const totalPages = Math.ceil(totalMessages / maxLimit);
-
-//     // Fix: Calculate sequence numbers correctly (IMAP is 1-based)
-//     const startSeq = Math.max(totalMessages - (currentPage * maxLimit) + 1, 1);
-//     const endSeq = Math.max(totalMessages - ((currentPage - 1) * maxLimit), 1);
-
-//     console.log(`Fetching sent messages ${startSeq}:${endSeq} (Page ${currentPage}, Total: ${totalMessages})`);
-
-//     const messages = [];
-
-//     if (startSeq <= endSeq && startSeq >= 1 && endSeq >= 1) {
-//       try {
-//         for await (let msg of client.fetch(`${startSeq}:${endSeq}`, {
-//           envelope: true,
-//           uid: true,
-//           flags: true,
-//           source: true,
-//           bodyStructure: true
-//         })) {
-//           try {
-//             const parsed = await simpleParser(msg.source);
-
-//             // Clean HTML content
-//             let cleanHtml = parsed.html || '';
-//             if (cleanHtml) {
-//               cleanHtml = cleanHtml.replace(/https:\/\/tracking\.inflection\.io\/[^"]+/g, (url) => {
-//                 try {
-//                   const urlObj = new URL(url);
-//                   const redirect = urlObj.searchParams.get('redirect');
-//                   return redirect || url;
-//                 } catch {
-//                   return url;
-//                 }
-//               });
-
-//               cleanHtml = cleanHtml.replace(/<span[^>]*id="inflection-email-preheader"[^>]*>.*?<\/span>/gis, '');
-//             }
-
-//             // Extract clean text
-//             let cleanText = parsed.text || '';
-//             if (cleanText) {
-//               cleanText = cleanText.replace(/https:\/\/tracking\.inflection\.io\/[^\s]+/g, '');
-//             }
-
-//             messages.push({
-//               subject: msg.envelope.subject || '(No Subject)',
-//               from: msg.envelope.from?.map(f => `${f.name || ''} <${f.address}>`).join(', ') || email,
-//               date: msg.envelope.date || new Date(),
-//               uid: msg.uid,
-//               seq: msg.seq,
-//               read: Array.isArray(msg.flags) ? msg.flags.includes('\\Seen') : false,
-//               text: cleanText,
-//               html: cleanHtml,
-//               to: msg.envelope.to?.map(t => `${t.name || ''} <${t.address}>`).join(', ') || '',
-//               cc: msg.envelope.cc?.map(c => `${c.name || ''} <${c.address}>`).join(', ') || '',
-//               messageId: msg.envelope.messageId
-//             });
-//           } catch (parseError) {
-//             console.error('Error parsing message:', parseError);
-//             // Continue with next message even if one fails
-//           }
-//         }
-//       } catch (fetchError) {
-//         console.error('Fetch error:', fetchError);
-//         // Return empty messages but don't fail the entire request
-//       }
-//     }
-
-//     await client.logout();
-
-//     const sortedMessages = messages.reverse();
-
-//     return res.json({
-//       success: true,
-//       mailbox: selectedBox.name,
-//       sent: sortedMessages,
-//       pagination: {
-//         currentPage,
-//         totalPages,
-//         totalMessages,
-//         limit: maxLimit,
-//         hasNextPage: currentPage < totalPages,
-//         hasPrevPage: currentPage > 1
-//       }
-//     });
-//   } catch (err) {
-//     console.error('Sent Fetch Error:', err);
-
-//     // Ensure client is properly closed even on error
-//     if (client) {
-//       try {
-//         await client.logout();
-//       } catch (logoutError) {
-//         console.error('Error during logout:', logoutError);
-//       }
-//     }
-
-//     return res.status(500).json({ 
-//       success: false, 
-//       error: err.message,
-//       details: 'Failed to fetch sent emails. Please check your credentials and try again.'
-//     });
-//   }
-// });
 
 router.post('/api/fetchsent', async (req, res) => {
   let client;
