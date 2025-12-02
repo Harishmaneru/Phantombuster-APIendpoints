@@ -1195,17 +1195,22 @@ router.get('/api/email/attachment', async (req, res) => {
     await client.mailboxOpen('INBOX');
 
     // Fetch message by UID directly (more efficient)
-    const fetchResult = client.fetch(parseInt(uid), {
-      source: true
-    }, { uid: true });
+    console.log(`[Attachment] Fetching UID: ${uid}`);
+    const fetchResult = client.fetch(String(uid), {
+      source: true,
+      uid: true
+    });
 
     let foundAttachment = null;
 
     for await (let msg of fetchResult) {
+      console.log(`[Attachment] Processing message UID: ${msg.uid}`);
       const parsed = await simpleParser(msg.source);
 
       if (parsed.attachments && Array.isArray(parsed.attachments)) {
         const decodedFilename = decodeURIComponent(filename);
+        console.log(`[Attachment] Looking for filename: ${decodedFilename}`);
+
         foundAttachment = parsed.attachments.find(att =>
           att.filename === decodedFilename || att.filename === filename
         );
@@ -1219,6 +1224,10 @@ router.get('/api/email/attachment', async (req, res) => {
               (att.contentId && att.contentId.includes(contentId.replace(/[<>]/g, '')))
             );
           }
+        }
+
+        if (foundAttachment) {
+          console.log(`[Attachment] Found attachment: ${foundAttachment.filename}, Size: ${foundAttachment.size}`);
         }
         break;
       }
