@@ -1069,7 +1069,7 @@ router.post('/api/fetchinbox', async (req, res) => {
             // Generate unique identifier for the attachment
             attachmentId: `${msg.uid}-${att.filename || Date.now()}`,
             // URL to download the attachment
-            url: `${baseUrl}/api/email/attachment?email=${encodeURIComponent(email)}&token=${encodeURIComponent(token)}&uid=${msg.uid}&filename=${encodeURIComponent(att.filename || 'unnamed_attachment')}&checksum=${encodeURIComponent(att.checksum || '')}`
+            url: `${baseUrl}/api/email/attachment?email=${encodeURIComponent(email)}&token=${encodeURIComponent(token)}&uid=${msg.uid}&messageId=${encodeURIComponent(msg.envelope.messageId)}&filename=${encodeURIComponent(att.filename || 'unnamed_attachment')}&checksum=${encodeURIComponent(att.checksum || '')}`
           }));
         }
         // Method 2: Alternative - check for attachments in email structure
@@ -1196,10 +1196,34 @@ router.get('/api/email/attachment', async (req, res) => {
 
     // Fetch message by UID directly (more efficient)
     console.log(`[Attachment] Fetching UID: ${uid}`);
-    const fetchResult = client.fetch(String(uid), {
+
+    // Try to verify UID existence first
+    const searchResult = await client.search({ uid: uid });
+    console.log(`[Attachment] Search for UID ${uid} returned:`, searchResult);
+
+    let fetchResult = client.fetch(String(uid), {
       source: true,
       uid: true
     });
+
+    // Fallback: If UID search failed or we want to be sure, try Message-ID if provided
+    const messageId = req.query.messageId;
+    if ((!searchResult || searchResult.length === 0) && messageId) {
+      console.log(`[Attachment] UID not found, falling back to Message-ID: ${messageId}`);
+      const messageUids = await client.search({
+        header: { 'Message-ID': messageId }
+      });
+
+      if (messageUids && messageUids.length > 0) {
+        console.log(`[Attachment] Found new UID via Message-ID: ${messageUids[0]}`);
+        fetchResult = client.fetch(messageUids[0], {
+          source: true,
+          uid: true
+        });
+      } else {
+        console.log(`[Attachment] Message-ID search also failed`);
+      }
+    }
 
     let foundAttachment = null;
     let messageCount = 0;
