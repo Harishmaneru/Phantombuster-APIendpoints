@@ -593,6 +593,7 @@ router.post('/api/emailsend', async (req, res) => {
 
 //  Forward Email
 // Fixed Email Forward API - Gmail-style forwarding
+// Fixed Email Forward API - Gmail-style forwarding
 router.post('/api/emailforward', async (req, res) => {
   let imapClient;
 
@@ -604,14 +605,16 @@ router.post('/api/emailforward', async (req, res) => {
       cc,
       bcc,
       originalMessageId, // Message-ID of the email to forward
-      additionalHtml = '',
-      additionalText = '',
+      forwardMessage = '', // Brief message to add at top (max 1000 chars)
       sender_name,
       includeAttachments = true,
       addForwardPrefix = true
     } = req.body;
 
     console.log('📧 Forward API called:', { from, to, originalMessageId });
+
+    // Limit forwardMessage to prevent payload issues (1000 chars max)
+    const safeForwardMessage = forwardMessage ? forwardMessage.substring(0, 1000) : '';
 
     // Validation
     if (!token || !from || !to || !originalMessageId) {
@@ -763,10 +766,16 @@ router.post('/api/emailforward', async (req, res) => {
             font-size: 12px;
             margin: 20px 0 10px 0;
           }
+          .forward-message {
+            margin-bottom: 20px;
+            padding: 10px;
+            background-color: #f9f9f9;
+            border-left: 3px solid #4285f4;
+          }
         </style>
       </head>
       <body>
-        ${additionalHtml ? `<div>${additionalHtml}</div><br>` : ''}
+        ${safeForwardMessage ? `<div class="forward-message">${safeForwardMessage.replace(/\n/g, '<br>')}</div>` : ''}
         
         <div class="gmail-attr">
           ---------- Forwarded message ---------<br>
@@ -785,7 +794,7 @@ router.post('/api/emailforward', async (req, res) => {
 
     // Build plain text content
     const forwardedText = `
-${additionalText ? `${additionalText}\n\n` : ''}
+${safeForwardMessage ? `${safeForwardMessage}\n\n` : ''}
 ---------- Forwarded message ---------
 From: ${forwardedFrom}
 Date: ${forwardedDate}
