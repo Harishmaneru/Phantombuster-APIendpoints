@@ -591,207 +591,169 @@ router.post('/api/emailsend', async (req, res) => {
   }
 });
 
-// 2️⃣.5️⃣ Forward Email
-// 2️⃣.5️⃣ Forward Email - SIMPLE SEND ONLY VERSION
+//  Forward Email
 router.post('/api/emailforward', async (req, res) => {
   try {
-    const {
-      token,
-      from,
-      to,
-      cc,
-      bcc,
-      originalMessageId,
-      additionalHtml = '',
-      additionalText = '',
-      trackLinks = false,
-      sender_name,
-      trackingPayload,
-      attachments = [],
-      originalSubject = '', // Optional: Pass original subject if known
-      originalFrom = '',    // Optional: Pass original from if known
-      originalDate = ''     // Optional: Pass original date if known
-    } = req.body;
+    console.log('📧 Forward API called');
 
-    console.log(`📧 Forward Email - Simple Send: ${from} -> ${to}`);
+    // Minimal validation - parse manually to avoid body-parser issues
+    let requestBody = '';
 
-    // Validate required fields
-    if (!token || !from || !to || !originalMessageId) {
-      return res.status(400).json({
-        success: false,
-        error: 'Missing required fields: token, from, to, originalMessageId'
-      });
-    }
-
-    // Get SMTP credentials
-    const smtp = await SMTPAuth.findOne({ email: from, token });
-    if (!smtp) {
-      return res.status(403).json({
-        success: false,
-        error: 'Invalid token or sender email'
-      });
-    }
-
-    const decryptedPass = decrypt(smtp.pass);
-
-    // Create subject
-    const subject = originalSubject
-      ? `Fwd: ${originalSubject}`
-      : `Fwd: Message ${originalMessageId.substring(0, 20)}...`;
-
-    // Generate tracking ID
-    const trackingId = crypto.randomBytes(16).toString('hex');
-    const baseUrl = process.env.BASE_URL || 'https://videoresponse.onepgr.com:3001';
-
-    // Create email content
-    let emailHtml = additionalHtml || '';
-    let emailText = additionalText || '';
-
-    // Add forward header
-    const forwardHeaderHtml = `
-      <br><br>
-      <div style="border-left: 3px solid #ccc; padding-left: 15px; margin-left: 10px; color: #666;">
-        <p><strong>---------- Forwarded Message ---------</strong></p>
-        ${originalFrom ? `<p><strong>From:</strong> ${originalFrom}</p>` : ''}
-        ${originalDate ? `<p><strong>Date:</strong> ${originalDate}</p>` : ''}
-        ${originalSubject ? `<p><strong>Subject:</strong> ${originalSubject}</p>` : ''}
-        <p><strong>Original Message ID:</strong> ${originalMessageId}</p>
-      </div>
-      <br>
-      <p><em>[This is a forwarded email notification]</em></p>
-    `;
-
-    const forwardHeaderText = `
-    
----------- Forwarded Message ---------
-${originalFrom ? `From: ${originalFrom}` : ''}
-${originalDate ? `Date: ${originalDate}` : ''}
-${originalSubject ? `Subject: ${originalSubject}` : ''}
-Original Message ID: ${originalMessageId}
-
-[This is a forwarded email notification]
-    `;
-
-    emailHtml += forwardHeaderHtml;
-    emailText += forwardHeaderText;
-
-    // Add tracking if enabled
-    if (emailHtml && trackLinks) {
-      const trackingPixelUrl = `${baseUrl}/api/track/open/${trackingId}`;
-      emailHtml += `<img src="${trackingPixelUrl}" width="1" height="1" style="display:none;border:0;" alt=""/>\n`;
-
-      // Replace links with tracking links
-      emailHtml = emailHtml.replace(/href=["'](.*?)["']/g, (match, url) => {
-        if (url.startsWith('http') && !url.includes(baseUrl) && !url.includes('mailto:')) {
-          const encodedUrl = encodeURIComponent(url);
-          return `href="${baseUrl}/api/track/click/${trackingId}?url=${encodedUrl}"`;
-        }
-        return match;
-      });
-    }
-
-    // Create transporter
-    const transporter = nodemailer.createTransport({
-      host: smtp.host,
-      port: smtp.port,
-      secure: smtp.port === 465,
-      auth: { user: from, pass: decryptedPass },
-      tls: { rejectUnauthorized: false },
-      connectionTimeout: 10000
+    // Read request body as string
+    req.on('data', chunk => {
+      requestBody += chunk.toString();
+      // If body gets too large, stop reading
+      if (requestBody.length > 1024 * 1024) { // 1MB max for request
+        req.destroy();
+        return res.status(413).json({
+          success: false,
+          error: 'Request too large'
+        });
+      }
     });
 
-    // Verify connection
-    try {
-      await transporter.verify();
-      console.log('✅ SMTP connection verified');
-    } catch (verifyError) {
-      console.error('❌ SMTP verification failed:', verifyError.message);
+    req.on('end', async () => {
+      try {
+        // Parse JSON manually
+        const body = JSON.parse(requestBody);
+
+        const {
+          token,
+          from,
+          to,
+          originalMessageId,
+          additionalHtml = '',
+          additionalText = '',
+          sender_name,
+          attachments = []
+        } = body;
+
+        console.log(`Forward request: ${from} -> ${to}, MessageID: ${originalMessageId}`);
+
+        // Basic validation
+        if (!token || !from || !to || !originalMessageId) {
+          return res.status(400).json({
+            success: false,
+            error: 'Missing required fields'
+          });
+        }
+
+        // Get SMTP config
+        const smtp = await SMTPAuth.findOne({ email: from, token });
+        if (!smtp) {
+          return res.status(403).json({
+            success: false,
+            error: 'Invalid credentials'
+          });
+        }
+
+        const decryptedPass = decrypt(smtp.pass);
+
+        // Create a simple forward email (NO FETCHING ORIGINAL)
+        const subject = `Fwd: Email ${originalMessageId.substring(0, 20)}...`;
+        const trackingId = crypto.randomBytes(8).toString('hex');
+
+        const emailHtml = `
+          <!DOCTYPE html>
+          <html>
+          <head>
+            <meta charset="utf-8">
+            <style>
+              body { font-family: Arial, sans-serif; line-height: 1.6; color: #333; }
+              .forward-header { 
+                border-left: 3px solid #1a73e8; 
+                padding-left: 15px; 
+                margin: 20px 0;
+                color: #5f6368;
+                font-size: 14px;
+              }
+            </style>
+          </head>
+          <body>
+            ${additionalHtml || '<p>Forwarded email:</p>'}
+            
+            <div class="forward-header">
+              <div style="font-weight: bold; margin-bottom: 8px;">
+                ---------- Forwarded message ---------
+              </div>
+              <div><strong>Original Message ID:</strong> ${originalMessageId}</div>
+              <div><strong>Forwarded by:</strong> ${sender_name || from}</div>
+              <div><strong>Forwarded on:</strong> ${new Date().toLocaleString()}</div>
+            </div>
+            
+            <p style="color: #666; font-style: italic; margin-top: 20px;">
+              <em>This is a forward notification. The original email content was not included.</em>
+            </p>
+          </body>
+          </html>
+        `;
+
+        const emailText = `
+          ${additionalText || 'Forwarded email:'}
+          
+          ---------- Forwarded message ---------
+          Original Message ID: ${originalMessageId}
+          Forwarded by: ${sender_name || from}
+          Forwarded on: ${new Date().toLocaleString()}
+          
+          This is a forward notification. The original email content was not included.
+        `;
+
+        // Send email immediately
+        const transporter = nodemailer.createTransport({
+          host: smtp.host,
+          port: smtp.port,
+          secure: smtp.port === 465,
+          auth: { user: from, pass: decryptedPass },
+          tls: { rejectUnauthorized: false }
+        });
+
+        const info = await transporter.sendMail({
+          from: sender_name ? `${sender_name} <${from}>` : from,
+          to: to,
+          subject: subject,
+          html: emailHtml,
+          text: emailText,
+          messageId: `<forward-${Date.now()}@${from.split('@')[1]}>`,
+          headers: {
+            'X-Forwarded-Message-ID': originalMessageId,
+            'X-Forwarded-By': from
+          },
+          attachments: attachments.slice(0, 5) // Limit to 5 attachments
+        });
+
+        console.log(`✅ Forward email sent: ${info.messageId}`);
+
+        // Return success immediately
+        return res.json({
+          success: true,
+          message: 'Forward notification sent',
+          messageId: info.messageId,
+          timestamp: new Date().toISOString()
+        });
+
+      } catch (parseError) {
+        console.error('Request parsing error:', parseError);
+        return res.status(400).json({
+          success: false,
+          error: 'Invalid JSON in request body'
+        });
+      }
+    });
+
+    req.on('error', (error) => {
+      console.error('Request error:', error);
       return res.status(500).json({
         success: false,
-        error: `SMTP connection failed: ${verifyError.message}`
+        error: 'Request processing error'
       });
-    }
-
-    // Prepare email options
-    const fromField = sender_name ? `${sender_name} <${from}>` : from;
-    const encodedSubject = encodeSubjectForEmail(subject);
-
-    const emailOptions = {
-      from: fromField,
-      to,
-      subject: encodedSubject,
-      html: emailHtml,
-      text: emailText,
-      messageId: `<${trackingId}@${from.split('@')[1]}>`,
-      headers: {
-        'X-Tracking-ID': trackingId,
-        'In-Reply-To': originalMessageId,
-        'References': originalMessageId
-      }
-    };
-
-    // Add optional fields
-    if (cc) emailOptions.cc = cc;
-    if (bcc) emailOptions.bcc = bcc;
-    if (attachments && attachments.length > 0) {
-      emailOptions.attachments = attachments;
-    }
-
-    // Send email
-    console.log(`📤 Sending forward email...`);
-    const info = await transporter.sendMail(emailOptions);
-    console.log(`✅ Email sent successfully: ${info.messageId}`);
-
-    // Save tracking record
-    const trackingRecord = new EmailTracking({
-      messageId: trackingId,
-      originalMessageId: info.messageId,
-      fromEmail: from,
-      toEmail: to,
-      subject: subject,
-      webhookUrl: 'https://meet.onepgr.com/session/smatpTracking',
-      emailContent: {
-        html: emailHtml,
-        text: emailText
-      },
-      trackingPayload: trackingPayload || null
-    });
-
-    await trackingRecord.save();
-
-    // Send success response immediately
-    return res.json({
-      success: true,
-      message: 'Email forwarded successfully',
-      messageId: info.messageId,
-      trackingId: trackingId,
-      subject: subject,
-      timestamp: new Date().toISOString(),
-      attachmentsCount: attachments.length || 0
     });
 
   } catch (err) {
-    console.error('❌ Forward Email Error:', err.message);
-
-    // Determine error type for better response
-    let statusCode = 500;
-    let errorMessage = err.message;
-
-    if (err.code === 'EAUTH') {
-      statusCode = 401;
-      errorMessage = 'Authentication failed - check your email credentials';
-    } else if (err.code === 'ECONNECTION') {
-      statusCode = 503;
-      errorMessage = 'Cannot connect to email server';
-    } else if (err.code === 'EENVELOPE') {
-      statusCode = 400;
-      errorMessage = 'Invalid email address';
-    }
-
-    return res.status(statusCode).json({
+    console.error('Unexpected error:', err);
+    return res.status(500).json({
       success: false,
-      error: errorMessage,
-      code: err.code
+      error: 'Server error'
     });
   }
 });
