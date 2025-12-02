@@ -592,9 +592,10 @@ router.post('/api/emailsend', async (req, res) => {
 });
 
 // 2️⃣.5️⃣ Forward Email
-// 2️⃣.5️⃣ Forward Email - Fixed Version
+// 2️⃣.5️⃣ Forward Email - Fixed with timeout handling
 router.post('/api/emailforward', async (req, res) => {
   let client = null;
+  let parseTimeout = null;
 
   try {
     const {
@@ -626,8 +627,8 @@ router.post('/api/emailforward', async (req, res) => {
       });
     }
 
-    // Validate and sanitize originalMessageId
-    const cleanMessageId = originalMessageId.replace(/[<>]/g, '');
+    // Clean and prepare message ID
+    const cleanMessageId = originalMessageId.replace(/[<>]/g, '').trim();
 
     const smtp = await SMTPAuth.findOne({ email: from, token });
     if (!smtp) {
@@ -655,8 +656,6 @@ router.post('/api/emailforward', async (req, res) => {
       };
 
       if (hostMap[smtpHost]) return hostMap[smtpHost];
-
-      // Heuristic fallback
       if (smtpHost.startsWith('smtp.')) {
         return smtpHost.replace('smtp.', 'imap.');
       }
@@ -664,7 +663,7 @@ router.post('/api/emailforward', async (req, res) => {
     }
 
     const imapHost = getImapHost(smtp.host);
-    console.log(`🔍 Attempting IMAP connection to: ${imapHost} for user ${from}`);
+    console.log(`🔍 IMAP to: ${imapHost} for ${from}`);
 
     client = new ImapFlow({
       host: imapHost,
@@ -672,49 +671,48 @@ router.post('/api/emailforward', async (req, res) => {
       secure: true,
       auth: { user: from, pass: decryptedPass },
       logger: false,
-      timeout: 30000,
-      tls: { rejectUnauthorized: false }
+      timeout: 20000, // Reduced timeout
     });
 
     try {
       await client.connect();
-      console.log('✅ IMAP connected successfully');
+      console.log('✅ IMAP connected');
 
-      // Try common mailbox names
-      const mailboxes = ['INBOX', 'Sent', 'Sent Items', '[Gmail]/Sent Mail'];
-      let mailboxFound = false;
-
-      for (const mailboxName of mailboxes) {
+      // Try to open mailbox with timeout
+      try {
+        await client.mailboxOpen('INBOX');
+        console.log('✅ Opened INBOX');
+      } catch (mailboxError) {
+        console.log('⚠️ INBOX failed, trying Sent:', mailboxError.message);
         try {
-          await client.mailboxOpen(mailboxName);
-          mailboxFound = true;
-          console.log(`✅ Opened mailbox: ${mailboxName}`);
-          break;
-        } catch (e) {
-          console.log(`⚠️ Could not open mailbox ${mailboxName}: ${e.message}`);
+          await client.mailboxOpen('Sent');
+          console.log('✅ Opened Sent');
+        } catch (sentError) {
+          try {
+            await client.mailboxOpen('Sent Items');
+            console.log('✅ Opened Sent Items');
+          } catch (error) {
+            throw new Error('Could not open any mailbox');
+          }
         }
       }
 
-      if (!mailboxFound) {
-        await client.mailboxOpen('INBOX');
-      }
+      // Search for message
+      let messageUids = [];
 
-      // Search for the message with multiple header patterns
+      // Try different patterns
       const searchPatterns = [
         { header: { 'Message-ID': cleanMessageId } },
         { header: { 'Message-ID': `<${cleanMessageId}>` } },
-        { header: { 'Message-ID': originalMessageId } },
-        { header: { 'Message-ID': `<${originalMessageId}>` } }
+        { header: { 'Message-ID': originalMessageId.trim() } }
       ];
-
-      let messageUids = [];
 
       for (const pattern of searchPatterns) {
         try {
           const uids = await client.search(pattern);
           if (uids && uids.length > 0) {
             messageUids = uids;
-            console.log(`✅ Found message with pattern: ${JSON.stringify(pattern)}`);
+            console.log(`✅ Found ${uids.length} message(s) with pattern`);
             break;
           }
         } catch (searchError) {
@@ -723,85 +721,122 @@ router.post('/api/emailforward', async (req, res) => {
       }
 
       if (messageUids.length === 0) {
-        console.log(`❌ No message found with Message-ID: ${cleanMessageId}`);
-        // Try searching by subject or other criteria as fallback
-        // This would require additional logic
-        throw new Error(`Original email not found with Message-ID: ${cleanMessageId}`);
+        throw new Error(`No message found with Message-ID: ${cleanMessageId}`);
       }
 
-      // Fetch the most recent one if duplicates exist
+      // Fetch message with timeout protection
       const uid = messageUids[messageUids.length - 1];
-      console.log(`📨 Fetching message with UID: ${uid}`);
+      console.log(`📨 Fetching UID: ${uid}`);
 
-      for await (let msg of client.fetch(uid, {
-        byUid: true,
-        envelope: true,
-        source: true,
-        bodyStructure: true
-      })) {
-        const parsed = await simpleParser(msg.source);
+      // Create a promise that will timeout
+      const parsePromise = new Promise(async (resolve, reject) => {
+        try {
+          for await (let msg of client.fetch(uid, {
+            byUid: true,
+            envelope: true,
+            source: true,
+            bodyStructure: true
+          })) {
+            console.log(`📝 Subject: "${msg.envelope.subject}"`);
 
-        console.log(`📝 Original email subject: "${msg.envelope.subject}"`);
+            // Parse with timeout protection
+            const parseWithTimeout = new Promise((resolveParse, rejectParse) => {
+              parseTimeout = setTimeout(() => {
+                rejectParse(new Error('Email parsing timeout after 15 seconds'));
+              }, 15000);
 
-        // Clean HTML content
-        let cleanHtml = parsed.html || '';
-        if (cleanHtml) {
-          cleanHtml = cleanHtml.replace(/https:\/\/tracking\.inflection\.io\/[^"']+/g, (url) => {
-            try {
-              return new URL(url).searchParams.get('redirect') || url;
-            } catch {
-              return url;
+              simpleParser(msg.source)
+                .then(parsed => {
+                  clearTimeout(parseTimeout);
+                  resolveParse(parsed);
+                })
+                .catch(error => {
+                  clearTimeout(parseTimeout);
+                  rejectParse(error);
+                });
+            });
+
+            const parsed = await parseWithTimeout;
+
+            // Extract basic info without heavy processing
+            let cleanHtml = parsed.html || '';
+            let cleanText = parsed.text || '';
+
+            // Quick clean - don't do complex regex on large content
+            if (cleanHtml && cleanHtml.length > 100000) { // If very large HTML
+              console.log(`⚠️ Large HTML detected (${cleanHtml.length} chars), skipping complex cleaning`);
+              // Just do basic cleaning
+              cleanHtml = cleanHtml.replace(/<img[^>]*tracking[^>]*>/gi, '');
+            } else {
+              // Do normal cleaning for smaller emails
+              cleanHtml = cleanHtml.replace(/https:\/\/tracking\.inflection\.io\/[^"']+/g, (url) => {
+                try {
+                  return new URL(url).searchParams.get('redirect') || url;
+                } catch {
+                  return url;
+                }
+              });
+              cleanHtml = cleanHtml.replace(/<span[^>]*id="inflection-email-preheader"[^>]*>.*?<\/span>/gis, '');
             }
-          });
-          cleanHtml = cleanHtml.replace(/<span[^>]*id="inflection-email-preheader"[^>]*>.*?<\/span>/gis, '');
-        }
 
-        // Extract clean text
-        let cleanText = parsed.text || '';
-        if (cleanText) {
-          cleanText = cleanText.replace(/https:\/\/tracking\.inflection\.io\/[^\s]+/g, '');
-        }
+            if (cleanText) {
+              cleanText = cleanText.replace(/https:\/\/tracking\.inflection\.io\/[^\s]+/g, '');
+            }
 
-        // Extract original attachments if they exist
-        if (parsed.attachments && parsed.attachments.length > 0) {
-          console.log(`📎 Found ${parsed.attachments.length} attachments in original email`);
-          originalAttachments = parsed.attachments.map(att => ({
-            filename: att.filename || `attachment_${Date.now()}.${att.contentType.split('/')[1] || 'bin'}`,
-            content: att.content,
-            contentType: att.contentType,
-            encoding: 'base64',
-            cid: att.cid
-          }));
-        }
+            // Extract attachments (simplified)
+            if (parsed.attachments && parsed.attachments.length > 0) {
+              console.log(`📎 Found ${parsed.attachments.length} attachments`);
+              // Only take first few attachments to avoid memory issues
+              originalAttachments = parsed.attachments.slice(0, 5).map(att => ({
+                filename: att.filename || `attachment_${Date.now()}.dat`,
+                content: att.content,
+                contentType: att.contentType || 'application/octet-stream',
+                encoding: 'base64'
+              }));
+            }
 
-        originalEmail = {
-          subject: msg.envelope.subject,
-          from: msg.envelope.from.map(f => ({
-            name: f.name || '',
-            address: f.address
-          })),
-          to: msg.envelope.to?.map(t => ({
-            name: t.name || '',
-            address: t.address
-          })) || [],
-          date: msg.envelope.date,
-          html: cleanHtml,
-          text: cleanText,
-          attachments: originalAttachments
-        };
-        break;
-      }
+            originalEmail = {
+              subject: msg.envelope.subject,
+              from: msg.envelope.from?.map(f => ({
+                name: f.name || '',
+                address: f.address
+              })) || [],
+              to: msg.envelope.to?.map(t => ({
+                name: t.name || '',
+                address: t.address
+              })) || [],
+              date: msg.envelope.date,
+              html: cleanHtml.substring(0, 1000000), // Limit HTML size
+              text: cleanText.substring(0, 100000), // Limit text size
+              attachments: originalAttachments
+            };
+
+            resolve(originalEmail);
+            break;
+          }
+        } catch (error) {
+          reject(error);
+        }
+      });
+
+      // Wait for parsing with overall timeout
+      originalEmail = await Promise.race([
+        parsePromise,
+        new Promise((_, reject) =>
+          setTimeout(() => reject(new Error('Overall parsing timeout')), 30000)
+        )
+      ]);
 
       await client.logout();
       client = null;
 
     } catch (imapError) {
-      console.error('IMAP Fetch Error:', imapError);
+      console.error('❌ IMAP Error:', imapError.message);
       if (client) {
         try {
           await client.close();
         } catch (e) {
-          console.error('Error closing IMAP client:', e);
+          console.error('Close error:', e.message);
         }
       }
       return res.status(500).json({
@@ -817,121 +852,81 @@ router.post('/api/emailforward', async (req, res) => {
       });
     }
 
-    // --- Construct Forwarded Content ---
-    const subject = `Fwd: ${originalEmail.subject}`;
+    console.log(`✅ Email fetched successfully, preparing forward...`);
 
-    // Format date nicely
+    // --- Construct Forwarded Content ---
+    const subject = `Fwd: ${originalEmail.subject || 'No Subject'}`;
+
+    // Format sender info safely
+    const fromString = originalEmail.from && originalEmail.from.length > 0
+      ? originalEmail.from.map(f => f.name ? `${f.name} <${f.address}>` : f.address).join(', ')
+      : 'Unknown Sender';
+
+    const toString = originalEmail.to && originalEmail.to.length > 0
+      ? originalEmail.to.map(t => t.name ? `${t.name} <${t.address}>` : t.address).join(', ')
+      : 'Unknown Recipient';
+
     const formattedDate = originalEmail.date
       ? new Date(originalEmail.date).toLocaleString('en-US', {
         weekday: 'short',
         month: 'short',
         day: 'numeric',
-        year: 'numeric',
-        hour: 'numeric',
-        minute: 'numeric',
-        hour12: true
+        year: 'numeric'
       })
       : 'Date not available';
 
-    // Format sender info
-    const fromString = originalEmail.from
-      .map(f => f.name ? `${f.name} <${f.address}>` : f.address)
-      .join(', ');
-
-    // Format recipient info
-    const toString = originalEmail.to
-      .map(t => t.name ? `${t.name} <${t.address}>` : t.address)
-      .join(', ');
-
     const forwardHeaderHtml = `
       <br><br>
-      <div style="border-left: 3px solid #ccc; padding-left: 15px; margin-left: 10px; color: #666; font-style: italic;">
-        <p>---------- Forwarded message ---------</p>
+      <div style="border-left: 2px solid #ccc; padding-left: 10px; margin-left: 5px; color: #666;">
+        <p><strong>---------- Forwarded message ---------</strong></p>
         <p><strong>From:</strong> ${fromString}</p>
         <p><strong>Date:</strong> ${formattedDate}</p>
-        <p><strong>Subject:</strong> ${originalEmail.subject}</p>
+        <p><strong>Subject:</strong> ${originalEmail.subject || 'No Subject'}</p>
         <p><strong>To:</strong> ${toString}</p>
       </div>
       <br>
     `;
 
     const forwardHeaderText = `
-
+    
 ---------- Forwarded message ---------
 From: ${fromString}
 Date: ${formattedDate}
-Subject: ${originalEmail.subject}
+Subject: ${originalEmail.subject || 'No Subject'}
 To: ${toString}
 
 `;
 
-    let emailHtml = additionalHtml + forwardHeaderHtml + (originalEmail.html || originalEmail.text || '');
-    let emailText = additionalText + forwardHeaderText + (originalEmail.text || '');
+    // Combine content safely
+    let emailHtml = (additionalHtml || '') + forwardHeaderHtml + (originalEmail.html || '');
+    let emailText = (additionalText || '') + forwardHeaderText + (originalEmail.text || '');
+
+    // Truncate if too long
+    if (emailHtml.length > 1000000) {
+      console.log('⚠️ HTML too long, truncating');
+      emailHtml = emailHtml.substring(0, 1000000) + '... [truncated]';
+    }
 
     // --- Send Forwarded Email ---
+    console.log(`📤 Creating SMTP transporter...`);
     const transporter = nodemailer.createTransport({
       host: smtp.host,
       port: smtp.port,
       secure: smtp.port === 465,
       auth: { user: from, pass: decryptedPass },
-      tls: { rejectUnauthorized: false }
+      tls: { rejectUnauthorized: false },
+      connectionTimeout: 10000,
+      greetingTimeout: 10000
     });
 
     await transporter.verify();
+    console.log('✅ SMTP verified');
 
     const trackingId = crypto.randomBytes(16).toString('hex');
-    const baseUrl = process.env.BASE_URL || 'https://videoresponse.onepgr.com:3001';
-    const trackingPixelUrl = `${baseUrl}/api/track/open/${trackingId}`;
-
-    // Add tracking pixel if HTML exists
-    if (emailHtml) {
-      emailHtml += `<img src="${trackingPixelUrl}" width="1" height="1" style="display:none;border:0;" alt=""/>\n`;
-    }
-
-    // Track links if requested
-    if (emailHtml && trackLinks) {
-      emailHtml = emailHtml.replace(/href=["'](.*?)["']/g, (match, url) => {
-        if (url.startsWith('http') && !url.includes(baseUrl) && !url.includes('mailto:')) {
-          const encodedUrl = encodeURIComponent(url);
-          return `href="${baseUrl}/api/track/click/${trackingId}?url=${encodedUrl}"`;
-        }
-        return match;
-      });
-    }
-
     const fromField = sender_name ? `${sender_name} <${from}>` : from;
     const encodedSubject = encodeSubjectForEmail(subject);
 
-    // Prepare all attachments (original + new)
-    const allAttachments = [...originalAttachments, ...(attachments || [])].map(att => {
-      // Handle different attachment formats
-      if (att.content) {
-        // Already has content (from original email)
-        return {
-          filename: att.filename,
-          content: att.content,
-          contentType: att.contentType,
-          encoding: att.encoding || 'base64',
-          cid: att.cid
-        };
-      } else if (att.path) {
-        // File path
-        return {
-          filename: att.filename,
-          path: att.path
-        };
-      } else if (att.url) {
-        // URL
-        return {
-          filename: att.filename,
-          path: att.url
-        };
-      }
-      return att;
-    });
-
-    console.log(`📎 Total attachments to forward: ${allAttachments.length}`);
-
+    // Prepare email options
     const emailOptions = {
       from: fromField,
       to,
@@ -941,92 +936,70 @@ To: ${toString}
       messageId: `<${trackingId}@${from.split('@')[1]}>`,
       headers: {
         'X-Tracking-ID': trackingId,
-        'References': `<${trackingId}@${from.split('@')[1]}>`,
         'In-Reply-To': originalMessageId
       }
     };
 
     if (cc) emailOptions.cc = cc;
     if (bcc) emailOptions.bcc = bcc;
+
+    // Combine attachments
+    const allAttachments = [...originalAttachments, ...attachments];
     if (allAttachments.length > 0) {
-      emailOptions.attachments = allAttachments;
+      emailOptions.attachments = allAttachments.slice(0, 10); // Limit to 10 attachments
     }
 
-    console.log(`📤 Sending forwarded email...`);
+    console.log(`📤 Sending email...`);
     const info = await transporter.sendMail(emailOptions);
-    console.log(`✅ Forwarded email sent successfully: ${info.messageId}`);
+    console.log(`✅ Email sent: ${info.messageId}`);
 
-    // --- Logging & Tracking ---
-    const webhookUrl = 'https://meet.onepgr.com/session/smatpTracking';
-
+    // Create tracking record
     const trackingRecord = new EmailTracking({
       messageId: trackingId,
       originalMessageId: info.messageId,
       fromEmail: from,
       toEmail: to,
       subject,
-      webhookUrl,
+      webhookUrl: 'https://meet.onepgr.com/session/smatpTracking',
       emailContent: {
-        html: emailHtml,
-        text: emailText
+        html: emailHtml.substring(0, 10000), // Store only first 10k chars
+        text: emailText.substring(0, 5000)
       },
       trackingPayload: trackingPayload || null
     });
 
     await trackingRecord.save();
 
-    await sendWebhookNotification(webhookUrl, {
-      event: 'sent',
-      trackingId,
-      email: to,
-      from,
-      subject,
-      timestamp: new Date(),
-      messageId: info.messageId,
-      recipients: { to, cc: cc || null, bcc: bcc || null },
-      contentUsed: {
-        html: !!emailHtml,
-        text: !!emailText,
-        trackingEnabled: !!trackLinks
-      },
-      trackingPayload: trackingPayload || null,
-      senderName: sender_name || null,
-      isForward: true,
-      originalMessageId,
-      attachmentsCount: allAttachments.length
-    });
-
+    // Send success response immediately
     return res.json({
       success: true,
       messageId: info.messageId,
       trackingId,
       recipients: { to, cc: cc || null, bcc: bcc || null },
-      contentUsed: {
-        html: !!emailHtml,
-        text: !!emailText,
-        trackingEnabled: !!trackLinks
-      },
-      trackingPayload: trackingPayload || null,
-      senderName: sender_name || null,
-      attachmentsCount: allAttachments.length
+      subject: subject,
+      attachmentsCount: allAttachments.length,
+      forwardedFrom: fromString
     });
 
   } catch (err) {
-    console.error('❌ Email Forward Error:', err);
+    console.error('❌ Email Forward Error:', err.message);
 
-    // Clean up IMAP connection if still open
+    // Clean up timeouts
+    if (parseTimeout) clearTimeout(parseTimeout);
+
+    // Clean up IMAP connection
     if (client) {
       try {
         await client.close();
       } catch (closeError) {
-        console.error('Error closing IMAP client:', closeError);
+        console.error('Close error:', closeError.message);
       }
     }
 
     return res.status(500).json({
       success: false,
-      error: err.message,
-      details: 'Failed to forward email. Please check the original message ID and try again.'
+      error: err.message || 'Unknown error',
+      code: err.code
     });
   }
 });
