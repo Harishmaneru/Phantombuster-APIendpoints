@@ -1207,6 +1207,15 @@ router.get('/api/email/attachment', async (req, res) => {
       console.log(`[Attachment] Processing message UID: ${msg.uid}`);
       const parsed = await simpleParser(msg.source);
 
+      console.log(`[Attachment] Parsed subject: ${parsed.subject}`);
+      console.log(`[Attachment] Parsed attachments count: ${parsed.attachments ? parsed.attachments.length : 0}`);
+
+      if (parsed.attachments) {
+        parsed.attachments.forEach((a, i) => {
+          console.log(`[Attachment] #${i}: filename="${a.filename}", checksum="${a.checksum}", contentId="${a.contentId}", size=${a.size}`);
+        });
+      }
+
       if (parsed.attachments && Array.isArray(parsed.attachments)) {
         const decodedFilename = decodeURIComponent(filename);
         console.log(`[Attachment] Looking for filename: ${decodedFilename}`);
