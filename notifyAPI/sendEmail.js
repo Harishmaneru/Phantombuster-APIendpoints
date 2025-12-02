@@ -1286,6 +1286,22 @@ router.get('/api/email/attachment', async (req, res) => {
 
         if (foundAttachment) {
           console.log(`[Attachment] Found attachment: ${foundAttachment.filename}, Size: ${foundAttachment.size}`);
+
+          // Send response immediately
+          res.setHeader('Content-Type', foundAttachment.contentType || 'application/octet-stream');
+          res.setHeader('Content-Disposition', `attachment; filename="${encodeURIComponent(foundAttachment.filename)}"`);
+          res.setHeader('Content-Length', foundAttachment.size);
+
+          if (foundAttachment.content) {
+            res.send(foundAttachment.content);
+            console.log(`[Attachment] Response sent successfully`);
+          } else {
+            res.status(500).json({ success: false, error: 'Attachment content is empty' });
+          }
+
+          // Logout after sending response (don't await strictly if it blocks)
+          try { await client.logout(); } catch (e) { console.error('Logout error:', e); }
+          return;
         }
         break;
       } else {
@@ -1297,20 +1313,7 @@ router.get('/api/email/attachment', async (req, res) => {
 
     await client.logout();
 
-    if (foundAttachment) {
-      // Set appropriate headers
-      res.setHeader('Content-Type', foundAttachment.contentType || 'application/octet-stream');
-      res.setHeader('Content-Disposition', `attachment; filename="${encodeURIComponent(foundAttachment.filename)}"`);
-      res.setHeader('Content-Length', foundAttachment.size);
-
-      // Send the attachment content
-      if (foundAttachment.content) {
-        return res.send(foundAttachment.content);
-      } else {
-        return res.status(500).json({ success: false, error: 'Attachment content is empty' });
-      }
-    }
-
+    // If we get here, attachment was not found
     return res.status(404).json({ success: false, error: 'Attachment not found' });
   } catch (err) {
     console.error('Attachment Fetch Error:', err);
