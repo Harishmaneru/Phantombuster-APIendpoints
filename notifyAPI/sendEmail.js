@@ -1069,7 +1069,7 @@ router.post('/api/fetchinbox', async (req, res) => {
             // Generate unique identifier for the attachment
             attachmentId: `${msg.uid}-${att.filename || Date.now()}`,
             // URL to download the attachment
-            url: `${baseUrl}/api/email/attachment?email=${encodeURIComponent(email)}&token=${encodeURIComponent(token)}&uid=${msg.uid}&filename=${encodeURIComponent(att.filename || 'unnamed_attachment')}`
+            url: `${baseUrl}/api/email/attachment?email=${encodeURIComponent(email)}&token=${encodeURIComponent(token)}&uid=${msg.uid}&filename=${encodeURIComponent(att.filename || 'unnamed_attachment')}&checksum=${encodeURIComponent(att.checksum || '')}`
           }));
         }
         // Method 2: Alternative - check for attachments in email structure
@@ -1210,19 +1210,32 @@ router.get('/api/email/attachment', async (req, res) => {
       if (parsed.attachments && Array.isArray(parsed.attachments)) {
         const decodedFilename = decodeURIComponent(filename);
         console.log(`[Attachment] Looking for filename: ${decodedFilename}`);
+        console.log(`[Attachment] Available attachments:`, parsed.attachments.map(a => a.filename));
 
-        foundAttachment = parsed.attachments.find(att =>
-          att.filename === decodedFilename || att.filename === filename
-        );
+        // 1. Try to match by checksum if provided
+        const checksum = req.query.checksum;
+        if (checksum) {
+          foundAttachment = parsed.attachments.find(att => att.checksum === checksum);
+          if (foundAttachment) console.log(`[Attachment] Matched by checksum`);
+        }
 
+        // 2. Try to match by filename
         if (!foundAttachment) {
-          // Try to find by contentId if filename doesn't match
+          foundAttachment = parsed.attachments.find(att =>
+            att.filename === decodedFilename || att.filename === filename
+          );
+          if (foundAttachment) console.log(`[Attachment] Matched by filename`);
+        }
+
+        // 3. Try to match by contentId
+        if (!foundAttachment) {
           const contentId = req.query.contentId;
           if (contentId) {
             foundAttachment = parsed.attachments.find(att =>
               att.contentId === contentId ||
               (att.contentId && att.contentId.includes(contentId.replace(/[<>]/g, '')))
             );
+            if (foundAttachment) console.log(`[Attachment] Matched by contentId`);
           }
         }
 
@@ -1230,6 +1243,8 @@ router.get('/api/email/attachment', async (req, res) => {
           console.log(`[Attachment] Found attachment: ${foundAttachment.filename}, Size: ${foundAttachment.size}`);
         }
         break;
+      } else {
+        console.log(`[Attachment] No attachments found in parsed message`);
       }
     }
 
