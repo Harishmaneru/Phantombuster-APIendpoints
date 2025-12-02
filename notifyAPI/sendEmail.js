@@ -592,168 +592,327 @@ router.post('/api/emailsend', async (req, res) => {
 });
 
 //  Forward Email
+// Fixed Email Forward API - Gmail-style forwarding
 router.post('/api/emailforward', async (req, res) => {
+  let imapClient;
+
   try {
-    console.log('📧 Forward API called');
+    const {
+      token,
+      from,
+      to,
+      cc,
+      bcc,
+      originalMessageId, // Message-ID of the email to forward
+      additionalHtml = '',
+      additionalText = '',
+      sender_name,
+      includeAttachments = true,
+      addForwardPrefix = true
+    } = req.body;
 
-    // Minimal validation - parse manually to avoid body-parser issues
-    let requestBody = '';
+    console.log('📧 Forward API called:', { from, to, originalMessageId });
 
-    // Read request body as string
-    req.on('data', chunk => {
-      requestBody += chunk.toString();
-      // If body gets too large, stop reading
-      if (requestBody.length > 1024 * 1024) { // 1MB max for request
-        req.destroy();
-        return res.status(413).json({
-          success: false,
-          error: 'Request too large'
-        });
-      }
-    });
-
-    req.on('end', async () => {
-      try {
-        // Parse JSON manually
-        const body = JSON.parse(requestBody);
-
-        const {
-          token,
-          from,
-          to,
-          originalMessageId,
-          additionalHtml = '',
-          additionalText = '',
-          sender_name,
-          attachments = []
-        } = body;
-
-        console.log(`Forward request: ${from} -> ${to}, MessageID: ${originalMessageId}`);
-
-        // Basic validation
-        if (!token || !from || !to || !originalMessageId) {
-          return res.status(400).json({
-            success: false,
-            error: 'Missing required fields'
-          });
-        }
-
-        // Get SMTP config
-        const smtp = await SMTPAuth.findOne({ email: from, token });
-        if (!smtp) {
-          return res.status(403).json({
-            success: false,
-            error: 'Invalid credentials'
-          });
-        }
-
-        const decryptedPass = decrypt(smtp.pass);
-
-        // Create a simple forward email (NO FETCHING ORIGINAL)
-        const subject = `Fwd: Email ${originalMessageId.substring(0, 20)}...`;
-        const trackingId = crypto.randomBytes(8).toString('hex');
-
-        const emailHtml = `
-          <!DOCTYPE html>
-          <html>
-          <head>
-            <meta charset="utf-8">
-            <style>
-              body { font-family: Arial, sans-serif; line-height: 1.6; color: #333; }
-              .forward-header { 
-                border-left: 3px solid #1a73e8; 
-                padding-left: 15px; 
-                margin: 20px 0;
-                color: #5f6368;
-                font-size: 14px;
-              }
-            </style>
-          </head>
-          <body>
-            ${additionalHtml || '<p>Forwarded email:</p>'}
-            
-            <div class="forward-header">
-              <div style="font-weight: bold; margin-bottom: 8px;">
-                ---------- Forwarded message ---------
-              </div>
-              <div><strong>Original Message ID:</strong> ${originalMessageId}</div>
-              <div><strong>Forwarded by:</strong> ${sender_name || from}</div>
-              <div><strong>Forwarded on:</strong> ${new Date().toLocaleString()}</div>
-            </div>
-            
-            <p style="color: #666; font-style: italic; margin-top: 20px;">
-              <em>This is a forward notification. The original email content was not included.</em>
-            </p>
-          </body>
-          </html>
-        `;
-
-        const emailText = `
-          ${additionalText || 'Forwarded email:'}
-          
-          ---------- Forwarded message ---------
-          Original Message ID: ${originalMessageId}
-          Forwarded by: ${sender_name || from}
-          Forwarded on: ${new Date().toLocaleString()}
-          
-          This is a forward notification. The original email content was not included.
-        `;
-
-        // Send email immediately
-        const transporter = nodemailer.createTransport({
-          host: smtp.host,
-          port: smtp.port,
-          secure: smtp.port === 465,
-          auth: { user: from, pass: decryptedPass },
-          tls: { rejectUnauthorized: false }
-        });
-
-        const info = await transporter.sendMail({
-          from: sender_name ? `${sender_name} <${from}>` : from,
-          to: to,
-          subject: subject,
-          html: emailHtml,
-          text: emailText,
-          messageId: `<forward-${Date.now()}@${from.split('@')[1]}>`,
-          headers: {
-            'X-Forwarded-Message-ID': originalMessageId,
-            'X-Forwarded-By': from
-          },
-          attachments: attachments.slice(0, 5) // Limit to 5 attachments
-        });
-
-        console.log(`✅ Forward email sent: ${info.messageId}`);
-
-        // Return success immediately
-        return res.json({
-          success: true,
-          message: 'Forward notification sent',
-          messageId: info.messageId,
-          timestamp: new Date().toISOString()
-        });
-
-      } catch (parseError) {
-        console.error('Request parsing error:', parseError);
-        return res.status(400).json({
-          success: false,
-          error: 'Invalid JSON in request body'
-        });
-      }
-    });
-
-    req.on('error', (error) => {
-      console.error('Request error:', error);
-      return res.status(500).json({
+    // Validation
+    if (!token || !from || !to || !originalMessageId) {
+      return res.status(400).json({
         success: false,
-        error: 'Request processing error'
+        error: 'Missing required fields: token, from, to, originalMessageId'
       });
+    }
+
+    // Get SMTP auth
+    const smtp = await SMTPAuth.findOne({ email: from, token });
+    if (!smtp) {
+      return res.status(403).json({
+        success: false,
+        error: 'Invalid token or sender email'
+      });
+    }
+
+    const decryptedPass = decrypt(smtp.pass);
+
+    // Step 1: Connect to IMAP and fetch the original email
+    console.log('🔌 Connecting to IMAP to fetch original email...');
+
+    imapClient = new ImapFlow({
+      host: smtp.host.replace('smtp.', 'imap.'),
+      port: 993,
+      secure: true,
+      auth: { user: from, pass: decryptedPass },
+      logger: false,
+      timeout: 60000 // 60 seconds for large emails
+    });
+
+    await imapClient.connect();
+    console.log('✅ IMAP connected');
+
+    // Try common mailbox locations
+    const mailboxes = ['INBOX', 'Sent', '[Gmail]/Sent Mail', 'Sent Items', 'Sent Messages'];
+    let originalEmail = null;
+    let foundMailbox = null;
+
+    for (const mailbox of mailboxes) {
+      try {
+        await imapClient.mailboxOpen(mailbox);
+        console.log(`📂 Searching in ${mailbox} for Message-ID: ${originalMessageId}`);
+
+        const messageUids = await imapClient.search({
+          header: { 'Message-ID': originalMessageId }
+        });
+
+        if (messageUids && messageUids.length > 0) {
+          console.log(`✅ Found message in ${mailbox}`);
+          foundMailbox = mailbox;
+
+          // Fetch the complete email
+          for await (let msg of imapClient.fetch(messageUids, {
+            byUid: true,
+            envelope: true,
+            uid: true,
+            flags: true,
+            source: true,
+            bodyStructure: true
+          })) {
+            const parsed = await simpleParser(msg.source);
+
+            originalEmail = {
+              envelope: msg.envelope,
+              parsed: parsed,
+              uid: msg.uid,
+              flags: msg.flags
+            };
+
+            console.log('✅ Original email fetched successfully');
+            break;
+          }
+          break;
+        }
+      } catch (err) {
+        console.log(`⚠️ Mailbox ${mailbox} not accessible: ${err.message}`);
+        continue;
+      }
+    }
+
+    // Close IMAP connection
+    await imapClient.logout();
+    imapClient = null;
+
+    if (!originalEmail) {
+      return res.status(404).json({
+        success: false,
+        error: 'Original email not found in any mailbox'
+      });
+    }
+
+    // Step 2: Build the forwarded email (Gmail-style)
+    const original = originalEmail.parsed;
+    const envelope = originalEmail.envelope;
+
+    // Prepare subject with "Fwd:" prefix
+    let forwardSubject = envelope.subject || '(No Subject)';
+    if (addForwardPrefix && !forwardSubject.toLowerCase().startsWith('fwd:')) {
+      forwardSubject = `Fwd: ${forwardSubject}`;
+    }
+
+    // Build forwarded email header info
+    const forwardedFrom = envelope.from
+      ? envelope.from.map(f => `${f.name || ''} <${f.address}>`).join(', ')
+      : 'Unknown';
+
+    const forwardedTo = envelope.to
+      ? envelope.to.map(t => `${t.name || ''} <${t.address}>`).join(', ')
+      : '';
+
+    const forwardedDate = envelope.date
+      ? new Date(envelope.date).toLocaleString('en-US', {
+        weekday: 'short',
+        year: 'numeric',
+        month: 'short',
+        day: 'numeric',
+        hour: '2-digit',
+        minute: '2-digit',
+        timeZoneName: 'short'
+      })
+      : '';
+
+    const forwardedCc = envelope.cc
+      ? envelope.cc.map(c => `${c.name || ''} <${c.address}>`).join(', ')
+      : '';
+
+    // Build HTML content (Gmail-style)
+    const forwardedHtml = `
+      <!DOCTYPE html>
+      <html>
+      <head>
+        <meta charset="utf-8">
+        <style>
+          body {
+            font-family: Arial, sans-serif;
+            font-size: 14px;
+            line-height: 1.6;
+            color: #333;
+          }
+          .gmail-quote {
+            margin: 0 0 0 0.8ex;
+            border-left: 1px solid #ccc;
+            padding-left: 1ex;
+          }
+          .gmail-attr {
+            color: #666;
+            font-size: 12px;
+            margin: 20px 0 10px 0;
+          }
+        </style>
+      </head>
+      <body>
+        ${additionalHtml ? `<div>${additionalHtml}</div><br>` : ''}
+        
+        <div class="gmail-attr">
+          ---------- Forwarded message ---------<br>
+          From: <strong>${forwardedFrom}</strong><br>
+          Date: ${forwardedDate}<br>
+          Subject: ${envelope.subject || '(No Subject)'}<br>
+          To: ${forwardedTo}${forwardedCc ? `<br>Cc: ${forwardedCc}` : ''}
+        </div>
+        
+        <div class="gmail-quote">
+          ${original.html || original.textAsHtml || `<pre>${original.text || ''}</pre>`}
+        </div>
+      </body>
+      </html>
+    `;
+
+    // Build plain text content
+    const forwardedText = `
+${additionalText ? `${additionalText}\n\n` : ''}
+---------- Forwarded message ---------
+From: ${forwardedFrom}
+Date: ${forwardedDate}
+Subject: ${envelope.subject || '(No Subject)'}
+To: ${forwardedTo}${forwardedCc ? `\nCc: ${forwardedCc}` : ''}
+
+${original.text || 'No text content'}
+    `.trim();
+
+    // Step 3: Prepare attachments
+    let forwardedAttachments = [];
+    if (includeAttachments && original.attachments && original.attachments.length > 0) {
+      console.log(`📎 Including ${original.attachments.length} attachments`);
+
+      forwardedAttachments = original.attachments.map(att => ({
+        filename: att.filename || 'attachment',
+        content: att.content,
+        contentType: att.contentType || 'application/octet-stream',
+        encoding: 'base64'
+      }));
+    }
+
+    // Step 4: Send the forwarded email via SMTP
+    console.log('📤 Sending forwarded email via SMTP...');
+
+    const transporter = nodemailer.createTransport({
+      host: smtp.host,
+      port: smtp.port,
+      secure: smtp.port === 465,
+      auth: { user: from, pass: decryptedPass },
+      tls: { rejectUnauthorized: false }
+    });
+
+    // Verify SMTP connection
+    await transporter.verify();
+    console.log('✅ SMTP connection verified');
+
+    // Generate tracking ID for the forwarded email
+    const trackingId = crypto.randomBytes(16).toString('hex');
+    const fromField = sender_name ? `${sender_name} <${from}>` : from;
+
+    const emailOptions = {
+      from: fromField,
+      to: to,
+      cc: cc,
+      bcc: bcc,
+      subject: forwardSubject,
+      html: forwardedHtml,
+      text: forwardedText,
+      messageId: `<fwd-${trackingId}@${from.split('@')[1]}>`,
+      headers: {
+        'X-Forwarded-Message-ID': originalMessageId,
+        'X-Forwarded-By': from,
+        'References': originalMessageId,
+        'In-Reply-To': originalMessageId
+      },
+      attachments: forwardedAttachments
+    };
+
+    const info = await transporter.sendMail(emailOptions);
+    console.log(`✅ Forwarded email sent: ${info.messageId}`);
+
+    // Step 5: Save tracking record
+    const webhookUrl = 'https://meet.onepgr.com/session/smatpTracking';
+
+    const trackingRecord = new EmailTracking({
+      messageId: trackingId,
+      originalMessageId: info.messageId,
+      fromEmail: from,
+      toEmail: to,
+      subject: forwardSubject,
+      webhookUrl: webhookUrl,
+      emailContent: {
+        html: forwardedHtml,
+        text: forwardedText
+      }
+    });
+
+    await trackingRecord.save();
+
+    // Send webhook notification
+    await sendWebhookNotification(webhookUrl, {
+      event: 'forwarded',
+      trackingId,
+      email: to,
+      from,
+      subject: forwardSubject,
+      timestamp: new Date(),
+      messageId: info.messageId,
+      originalMessageId: originalMessageId,
+      recipients: { to, cc: cc || null, bcc: bcc || null },
+      attachmentsCount: forwardedAttachments.length,
+      senderName: sender_name || null
+    });
+
+    return res.json({
+      success: true,
+      message: 'Email forwarded successfully',
+      messageId: info.messageId,
+      trackingId,
+      forwardedFrom: originalMessageId,
+      forwardedTo: to,
+      subject: forwardSubject,
+      attachmentsCount: forwardedAttachments.length,
+      timestamp: new Date().toISOString()
     });
 
   } catch (err) {
-    console.error('Unexpected error:', err);
+    console.error('❌ Email Forward Error:', err);
+
+    // Cleanup IMAP connection if still open
+    if (imapClient) {
+      try {
+        await imapClient.logout();
+      } catch (logoutErr) {
+        try {
+          await imapClient.close();
+        } catch (closeErr) {
+          // Ignore cleanup errors
+        }
+      }
+    }
+
     return res.status(500).json({
       success: false,
-      error: 'Server error'
+      error: err.message,
+      details: 'Failed to forward email. Please check the original message ID and try again.'
     });
   }
 });
