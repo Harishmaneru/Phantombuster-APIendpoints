@@ -27,147 +27,179 @@ const cleanupCache = () => {
     }
 };
 
-// Enhanced quick templates with proper email formatting
-const quickTemplates = {
-    'acknowledgment': {
-        'Direct & Concise': "Hi,\n\nThanks for your email. I'll review this and get back to you soon.\n\nBest regards",
-        'Professional': "Dear Sender,\n\nThank you for reaching out. I have received your message and will review the details carefully. I will respond with a comprehensive reply shortly.\n\nBest regards",
-        'Detailed / Informative': "Dear Sender,\n\nThank you for your email. I appreciate you taking the time to share these details with me.\n\nI have carefully noted all the points you've mentioned and will provide a thorough response after reviewing everything in detail. You can expect to hear back from me within the next 24-48 hours.\n\nIf there's anything urgent that requires immediate attention, please feel free to let me know.\n\nBest regards"
-    },
-    'confirmation': {
-        'Direct & Concise': "Hi,\n\nConfirmed. I'll proceed as discussed.\n\nBest regards",
-        'Professional': "Dear Sender,\n\nThis email confirms that I have received your instructions and understood the requirements. I will proceed accordingly and keep you updated on the progress.\n\nBest regards",
-        'Detailed / Informative': "Dear Sender,\n\nI am writing to confirm receipt of your message and acknowledge the details you have outlined.\n\nI have reviewed all the points mentioned and will ensure that each item is addressed according to your specifications. I will follow the timeline discussed and provide regular updates as we progress.\n\nPlease don't hesitate to reach out if you have any questions or need clarification on any aspect.\n\nBest regards"
-    }
-};
 
-const detectEmailPattern = (emailBody) => {
-    const body = emailBody.toLowerCase();
-    if (body.length < 50 && (body.includes('thank') || body.includes('thanks') || body.includes('appreciate'))) {
-        return 'acknowledgment';
-    }
-    if (body.length < 50 && (body.includes('confirm') || body.includes('acknowledge'))) {
-        return 'confirmation';
-    }
-    return null;
-};
 
-// **OPTIMIZED EMAIL GENERATION ENDPOINT**
+// **BACKWARD COMPATIBLE EMAIL REPLY GENERATOR**
 router.post('/generate-email-reply', async (req, res) => {
     const startTime = Date.now();
 
     try {
-        const { emailBody, replyType } = req.body;
+        // Handle both old and new payload structures
+        const {
+            emailBody,
+            // Old parameter name (backward compatible)
+            replyType,
+            // New parameter names
+            replyTypes,
+            tone = 'neutral',
+            recipientName = '',
+            senderName = '',
+            additionalInstructions = ''
+        } = req.body;
 
-        if (!emailBody) {
+        // Validate required fields
+        if (!emailBody || typeof emailBody !== 'string') {
             return res.status(400).json({
                 success: false,
-                error: 'emailBody is required in the payload'
+                error: 'Valid emailBody is required',
+                details: 'emailBody must be a non-empty string'
             });
         }
 
-        // Check cache
-        const cacheKey = generateCacheKey(emailBody, replyType);
+        // Determine reply types (support both old and new formats)
+        let typesToGenerate;
+
+        // Priority: 1. replyTypes (new), 2. replyType (old), 3. default
+        if (replyTypes && Array.isArray(replyTypes) && replyTypes.length > 0) {
+            // Handle "all" in array
+            if (replyTypes.includes('all')) {
+                typesToGenerate = ['Direct & Concise', 'Professional', 'Detailed / Informative'];
+            } else {
+                const validReplyTypes = ['Direct', 'Professional', 'Detailed', 'Friendly', 'Formal', 'Casual'];
+                typesToGenerate = replyTypes.filter(type => validReplyTypes.includes(type));
+
+                // Map to old format names if needed for backward compatibility
+                typesToGenerate = typesToGenerate.map(type => {
+                    if (type === 'Direct') return 'Direct & Concise';
+                    if (type === 'Detailed') return 'Detailed / Informative';
+                    return type;
+                });
+            }
+        }
+        // Old format: comma-separated string
+        else if (replyType) {
+            // Handle "all" special case
+            if (replyType.toLowerCase() === 'all') {
+                typesToGenerate = ['Direct & Concise', 'Professional', 'Detailed / Informative'];
+            } else {
+                const requestedTypes = replyType.split(',').map(type => type.trim());
+                const allReplyTypes = ['Direct & Concise', 'Professional', 'Detailed / Informative'];
+
+                typesToGenerate = [];
+                for (const requestedType of requestedTypes) {
+                    // Handle partial matches
+                    if (requestedType.toLowerCase() === 'direct' ||
+                        requestedType.toLowerCase() === 'concise' ||
+                        requestedType.toLowerCase() === 'direct & concise') {
+                        typesToGenerate.push('Direct & Concise');
+                    }
+                    else if (requestedType.toLowerCase() === 'professional') {
+                        typesToGenerate.push('Professional');
+                    }
+                    else if (requestedType.toLowerCase() === 'detailed' ||
+                        requestedType.toLowerCase() === 'informative' ||
+                        requestedType.toLowerCase() === 'detailed / informative') {
+                        typesToGenerate.push('Detailed / Informative');
+                    }
+                    else {
+                        // Try to match
+                        const matchedType = allReplyTypes.find(validType =>
+                            validType.toLowerCase().includes(requestedType.toLowerCase())
+                        );
+                        if (matchedType && !typesToGenerate.includes(matchedType)) {
+                            typesToGenerate.push(matchedType);
+                        }
+                    }
+                }
+            }
+        }
+        // Default to all three
+        else {
+            typesToGenerate = ['Direct & Concise', 'Professional', 'Detailed / Informative'];
+        }
+
+        // Remove duplicates
+        typesToGenerate = [...new Set(typesToGenerate)];
+
+        if (typesToGenerate.length === 0) {
+            return res.status(400).json({
+                success: false,
+                error: 'No valid reply types specified',
+                validTypes: ['Direct & Concise', 'Professional', 'Detailed / Informative', 'all'],
+                examples: [
+                    'replyType: "all"',
+                    'replyType: "Direct & Concise,Professional"',
+                    'replyType: "direct"',
+                    'replyType: "detailed"'
+                ]
+            });
+        }
+
+        // Check cache (use old-style cache key for backward compatibility)
+        const cacheKey = generateCacheKey(emailBody, typesToGenerate.join(','));
         const cached = responseCache.get(cacheKey);
-        if (cached && (Date.now() - cached.timestamp) < CACHE_TTL) {
+
+        if (cached) {
             return res.json({
                 success: true,
-                replies: cached.data,
+                replies: cached.replies,
                 cached: true,
                 responseTime: Date.now() - startTime
             });
         }
 
-        // Quick pattern matching
-        const emailPattern = detectEmailPattern(emailBody);
-        const allReplyTypes = ['Direct & Concise', 'Professional', 'Detailed / Informative'];
-        let typesToGenerate = [];
+        // Generate replies
+        const trimmedEmailBody = emailBody.substring(0, 2000);
 
-        if (replyType) {
-            const requestedTypes = replyType.split(',').map(type => type.trim());
-            for (const requestedType of requestedTypes) {
-                const matchedType = allReplyTypes.find(validType =>
-                    validType.toLowerCase().includes(requestedType.toLowerCase())
-                );
-                if (matchedType && !typesToGenerate.includes(matchedType)) {
-                    typesToGenerate.push(matchedType);
-                }
-            }
-        } else {
-            typesToGenerate = [...allReplyTypes];
-        }
+        // Prepare system message
+        const systemMessage = `You are an expert email composer. Generate high-quality email replies.
 
-        if (typesToGenerate.length === 0) {
-            return res.status(400).json({
-                success: false,
-                error: `Invalid replyType. Valid types: "Direct & Concise", "Professional", "Detailed / Informative".`
-            });
-        }
+GENERATION RULES:
+1. Create COMPLETE emails with proper structure
+2. Include appropriate greeting and closing
+3. Address all key points from the original email
+4. Match the tone and formality level
+5. Be professional, clear, and actionable
+6. Use natural, conversational language
 
-        // Use quick templates if pattern detected
-        if (emailPattern) {
-            const quickReplies = {};
-            typesToGenerate.forEach(type => {
-                if (quickTemplates[emailPattern] && quickTemplates[emailPattern][type]) {
-                    quickReplies[type] = quickTemplates[emailPattern][type];
-                }
-            });
+REPLY STYLES:
+- Direct & Concise: Brief, to the point, minimal pleasantries (2-3 sentences max)
+- Professional: Balanced, business-appropriate, well-structured (4-6 sentences)
+- Detailed / Informative: Comprehensive, addresses all aspects thoroughly (6+ sentences)
 
-            if (Object.keys(quickReplies).length === typesToGenerate.length) {
-                responseCache.set(cacheKey, { data: quickReplies, timestamp: Date.now() });
-                cleanupCache();
+${recipientName ? `RECIPIENT: ${recipientName}` : ''}
+${senderName ? `SENDER: ${senderName}` : ''}
+${additionalInstructions ? `ADDITIONAL INSTRUCTIONS: ${additionalInstructions}` : ''}`;
 
-                return res.json({
-                    success: true,
-                    replies: quickReplies,
-                    quickTemplate: true,
-                    responseTime: Date.now() - startTime
-                });
-            }
-        }
-
-        // **SINGLE OPTIMIZED API CALL WITH PROPER EMAIL FORMATTING**
-        const systemMessage = `You are an expert email writer. Generate professional email replies in proper email format.
-
-CRITICAL FORMATTING RULES:
-1. Start with appropriate greeting (Hi/Hello for casual, Dear [Sender] for formal)
-2. Write clear paragraphs with proper spacing
-3. End with professional closing (Best regards/Sincerely/Kind regards)
-4. Use proper email structure with line breaks
-5. Be natural and conversational while maintaining professionalism
-
-Generate responses that match the exact tone and length for each style requested.`;
-
-        const styleGuides = {
-            'Direct & Concise': 'Brief and to the point. Casual greeting. Address main points quickly without unnecessary details. Efficient communication.',
-            'Professional': 'Professional business tone. Formal greeting. Address all key points with appropriate detail. Well-structured and clear.',
-            'Detailed / Informative': 'Thorough and comprehensive. Formal greeting. Address all aspects mentioned in the email with full context and explanations. Include relevant background and next steps where appropriate.'
+        // Prepare user prompt
+        let styleDescriptions = '';
+        const styleMapping = {
+            'Direct & Concise': 'Direct & Concise (brief, 2-3 sentences, straight to the point)',
+            'Professional': 'Professional (formal business tone, 4-6 sentences, complete structure)',
+            'Detailed / Informative': 'Detailed / Informative (comprehensive, 6+ sentences, full explanations)'
         };
 
-        const userPrompt = `Original Email to Reply To:
----
-${emailBody.substring(0, 800)}
----
+        typesToGenerate.forEach(type => {
+            if (styleMapping[type]) {
+                styleDescriptions += `- ${styleMapping[type]}\n`;
+            }
+        });
 
-Generate ${typesToGenerate.length} email reply variation(s) in PROPER EMAIL FORMAT with these exact styles:
+        const userPrompt = `ORIGINAL EMAIL TO REPLY TO:
+${trimmedEmailBody}
 
-${typesToGenerate.map(type => `**${type}**: ${styleGuides[type]}`).join('\n')}
+Generate email replies in these specific styles:
+${styleDescriptions}
 
-IMPORTANT INSTRUCTIONS:
-- Adapt the reply length based on the complexity and content of the original email
-- For simple emails (thank you, confirmation, etc.), keep replies concise regardless of style
-- For complex emails with multiple questions or topics, provide appropriate depth
-- Maintain the specified tone and style, but let content dictate length
-- Always include proper greeting and closing
+For each style, generate a COMPLETE EMAIL ready to send, including:
+- Appropriate greeting (use ${recipientName ? `"Dear ${recipientName}"` : '"Hi" or "Hello"'} for greeting)
+- Clear body addressing the email content
+- Professional closing (use ${senderName ? `"Best regards,\n${senderName}"` : '"Best regards"'} for closing)
+- Proper formatting with line breaks between paragraphs
 
-Return ONLY valid JSON in this exact format:
-{
-  "Direct & Concise": "full email reply with greeting and closing",
-  "Professional": "full email reply with greeting and closing",
-  "Detailed / Informative": "full email reply with greeting and closing"
-}
+IMPORTANT: Make each reply DISTINCT and appropriate for its style.
 
-Include only the styles requested: ${typesToGenerate.join(', ')}`;
+Return as JSON with each requested style as a key containing the full email.`;
 
         const completion = await openai.chat.completions.create({
             model: "gpt-4o-mini",
@@ -175,52 +207,89 @@ Include only the styles requested: ${typesToGenerate.join(', ')}`;
                 { role: "system", content: systemMessage },
                 { role: "user", content: userPrompt }
             ],
-            max_tokens: 1200, // Increased to allow AI to decide appropriate length
+            max_tokens: typesToGenerate.length === 3 ? 1500 : 1000,
             temperature: 0.7,
-            response_format: { type: "json_object" }
+            response_format: { type: "json_object" },
+            stream: false
         });
 
         const content = completion.choices[0].message.content;
-        let replies = JSON.parse(content);
+        let replies;
 
-        // Filter to only requested types
-        const filteredReplies = {};
-        typesToGenerate.forEach(type => {
-            if (replies[type]) {
-                filteredReplies[type] = replies[type];
+        try {
+            replies = JSON.parse(content);
+
+            // Validate and ensure all requested types are present
+            const validatedReplies = {};
+            const missingTypes = [];
+
+            typesToGenerate.forEach(type => {
+                if (replies[type] && typeof replies[type] === 'string' && replies[type].trim().length > 20) {
+                    validatedReplies[type] = replies[type].trim();
+                } else {
+                    missingTypes.push(type);
+                }
+            });
+
+            // Generate fallbacks for missing types
+            if (missingTypes.length > 0) {
+                const greeting = recipientName ? `Dear ${recipientName},` : 'Hello,';
+                const closing = senderName ? `\n\nBest regards,\n${senderName}` : '\n\nBest regards';
+
+                missingTypes.forEach(type => {
+                    if (type === 'Direct & Concise') {
+                        validatedReplies[type] = `${greeting}\n\nThanks for your email. I'll review and get back to you soon.${closing}`;
+                    } else if (type === 'Professional') {
+                        validatedReplies[type] = `${greeting}\n\nThank you for your message. I have received it and will provide a detailed response shortly.${closing}`;
+                    } else if (type === 'Detailed / Informative') {
+                        validatedReplies[type] = `${greeting}\n\nThank you for reaching out. I acknowledge receipt of your email and will carefully review all the points mentioned. I'll provide a comprehensive response addressing each aspect you've raised.${closing}`;
+                    }
+                });
             }
-        });
 
-        // Cache response
-        responseCache.set(cacheKey, {
-            data: filteredReplies,
-            timestamp: Date.now()
-        });
-        cleanupCache();
+            // Cache the result
+            responseCache.set(cacheKey, {
+                replies: validatedReplies,
+                timestamp: Date.now()
+            });
 
-        console.log(`Generated ${typesToGenerate.length} replies in ${Date.now() - startTime}ms`);
+            return res.json({
+                success: true,
+                replies: validatedReplies,
+                generatedTypes: typesToGenerate,
+                responseTime: Date.now() - startTime
+            });
 
-        res.json({
-            success: true,
-            replies: filteredReplies,
-            responseTime: Date.now() - startTime
-        });
+        } catch (parseError) {
+            console.error('JSON parse error:', parseError);
+            throw new Error('Failed to parse AI response');
+        }
 
     } catch (error) {
-        console.error('Error generating email reply:', error);
+        console.error('Email reply generation error:', error);
 
+        // Backward compatible fallback replies
         const fallbackReplies = {
             'Direct & Concise': 'Hi,\n\nThanks for your email. I will review this and respond shortly.\n\nBest regards',
             'Professional': 'Dear Sender,\n\nThank you for your message. I have received it and will provide a detailed response as soon as possible.\n\nBest regards',
             'Detailed / Informative': 'Dear Sender,\n\nThank you for taking the time to reach out. I acknowledge receipt of your email and have noted all the details you have shared.\n\nI will carefully review your message and provide a comprehensive response within the next 24-48 hours. If there is anything urgent that requires immediate attention, please let me know.\n\nBest regards'
         };
 
-        res.status(500).json({
+        const errorResponse = {
             success: false,
-            error: error.message || 'Failed to generate email reply',
+            error: error.message || 'Failed to generate email replies',
             fallbackReplies,
             responseTime: Date.now() - startTime
-        });
+        };
+
+        if (error instanceof OpenAI.APIError) {
+            errorResponse.apiError = {
+                code: error.code,
+                type: error.type
+            };
+        }
+
+        res.status(500).json(errorResponse);
     }
 });
 
