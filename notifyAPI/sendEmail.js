@@ -621,8 +621,29 @@ router.post('/api/emailforward', async (req, res) => {
 
     // --- Fetch Original Email ---
     let originalEmail = null;
-    // Use heuristic to guess IMAP host from SMTP host
-    const imapHost = smtp.host.startsWith('smtp.') ? smtp.host.replace('smtp.', 'imap.') : smtp.host;
+
+    // Helper to determine IMAP host
+    function getImapHost(smtpHost) {
+      const hostMap = {
+        'smtp.gmail.com': 'imap.gmail.com',
+        'smtp-mail.outlook.com': 'outlook.office365.com',
+        'smtp.mail.yahoo.com': 'imap.mail.yahoo.com',
+        'smtp.mail.me.com': 'imap.mail.me.com',
+        'smtp.zoho.com': 'imap.zoho.com',
+        'smtp.yandex.com': 'imap.yandex.com'
+      };
+
+      if (hostMap[smtpHost]) return hostMap[smtpHost];
+
+      // Heuristic fallback
+      if (smtpHost.startsWith('smtp.')) {
+        return smtpHost.replace('smtp.', 'imap.');
+      }
+      return `imap.${smtpHost}`; // Fallback for bare domains or others
+    }
+
+    const imapHost = getImapHost(smtp.host);
+    console.log(`Attempting IMAP connection to: ${imapHost} for user ${from}`);
 
     const client = new ImapFlow({
       host: imapHost,
@@ -630,7 +651,8 @@ router.post('/api/emailforward', async (req, res) => {
       secure: true,
       auth: { user: from, pass: decryptedPass },
       logger: false,
-      timeout: 30000
+      timeout: 30000,
+      tls: { rejectUnauthorized: false } // Match nodemailer settings
     });
 
     try {
