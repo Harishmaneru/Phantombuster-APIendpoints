@@ -1056,6 +1056,15 @@ router.post('/api/fetchinbox', async (req, res) => {
           cleanText = cleanText.replace(/https:\/\/tracking\.inflection\.io\/[^\s]+/g, '');
         }
 
+        // Extract attachments metadata
+        const attachments = parsed.attachments ? parsed.attachments.map(att => ({
+          filename: att.filename,
+          contentType: att.contentType,
+          size: att.size,
+          checksum: att.checksum,
+          contentId: att.contentId
+        })) : [];
+
         messages.push({
           subject: msg.envelope.subject,
           from: msg.envelope.from.map(f => `${f.name || ''} <${f.address}>`).join(', '),
@@ -1067,7 +1076,9 @@ router.post('/api/fetchinbox', async (req, res) => {
           html: cleanHtml,
           to: msg.envelope.to?.map(t => `${t.name || ''} <${t.address}>`).join(', '),
           cc: msg.envelope.cc?.map(c => `${c.name || ''} <${c.address}>`).join(', '),
-          messageId: msg.envelope.messageId
+          messageId: msg.envelope.messageId,
+          attachments: attachments,
+          hasAttachments: attachments.length > 0
         });
       }
     }
