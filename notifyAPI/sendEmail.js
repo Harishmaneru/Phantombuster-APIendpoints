@@ -1202,8 +1202,10 @@ router.get('/api/email/attachment', async (req, res) => {
     });
 
     let foundAttachment = null;
+    let messageCount = 0;
 
     for await (let msg of fetchResult) {
+      messageCount++;
       console.log(`[Attachment] Processing message UID: ${msg.uid}`);
       const parsed = await simpleParser(msg.source);
 
@@ -1256,6 +1258,8 @@ router.get('/api/email/attachment', async (req, res) => {
         console.log(`[Attachment] No attachments found in parsed message`);
       }
     }
+
+    console.log(`[Attachment] Total messages processed: ${messageCount}`);
 
     await client.logout();
 
