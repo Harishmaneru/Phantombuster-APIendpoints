@@ -1197,33 +1197,43 @@ router.get('/api/email/attachment', async (req, res) => {
     // Fetch message by UID directly (more efficient)
     console.log(`[Attachment] Fetching UID: ${uid}`);
 
-    // Try to verify UID existence first
+    let sequenceNumber = null;
+
+    // 1. Try to find sequence number by UID
     const searchResult = await client.search({ uid: uid });
     console.log(`[Attachment] Search for UID ${uid} returned:`, searchResult);
 
-    let fetchResult = client.fetch(String(uid), {
-      source: true,
-      uid: true
-    });
+    if (searchResult && searchResult.length > 0) {
+      sequenceNumber = searchResult[0];
+      console.log(`[Attachment] Found sequence number via UID: ${sequenceNumber}`);
+    }
 
-    // Fallback: If UID search failed or we want to be sure, try Message-ID if provided
+    // 2. Fallback: Try Message-ID if UID search failed
     const messageId = req.query.messageId;
-    if ((!searchResult || searchResult.length === 0) && messageId) {
-      console.log(`[Attachment] UID not found, falling back to Message-ID: ${messageId}`);
+    if (!sequenceNumber && messageId) {
+      console.log(`[Attachment] UID search failed, falling back to Message-ID: ${messageId}`);
       const messageUids = await client.search({
         header: { 'Message-ID': messageId }
       });
 
       if (messageUids && messageUids.length > 0) {
-        console.log(`[Attachment] Found new UID via Message-ID: ${messageUids[0]}`);
-        fetchResult = client.fetch(messageUids[0], {
-          source: true,
-          uid: true
-        });
+        sequenceNumber = messageUids[0];
+        console.log(`[Attachment] Found sequence number via Message-ID: ${sequenceNumber}`);
       } else {
         console.log(`[Attachment] Message-ID search also failed`);
       }
     }
+
+    if (!sequenceNumber) {
+      await client.logout();
+      return res.status(404).json({ success: false, error: 'Message not found' });
+    }
+
+    // Fetch by sequence number (no uid: true option)
+    console.log(`[Attachment] Fetching sequence number: ${sequenceNumber}`);
+    const fetchResult = client.fetch(String(sequenceNumber), {
+      source: true
+    });
 
     let foundAttachment = null;
     let messageCount = 0;
