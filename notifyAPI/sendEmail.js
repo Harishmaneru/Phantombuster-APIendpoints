@@ -1056,23 +1056,44 @@ router.post('/api/fetchinbox', async (req, res) => {
           cleanText = cleanText.replace(/https:\/\/tracking\.inflection\.io\/[^\s]+/g, '');
         }
 
-        // Extract attachments metadata
-        const baseUrl = process.env.BASE_URL || 'https://videoresponse.onepgr.com:3001';
-        const attachments = parsed.attachments ? parsed.attachments.map(att => ({
-          filename: att.filename,
-          contentType: att.contentType,
-          size: att.size,
-          checksum: att.checksum,
-          contentId: att.contentId,
-          url: `${baseUrl}/api/email/attachment?email=${encodeURIComponent(email)}&token=${encodeURIComponent(token)}&messageId=${encodeURIComponent(msg.envelope.messageId)}&filename=${encodeURIComponent(att.filename)}`
-        })) : [];
+        // FIXED: Properly handle attachments
+        // Method 1: Check parsed.attachments array
+        let attachments = [];
+        if (parsed.attachments && Array.isArray(parsed.attachments)) {
+          const baseUrl = process.env.BASE_URL || 'https://videoresponse.onepgr.com:3001';
+          attachments = parsed.attachments.map(att => ({
+            filename: att.filename || 'unnamed_attachment',
+            contentType: att.contentType || 'application/octet-stream',
+            size: att.size || 0,
+            contentId: att.contentId || null,
+            // Generate unique identifier for the attachment
+            attachmentId: `${msg.uid}-${att.filename || Date.now()}`,
+            // URL to download the attachment
+            url: `${baseUrl}/api/email/attachment?email=${encodeURIComponent(email)}&token=${encodeURIComponent(token)}&uid=${msg.uid}&filename=${encodeURIComponent(att.filename || 'unnamed_attachment')}`
+          }));
+        }
+        // Method 2: Alternative - check for attachments in email structure
+        else if (msg.bodyStructure && msg.bodyStructure.childNodes) {
+          // You may need to recursively traverse the body structure
+          attachments = extractAttachmentsFromStructure(msg.bodyStructure, msg.uid, email, token);
+        }
+
+        // Method 3: Debug - log what we received
+        console.log(`Message ${msg.uid}: attachments found:`, parsed.attachments ? parsed.attachments.length : 0);
+        if (parsed.attachments && parsed.attachments.length > 0) {
+          console.log('Attachment details:', parsed.attachments.map(a => ({
+            filename: a.filename,
+            contentType: a.contentType,
+            size: a.size
+          })));
+        }
 
         messages.push({
           subject: msg.envelope.subject,
           from: msg.envelope.from.map(f => `${f.name || ''} <${f.address}>`).join(', '),
           date: msg.envelope.date,
           uid: msg.uid,
-          seq: msg.seq, // Store sequence number for reference
+          seq: msg.seq,
           read: Array.isArray(msg.flags) ? msg.flags.includes('\\Seen') : false,
           text: cleanText,
           html: cleanHtml,
@@ -1108,72 +1129,101 @@ router.post('/api/fetchinbox', async (req, res) => {
   }
 });
 
+// Helper function to extract attachments from body structure
+function extractAttachmentsFromStructure(structure, uid, email, token) {
+  const attachments = [];
+  const baseUrl = process.env.BASE_URL || 'https://videoresponse.onepgr.com:3001';
+
+  function traverse(node, path = '') {
+    if (!node) return;
+
+    // Check if this is an attachment
+    if (node.disposition && node.disposition.type &&
+      (node.disposition.type.toLowerCase() === 'attachment' ||
+        (node.disposition.type.toLowerCase() === 'inline' && node.filename))) {
+
+      attachments.push({
+        filename: node.filename || node.name || 'unnamed_attachment',
+        contentType: node.type || 'application/octet-stream',
+        size: node.size || 0,
+        contentId: node.contentId || null,
+        attachmentId: `${uid}-${node.filename || Date.now()}`,
+        url: `${baseUrl}/api/email/attachment?email=${encodeURIComponent(email)}&token=${encodeURIComponent(token)}&uid=${uid}&part=${path}`
+      });
+    }
+
+    // Recursively check child nodes
+    if (node.childNodes && Array.isArray(node.childNodes)) {
+      node.childNodes.forEach((child, index) => {
+        traverse(child, path ? `${path}.${index + 1}` : `${index + 1}`);
+      });
+    }
+  }
+
+  traverse(structure);
+  return attachments;
+}
+
 
 // 9️⃣ Fetch Specific Email by Message ID
-// 8️⃣ Download Attachment
+// Endpoint to download attachments
 router.get('/api/email/attachment', async (req, res) => {
-  let client;
   try {
-    const { token, email, messageId, filename } = req.query;
+    const { email, token, uid, filename, part } = req.query;
 
-    if (!token || !email || !messageId || !filename) {
-      return res.status(400).send('Missing required parameters');
+    if (!email || !token || !uid) {
+      return res.status(400).json({ success: false, error: 'Missing parameters' });
     }
 
+    // Verify token
     const smtp = await SMTPAuth.findOne({ email, token });
     if (!smtp) {
-      return res.status(403).send('Invalid token or sender email');
+      return res.status(403).json({ success: false, error: 'Invalid token or email' });
     }
 
+    // Decrypt password
     const decryptedPass = decrypt(smtp.pass);
 
-    client = new ImapFlow({
+    const client = new ImapFlow({
       host: smtp.host,
       port: 993,
       secure: true,
       auth: { user: email, pass: decryptedPass },
-      logger: false,
-      timeout: 60000
+      logger: false
     });
 
     await client.connect();
     await client.mailboxOpen('INBOX');
 
-    const messageUids = await client.search({
-      header: { 'Message-ID': messageId }
-    });
-
-    if (!messageUids || messageUids.length === 0) {
-      await client.logout();
-      return res.status(404).send('Message not found');
-    }
-
-    let foundAttachment = null;
-
-    for await (let msg of client.fetch(messageUids[0], { source: true })) {
+    // Fetch the specific message by UID
+    const messages = [];
+    for await (let msg of client.fetch(uid, { uid: true, source: true, bodyStructure: true }, { uid: true })) {
       const parsed = await simpleParser(msg.source);
-      if (parsed.attachments) {
-        foundAttachment = parsed.attachments.find(att => att.filename === filename);
+
+      // Find the specific attachment
+      if (parsed.attachments && Array.isArray(parsed.attachments)) {
+        const attachment = parsed.attachments.find(att =>
+          att.filename === filename || (part && att.contentId === part)
+        );
+
+        if (attachment) {
+          // Set appropriate headers
+          res.setHeader('Content-Type', attachment.contentType || 'application/octet-stream');
+          res.setHeader('Content-Disposition', `attachment; filename="${attachment.filename}"`);
+          res.setHeader('Content-Length', attachment.size);
+
+          // Send the attachment content
+          return res.send(attachment.content);
+        }
       }
-      break;
     }
 
     await client.logout();
 
-    if (!foundAttachment) {
-      return res.status(404).send('Attachment not found');
-    }
-
-    res.setHeader('Content-Type', foundAttachment.contentType);
-    res.setHeader('Content-Disposition', `attachment; filename="${foundAttachment.filename}"`);
-    res.send(foundAttachment.content);
-
+    return res.status(404).json({ success: false, error: 'Attachment not found' });
   } catch (err) {
-    console.error('Attachment Download Error:', err);
-    if (client) {
-      try { await client.logout(); } catch (e) { }
-    }
-    res.status(500).send('Failed to download attachment');
+    console.error('Attachment Fetch Error:', err);
+    return res.status(500).json({ success: false, error: err.message });
   }
 });
 
