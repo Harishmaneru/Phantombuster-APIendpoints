@@ -1057,12 +1057,14 @@ router.post('/api/fetchinbox', async (req, res) => {
         }
 
         // Extract attachments metadata
+        const baseUrl = process.env.BASE_URL || 'https://videoresponse.onepgr.com:3001';
         const attachments = parsed.attachments ? parsed.attachments.map(att => ({
           filename: att.filename,
           contentType: att.contentType,
           size: att.size,
           checksum: att.checksum,
-          contentId: att.contentId
+          contentId: att.contentId,
+          url: `${baseUrl}/api/email/attachment?email=${encodeURIComponent(email)}&token=${encodeURIComponent(token)}&messageId=${encodeURIComponent(msg.envelope.messageId)}&filename=${encodeURIComponent(att.filename)}`
         })) : [];
 
         messages.push({
@@ -1108,6 +1110,73 @@ router.post('/api/fetchinbox', async (req, res) => {
 
 
 // 9️⃣ Fetch Specific Email by Message ID
+// 8️⃣ Download Attachment
+router.get('/api/email/attachment', async (req, res) => {
+  let client;
+  try {
+    const { token, email, messageId, filename } = req.query;
+
+    if (!token || !email || !messageId || !filename) {
+      return res.status(400).send('Missing required parameters');
+    }
+
+    const smtp = await SMTPAuth.findOne({ email, token });
+    if (!smtp) {
+      return res.status(403).send('Invalid token or sender email');
+    }
+
+    const decryptedPass = decrypt(smtp.pass);
+
+    client = new ImapFlow({
+      host: smtp.host,
+      port: 993,
+      secure: true,
+      auth: { user: email, pass: decryptedPass },
+      logger: false,
+      timeout: 60000
+    });
+
+    await client.connect();
+    await client.mailboxOpen('INBOX');
+
+    const messageUids = await client.search({
+      header: { 'Message-ID': messageId }
+    });
+
+    if (!messageUids || messageUids.length === 0) {
+      await client.logout();
+      return res.status(404).send('Message not found');
+    }
+
+    let foundAttachment = null;
+
+    for await (let msg of client.fetch(messageUids[0], { source: true })) {
+      const parsed = await simpleParser(msg.source);
+      if (parsed.attachments) {
+        foundAttachment = parsed.attachments.find(att => att.filename === filename);
+      }
+      break;
+    }
+
+    await client.logout();
+
+    if (!foundAttachment) {
+      return res.status(404).send('Attachment not found');
+    }
+
+    res.setHeader('Content-Type', foundAttachment.contentType);
+    res.setHeader('Content-Disposition', `attachment; filename="${foundAttachment.filename}"`);
+    res.send(foundAttachment.content);
+
+  } catch (err) {
+    console.error('Attachment Download Error:', err);
+    if (client) {
+      try { await client.logout(); } catch (e) { }
+    }
+    res.status(500).send('Failed to download attachment');
+  }
+});
+
 // 9️⃣ Fetch Specific Email by Message ID - Fixed version
 router.post('/api/fetchsingleemail', async (req, res) => {
   let client;
