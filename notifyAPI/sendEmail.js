@@ -665,18 +665,22 @@ router.post('/api/emailforward', async (req, res) => {
         });
 
         if (messageUids && messageUids.length > 0) {
-          console.log(`✅ Found message in ${mailbox}`);
+          console.log(`✅ Found message in ${mailbox}, UID: ${messageUids[0]}`);
           foundMailbox = mailbox;
 
-          // Fetch the complete email
-          for await (let msg of imapClient.fetch(messageUids, {
+          // Fetch only the first matching message
+          const fetchMessages = imapClient.fetch(messageUids.slice(0, 1), {
             byUid: true,
             envelope: true,
             uid: true,
             flags: true,
             source: true,
             bodyStructure: true
-          })) {
+          });
+
+          // Get first message and break immediately
+          for await (let msg of fetchMessages) {
+            console.log('📧 Parsing fetched message...');
             const parsed = await simpleParser(msg.source);
 
             originalEmail = {
@@ -686,10 +690,12 @@ router.post('/api/emailforward', async (req, res) => {
               flags: msg.flags
             };
 
-            console.log('✅ Original email fetched successfully');
-            break;
+            console.log('✅ Original email parsed successfully');
+            break; // Critical: exit loop immediately
           }
-          break;
+
+          console.log('✅ Breaking from mailbox search loop');
+          break; // Exit mailbox search loop
         }
       } catch (err) {
         console.log(`⚠️ Mailbox ${mailbox} not accessible: ${err.message}`);
@@ -697,8 +703,20 @@ router.post('/api/emailforward', async (req, res) => {
       }
     }
 
-    // Close IMAP connection
-    await imapClient.logout();
+    // Close IMAP connection immediately after fetching
+    console.log('🔒 Closing IMAP connection...');
+    try {
+      await imapClient.logout();
+      console.log('✅ IMAP connection closed gracefully');
+    } catch (logoutErr) {
+      console.log('⚠️ IMAP logout failed, forcing close:', logoutErr.message);
+      try {
+        await imapClient.close();
+        console.log('✅ IMAP connection force-closed');
+      } catch (closeErr) {
+        console.log('⚠️ IMAP force-close failed:', closeErr.message);
+      }
+    }
     imapClient = null;
 
     if (!originalEmail) {
@@ -707,6 +725,8 @@ router.post('/api/emailforward', async (req, res) => {
         error: 'Original email not found in any mailbox'
       });
     }
+
+    console.log('📝 Building forwarded email content...');
 
     // Step 2: Build the forwarded email (Gmail-style)
     const original = originalEmail.parsed;
@@ -807,14 +827,31 @@ ${original.text || 'No text content'}
     // Step 3: Prepare attachments
     let forwardedAttachments = [];
     if (includeAttachments && original.attachments && original.attachments.length > 0) {
-      console.log(`📎 Including ${original.attachments.length} attachments`);
+      console.log(`📎 Processing ${original.attachments.length} attachments...`);
 
-      forwardedAttachments = original.attachments.map(att => ({
-        filename: att.filename || 'attachment',
-        content: att.content,
-        contentType: att.contentType || 'application/octet-stream',
-        encoding: 'base64'
-      }));
+      // Limit to 10 attachments or 25MB total to prevent timeouts
+      let totalSize = 0;
+      const maxTotalSize = 25 * 1024 * 1024; // 25MB
+      const maxAttachments = 10;
+
+      for (const att of original.attachments.slice(0, maxAttachments)) {
+        const attSize = att.content ? att.content.length : 0;
+        if (totalSize + attSize > maxTotalSize) {
+          console.log(`⚠️ Attachment size limit reached, skipping remaining attachments`);
+          break;
+        }
+
+        forwardedAttachments.push({
+          filename: att.filename || 'attachment',
+          content: att.content,
+          contentType: att.contentType || 'application/octet-stream',
+          encoding: 'base64'
+        });
+
+        totalSize += attSize;
+      }
+
+      console.log(`✅ Prepared ${forwardedAttachments.length} attachments (${(totalSize / 1024 / 1024).toFixed(2)} MB)`);
     }
 
     // Step 4: Send the forwarded email via SMTP
@@ -839,8 +876,6 @@ ${original.text || 'No text content'}
     const emailOptions = {
       from: fromField,
       to: to,
-      cc: cc,
-      bcc: bcc,
       subject: forwardSubject,
       html: forwardedHtml,
       text: forwardedText,
@@ -850,46 +885,55 @@ ${original.text || 'No text content'}
         'X-Forwarded-By': from,
         'References': originalMessageId,
         'In-Reply-To': originalMessageId
-      },
-      attachments: forwardedAttachments
+      }
     };
 
-    const info = await transporter.sendMail(emailOptions);
-    console.log(`✅ Forwarded email sent: ${info.messageId}`);
+    // Add optional fields only if provided
+    if (cc) emailOptions.cc = cc;
+    if (bcc) emailOptions.bcc = bcc;
+    if (forwardedAttachments.length > 0) {
+      emailOptions.attachments = forwardedAttachments;
+    }
 
-    // Step 5: Save tracking record
+    console.log('📤 Sending email via SMTP...');
+    const info = await transporter.sendMail(emailOptions);
+    console.log(`✅ Forwarded email sent successfully: ${info.messageId}`);
+
+    // Step 5: Save tracking record (async, don't wait)
     const webhookUrl = 'https://meet.onepgr.com/session/smatpTracking';
 
-    const trackingRecord = new EmailTracking({
-      messageId: trackingId,
-      originalMessageId: info.messageId,
-      fromEmail: from,
-      toEmail: to,
-      subject: forwardSubject,
-      webhookUrl: webhookUrl,
-      emailContent: {
-        html: forwardedHtml,
-        text: forwardedText
-      }
-    });
+    // Don't await these - send response immediately
+    Promise.all([
+      EmailTracking.create({
+        messageId: trackingId,
+        originalMessageId: info.messageId,
+        fromEmail: from,
+        toEmail: to,
+        subject: forwardSubject,
+        webhookUrl: webhookUrl,
+        emailContent: {
+          html: forwardedHtml,
+          text: forwardedText
+        }
+      }),
+      sendWebhookNotification(webhookUrl, {
+        event: 'forwarded',
+        trackingId,
+        email: to,
+        from,
+        subject: forwardSubject,
+        timestamp: new Date(),
+        messageId: info.messageId,
+        originalMessageId: originalMessageId,
+        recipients: { to, cc: cc || null, bcc: bcc || null },
+        attachmentsCount: forwardedAttachments.length,
+        senderName: sender_name || null
+      })
+    ]).catch(err => console.error('Background task error:', err));
 
-    await trackingRecord.save();
+    console.log('✅ Sending response to client...');
 
-    // Send webhook notification
-    await sendWebhookNotification(webhookUrl, {
-      event: 'forwarded',
-      trackingId,
-      email: to,
-      from,
-      subject: forwardSubject,
-      timestamp: new Date(),
-      messageId: info.messageId,
-      originalMessageId: originalMessageId,
-      recipients: { to, cc: cc || null, bcc: bcc || null },
-      attachmentsCount: forwardedAttachments.length,
-      senderName: sender_name || null
-    });
-
+    // Send response immediately
     return res.json({
       success: true,
       message: 'Email forwarded successfully',
