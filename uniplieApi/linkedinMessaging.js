@@ -2589,6 +2589,124 @@ router.get('/api/unipile/companyinfo/:identifier', async (req, res) => {
 });
 
 
+
+// Reconnect a disconnected LinkedIn account in Unipile
+router.post('/api/unipile/linkedin/reconnect', async (req, res) => {
+  try {
+    const { user_id } = req.query; // or req.body if you prefer
+    const {
+      auth_type,          // "basic" | "cookie"
+      username,
+      password,
+      access_token,       // li_at
+      premium_token,      // li_a (optional)
+      country,
+      ip,
+      proxy,              // { protocol, host, port, username?, password? }
+      user_agent,
+      sync_limit,         // { chats?: string|number, messages?: string|number }
+      disabled_features,  // ["linkedin_recruiter", ...]
+      recruiter_contract_id
+    } = req.body;
+
+    // 1) Validate base params
+    if (!user_id) {
+      return res.status(400).json({
+        success: false,
+        error: 'user_id query parameter is required'
+      });
+    }
+
+    if (!auth_type || !['basic', 'cookie'].includes(auth_type)) {
+      return res.status(400).json({
+        success: false,
+        error: 'auth_type must be "basic" or "cookie"'
+      });
+    }
+
+    if (auth_type === 'basic' && (!username || !password)) {
+      return res.status(400).json({
+        success: false,
+        error: 'username and password are required for basic auth'
+      });
+    }
+
+    if (auth_type === 'cookie' && !access_token) {
+      return res.status(400).json({
+        success: false,
+        error: 'access_token (li_at) is required for cookie auth'
+      });
+    }
+
+    // 2) Lookup account_id from DB (same style as your status route)
+    const dbResult = await getLinkedInAccountStatus(user_id);
+    if (!dbResult.success || !dbResult.account_id) {
+      return res.status(404).json({
+        success: false,
+        error: 'No LinkedIn account found for this user'
+      });
+    }
+
+    const accountId = dbResult.account_id;
+    console.log(`♻️ Reconnecting LinkedIn for user ${user_id}, account: ${accountId}`);
+
+    // 3) Build Unipile payload
+    const basePayload = {
+      provider: 'LINKEDIN',
+      country,
+      ip,
+      proxy,
+      user_agent,
+      sync_limit,
+      disabled_features,
+      recruiter_contract_id
+    };
+
+    let payload;
+    if (auth_type === 'basic') {
+      payload = {
+        ...basePayload,
+        username,
+        password
+      };
+    } else {
+      payload = {
+        ...basePayload,
+        access_token,
+        premium_token
+      };
+    }
+
+    // 4) Call Unipile reconnect API
+    // POST /api/v1/accounts/{id}
+    const reconnectResponse = await axios.post(
+      `${getBaseUrl()}/accounts/${accountId}`,
+      payload,
+      { headers: getHeaders() }
+    );
+
+    console.log('✅ Reconnect response:', JSON.stringify(reconnectResponse.data, null, 2));
+
+    return res.json({
+      success: true,
+      message: 'LinkedIn account reconnect triggered successfully',
+      data: reconnectResponse.data
+    });
+
+  } catch (err) {
+    console.error('❌ Error reconnecting LinkedIn account:', err.response?.data || err.message);
+
+    // Bubble up Unipile error status if available
+    const status = err.response?.status || 500;
+    return res.status(status).json({
+      success: false,
+      error: 'Failed to reconnect LinkedIn account',
+      details: err.response?.data || err.message
+    });
+  }
+});
+
+
 // ==================== HEALTH CHECK ====================
 
 router.get('/api/unipile/health', (req, res) => {
