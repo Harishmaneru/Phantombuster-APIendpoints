@@ -51,7 +51,17 @@ const handleError = (err, res) => {
   });
 
   const status = err.response?.status || 500;
-  const message = err.response?.data?.error || err.message || 'Internal server error';
+
+  // Forward full error details from Unipile if available
+  if (err.response?.data) {
+    return res.status(status).json({
+      success: false,
+      error: err.response.data,
+      message: err.message
+    });
+  }
+
+  const message = err.message || 'Internal server error';
 
   res.status(status).json({
     success: false,
@@ -2417,10 +2427,12 @@ router.get('/api/unipile/linkedin/user/me', async (req, res) => {
     if (err.response?.status === 404) {
       return res.status(200).json({
         success: false,
-        error: 'User profile not found',
-        details: 'Unable to fetch current user profile from LinkedIn'
+        message: 'User profile not found',
+        details: 'User has not connected a LinkedIn account yet'
       });
     }
+
+
 
     handleError(err, res);
   }
