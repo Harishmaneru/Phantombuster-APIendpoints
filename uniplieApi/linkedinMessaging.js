@@ -1252,7 +1252,7 @@ router.post('/api/unipile/account/disconnect', async (req, res) => {
     console.log('Before disconnect - Status:', currentAccount.status);
 
     const result = await disconnectLinkedInAccount(user_id, reason);
-    
+
     // Verify status was updated
     const updatedAccount = await getAccountStatus(user_id);
     console.log('After disconnect - Status:', updatedAccount.status);
@@ -1740,7 +1740,7 @@ router.get('/api/unipile/account/:accountId/details', async (req, res) => {
 // });
 router.post('/api/unipile/linkedin/invite', async (req, res) => {
   let invitePayload = null; // Declare at function scope for error handling
-  
+
   try {
     const {
       account_id,
@@ -1905,7 +1905,7 @@ router.post('/api/unipile/linkedin/invite', async (req, res) => {
         user_id,
         message
       } = req.body;
-      
+
       // Try to get account_id from user_id if not provided
       let finalAccountId = account_id;
       if (!finalAccountId && user_id) {
@@ -1918,7 +1918,7 @@ router.post('/api/unipile/linkedin/invite', async (req, res) => {
           // Ignore DB errors during error reconstruction
         }
       }
-      
+
       invitePayload = {
         account_id: finalAccountId || null,
         provider_id: null,
@@ -1930,7 +1930,7 @@ router.post('/api/unipile/linkedin/invite', async (req, res) => {
     if (err.response?.data) {
       const unipileError = err.response.data;
       const statusCode = err.response.status;
-      
+
       return res.status(statusCode).json({
         success: false,
         status: statusCode,
@@ -1946,7 +1946,7 @@ router.post('/api/unipile/linkedin/invite', async (req, res) => {
     // Modify handleError to include invitePayload by using a custom response
     const status = err.response?.status || 500;
     const errorMessage = err.response?.data?.error || err.message || 'Internal server error';
-    
+
     res.status(status).json({
       success: false,
       error: errorMessage,
@@ -2290,7 +2290,7 @@ router.get('/api/unipile/linkedin/fetch-profile/:identifier', async (req, res) =
                 return { chatId: null, hasExistingChat: false };
               }
             })(),
-            new Promise((resolve) => 
+            new Promise((resolve) =>
               setTimeout(() => {
                 console.log('Chat lookup timeout - returning profile without chat info');
                 resolve({ chatId: null, hasExistingChat: false, timeout: true });
@@ -2550,6 +2550,41 @@ router.get('/api/unipile/linkedin/status/:identifier', async (req, res) => {
       error: 'Failed to check LinkedIn status',
       details: err.message
     });
+  }
+});
+
+
+// ==================== COMPANY ENDPOINTS ====================
+
+// Get Company Info
+router.get('/api/unipile/companyinfo/:identifier', async (req, res) => {
+  try {
+    const { identifier } = req.params;
+    const { user_id } = req.query;
+
+    if (!user_id) {
+      return res.status(400).json({
+        success: false,
+        error: 'user_id is required'
+      });
+    }
+
+    const dbResult = await getLinkedInAccountStatus(user_id);
+    if (!dbResult.success || !dbResult.account_id) {
+      return res.status(404).json({ success: false, error: 'No LinkedIn account found' });
+    }
+
+    const response = await axios.get(
+      `${getBaseUrl()}/linkedin/company/${identifier}?account_id=${dbResult.account_id}`,
+      { headers: getHeaders() }
+    );
+
+    res.json({
+      success: true,
+      data: response.data
+    });
+  } catch (err) {
+    handleError(err, res);
   }
 });
 
