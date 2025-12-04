@@ -2425,7 +2425,7 @@ router.get('/api/unipile/linkedin/user/me', async (req, res) => {
     console.error('Get current user profile error:', err.response?.data || err.message);
 
     if (err.response?.status === 404) {
-      return res.status(200).json({
+      return res.status(404).json({
         success: false,
         message: 'User profile not found',
         details: 'User has not connected a LinkedIn account yet'
