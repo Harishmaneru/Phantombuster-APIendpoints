@@ -436,6 +436,163 @@ router.post('/api/senderemail/smtpauth', async (req, res) => {
 });
 
 // 2️⃣ Send Email
+// router.post('/api/emailsend', async (req, res) => {
+//   try {
+//     const {
+//       token,
+//       from,
+//       to,
+//       cc,
+//       bcc,
+//       subject,
+//       html,
+//       text,
+//       trackLinks,
+//       sender_name,
+//       trackingPayload,
+//       attachments
+//     } = req.body;
+
+//     if (!token || !from || !to) {
+//       return res.status(400).json({ success: false, error: 'Missing required fields: token, from, to' });
+//     }
+
+//     // Validate that user provided email content
+//     if (!html && !text) {
+//       return res.status(400).json({
+//         success: false,
+//         error: 'Email content is required. Please provide either html or text content.'
+//       });
+//     }
+
+//     const smtp = await SMTPAuth.findOne({ email: from, token });
+//     if (!smtp) {
+//       return res.status(403).json({ success: false, error: 'Invalid token or sender email' });
+//     }
+
+//     const decryptedPass = decrypt(smtp.pass);
+//     const transporter = nodemailer.createTransport({
+//       host: smtp.host,
+//       port: smtp.port,
+//       secure: smtp.port === 465,
+//       auth: { user: from, pass: decryptedPass },
+//       tls: { rejectUnauthorized: false }
+//     });
+
+//     await transporter.verify();
+
+//     const trackingId = crypto.randomBytes(16).toString('hex');
+//     const baseUrl = process.env.BASE_URL || 'https://videoresponse.onepgr.com:3001';
+//     const trackingPixelUrl = `${baseUrl}/api/track/open/${trackingId}`;
+
+//     // Use exactly what user provided - no template processing
+//     let emailHtml = html;
+//     let emailText = text;
+
+//     // Add tracking pixel only if HTML content exists
+//     if (emailHtml) {
+//       emailHtml += `<img src="${trackingPixelUrl}" width="1" height="1" style="display:none;border:0;" alt=""/>\n`;
+//     }
+
+//     // Track links only if requested and HTML content exists
+//     if (emailHtml && trackLinks) {
+//       emailHtml = emailHtml.replace(/href=["'](.*?)["']/g, (match, url) => {
+//         if (url.startsWith('http') && !url.includes(baseUrl)) {
+//           const encodedUrl = encodeURIComponent(url);
+//           return `href="${baseUrl}/api/track/click/${trackingId}?url=${encodedUrl}"`;
+//         }
+//         return match;
+//       });
+//     }
+
+//     // Format from field with sender name if provided
+//     const fromField = sender_name ? `${sender_name} <${from}>` : from;
+
+//     // Encode subject properly for email headers (handles HTML content)
+//     const encodedSubject = encodeSubjectForEmail(subject);
+
+//     const emailOptions = {
+//       from: fromField,
+//       to,
+//       subject: encodedSubject,
+//       html: emailHtml,
+//       text: emailText,
+//       messageId: `<${trackingId}@${from.split('@')[1]}>`,
+//       headers: {
+//         'X-Tracking-ID': trackingId,
+//         'References': `<${trackingId}@${from.split('@')[1]}>`
+//       }
+//     };
+
+//     if (cc) emailOptions.cc = cc;
+//     if (bcc) emailOptions.bcc = bcc;
+//     if (attachments && Array.isArray(attachments) && attachments.length > 0) {
+//       emailOptions.attachments = attachments;
+//     }
+
+//     const info = await transporter.sendMail(emailOptions);
+
+//     // Set webhook URL for all events
+//     const webhookUrl = 'https://meet.onepgr.com/session/smatpTracking';
+
+//     const trackingRecord = new EmailTracking({
+//       messageId: trackingId,
+//       originalMessageId: info.messageId,
+//       fromEmail: from,
+//       toEmail: to,
+//       subject,
+//       webhookUrl: webhookUrl, // Always store webhook URL for all emails
+//       emailContent: {
+//         html: html,
+//         text: text
+//       },
+//       trackingPayload: trackingPayload || null
+//     });
+
+//     await trackingRecord.save();
+
+//     // Send immediate notification for all emails
+//     await sendWebhookNotification(webhookUrl, {
+//       event: 'sent',
+//       trackingId,
+//       email: to,
+//       from,
+//       subject: subject, // Use original subject for webhook
+//       timestamp: new Date(),
+//       messageId: info.messageId,
+//       recipients: { to, cc: cc || null, bcc: bcc || null },
+//       contentUsed: {
+//         html: !!html,
+//         text: !!text,
+//         trackingEnabled: !!trackLinks,
+//         attachmentsCount: attachments ? attachments.length : 0
+//       },
+//       trackingPayload: trackingPayload || null,
+//       senderName: sender_name || null
+//     });
+
+//     return res.json({
+//       success: true,
+//       messageId: info.messageId,
+//       trackingId,
+//       recipients: { to, cc: cc || null, bcc: bcc || null },
+//       contentUsed: {
+//         html: !!html,
+//         text: !!text,
+//         trackingEnabled: !!trackLinks,
+//         attachmentsCount: attachments ? attachments.length : 0
+//       },
+//       trackingPayload: trackingPayload || null,
+//       senderName: sender_name || null
+//     });
+//   } catch (err) {
+//     console.error('Email Send Error:', err);
+//     return res.status(500).json({ success: false, error: err.message });
+//   }
+// });
+
+
+
 router.post('/api/emailsend', async (req, res) => {
   try {
     const {
@@ -495,12 +652,31 @@ router.post('/api/emailsend', async (req, res) => {
     }
 
     // Track links only if requested and HTML content exists
+    // Track links only if requested and HTML content exists
+    // Skip tracking for links with data-no-track or data-media-link attributes
     if (emailHtml && trackLinks) {
-      emailHtml = emailHtml.replace(/href=["'](.*?)["']/g, (match, url) => {
+      // Use a more sophisticated regex that captures the full <a> tag
+      emailHtml = emailHtml.replace(/<a\s+([^>]*)href=["']([^"']+)["']([^>]*)>(.*?)<\/a>/gi, (match, beforeHref, url, afterHref, content) => {
+        const fullAttributes = beforeHref + 'href="' + url + '"' + afterHref;
+
+        // Check if this link should NOT be tracked
+        const shouldSkipTracking =
+          fullAttributes.includes('data-no-track="true"') ||
+          fullAttributes.includes("data-no-track='true'") ||
+          fullAttributes.includes('data-media-link="true"') ||
+          fullAttributes.includes("data-media-link='true'");
+
+        // If it's a media link or marked as no-track, keep the direct URL
+        if (shouldSkipTracking) {
+          return match; // Return original link unchanged
+        }
+
+        // Otherwise, wrap with tracking URL
         if (url.startsWith('http') && !url.includes(baseUrl)) {
           const encodedUrl = encodeURIComponent(url);
-          return `href="${baseUrl}/api/track/click/${trackingId}?url=${encodedUrl}"`;
+          return `<a ${beforeHref}href="${baseUrl}/api/track/click/${trackingId}?url=${encodedUrl}"${afterHref}>${content}</a>`;
         }
+
         return match;
       });
     }
@@ -590,6 +766,8 @@ router.post('/api/emailsend', async (req, res) => {
     return res.status(500).json({ success: false, error: err.message });
   }
 });
+
+
 
 //  Forward Email
 // Fixed Email Forward API - Gmail-style forwarding
