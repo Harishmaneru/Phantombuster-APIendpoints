@@ -20,17 +20,17 @@ const isTrialActive = (trialData) => {
 // Helper function to increment interview creation count
 const incrementInterviewCount = (userId) => {
     console.log('Incrementing interview count for userId:', userId);
-    
+
     const trialData = freeTrials.get(userId);
     if (trialData) {
         trialData.interviewPageCreationCount = (trialData.interviewPageCreationCount || 0) + 1;
         trialData.lastInterviewCreated = new Date().toISOString();
         freeTrials.set(userId, trialData);
-        
+
         console.log(`Interview count updated to ${trialData.interviewPageCreationCount} for user ${userId}`);
         return trialData.interviewPageCreationCount;
     }
-    
+
     console.log(`No trial found for user ${userId}`);
     return 0;
 };
@@ -39,11 +39,11 @@ const incrementInterviewCount = (userId) => {
 const canCreateInterview = (userId) => {
     const trialData = freeTrials.get(userId);
     if (!trialData) return false;
-    
+
     const isActive = isTrialActive(trialData);
     const currentCount = trialData.interviewPageCreationCount || 0;
     const maxInterviews = 5; // Free trial limit
-    
+
     return isActive && currentCount < maxInterviews;
 };
 
@@ -67,12 +67,12 @@ const activateFreeTrial = async (userId) => {
         // Check if user already has an active trial
         if (existingTrial) {
             const isActive = isTrialActive(existingTrial);
-            
+
             if (isActive) {
                 // Trial still active
                 const remainingDays = Math.ceil((new Date(existingTrial.endDate) - now) / (1000 * 60 * 60 * 24));
                 const interviewCount = existingTrial.interviewPageCreationCount || 0;
-                
+
                 return {
                     success: true,
                     message: "Free trial is already active",
@@ -123,7 +123,7 @@ const activateFreeTrial = async (userId) => {
                                 features: ["Unlimited interviews", "Extended video length", "Basic analytics"]
                             },
                             {
-                                type: "business", 
+                                type: "business",
                                 name: "Business Plan",
                                 features: ["Everything in Personal", "Advanced analytics", "Custom branding", "Team management"]
                             }
@@ -210,7 +210,7 @@ const checkTrialStatus = (userId) => {
     }
 
     const trialData = freeTrials.get(userId);
-    
+
     if (!trialData) {
         return {
             success: false,
@@ -229,10 +229,10 @@ const checkTrialStatus = (userId) => {
 
     const isActive = isTrialActive(trialData);
     const now = new Date();
-    
+
     if (isActive) {
         const remainingDays = Math.ceil((new Date(trialData.endDate) - now) / (1000 * 60 * 60 * 24));
-        
+
         return {
             success: true,
             message: "Trial status retrieved successfully",
@@ -248,7 +248,7 @@ const checkTrialStatus = (userId) => {
         };
     } else {
         const expiredDays = Math.ceil((now - new Date(trialData.endDate)) / (1000 * 60 * 60 * 24));
-        
+
         return {
             success: true,
             message: "Trial status retrieved successfully",
@@ -295,8 +295,8 @@ router.post('/activatefreetrial', async (req, res) => {
             dataPresent: !!response.data
         });
 
-        const statusCode = response.success ? (response.data?.status === 'active' && response.message.includes('already') ? 200 : 201) : 
-                          (response.error === 'TRIAL_EXPIRED' ? 403 : 400);
+        const statusCode = response.success ? (response.data?.status === 'active' && response.message.includes('already') ? 200 : 201) :
+            (response.error === 'TRIAL_EXPIRED' ? 403 : 400);
 
         res.status(statusCode).json(response);
     } catch (error) {
@@ -322,7 +322,7 @@ router.get('/checktrialstatus', (req, res) => {
     console.log('Request query:', req.query);
 
     const { userId } = req.query;
-    
+
     try {
         console.log('Processing request for userId:', userId);
         const response = checkTrialStatus(userId);
@@ -371,12 +371,12 @@ router.post('/incrementinterviewcount', (req, res) => {
 
     try {
         console.log('Processing request for userId:', userId);
-        
+
         // Check if user can create more interviews
         if (!canCreateInterview(userId)) {
             const trialData = freeTrials.get(userId);
             const currentCount = trialData ? (trialData.interviewPageCreationCount || 0) : 0;
-            
+
             return res.status(403).json({
                 success: false,
                 message: "Interview creation limit reached or trial expired",
