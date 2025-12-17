@@ -1459,6 +1459,8 @@ router.get('/cpanel/user-all-emails/:userId', async (req, res) => {
             domain: domain.toLowerCase()
           });
 
+          console.log(`Raw cPanel response for ${domain}:`, JSON.stringify(emailResult, null, 2));
+
           if (emailResult.status === 1 && emailResult.data) {
             // Filter emails to only include those for this specific domain
             const domainEmails = emailResult.data.filter(email =>

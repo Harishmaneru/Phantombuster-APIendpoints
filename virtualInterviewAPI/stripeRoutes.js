@@ -3419,6 +3419,7 @@ router.post('/get-subscription-info-by-app', async (req, res) => {
                 // kampaignai: 'http://localhost:4200',
                 gps: 'https://gps.onepgr.com',
                 getsalesgpt: 'https://sales.onepgr.com',
+                liame: 'https://liame.onepgr.com',
             };
 
             let returnUrl = appUrlMap[app] ? `${appUrlMap[app]}/profile` : 'https://onepgr.com';
