@@ -2851,6 +2851,7 @@ router.post('/create-checkout-session-by-app', async (req, res) => {
                 case 'gps': return `${baseUrl}/gps-success?session_id={CHECKOUT_SESSION_ID}`;
                 case 'getsalesgpt': return `${baseUrl}/sales-success?session_id={CHECKOUT_SESSION_ID}`;
                 case 'onboarding-kai': return `${baseUrl}/get-started/success?session_id={CHECKOUT_SESSION_ID}`;
+                case 'liame': return `${baseUrl}/liame-success?session_id={CHECKOUT_SESSION_ID}`;
                 default: return `${baseUrl}/success?session_id={CHECKOUT_SESSION_ID}`;
             }
         };
