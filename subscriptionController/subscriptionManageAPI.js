@@ -97,7 +97,7 @@ async function fetchSubscription(req, res) {
         const sub = await SubscriptionFlags.findOne({ userId, app });
 
         if (!sub) {
-            return res.status(404).json({ success: false, message: "Subscription not found" });
+            return res.status(200).json({ success: false, message: "No active subscription. User has not subscribed yet." });
         }
 
         res.json({ success: true, data: sub });
