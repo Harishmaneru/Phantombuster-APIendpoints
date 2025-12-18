@@ -141,7 +141,7 @@ async function updateUsage(req, res) {
 
         // Validate usage details and check limits before updating
         const validationResults = [];
-        const updatedUsage = sub.usage ? { ...sub.usage.toObject() } : {};
+        const updatedUsage = sub.usage ? { ...sub.usage } : {};
         let hasLimitExceeded = false;
 
         for (let key in usageDetails) {
