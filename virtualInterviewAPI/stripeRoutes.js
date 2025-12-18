@@ -3014,7 +3014,7 @@ router.post('/create-billing-portal-session-by-app', async (req, res) => {
             kampaignai: 'https://kampaign.onepgr.com',
             gps: 'http://localhost:4200',
             getsalesgpt: 'http://localhost:4200',
-            liame: 'http://localhost:4200',
+            liame: 'https://liame.onepgr.com',
         } : {
             // Production URLs
             kampaignai: 'https://kampaign.onepgr.com',
