@@ -193,37 +193,37 @@ router.post('/api/warmup/add-inbox', async (req, res) => {
 
     } catch (firstAttemptError) {
       console.log('❌ First attempt failed, trying external email providers...');
-      
+
       // STEP 2: If first attempt fails, try common external email providers
       const domain = email.split('@')[1];
       console.log(`📧 Detected external domain: ${domain}`);
-      
+
       // Enhanced list of common email providers and their servers
       const commonProviders = [
         // Namecheap PrivateEmail (your case)
         { name: 'PrivateEmail', smtp_host: 'mail.privateemail.com', imap_host: 'mail.privateemail.com', port: 465, tls: true },
-        
+
         // Google Workspace / Gmail
         { name: 'Google', smtp_host: 'smtp.gmail.com', imap_host: 'imap.gmail.com', port: 465, tls: true },
         { name: 'Google Alt', smtp_host: 'smtp.gmail.com', imap_host: 'imap.gmail.com', port: 587, tls: false },
-        
+
         // Microsoft Outlook/Office365
         { name: 'Outlook', smtp_host: 'smtp.office365.com', imap_host: 'outlook.office365.com', port: 587, tls: true },
-        
+
         // GoDaddy
         { name: 'GoDaddy', smtp_host: 'smtp.secureserver.net', imap_host: 'imap.secureserver.net', port: 465, tls: true },
         { name: 'GoDaddy Alt', smtp_host: 'smtp.secureserver.net', imap_host: 'imap.secureserver.net', port: 587, tls: false },
-        
+
         // Bluehost
         { name: 'Bluehost', smtp_host: 'mail.${domain}', imap_host: 'mail.${domain}', port: 465, tls: true },
         { name: 'Bluehost Alt', smtp_host: 'mail.${domain}', imap_host: 'mail.${domain}', port: 587, tls: false },
-        
+
         // SiteGround
         { name: 'SiteGround', smtp_host: 'mail.${domain}', imap_host: 'mail.${domain}', port: 465, tls: true },
-        
+
         // HostGator
         { name: 'HostGator', smtp_host: 'mail.${domain}', imap_host: 'mail.${domain}', port: 465, tls: true },
-        
+
         // Standard domain-based fallbacks (keep your existing logic but improved)
         { name: 'Domain Mail', smtp_host: `mail.${domain}`, imap_host: `mail.${domain}`, port: 465, tls: true },
         { name: 'Domain SMTP', smtp_host: `smtp.${domain}`, imap_host: `imap.${domain}`, port: 465, tls: true },
@@ -241,7 +241,7 @@ router.post('/api/warmup/add-inbox', async (req, res) => {
           // Replace template variables in hostnames
           const smtpHost = provider.smtp_host.replace('${domain}', domain);
           const imapHost = provider.imap_host.replace('${domain}', domain);
-          
+
           const fallbackPayload = {
             email: email,
             sender_first: sender_first,
@@ -273,7 +273,7 @@ router.post('/api/warmup/add-inbox', async (req, res) => {
 
           console.log(`🔄 Trying ${provider.name}: SMTP ${smtpHost}:${provider.port} (TLS: ${provider.tls})`);
           fallbackResponse = await axiosInstance.post('/inboxes/advanced', fallbackPayload);
-          
+
           if (fallbackResponse.data?.code === 'created') {
             console.log(`✅ Success with ${provider.name} provider`);
             successfulProvider = provider;
@@ -561,7 +561,7 @@ router.post('/api/warmup/add-inbox', async (req, res) => {
 
 //             console.log(`🔁 Retrying with ${host}...`);
 //             fallbackResponse = await axiosInstance.post('/inboxes/advanced', fallbackPayload);
-            
+
 //             if (fallbackResponse.data?.code === 'created') {
 //               console.log(`✅ Fallback succeeded with ${host}`);
 //               break;
@@ -1353,27 +1353,27 @@ router.post('/api/warmup/inbox-health', async (req, res) => {
   }
 });
 /**
- * 10. Get account usage and limits
+ * 10. Get account credits and limits
  *
- *    GET /api/warmup/account-usage
+ *    GET /api/warmup/account-credits
  *
- *    → Returns account usage statistics and limits
+ *    → Returns account credits and usage statistics
  *
- *    Endpoint hit: GET /v1/account/usage
- *    Documentation: https://docs.warmupinbox.com/
+ *    Endpoint hit: GET /v1/account/credits
+ *    Documentation: https://api.warmupinbox.com/api-doc
  */
-router.get('/api/warmup/account-usage', async (req, res) => {
+router.get('/api/warmup/account-credits', async (req, res) => {
   try {
-    // GET /v1/account/usage
-    const response = await axiosInstance.get('/account/usage');
+    // GET /v1/account/credits
+    const response = await axiosInstance.get('/account/credits');
 
     return res.status(200).json({
       status: "1",
-      message: "Fetched account usage successfully.",
+      message: "Fetched account credits successfully.",
       data: response.data
     });
   } catch (error) {
-    console.error('Error fetching account usage:', error.response?.data || error.message);
+    console.error('Error fetching account credits:', error.response?.data || error.message);
     return res.status(error.response?.status || 500).json({
       status: "-1",
       message: error.response?.data?.message || error.message
@@ -1664,7 +1664,7 @@ router.post('/api/warmup/create-inbox-advanced', async (req, res) => {
 });
 
 
- 
+
 
 
 
