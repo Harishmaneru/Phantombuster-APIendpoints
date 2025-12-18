@@ -2777,7 +2777,7 @@ router.post('/create-checkout-session-by-app', async (req, res) => {
             kampaignai: 'http://localhost:4200',
             gps: 'http://localhost:4200',
             getsalesgpt: 'http://localhost:4200',
-            liame: 'http://localhost:4200',
+            liame: 'https://liame.onepgr.com',
         } : {
             kampaignai: 'https://kampaign.onepgr.com',
             gps: 'https://gps.onepgr.com',
