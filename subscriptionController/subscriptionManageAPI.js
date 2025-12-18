@@ -27,13 +27,10 @@ const SubscriptionFlagsSchema = new mongoose.Schema({
     userId: { type: String, required: true },
     app: { type: String, required: true },
     subscription: { type: Object, required: true }, // dynamic object from frontend
-    usage: {
-        campaignsUsed: { type: Number, default: 0 },
-        domainsUsed: { type: Number, default: 0 },
-        emailsUsed: { type: Number, default: 0 }
-    }
+    usage: { type: Object, default: {} }
 }, {
     timestamps: true,
+    minimize: false, // Ensure empty objects are saved
     collection: 'subscription_flags' 
 });
 
@@ -122,10 +119,15 @@ async function updateUsage(req, res) {
         }
 
         // Check if subscription is active
-        if (sub.subscription.payment && sub.subscription.payment.status !== 'active') {
+        const paymentStatus = sub.subscription.payment?.status;
+        const allowedStatuses = ['active', 'trialing', 'paid', 'succeeded'];
+        
+        if (sub.subscription.payment && paymentStatus && !allowedStatuses.includes(paymentStatus)) {
+            console.log(`UpdateUsage: Subscription not active for userId: ${userId}, app: ${app}. Status: ${paymentStatus}`);
             return res.status(403).json({
                 success: false,
-                message: "Subscription is not active"
+                message: "Subscription is not active",
+                currentStatus: paymentStatus
             });
         }
 
@@ -139,50 +141,51 @@ async function updateUsage(req, res) {
 
         // Validate usage details and check limits before updating
         const validationResults = [];
-        const updatedUsage = { ...sub.usage };
+        const updatedUsage = sub.usage ? { ...sub.usage.toObject() } : {};
         let hasLimitExceeded = false;
 
         for (let key in usageDetails) {
-            if (sub.usage[key] !== undefined && typeof usageDetails[key] === 'number') {
-                const newUsage = sub.usage[key] + usageDetails[key];
+            const currentUsage = (sub.usage && sub.usage[key]) || 0;
+            if (typeof usageDetails[key] === 'number') {
+                const newUsage = currentUsage + usageDetails[key];
                 const featureKey = key.replace("Used", "");
 
                 // Check limits
-                if (sub.subscription.features && sub.subscription.features[featureKey]) {
+                if (sub.subscription.features && sub.subscription.features[featureKey] !== undefined) {
                     const limit = sub.subscription.features[featureKey];
 
-                    if (newUsage > limit) {
+                    if (limit !== "unlimited" && newUsage > limit) {
                         hasLimitExceeded = true;
                         validationResults.push({
                             feature: featureKey,
-                            currentUsage: sub.usage[key],
+                            currentUsage: currentUsage,
                             requestedIncrement: usageDetails[key],
                             newTotal: newUsage,
                             limit: limit,
                             status: "limit_exceeded",
-                            message: `Cannot create ${usageDetails[key]} more ${featureKey}. You have ${sub.usage[key]}/${limit} used.`
+                            message: `Cannot update ${featureKey}. You have ${currentUsage}/${limit} used.`
                         });
                     } else {
                         validationResults.push({
                             feature: featureKey,
-                            currentUsage: sub.usage[key],
+                            currentUsage: currentUsage,
                             requestedIncrement: usageDetails[key],
                             newTotal: newUsage,
                             limit: limit,
                             status: "allowed",
-                            message: `Successfully created ${usageDetails[key]} ${featureKey}. Total usage: ${newUsage}/${limit}`
+                            message: `Successfully updated ${featureKey}. Total usage: ${newUsage}/${limit}`
                         });
                         updatedUsage[key] = newUsage;
                     }
                 } else {
                     validationResults.push({
                         feature: featureKey,
-                        currentUsage: sub.usage[key],
+                        currentUsage: currentUsage,
                         requestedIncrement: usageDetails[key],
                         newTotal: newUsage,
                         limit: "unlimited",
                         status: "allowed",
-                        message: `Successfully created ${usageDetails[key]} ${featureKey}. No usage limits apply.`
+                        message: `Successfully updated ${featureKey}. No usage limits apply.`
                     });
                     updatedUsage[key] = newUsage;
                 }
@@ -207,6 +210,7 @@ async function updateUsage(req, res) {
 
         // All updates allowed, proceed with saving
         sub.usage = updatedUsage;
+        sub.markModified('usage'); // Tell Mongoose the usage object has changed
         await sub.save();
 
         // Return detailed success response
@@ -242,14 +246,20 @@ async function checkUsageLimit(req, res) {
 
         const sub = await SubscriptionFlags.findOne({ userId, app });
         if (!sub) {
+            console.log(`CheckUsageLimit: Subscription not found for userId: ${userId}, app: ${app}`);
             return res.status(404).json({ success: false, message: "Subscription not found" });
         }
 
         // Check if subscription is active
-        if (sub.subscription.payment && sub.subscription.payment.status !== 'active') {
+        const paymentStatus = sub.subscription.payment?.status;
+        const allowedStatuses = ['active', 'trialing', 'paid', 'succeeded'];
+        
+        if (sub.subscription.payment && paymentStatus && !allowedStatuses.includes(paymentStatus)) {
+            console.log(`CheckUsageLimit: Subscription not active for userId: ${userId}, app: ${app}. Status: ${paymentStatus}`);
             return res.status(403).json({
                 success: false,
-                message: "Subscription is not active"
+                message: "Subscription is not active",
+                currentStatus: paymentStatus
             });
         }
 
@@ -277,7 +287,7 @@ async function checkUsageLimit(req, res) {
         const featureKey = action; // e.g., "campaigns", "domains", "emails"
         const usageKey = `${action}Used`;
         const limit = sub.subscription.features[featureKey];
-        const currentUsage = sub.usage[usageKey] || 0;
+        const currentUsage = (sub.usage && sub.usage[usageKey]) || 0;
 
         if (currentUsage >= limit) {
             // Return 200 OK - limit exceeded but check completed successfully
