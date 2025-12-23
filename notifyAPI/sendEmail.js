@@ -646,8 +646,8 @@ router.post('/api/emailsend', async (req, res) => {
     let emailHtml = html;
     let emailText = text;
 
-    // Add tracking pixel only if HTML content exists
-    if (emailHtml) {
+    // Add tracking pixel only if HTML content exists AND link tracking is enabled
+    if (emailHtml && trackLinks) {
       emailHtml += `<img src="${trackingPixelUrl}" width="1" height="1" style="display:none;border:0;" alt=""/>\n`;
     }
 
