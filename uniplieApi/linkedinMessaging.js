@@ -2,6 +2,7 @@ const express = require('express');
 const axios = require('axios');
 const FormData = require('form-data');
 const fs = require('fs');
+const NodeCache = require('node-cache');
 const router = express.Router();
 
 // Import LinkedIn account service
@@ -28,6 +29,30 @@ const validateConfig = () => {
 };
 
 validateConfig();
+
+// ==================== CACHING ====================
+// Cache for LinkedIn profile data to reduce API calls and prevent rate limits
+// TTL: 30 minutes (profiles don't change frequently)
+const profileCache = new NodeCache({ 
+  stdTTL: 30 * 60, // 30 minutes in seconds
+  checkperiod: 60, // Check for expired keys every minute
+  useClones: false // Better performance, we don't need deep cloning
+});
+
+// Cache for chat lookup results (shorter TTL since chats can change)
+const chatCache = new NodeCache({
+  stdTTL: 10 * 60, // 10 minutes
+  checkperiod: 60
+});
+
+// Helper function to generate cache keys
+const getProfileCacheKey = (identifier, accountId) => {
+  return `profile:${accountId}:${identifier}`;
+};
+
+const getChatCacheKey = (accountId, providerId) => {
+  return `chat:${accountId}:${providerId}`;
+};
 
 // Build base URL from environment
 const getBaseUrl = () => {
@@ -2153,7 +2178,7 @@ router.get('/api/unipile/linkedin/connection-status/:identifier', async (req, re
 router.get('/api/unipile/linkedin/fetch-profile/:identifier', async (req, res) => {
   try {
     const { identifier } = req.params;
-    const { account_id, user_id } = req.query;
+    const { account_id, user_id, force_refresh } = req.query;
 
     // Get account_id from user_id if not provided
     let finalAccountId = account_id;
@@ -2171,13 +2196,34 @@ router.get('/api/unipile/linkedin/fetch-profile/:identifier', async (req, res) =
       });
     }
 
-    // Call Unipile API to get user details
-    const response = await axios.get(
-      `${getBaseUrl()}/users/${encodeURIComponent(identifier)}?account_id=${finalAccountId}`,
-      { headers: getHeaders() }
-    );
+    // Check cache first (unless force_refresh is requested)
+    const cacheKey = getProfileCacheKey(identifier, finalAccountId);
+    let userProfile = null;
+    let fromCache = false;
 
-    const userProfile = response.data;
+    if (force_refresh !== 'true' && force_refresh !== '1') {
+      const cachedData = profileCache.get(cacheKey);
+      if (cachedData) {
+        userProfile = cachedData;
+        fromCache = true;
+        console.log(`✅ [Cache HIT] Profile for ${identifier} (account: ${finalAccountId})`);
+      }
+    }
+
+    // If not in cache, fetch from Unipile API
+    if (!userProfile) {
+      console.log(`🔄 [Cache MISS] Fetching profile for ${identifier} from Unipile API`);
+      const response = await axios.get(
+        `${getBaseUrl()}/users/${encodeURIComponent(identifier)}?account_id=${finalAccountId}`,
+        { headers: getHeaders() }
+      );
+
+      userProfile = response.data;
+
+      // Cache the profile data
+      profileCache.set(cacheKey, userProfile);
+      console.log(`💾 [Cache SET] Profile for ${identifier} cached for 30 minutes`);
+    }
     let chatId = null;
     let hasExistingChat = false;
 
@@ -2191,11 +2237,31 @@ router.get('/api/unipile/linkedin/fetch-profile/:identifier', async (req, res) =
       const publicIdentifier = userProfile?.public_identifier || identifier;
 
       if (providerId || publicIdentifier) {
+        // Check cache for chat lookup first
+        const chatCacheKey = getChatCacheKey(finalAccountId, providerId || publicIdentifier);
+        let chatResult = null;
+        let chatFromCache = false;
+
+        if (force_refresh !== 'true' && force_refresh !== '1') {
+          const cachedChat = chatCache.get(chatCacheKey);
+          if (cachedChat) {
+            chatResult = cachedChat;
+            chatFromCache = true;
+            console.log(`✅ [Cache HIT] Chat lookup for ${providerId || publicIdentifier}`);
+          }
+        }
+
         // Helper function to find chat with timeout
         const findChatWithTimeout = async (timeoutMs = 3000) => {
+          // Return cached result if available
+          if (chatResult) {
+            return chatResult;
+          }
+
           return Promise.race([
             (async () => {
               try {
+                console.log(`🔄 [Cache MISS] Fetching chats for ${providerId || publicIdentifier}`);
                 // Fetch chats with higher limit to find existing chats (only for connected profiles)
                 const chatsResponse = await axios.get(
                   `${getBaseUrl()}/chats?account_id=${finalAccountId}&limit=250`,
@@ -2289,10 +2355,21 @@ router.get('/api/unipile/linkedin/fetch-profile/:identifier', async (req, res) =
                 if (userChat) {
                   const foundChatId = userChat.id || userChat.chat_id || userChat.chatId || null;
                   console.log(`Chat found: ${foundChatId} for user ${providerId || publicIdentifier}`);
-                  return { chatId: foundChatId, hasExistingChat: !!foundChatId };
+                  const result = { chatId: foundChatId, hasExistingChat: !!foundChatId };
+                  
+                  // Cache the chat lookup result
+                  chatCache.set(chatCacheKey, result);
+                  console.log(`💾 [Cache SET] Chat lookup for ${providerId || publicIdentifier} cached for 10 minutes`);
+                  
+                  return result;
                 } else {
                   console.log(`No chat found for user ${providerId || publicIdentifier}`);
-                  return { chatId: null, hasExistingChat: false };
+                  const result = { chatId: null, hasExistingChat: false };
+                  
+                  // Cache negative result too (to avoid repeated lookups)
+                  chatCache.set(chatCacheKey, result);
+                  
+                  return result;
                 }
               } catch (chatError) {
                 console.error('Could not fetch chat ID:', chatError.message);
@@ -2311,7 +2388,9 @@ router.get('/api/unipile/linkedin/fetch-profile/:identifier', async (req, res) =
 
         // Try to find chat with 3 second timeout (non-blocking)
         try {
-          const chatResult = await findChatWithTimeout(3000);
+          if (!chatResult) {
+            chatResult = await findChatWithTimeout(3000);
+          }
           chatId = chatResult.chatId;
           hasExistingChat = chatResult.hasExistingChat;
         } catch (error) {
@@ -2349,6 +2428,7 @@ router.get('/api/unipile/linkedin/fetch-profile/:identifier', async (req, res) =
         has_existing_chat: hasExistingChat
       },
       account_id: finalAccountId,
+      cached: fromCache,
       fetched_at: new Date()
     });
 
@@ -2719,9 +2799,127 @@ router.post('/api/unipile/linkedin/reconnect', async (req, res) => {
 });
 
 
+// ==================== CACHE MANAGEMENT ====================
+
+// Get cache statistics
+router.get('/api/unipile/cache/stats', (req, res) => {
+  const profileStats = profileCache.getStats();
+  const chatStats = chatCache.getStats();
+
+  res.json({
+    success: true,
+    cache_stats: {
+      profile_cache: {
+        keys: profileStats.keys,
+        hits: profileStats.hits,
+        misses: profileStats.misses,
+        ksize: profileStats.ksize,
+        vsize: profileStats.vsize
+      },
+      chat_cache: {
+        keys: chatStats.keys,
+        hits: chatStats.hits,
+        misses: chatStats.misses,
+        ksize: chatStats.ksize,
+        vsize: chatStats.vsize
+      }
+    },
+    cache_config: {
+      profile_ttl: '30 minutes',
+      chat_ttl: '10 minutes'
+    }
+  });
+});
+
+// Clear profile cache
+router.delete('/api/unipile/cache/profile', (req, res) => {
+  const beforeCount = profileCache.keys().length;
+  profileCache.flushAll();
+  
+  res.json({
+    success: true,
+    message: 'Profile cache cleared',
+    cleared_keys: beforeCount
+  });
+});
+
+// Clear chat cache
+router.delete('/api/unipile/cache/chat', (req, res) => {
+  const beforeCount = chatCache.keys().length;
+  chatCache.flushAll();
+  
+  res.json({
+    success: true,
+    message: 'Chat cache cleared',
+    cleared_keys: beforeCount
+  });
+});
+
+// Clear all caches
+router.delete('/api/unipile/cache/all', (req, res) => {
+  const profileCount = profileCache.keys().length;
+  const chatCount = chatCache.keys().length;
+  
+  profileCache.flushAll();
+  chatCache.flushAll();
+  
+  res.json({
+    success: true,
+    message: 'All caches cleared',
+    cleared_keys: {
+      profile: profileCount,
+      chat: chatCount,
+      total: profileCount + chatCount
+    }
+  });
+});
+
+// Clear specific profile from cache
+router.delete('/api/unipile/cache/profile/:identifier', async (req, res) => {
+  try {
+    const { identifier } = req.params;
+    const { account_id, user_id } = req.query;
+
+    // Get account_id from user_id if not provided
+    let finalAccountId = account_id;
+    if (!finalAccountId && user_id) {
+      const dbResult = await getLinkedInAccountStatus(user_id);
+      if (dbResult.success && dbResult.account_id) {
+        finalAccountId = dbResult.account_id;
+      }
+    }
+
+    if (!finalAccountId) {
+      return res.status(400).json({
+        success: false,
+        error: 'account_id or user_id is required'
+      });
+    }
+
+    const cacheKey = getProfileCacheKey(identifier, finalAccountId);
+    const deleted = profileCache.del(cacheKey);
+    
+    res.json({
+      success: true,
+      message: deleted ? 'Profile removed from cache' : 'Profile not found in cache',
+      cache_key: cacheKey,
+      deleted: deleted
+    });
+  } catch (err) {
+    res.status(500).json({
+      success: false,
+      error: 'Failed to clear cache entry',
+      message: err.message
+    });
+  }
+});
+
 // ==================== HEALTH CHECK ====================
 
 router.get('/api/unipile/health', (req, res) => {
+  const profileStats = profileCache.getStats();
+  const chatStats = chatCache.getStats();
+
   res.json({
     success: true,
     message: 'Unipile API proxy is running',
@@ -2729,6 +2927,12 @@ router.get('/api/unipile/health', (req, res) => {
       subdomain: process.env.UNIPILE_SUBDOMAIN,
       port: process.env.UNIPILE_PORT,
       api_key_configured: !!process.env.UNIPILE_API_KEY
+    },
+    cache_status: {
+      profile_cache_keys: profileStats.keys,
+      chat_cache_keys: chatStats.keys,
+      profile_cache_hits: profileStats.hits,
+      chat_cache_hits: chatStats.hits
     }
   });
 });
