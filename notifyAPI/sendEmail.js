@@ -3480,6 +3480,143 @@ router.post('/api/fetchsent', async (req, res) => {
   }
 });
 
+
+// 🔟 Fetch Full Conversation (Sent Email + Replies)
+router.post('/api/fetch-conversation', async (req, res) => {
+  let client;
+  try {
+    const { token, email, messageId } = req.body;
+
+    // 1. Validation
+    if (!token || !email || !messageId) {
+      return res.status(400).json({ success: false, error: 'Missing required fields: token, email, messageId' });
+    }
+
+    // 2. Auth Lookup
+    const smtp = await SMTPAuth.findOne({ email, token });
+    if (!smtp) {
+      return res.status(403).json({ success: false, error: 'Invalid token or sender email' });
+    }
+
+    // 3. Decrypt Password
+    let decryptedPass;
+    try {
+      decryptedPass = decrypt(smtp.pass);
+    } catch (decryptError) {
+      return res.status(500).json({ success: false, error: 'Failed to decrypt stored credentials' });
+    }
+
+    // 4. Initialize IMAP Client
+    client = new ImapFlow({
+      host: smtp.host.replace('smtp.', 'imap.'), // Assuming standard naming, or use stored IMAP host if available
+      port: 993,
+      secure: true,
+      auth: { user: email, pass: decryptedPass },
+      logger: false,
+      timeout: 30000
+    });
+
+    await client.connect();
+
+    // --- STEP A: Fetch the Original Sent Email ---
+    let originalEmail = null;
+    
+    // Identify Sent Mailbox
+    const candidateSentBoxes = ['[Gmail]/Sent Mail', 'Sent Mail', 'Sent Items', 'Sent', 'INBOX.Sent'];
+    let sentBoxName = null;
+
+    for (const box of candidateSentBoxes) {
+      try {
+        const lock = await client.mailboxOpen(box);
+        if (lock) {
+          sentBoxName = box;
+          break;
+        }
+      } catch (e) { continue; }
+    }
+
+    if (sentBoxName) {
+      // Search for the specific Message-ID in Sent
+      const sentResult = await client.search({ header: { 'Message-ID': messageId } });
+      
+      if (sentResult.length > 0) {
+        for await (let msg of client.fetch(sentResult[0], { envelope: true, source: true, flags: true, uid: true })) {
+          const parsed = await simpleParser(msg.source);
+          originalEmail = {
+            type: 'sent',
+            subject: msg.envelope.subject,
+            from: msg.envelope.from.map(f => f.address).join(', '),
+            to: msg.envelope.to.map(t => t.address).join(', '),
+            date: msg.envelope.date,
+            html: parsed.html || parsed.textAsHtml,
+            text: parsed.text,
+            messageId: msg.envelope.messageId,
+            uid: msg.uid
+          };
+          break; 
+        }
+      }
+    }
+
+    // --- STEP B: Fetch Replies from Inbox ---
+    await client.mailboxOpen('INBOX');
+    
+    // Search for messages referencing the original Message-ID
+    // We search both In-Reply-To and References to catch all threads
+    const replyIds = await client.search({ 
+      or: [
+        { header: { 'In-Reply-To': messageId } },
+        { header: { 'References': messageId } }
+      ]
+    });
+
+    const replies = [];
+    
+    if (replyIds.length > 0) {
+      for await (let msg of client.fetch(replyIds, { envelope: true, source: true, flags: true, uid: true })) {
+        const parsed = await simpleParser(msg.source);
+        const flags = Array.isArray(msg.flags) ? msg.flags : [];
+        
+        replies.push({
+          type: 'reply',
+          subject: msg.envelope.subject,
+          from: msg.envelope.from.map(f => f.address).join(', '),
+          to: msg.envelope.to.map(t => t.address).join(', '),
+          date: msg.envelope.date,
+          html: parsed.html || parsed.textAsHtml,
+          text: parsed.text,
+          messageId: msg.envelope.messageId,
+          isRead: flags.includes('\\Seen') || flags.includes('Seen'),
+          uid: msg.uid
+        });
+      }
+    }
+
+    await client.logout();
+
+    // 5. Sort replies by date (oldest to newest)
+    replies.sort((a, b) => new Date(a.date) - new Date(b.date));
+
+    // 6. Return Data
+    return res.json({
+      success: true,
+      threadId: messageId, // Using the original MessageID as the thread identifier
+      conversation: {
+        original: originalEmail || { error: "Original sent email not found (might be deleted or not in standard Sent folder)" },
+        replies: replies
+      },
+      replyCount: replies.length
+    });
+
+  } catch (error) {
+    console.error('Fetch Conversation Error:', error);
+    if(client) client.close().catch(() => {});
+    return res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+
+
 //
 module.exports = {
   router,
