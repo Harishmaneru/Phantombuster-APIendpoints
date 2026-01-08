@@ -1114,261 +1114,83 @@ router.put('/updatecalendar/:grantId/:calendarId', checkApiKey, async (req, res)
  * 
  * Note: If replies are missing, it may be due to sync latency (Nylas takes 2-5 minutes to sync).
  */
-router.get('/thread-replies/:grantId/:messageId', checkApiKey, async (req, res) => {
+router.get('/thread-replies/:grantId/:threadId', checkApiKey, async (req, res) => {
   try {
-    const { grantId, messageId } = req.params;
-    const conversationChain = new Map(); // Store all messages in conversation
-    const trackedMessageIds = new Set();
+    const { grantId, threadId } = req.params;
     
-    console.log('\n=== FETCHING REPLIES TO SENT EMAIL ===');
-    console.log('Grant ID:', grantId);
-    console.log('Original Message ID:', messageId);
-    
-    // Step 1: Get the original sent message
-    let originalMessage = null;
-    try {
-      const messageUrl = `${NYLAS_API_BASE_URL}/grants/${grantId}/messages/${messageId}`;
-      console.log('Fetching original message:', messageUrl);
-      
-      const response = await axios.get(messageUrl, {
-        headers: {
-          'Accept': 'application/json',
-          'Authorization': `Bearer ${NYLAS_API_KEY}`
+    // We need your email to distinguish which message is "yours" (sent) vs "theirs" (replies).
+    // You can pass it as a query param: ?my_email=nikhil@example.com
+    const myEmail = req.query.my_email; 
+
+    if (!myEmail) {
+      return res.status(400).json({ success: false, message: "Please provide 'my_email' as a query parameter to identify your sent message." });
+    }
+
+    // Nylas v3 Endpoint to get all messages in a thread
+    const url = `${NYLAS_API_BASE_URL}/grants/${grantId}/messages?thread_id=${threadId}`;
+
+    const response = await axios.get(url, {
+      headers: {
+        'Accept': 'application/json, application/gzip',
+        'Authorization': `Bearer ${NYLAS_API_KEY}`,
+        'Content-Type': 'application/json'
+      }
+    });
+
+    const messages = response.data.data;
+
+    // 1. Sort messages by date (Oldest first) to understand the conversation flow
+    messages.sort((a, b) => a.date - b.date);
+
+    // 2. Separate "My Sent Email" from "Replies"
+    let sentEmailObj = null;
+    const repliesList = [];
+
+    messages.forEach(msg => {
+        // Check if the sender is "me" (Nikhil)
+        const isFromMe = msg.from.some(participant => participant.email === myEmail);
+
+        if (isFromMe && !sentEmailObj) {
+            // The first message found from "me" is treated as the main Sent Email
+            sentEmailObj = {
+                id: msg.id,
+                subject: msg.subject,
+                to: msg.to,
+                body: msg.body, // or msg.snippet for short version
+                date: new Date(msg.date * 1000).toISOString()
+            };
+        } else {
+            // Everything else is a reply (from Harish, Natesh, etc.)
+            repliesList.push({
+                id: msg.id,
+                from: msg.from,
+                body: msg.body, // or msg.snippet
+                date: new Date(msg.date * 1000).toISOString()
+            });
         }
-      });
-      
-      originalMessage = response.data?.data || response.data;
-      
-      if (!originalMessage || !originalMessage.id) {
-        throw new Error('Original message not found');
-      }
-      
-      conversationChain.set(originalMessage.id, originalMessage);
-      trackedMessageIds.add(originalMessage.id);
-      
-      console.log(`✓ Found original message: "${originalMessage.subject}"`);
-      console.log(`  Sent to: ${originalMessage.to?.map(r => r.email).join(', ')}`);
-      console.log(`  Date: ${new Date(originalMessage.date * 1000).toISOString()}`);
-      console.log(`  Thread ID: ${originalMessage.thread_id}`);
-      
-    } catch (error) {
-      console.error('❌ Error fetching original message:', error.response?.data || error.message);
-      return res.status(404).json({
-        success: false,
-        message: 'Original sent email not found',
-        error: error.response?.data?.error?.message || error.message,
-        timestamp: new Date().toISOString()
-      });
-    }
-    
-    // Step 2: Get all messages in the same thread
-    if (originalMessage.thread_id) {
-      try {
-        const threadUrl = `${NYLAS_API_BASE_URL}/grants/${grantId}/messages?thread_id=${originalMessage.thread_id}&limit=100`;
-        console.log('\nFetching all messages in thread:', threadUrl);
-        
-        const response = await axios.get(threadUrl, {
-          headers: {
-            'Accept': 'application/json',
-            'Authorization': `Bearer ${NYLAS_API_KEY}`
-          }
-        });
-        
-        const threadMessages = response.data?.data || response.data || [];
-        console.log(`Found ${threadMessages.length} messages in thread`);
-        
-        threadMessages.forEach(msg => {
-          if (msg.id && !trackedMessageIds.has(msg.id)) {
-            conversationChain.set(msg.id, msg);
-            trackedMessageIds.add(msg.id);
-            console.log(`  + Added: ${msg.id} (${msg.subject})`);
-          }
-        });
-        
-      } catch (error) {
-        console.error('Thread fetch error:', error.response?.data || error.message);
-      }
-    }
-    
-    // Step 3: CRITICAL - Find replies by checking Message-ID headers
-    // This is the key to finding direct replies to your email
-    console.log('\n=== SEARCHING FOR DIRECT REPLIES ===');
-    
-    // Extract Message-ID from original sent email
-    let originalMessageId = null;
-    if (originalMessage.headers && originalMessage.headers['Message-ID']) {
-      originalMessageId = originalMessage.headers['Message-ID'].replace(/[<>]/g, '');
-      console.log(`Original Message-ID: ${originalMessageId}`);
-    } else {
-      console.log('⚠ No Message-ID header found in original message');
-    }
-    
-    // Get sent message participants (who you sent to)
-    const originalRecipients = [];
-    if (originalMessage.to && Array.isArray(originalMessage.to)) {
-      originalMessage.to.forEach(recipient => {
-        if (recipient.email) originalRecipients.push(recipient.email.toLowerCase());
-      });
-    }
-    console.log(`Original recipients: ${originalRecipients.join(', ')}`);
-    
-    // Step 4: Search for messages that reference the original Message-ID
-    if (originalMessageId) {
-      try {
-        // Search in a time window after the original was sent
-        const searchStart = originalMessage.date;
-        const searchEnd = originalMessage.date + (90 * 86400); // 90 days after
-        
-        const searchUrl = `${NYLAS_API_BASE_URL}/grants/${grantId}/messages?limit=100&start=${searchStart}&end=${searchEnd}`;
-        console.log(`\nSearching for replies in time window: ${searchUrl}`);
-        
-        const response = await axios.get(searchUrl, {
-          headers: {
-            'Accept': 'application/json',
-            'Authorization': `Bearer ${NYLAS_API_KEY}`
-          }
-        });
-        
-        const recentMessages = response.data?.data || response.data || [];
-        console.log(`Found ${recentMessages.length} messages in time window`);
-        
-        let replyCount = 0;
-        recentMessages.forEach(msg => {
-          // Skip if already tracked
-          if (trackedMessageIds.has(msg.id)) return;
-          
-          // Check if this message is a reply to our original
-          let isReply = false;
-          
-          // Method 1: Check References or In-Reply-To headers
-          if (msg.headers) {
-            const references = msg.headers['References'] || '';
-            const inReplyTo = msg.headers['In-Reply-To'] || '';
-            
-            if (references.includes(originalMessageId) || inReplyTo.includes(originalMessageId)) {
-              isReply = true;
-              console.log(`  ✓ Found reply via header: ${msg.id}`);
-            }
-          }
-          
-          // Method 2: Check if from original recipient and has similar subject
-          if (!isReply && msg.from && msg.from[0] && msg.from[0].email) {
-            const fromEmail = msg.from[0].email.toLowerCase();
-            const isFromRecipient = originalRecipients.includes(fromEmail);
-            
-            if (isFromRecipient) {
-              const originalSubject = originalMessage.subject || '';
-              const cleanOriginalSubject = originalSubject.replace(/^(Re:|RE:|Fwd:|FWD:|Fw:|FW:)\s*/gi, '').trim();
-              
-              const msgSubject = msg.subject || '';
-              const cleanMsgSubject = msgSubject.replace(/^(Re:|RE:|Fwd:|FWD:|Fw:|FW:)\s*/gi, '').trim();
-              
-              // Check if subjects match (case-insensitive)
-              if (cleanMsgSubject.toLowerCase() === cleanOriginalSubject.toLowerCase()) {
-                isReply = true;
-                console.log(`  ✓ Found reply from recipient: ${fromEmail}`);
-              }
-            }
-          }
-          
-          // Method 3: Check if message mentions being a reply
-          if (!isReply && msg.body) {
-            const body = msg.body.toLowerCase();
-            const hasReplyIndicators = body.includes('on') && 
-                                      (body.includes('wrote:') || 
-                                       body.includes('sent:') ||
-                                       body.includes('said:'));
-            
-            if (hasReplyIndicators) {
-              // Check if it references original message snippet
-              const originalSnippet = (originalMessage.snippet || '').substring(0, 50).toLowerCase();
-              if (originalSnippet && body.includes(originalSnippet)) {
-                isReply = true;
-                console.log(`  ✓ Found reply via body content: ${msg.id}`);
-              }
-            }
-          }
-          
-          // Add if it's a reply
-          if (isReply) {
-            conversationChain.set(msg.id, msg);
-            trackedMessageIds.add(msg.id);
-            replyCount++;
-          }
-        });
-        
-        console.log(`Total new replies found: ${replyCount}`);
-        
-      } catch (error) {
-        console.error('Search error:', error.response?.data || error.message);
-      }
-    }
-    
-    // Step 5: Sort messages chronologically
-    const allMessages = Array.from(conversationChain.values());
-    const sortedMessages = allMessages.sort((a, b) => {
-      const dateA = a.date || a.timestamp || 0;
-      const dateB = b.date || b.timestamp || 0;
-      return dateA - dateB; // Oldest first
     });
-    
-    // Step 6: Identify which messages are replies vs original
-    const organizedMessages = sortedMessages.map(msg => {
-      const isOriginal = msg.id === originalMessage.id;
-      const isFromOriginalSender = msg.from && msg.from[0] && 
-                                  msg.from[0].email === originalMessage.from[0]?.email;
-      
-      return {
-        id: msg.id,
-        thread_id: msg.thread_id,
-        subject: msg.subject,
-        date: msg.date,
-        from: msg.from,
-        to: msg.to,
-        snippet: msg.snippet?.substring(0, 100),
-        is_original_sent_email: isOriginal,
-        is_reply: !isOriginal,
-        is_from_original_sender: isFromOriginalSender,
-        has_attachments: msg.attachments && msg.attachments.length > 0
-      };
-    });
-    
-    console.log('\n=== FINAL RESULT ===');
-    console.log(`Total messages in chain: ${sortedMessages.length}`);
-    console.log(`Original message + ${sortedMessages.length - 1} replies`);
-    
+
+    // 3. Construct the specific JSON format you requested
+    const finalResponse = {
+        "my sent email": {
+            ...sentEmailObj,
+            "replies": repliesList
+        }
+    };
+
     res.json({
       success: true,
-      original_message: {
-        id: originalMessage.id,
-        subject: originalMessage.subject,
-        date: originalMessage.date,
-        to: originalMessage.to,
-        thread_id: originalMessage.thread_id
-      },
-      conversation_chain: organizedMessages,
-      summary: {
-        total_messages: sortedMessages.length,
-        original_message: 1,
-        replies_found: sortedMessages.length - 1,
-        participants: Array.from(new Set(
-          sortedMessages.flatMap(msg => 
-            [...(msg.to || []), ...(msg.from || [])]
-              .filter(r => r && r.email)
-              .map(r => r.email)
-          )
-        ))
-      },
-      message: `Found ${sortedMessages.length} messages in conversation chain`,
+      data: finalResponse,
+      message: sentEmailObj ? 'Thread fetched successfully' : 'Thread fetched, but no sent email found from the provided address.',
       timestamp: new Date().toISOString()
     });
-    
+
   } catch (error) {
-    console.error('Fatal error:', error.message);
-    res.status(500).json({
+    console.error('Error fetching thread replies:', error.response?.data || error.message);
+    res.status(error.response?.status || 500).json({
       success: false,
-      message: 'Failed to fetch email replies',
-      error: error.message,
+      message: error.response?.data?.message || error.message || 'Failed to fetch thread replies',
+      data: error.response?.data || null,
       timestamp: new Date().toISOString()
     });
   }
