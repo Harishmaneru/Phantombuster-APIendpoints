@@ -1224,6 +1224,109 @@ router.get('/find-reply/:grantId', checkApiKey, async (req, res) => {
 });
 
 
+router.get('/smart-thread/:grantId/:threadId', checkApiKey, async (req, res) => {
+  try {
+    const { grantId, threadId } = req.params;
+    const { my_email, recipient_email } = req.query;
 
+    if (!my_email) {
+      return res.status(400).json({ success: false, message: "Query param 'my_email' is required." });
+    }
+
+    // Prepare the two API calls
+    const threadUrl = `${NYLAS_API_BASE_URL}/grants/${grantId}/messages?thread_id=${threadId}`;
+    
+    // Only prepare the search URL if the user provided a recipient to look for
+    const searchUrl = recipient_email 
+      ? `${NYLAS_API_BASE_URL}/grants/${grantId}/messages?any_email=${recipient_email}&limit=5` 
+      : null;
+
+    const axiosConfig = {
+      headers: {
+        'Authorization': `Bearer ${NYLAS_API_KEY}`,
+        'Content-Type': 'application/json'
+      }
+    };
+
+    // 1. EXECUTE REQUESTS IN PARALLEL
+    const promises = [axios.get(threadUrl, axiosConfig)];
+    if (searchUrl) promises.push(axios.get(searchUrl, axiosConfig));
+
+    const results = await Promise.all(promises);
+    
+    // Data from standard thread fetch
+    const threadMessages = results[0].data.data;
+    
+    // Data from sender search (if it ran), otherwise empty array
+    const searchMessages = results[1] ? results[1].data.data : [];
+
+    // 2. COMBINE & DEDUPLICATE MESSAGES
+    // We use a Map to ensure we don't have duplicate messages (by ID)
+    const allMessagesMap = new Map();
+
+    // Add thread messages first
+    threadMessages.forEach(msg => allMessagesMap.set(msg.id, msg));
+    
+    // Add search messages (this catches the "lost" replies)
+    searchMessages.forEach(msg => {
+        // Optional: strict check to ensure this search result belongs to the context 
+        // (e.g., ensure it's not a 2-year old email from the same person)
+        // For now, we simply add it if it's not already there.
+        if (!allMessagesMap.has(msg.id)) {
+            allMessagesMap.set(msg.id, msg);
+        }
+    });
+
+    const combinedMessages = Array.from(allMessagesMap.values());
+
+    // 3. SORT BY DATE
+    combinedMessages.sort((a, b) => a.date - b.date);
+
+    // 4. SEPARATE SENT vs REPLIES
+    let sentEmailObj = null;
+    const repliesList = [];
+
+    combinedMessages.forEach(msg => {
+      const isFromMe = msg.from.some(p => p.email === my_email);
+
+      if (isFromMe && !sentEmailObj) {
+        // Found the main "Sent" email
+        sentEmailObj = {
+            id: msg.id,
+            subject: msg.subject,
+            to: msg.to,
+            body: msg.body,
+            date: new Date(msg.date * 1000).toISOString()
+        };
+      } else if (!isFromMe) {
+        // It's a reply (either from the thread or the search)
+        repliesList.push({
+            id: msg.id,
+            from: msg.from,
+            subject: msg.subject, // Helpful to see if subject changed (thread break)
+            body: msg.body,
+            date: new Date(msg.date * 1000).toISOString()
+        });
+      }
+    });
+
+    // 5. RESPOND
+    res.json({
+      success: true,
+      data: {
+        "my sent email": {
+            ...sentEmailObj,
+            "replies": repliesList
+        }
+      },
+      message: sentEmailObj ? 'Smart fetch successful' : 'Fetched, but main sent email not found.',
+      timestamp: new Date().toISOString()
+    });
+
+  } catch (error) {
+    console.error('Error in smart fetch:', error.message);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
 module.exports = router;
 
