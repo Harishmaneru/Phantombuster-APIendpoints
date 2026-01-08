@@ -1114,278 +1114,261 @@ router.put('/updatecalendar/:grantId/:calendarId', checkApiKey, async (req, res)
  * 
  * Note: If replies are missing, it may be due to sync latency (Nylas takes 2-5 minutes to sync).
  */
-router.get('/thread-messages-enhanced/:grantId/:threadId', checkApiKey, async (req, res) => {
-  console.log('=== Debug Info ===');
-  console.log('Grant ID:', req.params.grantId);
-  console.log('Thread ID:', req.params.threadId);
-  console.log('Timestamp:', new Date().toISOString());
-
+router.get('/thread-replies/:grantId/:messageId', checkApiKey, async (req, res) => {
   try {
-    const { grantId, threadId } = req.params;
-    const allMessages = new Map();
+    const { grantId, messageId } = req.params;
+    const conversationChain = new Map(); // Store all messages in conversation
     const trackedMessageIds = new Set();
-    const conversationParticipants = new Set();
     
-    // Helper: Extract all email addresses from message
-    const extractAllEmails = (message) => {
-      const emails = [];
-      const fields = ['to', 'cc', 'bcc', 'from', 'reply_to'];
-      fields.forEach(field => {
-        if (message[field] && Array.isArray(message[field])) {
-          message[field].forEach(addr => {
-            if (addr.email) emails.push(addr.email.toLowerCase());
-          });
-        }
-      });
-      return emails;
-    };
-
-    // Step 1: Fetch initial thread using thread_id (FIXED - removed view=expanded)
+    console.log('\n=== FETCHING REPLIES TO SENT EMAIL ===');
+    console.log('Grant ID:', grantId);
+    console.log('Original Message ID:', messageId);
+    
+    // Step 1: Get the original sent message
+    let originalMessage = null;
     try {
-      const threadUrl = `${NYLAS_API_BASE_URL}/grants/${grantId}/messages?thread_id=${threadId}&limit=100`;
-      console.log('Fetching thread:', threadUrl);
+      const messageUrl = `${NYLAS_API_BASE_URL}/grants/${grantId}/messages/${messageId}`;
+      console.log('Fetching original message:', messageUrl);
       
-      const threadResponse = await axios.get(threadUrl, {
+      const response = await axios.get(messageUrl, {
         headers: {
           'Accept': 'application/json',
-          'Authorization': `Bearer ${NYLAS_API_KEY}`,
-          'Content-Type': 'application/json'
+          'Authorization': `Bearer ${NYLAS_API_KEY}`
         }
       });
       
-      const threadMessages = threadResponse.data?.data || threadResponse.data || [];
-      console.log(`Found ${threadMessages.length} initial messages in thread`);
+      originalMessage = response.data?.data || response.data;
       
-      threadMessages.forEach(msg => {
-        if (msg.id) {
-          allMessages.set(msg.id, msg);
-          trackedMessageIds.add(msg.id);
-          
-          // Collect participants
-          extractAllEmails(msg).forEach(email => conversationParticipants.add(email));
-          
-          console.log(`Added message: ${msg.id}, Subject: ${msg.subject}`);
-        }
-      });
+      if (!originalMessage || !originalMessage.id) {
+        throw new Error('Original message not found');
+      }
+      
+      conversationChain.set(originalMessage.id, originalMessage);
+      trackedMessageIds.add(originalMessage.id);
+      
+      console.log(`✓ Found original message: "${originalMessage.subject}"`);
+      console.log(`  Sent to: ${originalMessage.to?.map(r => r.email).join(', ')}`);
+      console.log(`  Date: ${new Date(originalMessage.date * 1000).toISOString()}`);
+      console.log(`  Thread ID: ${originalMessage.thread_id}`);
+      
     } catch (error) {
-      console.error('Initial thread fetch error:', error.response?.data || error.message || error);
+      console.error('❌ Error fetching original message:', error.response?.data || error.message);
+      return res.status(404).json({
+        success: false,
+        message: 'Original sent email not found',
+        error: error.response?.data?.error?.message || error.message,
+        timestamp: new Date().toISOString()
+      });
     }
-
-    // Step 2: If no messages found via thread_id, try to find by message ID directly
-    if (allMessages.size === 0) {
-      console.log('No messages found via thread_id, trying to find message by ID directly...');
-      
+    
+    // Step 2: Get all messages in the same thread
+    if (originalMessage.thread_id) {
       try {
-        // Try to fetch the specific message by its ID (threadId might actually be message ID)
-        const messageUrl = `${NYLAS_API_BASE_URL}/grants/${grantId}/messages/${threadId}`;
-        console.log('Trying direct message fetch:', messageUrl);
+        const threadUrl = `${NYLAS_API_BASE_URL}/grants/${grantId}/messages?thread_id=${originalMessage.thread_id}&limit=100`;
+        console.log('\nFetching all messages in thread:', threadUrl);
         
-        const messageResponse = await axios.get(messageUrl, {
+        const response = await axios.get(threadUrl, {
           headers: {
             'Accept': 'application/json',
-            'Authorization': `Bearer ${NYLAS_API_KEY}`,
-            'Content-Type': 'application/json'
+            'Authorization': `Bearer ${NYLAS_API_KEY}`
           }
         });
         
-        const message = messageResponse.data?.data || messageResponse.data;
-        if (message && message.id) {
-          allMessages.set(message.id, message);
-          trackedMessageIds.add(message.id);
-          extractAllEmails(message).forEach(email => conversationParticipants.add(email));
-          console.log(`Found message directly: ${message.id}`);
-          
-          // Now get other messages in the same thread
-          if (message.thread_id) {
-            const threadUrl2 = `${NYLAS_API_BASE_URL}/grants/${grantId}/messages?thread_id=${message.thread_id}&limit=100`;
-            const threadResponse2 = await axios.get(threadUrl2, {
-              headers: {
-                'Accept': 'application/json',
-                'Authorization': `Bearer ${NYLAS_API_KEY}`,
-                'Content-Type': 'application/json'
-              }
-            });
-            
-            const additionalMessages = threadResponse2.data?.data || threadResponse2.data || [];
-            additionalMessages.forEach(msg => {
-              if (msg.id && !trackedMessageIds.has(msg.id)) {
-                allMessages.set(msg.id, msg);
-                trackedMessageIds.add(msg.id);
-                extractAllEmails(msg).forEach(email => conversationParticipants.add(email));
-              }
-            });
+        const threadMessages = response.data?.data || response.data || [];
+        console.log(`Found ${threadMessages.length} messages in thread`);
+        
+        threadMessages.forEach(msg => {
+          if (msg.id && !trackedMessageIds.has(msg.id)) {
+            conversationChain.set(msg.id, msg);
+            trackedMessageIds.add(msg.id);
+            console.log(`  + Added: ${msg.id} (${msg.subject})`);
           }
-        }
+        });
+        
       } catch (error) {
-        console.error('Direct message fetch error:', error.response?.data || error.message || error);
+        console.error('Thread fetch error:', error.response?.data || error.message);
       }
     }
-
-    // Step 3: Find original message and gather search criteria
-    let originalMessage = null;
-    let originalSubject = null;
-    let searchStartDate = null;
-    let searchEndDate = null;
     
-    if (allMessages.size > 0) {
-      const sortedMessages = Array.from(allMessages.values()).sort((a, b) => 
-        (a.date || 0) - (b.date || 0)
-      );
-      
-      originalMessage = sortedMessages[0];
-      originalSubject = originalMessage.subject || '';
-      
-      // Set time window for searching (1 week before to 60 days after)
-      if (originalMessage.date) {
-        searchStartDate = originalMessage.date - 604800; // 7 days before
-        searchEndDate = originalMessage.date + 5184000; // 60 days after
-      }
-      
-      console.log(`Original message date: ${originalMessage.date}, Subject: "${originalSubject}"`);
-      console.log(`Participants: ${Array.from(conversationParticipants).join(', ')}`);
+    // Step 3: CRITICAL - Find replies by checking Message-ID headers
+    // This is the key to finding direct replies to your email
+    console.log('\n=== SEARCHING FOR DIRECT REPLIES ===');
+    
+    // Extract Message-ID from original sent email
+    let originalMessageId = null;
+    if (originalMessage.headers && originalMessage.headers['Message-ID']) {
+      originalMessageId = originalMessage.headers['Message-ID'].replace(/[<>]/g, '');
+      console.log(`Original Message-ID: ${originalMessageId}`);
+    } else {
+      console.log('⚠ No Message-ID header found in original message');
     }
-
-    // Step 4: Search for related messages using multiple strategies
-    if (originalMessage && conversationParticipants.size > 0) {
-      const searchStrategies = [];
-      const participantArray = Array.from(conversationParticipants);
-      const cleanSubject = originalSubject.replace(/^(Re:|RE:|Fwd:|FWD:|Fw:|FW:)\s*/gi, '').trim();
-      
-      console.log(`Searching with clean subject: "${cleanSubject}"`);
-      
-      // Strategy 1: Search by subject
-      if (cleanSubject) {
-        searchStrategies.push({
-          name: 'subject',
-          url: `${NYLAS_API_BASE_URL}/grants/${grantId}/messages?subject=${encodeURIComponent(cleanSubject)}&limit=100`
-        });
-      }
-      
-      // Strategy 2: Search by participants (to/from)
-      participantArray.forEach(email => {
-        searchStrategies.push({
-          name: `to_${email}`,
-          url: `${NYLAS_API_BASE_URL}/grants/${grantId}/messages?to=${encodeURIComponent(email)}&limit=50`
-        });
-        searchStrategies.push({
-          name: `from_${email}`,
-          url: `${NYLAS_API_BASE_URL}/grants/${grantId}/messages?from=${encodeURIComponent(email)}&limit=50`
-        });
+    
+    // Get sent message participants (who you sent to)
+    const originalRecipients = [];
+    if (originalMessage.to && Array.isArray(originalMessage.to)) {
+      originalMessage.to.forEach(recipient => {
+        if (recipient.email) originalRecipients.push(recipient.email.toLowerCase());
       });
-      
-      // Strategy 3: Search in time window
-      if (searchStartDate && searchEndDate) {
-        searchStrategies.push({
-          name: 'time_window',
-          url: `${NYLAS_API_BASE_URL}/grants/${grantId}/messages?start=${searchStartDate}&end=${searchEndDate}&limit=100`
+    }
+    console.log(`Original recipients: ${originalRecipients.join(', ')}`);
+    
+    // Step 4: Search for messages that reference the original Message-ID
+    if (originalMessageId) {
+      try {
+        // Search in a time window after the original was sent
+        const searchStart = originalMessage.date;
+        const searchEnd = originalMessage.date + (90 * 86400); // 90 days after
+        
+        const searchUrl = `${NYLAS_API_BASE_URL}/grants/${grantId}/messages?limit=100&start=${searchStart}&end=${searchEnd}`;
+        console.log(`\nSearching for replies in time window: ${searchUrl}`);
+        
+        const response = await axios.get(searchUrl, {
+          headers: {
+            'Accept': 'application/json',
+            'Authorization': `Bearer ${NYLAS_API_KEY}`
+          }
         });
-      }
-      
-      // Execute all search strategies
-      for (const strategy of searchStrategies) {
-        try {
-          console.log(`Executing search strategy: ${strategy.name}`);
+        
+        const recentMessages = response.data?.data || response.data || [];
+        console.log(`Found ${recentMessages.length} messages in time window`);
+        
+        let replyCount = 0;
+        recentMessages.forEach(msg => {
+          // Skip if already tracked
+          if (trackedMessageIds.has(msg.id)) return;
           
-          const response = await axios.get(strategy.url, {
-            headers: {
-              'Accept': 'application/json',
-              'Authorization': `Bearer ${NYLAS_API_KEY}`
+          // Check if this message is a reply to our original
+          let isReply = false;
+          
+          // Method 1: Check References or In-Reply-To headers
+          if (msg.headers) {
+            const references = msg.headers['References'] || '';
+            const inReplyTo = msg.headers['In-Reply-To'] || '';
+            
+            if (references.includes(originalMessageId) || inReplyTo.includes(originalMessageId)) {
+              isReply = true;
+              console.log(`  ✓ Found reply via header: ${msg.id}`);
             }
-          });
+          }
           
-          const foundMessages = response.data?.data || response.data || [];
-          console.log(`Found ${foundMessages.length} messages via ${strategy.name}`);
-          
-          foundMessages.forEach(msg => {
-            if (msg.id && !trackedMessageIds.has(msg.id)) {
-              // Check if this message is related to our conversation
+          // Method 2: Check if from original recipient and has similar subject
+          if (!isReply && msg.from && msg.from[0] && msg.from[0].email) {
+            const fromEmail = msg.from[0].email.toLowerCase();
+            const isFromRecipient = originalRecipients.includes(fromEmail);
+            
+            if (isFromRecipient) {
+              const originalSubject = originalMessage.subject || '';
+              const cleanOriginalSubject = originalSubject.replace(/^(Re:|RE:|Fwd:|FWD:|Fw:|FW:)\s*/gi, '').trim();
+              
               const msgSubject = msg.subject || '';
-              const msgCleanSubject = msgSubject.replace(/^(Re:|RE:|Fwd:|FWD:|Fw:|FW:)\s*/gi, '').trim();
-              const subjectMatches = cleanSubject && msgCleanSubject.toLowerCase() === cleanSubject.toLowerCase();
+              const cleanMsgSubject = msgSubject.replace(/^(Re:|RE:|Fwd:|FWD:|Fw:|FW:)\s*/gi, '').trim();
               
-              // Check if involves our participants
-              const msgEmails = extractAllEmails(msg);
-              const hasParticipant = msgEmails.some(email => conversationParticipants.has(email));
-              
-              // Check if it's within our time window
-              const withinTimeWindow = !searchStartDate || !searchEndDate || 
-                (msg.date && msg.date >= searchStartDate && msg.date <= searchEndDate);
-              
-              // If it matches criteria, add it
-              if ((subjectMatches || hasParticipant) && withinTimeWindow) {
-                allMessages.set(msg.id, msg);
-                trackedMessageIds.add(msg.id);
-                extractAllEmails(msg).forEach(email => conversationParticipants.add(email));
-                console.log(`Added related message: ${msg.id} via ${strategy.name}`);
+              // Check if subjects match (case-insensitive)
+              if (cleanMsgSubject.toLowerCase() === cleanOriginalSubject.toLowerCase()) {
+                isReply = true;
+                console.log(`  ✓ Found reply from recipient: ${fromEmail}`);
               }
             }
-          });
+          }
           
-          // Small delay to avoid rate limiting
-          await new Promise(resolve => setTimeout(resolve, 100));
+          // Method 3: Check if message mentions being a reply
+          if (!isReply && msg.body) {
+            const body = msg.body.toLowerCase();
+            const hasReplyIndicators = body.includes('on') && 
+                                      (body.includes('wrote:') || 
+                                       body.includes('sent:') ||
+                                       body.includes('said:'));
+            
+            if (hasReplyIndicators) {
+              // Check if it references original message snippet
+              const originalSnippet = (originalMessage.snippet || '').substring(0, 50).toLowerCase();
+              if (originalSnippet && body.includes(originalSnippet)) {
+                isReply = true;
+                console.log(`  ✓ Found reply via body content: ${msg.id}`);
+              }
+            }
+          }
           
-        } catch (error) {
-          console.error(`Search strategy ${strategy.name} failed:`, error.message);
-        }
+          // Add if it's a reply
+          if (isReply) {
+            conversationChain.set(msg.id, msg);
+            trackedMessageIds.add(msg.id);
+            replyCount++;
+          }
+        });
+        
+        console.log(`Total new replies found: ${replyCount}`);
+        
+      } catch (error) {
+        console.error('Search error:', error.response?.data || error.message);
       }
     }
-
-    // Step 5: Final processing and response
-    const messagesArray = Array.from(allMessages.values());
-    const sortedMessages = messagesArray.sort((a, b) => {
+    
+    // Step 5: Sort messages chronologically
+    const allMessages = Array.from(conversationChain.values());
+    const sortedMessages = allMessages.sort((a, b) => {
       const dateA = a.date || a.timestamp || 0;
       const dateB = b.date || b.timestamp || 0;
-      return dateA - dateB;
+      return dateA - dateB; // Oldest first
     });
     
-    console.log(`Total messages in conversation chain: ${sortedMessages.length}`);
-    
-    // Group by thread for clarity
-    const threadsMap = new Map();
-    sortedMessages.forEach(msg => {
-      const threadKey = msg.thread_id || 'no-thread';
-      if (!threadsMap.has(threadKey)) {
-        threadsMap.set(threadKey, []);
-      }
-      threadsMap.get(threadKey).push({
+    // Step 6: Identify which messages are replies vs original
+    const organizedMessages = sortedMessages.map(msg => {
+      const isOriginal = msg.id === originalMessage.id;
+      const isFromOriginalSender = msg.from && msg.from[0] && 
+                                  msg.from[0].email === originalMessage.from[0]?.email;
+      
+      return {
         id: msg.id,
+        thread_id: msg.thread_id,
         subject: msg.subject,
         date: msg.date,
         from: msg.from,
         to: msg.to,
-        snippet: msg.snippet?.substring(0, 100)
-      });
+        snippet: msg.snippet?.substring(0, 100),
+        is_original_sent_email: isOriginal,
+        is_reply: !isOriginal,
+        is_from_original_sender: isFromOriginalSender,
+        has_attachments: msg.attachments && msg.attachments.length > 0
+      };
     });
+    
+    console.log('\n=== FINAL RESULT ===');
+    console.log(`Total messages in chain: ${sortedMessages.length}`);
+    console.log(`Original message + ${sortedMessages.length - 1} replies`);
     
     res.json({
       success: true,
-      count: sortedMessages.length,
-      data: sortedMessages,
-      threads: Array.from(threadsMap.entries()).map(([threadId, msgs]) => ({
-        thread_id: threadId,
-        message_count: msgs.length,
-        messages: msgs
-      })),
-      participants: Array.from(conversationParticipants),
-      search_criteria_used: {
-        original_subject: originalSubject,
-        participants_count: conversationParticipants.size,
-        time_window: searchStartDate && searchEndDate ? 
-          `${new Date(searchStartDate * 1000).toISOString()} to ${new Date(searchEndDate * 1000).toISOString()}` : null
+      original_message: {
+        id: originalMessage.id,
+        subject: originalMessage.subject,
+        date: originalMessage.date,
+        to: originalMessage.to,
+        thread_id: originalMessage.thread_id
       },
-      message: sortedMessages.length > 0 ? 
-        'Complete conversation chain fetched successfully' : 
-        'No messages found with the given criteria',
+      conversation_chain: organizedMessages,
+      summary: {
+        total_messages: sortedMessages.length,
+        original_message: 1,
+        replies_found: sortedMessages.length - 1,
+        participants: Array.from(new Set(
+          sortedMessages.flatMap(msg => 
+            [...(msg.to || []), ...(msg.from || [])]
+              .filter(r => r && r.email)
+              .map(r => r.email)
+          )
+        ))
+      },
+      message: `Found ${sortedMessages.length} messages in conversation chain`,
       timestamp: new Date().toISOString()
     });
     
   } catch (error) {
-    console.error('Enhanced thread fetch error:', error.response?.data || error.message || error);
+    console.error('Fatal error:', error.message);
     res.status(500).json({
       success: false,
-      message: 'Failed to fetch conversation chain',
+      message: 'Failed to fetch email replies',
       error: error.message,
-      details: error.response?.data,
       timestamp: new Date().toISOString()
     });
   }
