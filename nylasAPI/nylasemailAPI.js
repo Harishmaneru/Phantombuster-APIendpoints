@@ -1098,12 +1098,23 @@ router.put('/updatecalendar/:grantId/:calendarId', checkApiKey, async (req, res)
 
 /*_________________________GET ALL MESSAGES IN A THREAD (CONVERSATION)_________________________*/
 
+/**
+ * Get all messages in a thread (conversation view)
+ * GET /api/nylas/thread-messages/:grantId/:threadId
+ * 
+ * Returns all messages in a thread sorted by date (oldest first) to display as a conversation chain.
+ * Includes limit=100 to ensure we don't cut off messages.
+ * 
+ * Note: If replies are missing, it may be due to:
+ * 1. Sync latency - Nylas takes a few minutes to sync new incoming emails
+ * 2. Thread splitting - Email provider may have treated reply as a new conversation
+ */
 router.get('/thread-messages/:grantId/:threadId', checkApiKey, async (req, res) => {
   try {
     const { grantId, threadId } = req.params;
 
-    // This is the specific API call to get the conversation history
-    const url = `${NYLAS_API_BASE_URL}/grants/${grantId}/messages?thread_id=${threadId}`;
+    // Use query params to ensure we get everything with limit=100
+    const url = `${NYLAS_API_BASE_URL}/grants/${grantId}/messages?thread_id=${threadId}&limit=100`;
 
     const response = await axios.get(url, {
       headers: {
@@ -1113,10 +1124,20 @@ router.get('/thread-messages/:grantId/:threadId', checkApiKey, async (req, res) 
       }
     });
 
+    // Extract messages from response (handle both data.data and data formats)
+    const messages = response.data?.data || response.data || [];
+
+    // Sort messages by date (oldest first) to look like a chat/conversation
+    const sortedMessages = messages.sort((a, b) => {
+      const dateA = a.date || a.timestamp || 0;
+      const dateB = b.date || b.timestamp || 0;
+      return dateA - dateB;
+    });
+
     res.json({
       success: true,
-      // This data will be an array of email objects (sent + received replies)
-      data: response.data.data, 
+      count: sortedMessages.length,
+      data: sortedMessages, // This will contain [Sent Email, Reply 1, Reply 2...]
       message: 'Conversation history fetched successfully',
       timestamp: new Date().toISOString()
     });
