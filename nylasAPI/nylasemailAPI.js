@@ -1103,32 +1103,176 @@ router.put('/updatecalendar/:grantId/:calendarId', checkApiKey, async (req, res)
  * GET /api/nylas/thread-messages/:grantId/:threadId
  * 
  * Returns all messages in a thread sorted by date (oldest first) to display as a conversation chain.
- * Includes limit=100 to ensure we don't cut off messages.
+ * This includes the sent email AND all replies, even if they have different thread_ids (thread splitting).
  * 
- * Note: If replies are missing, it may be due to:
- * 1. Sync latency - Nylas takes a few minutes to sync new incoming emails
- * 2. Thread splitting - Email provider may have treated reply as a new conversation
+ * Strategy:
+ * 1. Fetch messages by thread_id (primary method)
+ * 2. Get original message to extract subject and recipient info
+ * 3. Search for messages by subject (to catch thread-split replies)
+ * 4. Search for messages from recipient email (to catch any replies)
+ * 5. Merge and deduplicate all results
+ * 
+ * Note: If replies are missing, it may be due to sync latency (Nylas takes 2-5 minutes to sync).
  */
 router.get('/thread-messages/:grantId/:threadId', checkApiKey, async (req, res) => {
   try {
     const { grantId, threadId } = req.params;
+    const allMessages = new Map(); // Use Map to deduplicate by message ID
 
-    // Use query params to ensure we get everything with limit=100
-    const url = `${NYLAS_API_BASE_URL}/grants/${grantId}/messages?thread_id=${threadId}&limit=100`;
+    // Step 1: Fetch messages by thread_id (primary method)
+    try {
+      const threadUrl = `${NYLAS_API_BASE_URL}/grants/${grantId}/messages?thread_id=${threadId}&limit=100`;
+      const threadResponse = await axios.get(threadUrl, {
+        headers: {
+          'Accept': 'application/json, application/gzip',
+          'Authorization': `Bearer ${NYLAS_API_KEY}`,
+          'Content-Type': 'application/json'
+        }
+      });
+      
+      const threadMessages = threadResponse.data?.data || threadResponse.data || [];
+      threadMessages.forEach(msg => {
+        if (msg.id) allMessages.set(msg.id, msg);
+      });
+    } catch (error) {
+      console.error('Error fetching by thread_id:', error.response?.data || error.message);
+    }
 
-    const response = await axios.get(url, {
-      headers: {
-        'Accept': 'application/json, application/gzip',
-        'Authorization': `Bearer ${NYLAS_API_KEY}`,
-        'Content-Type': 'application/json'
+    // Step 2: Get thread details which should contain all messages in the thread
+    let subject = null;
+    let recipientEmails = [];
+    let originalMessage = null;
+
+    try {
+      const threadInfoUrl = `${NYLAS_API_BASE_URL}/grants/${grantId}/threads/${threadId}`;
+      const threadInfoResponse = await axios.get(threadInfoUrl, {
+        headers: {
+          'Accept': 'application/json, application/gzip',
+          'Authorization': `Bearer ${NYLAS_API_KEY}`,
+          'Content-Type': 'application/json'
+        }
+      });
+      
+      const threadInfo = threadInfoResponse.data?.data || threadInfoResponse.data;
+      if (threadInfo?.subject) {
+        subject = threadInfo.subject;
       }
-    });
+      if (threadInfo?.messages && Array.isArray(threadInfo.messages)) {
+        threadInfo.messages.forEach(msg => {
+          if (msg.id) allMessages.set(msg.id, msg);
+        });
+      }
+    } catch (error) {
+      console.error('Error fetching thread details:', error.response?.data || error.message);
+    }
 
-    // Extract messages from response (handle both data.data and data formats)
-    const messages = response.data?.data || response.data || [];
+    // Extract subject and recipient info from messages we have
+    if (allMessages.size > 0) {
+      const sortedByDate = Array.from(allMessages.values()).sort((a, b) => {
+        return (a.date || a.timestamp || 0) - (b.date || b.timestamp || 0);
+      });
+      originalMessage = sortedByDate[0];
+      
+      if (!subject && originalMessage?.subject) {
+        subject = originalMessage.subject;
+      }
+      
+      // Extract recipient emails from original message
+      if (originalMessage?.to && Array.isArray(originalMessage.to)) {
+        recipientEmails = originalMessage.to.map(r => r.email || r).filter(Boolean);
+      }
+    }
 
-    // Sort messages by date (oldest first) to look like a chat/conversation
-    const sortedMessages = messages.sort((a, b) => {
+    // Step 3: Search for messages by subject (to catch thread-split replies)
+    if (subject) {
+      try {
+        // Clean subject: remove "Re:", "Fwd:", etc. for better matching
+        const cleanSubject = subject
+          .replace(/^(Re:|RE:|Fwd:|FWD:|Fw:|FW:)\s*/i, '')
+          .trim();
+        
+        const queryParams = new URLSearchParams();
+        queryParams.append('subject', cleanSubject);
+        queryParams.append('limit', '100');
+        
+        const subjectUrl = `${NYLAS_API_BASE_URL}/grants/${grantId}/messages?${queryParams.toString()}`;
+        const subjectResponse = await axios.get(subjectUrl, {
+          headers: {
+            'Accept': 'application/json, application/gzip',
+            'Authorization': `Bearer ${NYLAS_API_KEY}`,
+            'Content-Type': 'application/json'
+          }
+        });
+        
+        const subjectMessages = subjectResponse.data?.data || subjectResponse.data || [];
+        subjectMessages.forEach(msg => {
+          // Only add if subject matches (case-insensitive, ignoring Re:/Fwd: prefixes)
+          const msgSubject = (msg.subject || '').replace(/^(Re:|RE:|Fwd:|FWD:|Fw:|FW:)\s*/i, '').trim();
+          if (msgSubject.toLowerCase() === cleanSubject.toLowerCase() && msg.id) {
+            allMessages.set(msg.id, msg);
+          }
+        });
+      } catch (error) {
+        console.error('Error fetching by subject:', error.response?.data || error.message);
+      }
+    }
+
+    // Step 4: Search for recent messages from recipient emails (to catch any thread-split replies)
+    // This is a fallback to catch replies that might have been split into different threads
+    // Only run if we have very few messages (likely missing replies)
+    if (recipientEmails.length > 0 && originalMessage && allMessages.size <= 2) {
+      const originalDate = originalMessage.date || originalMessage.timestamp || 0;
+      // Search for messages within 30 days after the original was sent
+      const searchStartDate = originalDate - 86400; // 1 day before to be safe
+      const searchEndDate = originalDate + (30 * 86400); // 30 days after
+      
+      try {
+        const queryParams = new URLSearchParams();
+        queryParams.append('limit', '50'); // Reduced limit for efficiency
+        queryParams.append('start', searchStartDate.toString());
+        queryParams.append('end', searchEndDate.toString());
+        
+        // Fetch messages in the time window and filter by recipient email
+        const recentUrl = `${NYLAS_API_BASE_URL}/grants/${grantId}/messages?${queryParams.toString()}`;
+        const recentResponse = await axios.get(recentUrl, {
+          headers: {
+            'Accept': 'application/json, application/gzip',
+            'Authorization': `Bearer ${NYLAS_API_KEY}`,
+            'Content-Type': 'application/json'
+          }
+        });
+        
+        const recentMessages = recentResponse.data?.data || recentResponse.data || [];
+        const cleanSubject = subject ? subject.replace(/^(Re:|RE:|Fwd:|FWD:|Fw:|FW:)\s*/i, '').trim().toLowerCase() : '';
+        
+        recentMessages.forEach(msg => {
+          // Check if message is from recipient and is a reply
+          const msgFrom = msg.from || [];
+          const isFromRecipient = msgFrom.some(f => {
+            const email = f.email || f;
+            return recipientEmails.some(re => email.toLowerCase() === re.toLowerCase());
+          });
+          
+          if (isFromRecipient && msg.id && !allMessages.has(msg.id)) {
+            const msgSubject = (msg.subject || '').toLowerCase();
+            // Check if it's likely a reply (has "Re:" or subject matches)
+            const msgCleanSubject = msgSubject.replace(/^(Re:|RE:|Fwd:|FWD:|Fw:|FW:)\s*/i, '').trim();
+            const isLikelyReply = msgSubject.includes('re:') || 
+                                 (cleanSubject && msgCleanSubject === cleanSubject);
+            
+            if (isLikelyReply && msg.date >= originalDate && msg.date <= searchEndDate) {
+              allMessages.set(msg.id, msg);
+            }
+          }
+        });
+      } catch (error) {
+        console.error('Error fetching recent messages from recipients:', error.response?.data || error.message);
+      }
+    }
+
+    // Step 5: Convert Map to Array, deduplicate, and sort by date (oldest first)
+    const messagesArray = Array.from(allMessages.values());
+    const sortedMessages = messagesArray.sort((a, b) => {
       const dateA = a.date || a.timestamp || 0;
       const dateB = b.date || b.timestamp || 0;
       return dateA - dateB;
