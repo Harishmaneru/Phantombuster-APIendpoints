@@ -1115,16 +1115,22 @@ router.put('/updatecalendar/:grantId/:calendarId', checkApiKey, async (req, res)
  * Note: If replies are missing, it may be due to sync latency (Nylas takes 2-5 minutes to sync).
  */
 router.get('/thread-messages-enhanced/:grantId/:threadId', checkApiKey, async (req, res) => {
+  console.log('=== Debug Info ===');
+  console.log('Grant ID:', req.params.grantId);
+  console.log('Thread ID:', req.params.threadId);
+  console.log('Timestamp:', new Date().toISOString());
+  next();
   try {
     const { grantId, threadId } = req.params;
     const allMessages = new Map();
-    const trackedMessageIds = new Set(); // Track all message IDs we've found
-    const conversationParticipants = new Set(); // All participants in conversation
+    const trackedMessageIds = new Set();
+    const conversationParticipants = new Set();
     
-    // Helper: Extract all email addresses from message recipients
+    // Helper: Extract all email addresses from message
     const extractAllEmails = (message) => {
       const emails = [];
-      ['to', 'cc', 'bcc', 'from', 'reply_to'].forEach(field => {
+      const fields = ['to', 'cc', 'bcc', 'from', 'reply_to'];
+      fields.forEach(field => {
         if (message[field] && Array.isArray(message[field])) {
           message[field].forEach(addr => {
             if (addr.email) emails.push(addr.email.toLowerCase());
@@ -1134,134 +1140,221 @@ router.get('/thread-messages-enhanced/:grantId/:threadId', checkApiKey, async (r
       return emails;
     };
 
-    // Step 1: Fetch initial thread and gather participant information
+    // Step 1: Fetch initial thread using thread_id (FIXED - removed view=expanded)
     try {
-      const threadUrl = `${NYLAS_API_BASE_URL}/grants/${grantId}/messages?thread_id=${threadId}&limit=100&view=expanded`;
+      const threadUrl = `${NYLAS_API_BASE_URL}/grants/${grantId}/messages?thread_id=${threadId}&limit=100`;
+      console.log('Fetching thread:', threadUrl);
+      
       const threadResponse = await axios.get(threadUrl, {
         headers: {
-          'Accept': 'application/json, application/gzip',
+          'Accept': 'application/json',
           'Authorization': `Bearer ${NYLAS_API_KEY}`,
           'Content-Type': 'application/json'
         }
       });
       
       const threadMessages = threadResponse.data?.data || threadResponse.data || [];
+      console.log(`Found ${threadMessages.length} initial messages in thread`);
+      
       threadMessages.forEach(msg => {
         if (msg.id) {
           allMessages.set(msg.id, msg);
           trackedMessageIds.add(msg.id);
           
-          // Collect all participants from this message
+          // Collect participants
           extractAllEmails(msg).forEach(email => conversationParticipants.add(email));
+          
+          console.log(`Added message: ${msg.id}, Subject: ${msg.subject}`);
         }
       });
     } catch (error) {
-      console.error('Initial thread fetch error:', error.response?.data || error.message);
+      console.error('Initial thread fetch error:', error.response?.data || error.message || error);
     }
 
-    // Step 2: Get message headers for conversation tracking
-    let originalMessageIdHeader = null;
-    if (allMessages.size > 0) {
-      const sortedMessages = Array.from(allMessages.values()).sort((a, b) => 
-        (a.date || 0) - (b.date || 0)
-      );
-      const originalMessage = sortedMessages[0];
+    // Step 2: If no messages found via thread_id, try to find by message ID directly
+    if (allMessages.size === 0) {
+      console.log('No messages found via thread_id, trying to find message by ID directly...');
       
-      // Extract Message-ID header if available (key for tracking replies)
-      if (originalMessage.headers && originalMessage.headers['Message-ID']) {
-        originalMessageIdHeader = originalMessage.headers['Message-ID'];
-      }
-      
-      // Also check for other headers that indicate conversation threading
-      if (originalMessage.headers) {
-        console.log('Original message headers:', Object.keys(originalMessage.headers));
-      }
-    }
-
-    // Step 3: Enhanced search by multiple criteria
-    const searchPromises = [];
-    
-    // 3A: Search by original Message-ID header (most reliable)
-    if (originalMessageIdHeader) {
-      const cleanMessageId = originalMessageIdHeader.replace(/[<>]/g, '');
-      searchPromises.push(
-        axios.get(`${NYLAS_API_BASE_URL}/grants/${grantId}/messages?limit=100`, {
+      try {
+        // Try to fetch the specific message by its ID (threadId might actually be message ID)
+        const messageUrl = `${NYLAS_API_BASE_URL}/grants/${grantId}/messages/${threadId}`;
+        console.log('Trying direct message fetch:', messageUrl);
+        
+        const messageResponse = await axios.get(messageUrl, {
           headers: {
             'Accept': 'application/json',
-            'Authorization': `Bearer ${NYLAS_API_KEY}`
+            'Authorization': `Bearer ${NYLAS_API_KEY}`,
+            'Content-Type': 'application/json'
           }
-        }).then(response => {
-          const messages = response.data?.data || response.data || [];
-          messages.forEach(msg => {
-            // Check if this message references our original message
-            if (msg.headers && msg.id && !trackedMessageIds.has(msg.id)) {
-              const references = msg.headers['References'] || msg.headers['In-Reply-To'] || '';
-              if (references.includes(cleanMessageId)) {
+        });
+        
+        const message = messageResponse.data?.data || messageResponse.data;
+        if (message && message.id) {
+          allMessages.set(message.id, message);
+          trackedMessageIds.add(message.id);
+          extractAllEmails(message).forEach(email => conversationParticipants.add(email));
+          console.log(`Found message directly: ${message.id}`);
+          
+          // Now get other messages in the same thread
+          if (message.thread_id) {
+            const threadUrl2 = `${NYLAS_API_BASE_URL}/grants/${grantId}/messages?thread_id=${message.thread_id}&limit=100`;
+            const threadResponse2 = await axios.get(threadUrl2, {
+              headers: {
+                'Accept': 'application/json',
+                'Authorization': `Bearer ${NYLAS_API_KEY}`,
+                'Content-Type': 'application/json'
+              }
+            });
+            
+            const additionalMessages = threadResponse2.data?.data || threadResponse2.data || [];
+            additionalMessages.forEach(msg => {
+              if (msg.id && !trackedMessageIds.has(msg.id)) {
                 allMessages.set(msg.id, msg);
                 trackedMessageIds.add(msg.id);
                 extractAllEmails(msg).forEach(email => conversationParticipants.add(email));
               }
+            });
+          }
+        }
+      } catch (error) {
+        console.error('Direct message fetch error:', error.response?.data || error.message || error);
+      }
+    }
+
+    // Step 3: Find original message and gather search criteria
+    let originalMessage = null;
+    let originalSubject = null;
+    let searchStartDate = null;
+    let searchEndDate = null;
+    
+    if (allMessages.size > 0) {
+      const sortedMessages = Array.from(allMessages.values()).sort((a, b) => 
+        (a.date || 0) - (b.date || 0)
+      );
+      
+      originalMessage = sortedMessages[0];
+      originalSubject = originalMessage.subject || '';
+      
+      // Set time window for searching (1 week before to 60 days after)
+      if (originalMessage.date) {
+        searchStartDate = originalMessage.date - 604800; // 7 days before
+        searchEndDate = originalMessage.date + 5184000; // 60 days after
+      }
+      
+      console.log(`Original message date: ${originalMessage.date}, Subject: "${originalSubject}"`);
+      console.log(`Participants: ${Array.from(conversationParticipants).join(', ')}`);
+    }
+
+    // Step 4: Search for related messages using multiple strategies
+    if (originalMessage && conversationParticipants.size > 0) {
+      const searchStrategies = [];
+      const participantArray = Array.from(conversationParticipants);
+      const cleanSubject = originalSubject.replace(/^(Re:|RE:|Fwd:|FWD:|Fw:|FW:)\s*/gi, '').trim();
+      
+      console.log(`Searching with clean subject: "${cleanSubject}"`);
+      
+      // Strategy 1: Search by subject
+      if (cleanSubject) {
+        searchStrategies.push({
+          name: 'subject',
+          url: `${NYLAS_API_BASE_URL}/grants/${grantId}/messages?subject=${encodeURIComponent(cleanSubject)}&limit=100`
+        });
+      }
+      
+      // Strategy 2: Search by participants (to/from)
+      participantArray.forEach(email => {
+        searchStrategies.push({
+          name: `to_${email}`,
+          url: `${NYLAS_API_BASE_URL}/grants/${grantId}/messages?to=${encodeURIComponent(email)}&limit=50`
+        });
+        searchStrategies.push({
+          name: `from_${email}`,
+          url: `${NYLAS_API_BASE_URL}/grants/${grantId}/messages?from=${encodeURIComponent(email)}&limit=50`
+        });
+      });
+      
+      // Strategy 3: Search in time window
+      if (searchStartDate && searchEndDate) {
+        searchStrategies.push({
+          name: 'time_window',
+          url: `${NYLAS_API_BASE_URL}/grants/${grantId}/messages?start=${searchStartDate}&end=${searchEndDate}&limit=100`
+        });
+      }
+      
+      // Execute all search strategies
+      for (const strategy of searchStrategies) {
+        try {
+          console.log(`Executing search strategy: ${strategy.name}`);
+          
+          const response = await axios.get(strategy.url, {
+            headers: {
+              'Accept': 'application/json',
+              'Authorization': `Bearer ${NYLAS_API_KEY}`
             }
           });
-        }).catch(err => console.error('Message-ID search error:', err.message))
-      );
-    }
-    
-    // 3B: Search by all conversation participants (expanded scope)
-    if (conversationParticipants.size > 0) {
-      const participantArray = Array.from(conversationParticipants);
-      // Search for recent messages involving any participant
-      const recentSearchUrl = `${NYLAS_API_BASE_URL}/grants/${grantId}/messages?limit=150`;
-      searchPromises.push(
-        axios.get(recentSearchUrl, {
-          headers: {
-            'Accept': 'application/json',
-            'Authorization': `Bearer ${NYLAS_API_KEY}`
-          }
-        }).then(response => {
-          const messages = response.data?.data || response.data || [];
-          const originalSubject = Array.from(allMessages.values())[0]?.subject || '';
-          const cleanSubject = originalSubject.replace(/^(Re:|RE:|Fwd:|FWD:|Fw:|FW:)\s*/gi, '').trim();
           
-          messages.forEach(msg => {
+          const foundMessages = response.data?.data || response.data || [];
+          console.log(`Found ${foundMessages.length} messages via ${strategy.name}`);
+          
+          foundMessages.forEach(msg => {
             if (msg.id && !trackedMessageIds.has(msg.id)) {
-              // Check if this message involves conversation participants
+              // Check if this message is related to our conversation
+              const msgSubject = msg.subject || '';
+              const msgCleanSubject = msgSubject.replace(/^(Re:|RE:|Fwd:|FWD:|Fw:|FW:)\s*/gi, '').trim();
+              const subjectMatches = cleanSubject && msgCleanSubject.toLowerCase() === cleanSubject.toLowerCase();
+              
+              // Check if involves our participants
               const msgEmails = extractAllEmails(msg);
               const hasParticipant = msgEmails.some(email => conversationParticipants.has(email));
               
-              // Check subject similarity
-              const msgCleanSubject = (msg.subject || '').replace(/^(Re:|RE:|Fwd:|FWD:|Fw:|FW:)\s*/gi, '').trim();
-              const subjectMatches = cleanSubject && msgCleanSubject.toLowerCase() === cleanSubject.toLowerCase();
+              // Check if it's within our time window
+              const withinTimeWindow = !searchStartDate || !searchEndDate || 
+                (msg.date && msg.date >= searchStartDate && msg.date <= searchEndDate);
               
-              if (hasParticipant && subjectMatches) {
+              // If it matches criteria, add it
+              if ((subjectMatches || hasParticipant) && withinTimeWindow) {
                 allMessages.set(msg.id, msg);
                 trackedMessageIds.add(msg.id);
+                extractAllEmails(msg).forEach(email => conversationParticipants.add(email));
+                console.log(`Added related message: ${msg.id} via ${strategy.name}`);
               }
             }
           });
-        }).catch(err => console.error('Participant search error:', err.message))
-      );
+          
+          // Small delay to avoid rate limiting
+          await new Promise(resolve => setTimeout(resolve, 100));
+          
+        } catch (error) {
+          console.error(`Search strategy ${strategy.name} failed:`, error.message);
+        }
+      }
     }
-    
-    // 3C: Execute all searches in parallel
-    await Promise.allSettled(searchPromises);
-    
-    // Step 4: Final organization and response
+
+    // Step 5: Final processing and response
     const messagesArray = Array.from(allMessages.values());
     const sortedMessages = messagesArray.sort((a, b) => {
       const dateA = a.date || a.timestamp || 0;
       const dateB = b.date || b.timestamp || 0;
-      return dateA - dateB; // Oldest first
+      return dateA - dateB;
     });
     
-    // Group messages by their thread for better visualization
+    console.log(`Total messages in conversation chain: ${sortedMessages.length}`);
+    
+    // Group by thread for clarity
     const threadsMap = new Map();
     sortedMessages.forEach(msg => {
       const threadKey = msg.thread_id || 'no-thread';
       if (!threadsMap.has(threadKey)) {
         threadsMap.set(threadKey, []);
       }
-      threadsMap.get(threadKey).push(msg);
+      threadsMap.get(threadKey).push({
+        id: msg.id,
+        subject: msg.subject,
+        date: msg.date,
+        from: msg.from,
+        to: msg.to,
+        snippet: msg.snippet?.substring(0, 100)
+      });
     });
     
     res.json({
@@ -1271,22 +1364,34 @@ router.get('/thread-messages-enhanced/:grantId/:threadId', checkApiKey, async (r
       threads: Array.from(threadsMap.entries()).map(([threadId, msgs]) => ({
         thread_id: threadId,
         message_count: msgs.length,
-        messages: msgs.map(m => ({ id: m.id, subject: m.subject, date: m.date }))
+        messages: msgs
       })),
       participants: Array.from(conversationParticipants),
-      message: 'Complete conversation chain fetched successfully',
+      search_criteria_used: {
+        original_subject: originalSubject,
+        participants_count: conversationParticipants.size,
+        time_window: searchStartDate && searchEndDate ? 
+          `${new Date(searchStartDate * 1000).toISOString()} to ${new Date(searchEndDate * 1000).toISOString()}` : null
+      },
+      message: sortedMessages.length > 0 ? 
+        'Complete conversation chain fetched successfully' : 
+        'No messages found with the given criteria',
       timestamp: new Date().toISOString()
     });
     
   } catch (error) {
-    console.error('Enhanced thread fetch error:', error.response?.data || error.message);
+    console.error('Enhanced thread fetch error:', error.response?.data || error.message || error);
     res.status(500).json({
       success: false,
-      message: 'Failed to fetch complete conversation chain',
+      message: 'Failed to fetch conversation chain',
       error: error.message,
+      details: error.response?.data,
       timestamp: new Date().toISOString()
     });
   }
 });
+
+
+
 module.exports = router;
 
