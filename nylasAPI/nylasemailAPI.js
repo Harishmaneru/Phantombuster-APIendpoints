@@ -1095,5 +1095,41 @@ router.put('/updatecalendar/:grantId/:calendarId', checkApiKey, async (req, res)
 });
 
 
+
+/*_________________________GET ALL MESSAGES IN A THREAD (CONVERSATION)_________________________*/
+
+router.get('/thread-messages/:grantId/:threadId', checkApiKey, async (req, res) => {
+  try {
+    const { grantId, threadId } = req.params;
+
+    // This is the specific API call to get the conversation history
+    const url = `${NYLAS_API_BASE_URL}/grants/${grantId}/messages?thread_id=${threadId}`;
+
+    const response = await axios.get(url, {
+      headers: {
+        'Accept': 'application/json, application/gzip',
+        'Authorization': `Bearer ${NYLAS_API_KEY}`,
+        'Content-Type': 'application/json'
+      }
+    });
+
+    res.json({
+      success: true,
+      // This data will be an array of email objects (sent + received replies)
+      data: response.data.data, 
+      message: 'Conversation history fetched successfully',
+      timestamp: new Date().toISOString()
+    });
+  } catch (error) {
+    console.error('Error fetching thread messages:', error.response?.data || error.message);
+    res.status(error.response?.status || 500).json({
+      success: false,
+      message: error.response?.data?.message || error.message || 'Failed to fetch conversation history',
+      data: error.response?.data || null,
+      timestamp: new Date().toISOString()
+    });
+  }
+});
+
 module.exports = router;
 
