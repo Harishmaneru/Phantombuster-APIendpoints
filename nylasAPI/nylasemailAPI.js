@@ -1196,6 +1196,33 @@ router.get('/thread-replies/:grantId/:threadId', checkApiKey, async (req, res) =
   }
 });
 
+router.get('/find-reply/:grantId', checkApiKey, async (req, res) => {
+  try {
+    const { grantId } = req.params;
+    const senderEmail = req.query.sender; // e.g., harish@onepgr.us
+
+    // API STRATEGY: Search for messages explicitly FROM this person
+    // We sort by date (descending) to get the newest reply first
+    const url = `${NYLAS_API_BASE_URL}/grants/${grantId}/messages?any_email=${senderEmail}&limit=5`;
+
+    const response = await axios.get(url, {
+      headers: {
+        'Authorization': `Bearer ${NYLAS_API_KEY}`,
+        'Content-Type': 'application/json'
+      }
+    });
+
+    res.json({
+      success: true,
+      data: response.data.data, // Check if Harish's email appears here
+      message: "Searched for messages from specific sender"
+    });
+
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
 
 
 module.exports = router;
