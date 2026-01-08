@@ -1119,7 +1119,7 @@ router.get('/thread-messages-enhanced/:grantId/:threadId', checkApiKey, async (r
   console.log('Grant ID:', req.params.grantId);
   console.log('Thread ID:', req.params.threadId);
   console.log('Timestamp:', new Date().toISOString());
-  next();
+
   try {
     const { grantId, threadId } = req.params;
     const allMessages = new Map();
