@@ -1496,13 +1496,17 @@ router.get(
       searchMessages.forEach((msg) => {
         if (allMessagesMap.has(msg.id)) return; // Already have it
 
+        const normalizedMsgSubject = normalizeSubject(msg.subject);
+
         // Check if this message belongs to the same conversation:
         // 1. Same thread_id
         const sameThread = msg.thread_id === threadId;
 
-        // 2. Subject matches (normalized - ignoring Re:/Fwd: prefixes)
+        // 2. Subject matches (contains check - handles appended text like @Testing)
         const subjectMatches =
-          normalizeSubject(msg.subject) === normalizedOriginalSubject;
+          normalizedMsgSubject === normalizedOriginalSubject ||
+          normalizedMsgSubject.includes(normalizedOriginalSubject) ||
+          normalizedOriginalSubject.includes(normalizedMsgSubject);
 
         // 3. References or in_reply_to points to one of our thread messages
         const references = msg.references || [];
@@ -1514,8 +1518,20 @@ router.get(
             inReplyTo.includes(id)
         );
 
+        // 4. Message is from the recipient we're searching for (and subject is related)
+        const isFromRecipient =
+          recipient_email &&
+          msg.from?.some(
+            (p) => p.email.toLowerCase() === recipient_email.toLowerCase()
+          );
+
         // Only add if it's actually related to this conversation
-        if (sameThread || subjectMatches || isReplyToThread) {
+        if (
+          sameThread ||
+          subjectMatches ||
+          isReplyToThread ||
+          (isFromRecipient && subjectMatches)
+        ) {
           allMessagesMap.set(msg.id, msg);
         }
       });
