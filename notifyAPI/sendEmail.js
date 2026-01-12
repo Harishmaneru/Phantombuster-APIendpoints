@@ -4491,24 +4491,26 @@ router.post("/api/fetch-email-thread", async (req, res) => {
       `✅ [FetchThread] SUCCESS - Thread has ${thread.length} message(s) (1 original + ${replies.length} replies)`
     );
 
-    // Return the complete thread
+    // Return the complete thread with better naming
     return res.json({
       success: true,
-      messageId: messageId,
-      thread: thread,
-      summary: {
+      threadId: messageId,
+      conversation: {
+        originalSentEmail: originalEmail || null,
+        replies: replies,
+      },
+      threadSummary: {
         totalMessages: thread.length,
-        sentEmail: originalEmail
-          ? {
-              subject: originalEmail.subject,
-              to: originalEmail.to,
-              date: originalEmail.date,
-            }
-          : null,
+        originalEmailSubject: originalEmail ? originalEmail.subject : null,
+        sender: originalEmail ? originalEmail.from : null,
+        recipient: originalEmail ? originalEmail.to : null,
+        sentDate: originalEmail ? originalEmail.date : null,
         replyCount: replies.length,
         hasReplies: replies.length > 0,
         lastReplyDate:
           replies.length > 0 ? replies[replies.length - 1].date : null,
+        lastReplyFrom:
+          replies.length > 0 ? replies[replies.length - 1].from : null,
       },
     });
   } catch (error) {
