@@ -4203,12 +4203,10 @@ router.post("/api/fetch-email-thread", async (req, res) => {
       decryptedPass = decrypt(smtp.pass);
     } catch (decryptError) {
       console.error("Password decryption failed:", decryptError);
-      return res
-        .status(500)
-        .json({
-          success: false,
-          error: "Failed to decrypt stored credentials",
-        });
+      return res.status(500).json({
+        success: false,
+        error: "Failed to decrypt stored credentials",
+      });
     }
 
     // 4. Initialize IMAP Client
@@ -4314,6 +4312,53 @@ router.post("/api/fetch-email-thread", async (req, res) => {
           );
           break;
         }
+      }
+    }
+
+    // Fallback: If original email not found in Sent folder, get from EmailTracking database
+    if (!originalEmail) {
+      console.log(
+        `📧 [FetchThread] Original email not in Sent folder, checking tracking database...`
+      );
+
+      // Search by originalMessageId (the full Message-ID) or by messageId (tracking ID)
+      let tracking = await EmailTracking.findOne({
+        originalMessageId: messageId,
+      });
+
+      // Also try searching by the tracking messageId field
+      if (!tracking) {
+        // Extract tracking ID from messageId if it follows our format: <trackingId@domain>
+        const trackingIdMatch = messageId.match(/<([^@]+)@/);
+        if (trackingIdMatch) {
+          tracking = await EmailTracking.findOne({
+            messageId: trackingIdMatch[1],
+          });
+        }
+      }
+
+      if (tracking && tracking.emailContent) {
+        console.log(
+          `✅ [FetchThread] Found original email in tracking database`
+        );
+        originalEmail = {
+          type: "sent",
+          subject: tracking.subject,
+          from: [{ name: "", address: tracking.fromEmail }],
+          to: [{ name: "", address: tracking.toEmail }],
+          cc: [],
+          date: tracking.sentAt || tracking.createdAt,
+          html: tracking.emailContent.html || "",
+          text: tracking.emailContent.text || "",
+          messageId: tracking.originalMessageId,
+          uid: null,
+          attachments: [],
+          hasAttachments: false,
+        };
+      } else {
+        console.log(
+          `⚠️ [FetchThread] Original email not found in tracking database either`
+        );
       }
     }
 
