@@ -432,11 +432,17 @@ router.post("/api/unipile/webhook/unipile-account", async (req, res) => {
 
 // ==================== CHAT ENDPOINTS ====================
 
-// Get all chats/conversations for a userId with enriched profile data
+// Get all chats/conversations for a userId - FAST VERSION
+// Profile fetching is now optional and uses aggressive parallelization with timeouts
 router.get("/api/unipile/user/:userId/allchats", async (req, res) => {
   try {
     const { userId } = req.params;
-    const { limit = 50, cursor, search, include_profiles = "true" } = req.query;
+    const {
+      limit = 50,
+      cursor,
+      search,
+      include_profiles = "false",
+    } = req.query;
 
     const dbResult = await getLinkedInAccountStatus(userId);
 
@@ -461,15 +467,18 @@ router.get("/api/unipile/user/:userId/allchats", async (req, res) => {
     let chatsData = response.data;
     const chats = chatsData?.items || [];
 
-    // Enrich chats with profile data if requested
+    // Fast profile enrichment with aggressive timeouts (only when explicitly requested)
     if (include_profiles === "true" && chats.length > 0) {
-      console.log(`🔄 Enriching ${chats.length} chats with profile data...`);
+      console.log(
+        `🚀 Fast enriching ${chats.length} chats with profile data...`
+      );
+      const startTime = Date.now();
 
-      // Helper function to fetch profile with caching
-      const fetchProfileForChat = async (chat) => {
+      // Helper: fetch single profile with timeout
+      const fetchProfileWithTimeout = async (chat, timeoutMs = 1500) => {
         const attendeeProviderId = chat.attendee_provider_id;
 
-        // Skip invalid provider IDs (like "1337" for LinkedIn offers)
+        // Skip invalid provider IDs
         if (
           !attendeeProviderId ||
           attendeeProviderId === "1337" ||
@@ -478,16 +487,15 @@ router.get("/api/unipile/user/:userId/allchats", async (req, res) => {
           return {
             ...chat,
             attendee_profile: null,
-            profile_fetch_status: "skipped_invalid_id",
+            profile_fetch_status: "skipped",
           };
         }
 
-        // Check cache first
+        // Check cache first (instant)
         const cacheKey = getProfileCacheKey(attendeeProviderId, accountId);
         const cachedProfile = profileCache.get(cacheKey);
 
         if (cachedProfile) {
-          console.log(`✅ [Cache HIT] Profile for ${attendeeProviderId}`);
           return {
             ...chat,
             attendee_profile: {
@@ -507,20 +515,27 @@ router.get("/api/unipile/user/:userId/allchats", async (req, res) => {
           };
         }
 
-        // Fetch from API
+        // Fetch with timeout
         try {
-          const profileResponse = await axios.get(
+          const profilePromise = axios.get(
             `${getBaseUrl()}/users/${encodeURIComponent(
               attendeeProviderId
             )}?account_id=${accountId}`,
-            { headers: getHeaders() }
+            { headers: getHeaders(), timeout: timeoutMs }
           );
 
+          const timeoutPromise = new Promise((_, reject) =>
+            setTimeout(() => reject(new Error("timeout")), timeoutMs)
+          );
+
+          const profileResponse = await Promise.race([
+            profilePromise,
+            timeoutPromise,
+          ]);
           const profile = profileResponse.data;
 
           // Cache the profile
           profileCache.set(cacheKey, profile);
-          console.log(`💾 [Cache SET] Profile for ${attendeeProviderId}`);
 
           return {
             ...chat,
@@ -537,44 +552,24 @@ router.get("/api/unipile/user/:userId/allchats", async (req, res) => {
             },
             profile_fetch_status: "fetched",
           };
-        } catch (profileError) {
-          console.warn(
-            `⚠️ Could not fetch profile for ${attendeeProviderId}:`,
-            profileError.message
-          );
+        } catch (err) {
           return {
             ...chat,
             attendee_profile: null,
-            profile_fetch_status: "error",
-            profile_fetch_error: profileError.message,
+            profile_fetch_status: "timeout_or_error",
           };
         }
       };
 
-      // Process chats in batches to avoid rate limiting (5 concurrent requests)
-      const batchSize = 5;
-      const enrichedChats = [];
-
-      for (let i = 0; i < chats.length; i += batchSize) {
-        const batch = chats.slice(i, i + batchSize);
-        const batchResults = await Promise.all(batch.map(fetchProfileForChat));
-        enrichedChats.push(...batchResults);
-
-        // Small delay between batches to respect rate limits
-        if (i + batchSize < chats.length) {
-          await new Promise((resolve) => setTimeout(resolve, 100));
-        }
-      }
-
-      // Update the response with enriched chats
-      chatsData = {
-        ...chatsData,
-        items: enrichedChats,
-      };
-
-      console.log(
-        `✅ Enriched ${enrichedChats.length} chats with profile data`
+      // Process ALL profiles in parallel with individual timeouts (much faster)
+      const enrichedChats = await Promise.all(
+        chats.map((chat) => fetchProfileWithTimeout(chat, 1500))
       );
+
+      chatsData = { ...chatsData, items: enrichedChats };
+
+      const elapsed = Date.now() - startTime;
+      console.log(`✅ Enriched ${enrichedChats.length} chats in ${elapsed}ms`);
     }
 
     res.json({
@@ -583,6 +578,100 @@ router.get("/api/unipile/user/:userId/allchats", async (req, res) => {
       account_id: accountId,
       user_id: userId,
       profiles_included: include_profiles === "true",
+    });
+  } catch (err) {
+    handleError(err, res);
+  }
+});
+
+// Batch fetch profiles for multiple provider IDs - for client-side enrichment
+router.post("/api/unipile/user/:userId/batch-profiles", async (req, res) => {
+  try {
+    const { userId } = req.params;
+    const { provider_ids } = req.body;
+
+    if (
+      !provider_ids ||
+      !Array.isArray(provider_ids) ||
+      provider_ids.length === 0
+    ) {
+      return res
+        .status(400)
+        .json({ success: false, error: "provider_ids array is required" });
+    }
+
+    const dbResult = await getLinkedInAccountStatus(userId);
+    if (!dbResult.success || !dbResult.account_id) {
+      return res
+        .status(404)
+        .json({ success: false, error: "No LinkedIn account found" });
+    }
+
+    const accountId = dbResult.account_id;
+    const startTime = Date.now();
+
+    // Fetch all profiles in parallel with timeout
+    const fetchProfile = async (providerId) => {
+      if (!providerId || providerId === "1337" || providerId.length < 10) {
+        return { provider_id: providerId, profile: null, status: "skipped" };
+      }
+
+      // Check cache
+      const cacheKey = getProfileCacheKey(providerId, accountId);
+      const cached = profileCache.get(cacheKey);
+      if (cached) {
+        return {
+          provider_id: providerId,
+          profile: {
+            provider_id: cached.provider_id,
+            name: cached.name || null,
+            headline: cached.headline || null,
+            profile_picture_url:
+              cached.profile_picture_url || cached.picture || null,
+            profile_url: cached.profile_url || null,
+            public_identifier: cached.public_identifier || null,
+            location: cached.location || null,
+          },
+          status: "cached",
+        };
+      }
+
+      // Fetch with timeout
+      try {
+        const response = await axios.get(
+          `${getBaseUrl()}/users/${encodeURIComponent(
+            providerId
+          )}?account_id=${accountId}`,
+          { headers: getHeaders(), timeout: 2000 }
+        );
+        const p = response.data;
+        profileCache.set(cacheKey, p);
+        return {
+          provider_id: providerId,
+          profile: {
+            provider_id: p.provider_id,
+            name: p.name || null,
+            headline: p.headline || null,
+            profile_picture_url: p.profile_picture_url || p.picture || null,
+            profile_url: p.profile_url || null,
+            public_identifier: p.public_identifier || null,
+            location: p.location || null,
+          },
+          status: "fetched",
+        };
+      } catch {
+        return { provider_id: providerId, profile: null, status: "error" };
+      }
+    };
+
+    const results = await Promise.all(provider_ids.map(fetchProfile));
+    const elapsed = Date.now() - startTime;
+
+    res.json({
+      success: true,
+      profiles: results,
+      count: results.length,
+      fetched_in_ms: elapsed,
     });
   } catch (err) {
     handleError(err, res);
