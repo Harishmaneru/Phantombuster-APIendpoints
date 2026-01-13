@@ -1,8 +1,8 @@
-const express = require('express');
-const axios = require('axios');
-const FormData = require('form-data');
-const fs = require('fs');
-const NodeCache = require('node-cache');
+const express = require("express");
+const axios = require("axios");
+const FormData = require("form-data");
+const fs = require("fs");
+const NodeCache = require("node-cache");
 const router = express.Router();
 
 // Import LinkedIn account service
@@ -13,18 +13,20 @@ const {
   refreshLinkedInAccount,
   handleAccountError,
   getAllLinkedInAccounts,
-  deleteLinkedInAccount
-} = require('./linkedinAccountService');
+  deleteLinkedInAccount,
+} = require("./linkedinAccountService");
 
 // ==================== MIDDLEWARE ====================
 
 // Validate environment variables on startup
 const validateConfig = () => {
-  const required = ['UNIPILE_API_KEY', 'UNIPILE_SUBDOMAIN', 'UNIPILE_PORT'];
-  const missing = required.filter(key => !process.env[key]);
+  const required = ["UNIPILE_API_KEY", "UNIPILE_SUBDOMAIN", "UNIPILE_PORT"];
+  const missing = required.filter((key) => !process.env[key]);
 
   if (missing.length > 0) {
-    throw new Error(`Missing required environment variables: ${missing.join(', ')}`);
+    throw new Error(
+      `Missing required environment variables: ${missing.join(", ")}`
+    );
   }
 };
 
@@ -33,16 +35,16 @@ validateConfig();
 // ==================== CACHING ====================
 // Cache for LinkedIn profile data to reduce API calls and prevent rate limits
 // TTL: 30 minutes (profiles don't change frequently)
-const profileCache = new NodeCache({ 
+const profileCache = new NodeCache({
   stdTTL: 30 * 60, // 30 minutes in seconds
   checkperiod: 60, // Check for expired keys every minute
-  useClones: false // Better performance, we don't need deep cloning
+  useClones: false, // Better performance, we don't need deep cloning
 });
 
 // Cache for chat lookup results (shorter TTL since chats can change)
 const chatCache = new NodeCache({
   stdTTL: 10 * 60, // 10 minutes
-  checkperiod: 60
+  checkperiod: 60,
 });
 
 // Helper function to generate cache keys
@@ -60,19 +62,19 @@ const getBaseUrl = () => {
 };
 
 // Standard headers for all requests
-const getHeaders = (contentType = 'application/json') => ({
-  'X-API-KEY': process.env.UNIPILE_API_KEY,
-  'Accept': 'application/json',
-  ...(contentType && { 'Content-Type': contentType })
+const getHeaders = (contentType = "application/json") => ({
+  "X-API-KEY": process.env.UNIPILE_API_KEY,
+  Accept: "application/json",
+  ...(contentType && { "Content-Type": contentType }),
 });
 
 // Unified error handler
 const handleError = (err, res) => {
-  console.error('API Error:', {
+  console.error("API Error:", {
     status: err.response?.status,
     message: err.message,
     data: err.response?.data,
-    url: err.config?.url
+    url: err.config?.url,
   });
 
   const status = err.response?.status || 500;
@@ -82,30 +84,30 @@ const handleError = (err, res) => {
     return res.status(status).json({
       success: false,
       error: err.response.data,
-      message: err.message
+      message: err.message,
     });
   }
 
-  const message = err.message || 'Internal server error';
+  const message = err.message || "Internal server error";
 
   res.status(status).json({
     success: false,
-    error: message
+    error: message,
   });
 };
 
 // ==================== ACCOUNT ENDPOINTS ====================
 
 // Get all accounts
-router.get('/api/unipile/accounts', async (req, res) => {
+router.get("/api/unipile/accounts", async (req, res) => {
   try {
     const response = await axios.get(`${getBaseUrl()}/accounts`, {
-      headers: getHeaders()
+      headers: getHeaders(),
     });
 
     res.json({
       success: true,
-      data: response.data
+      data: response.data,
     });
   } catch (err) {
     handleError(err, res);
@@ -113,17 +115,17 @@ router.get('/api/unipile/accounts', async (req, res) => {
 });
 
 // Get specific account details
-router.get('/api/unipile/accounts/:accountId', async (req, res) => {
+router.get("/api/unipile/accounts/:accountId", async (req, res) => {
   try {
     const { accountId } = req.params;
 
     const response = await axios.get(`${getBaseUrl()}/accounts/${accountId}`, {
-      headers: getHeaders()
+      headers: getHeaders(),
     });
 
     res.json({
       success: true,
-      data: response.data
+      data: response.data,
     });
   } catch (err) {
     handleError(err, res);
@@ -131,36 +133,36 @@ router.get('/api/unipile/accounts/:accountId', async (req, res) => {
 });
 
 // Create account via cookie (li_at token)
-router.post('/api/unipile/accounts/cookie', async (req, res) => {
+router.post("/api/unipile/accounts/cookie", async (req, res) => {
   try {
     const { access_token, user_agent, user_id, name } = req.body;
 
     if (!access_token || !user_agent) {
       return res.status(400).json({
         success: false,
-        error: 'access_token (li_at) and user_agent are required'
+        error: "access_token (li_at) and user_agent are required",
       });
     }
 
     if (!user_id) {
       return res.status(400).json({
         success: false,
-        error: 'user_id is required to store account information'
+        error: "user_id is required to store account information",
       });
     }
 
     // Use FormData for consistency
     const form = new FormData();
 
-    form.append('provider', 'LINKEDIN');
-    form.append('access_token', access_token);
-    form.append('user_agent', user_agent);
+    form.append("provider", "LINKEDIN");
+    form.append("access_token", access_token);
+    form.append("user_agent", user_agent);
 
     const response = await axios.post(`${getBaseUrl()}/accounts`, form, {
       headers: {
-        'X-API-KEY': process.env.UNIPILE_API_KEY,
-        ...form.getHeaders()
-      }
+        "X-API-KEY": process.env.UNIPILE_API_KEY,
+        ...form.getHeaders(),
+      },
     });
 
     // Store account in database
@@ -168,17 +170,17 @@ router.post('/api/unipile/accounts/cookie', async (req, res) => {
       const dbResult = await connectLinkedInAccount(
         user_id,
         response.data.account_id,
-        'LINKEDIN',
-        name || 'LinkedIn Account',
+        "LINKEDIN",
+        name || "LinkedIn Account",
         {
           user_agent: user_agent,
-          connected_via: 'cookie',
-          unipile_response: response.data
+          connected_via: "cookie",
+          unipile_response: response.data,
         }
       );
 
       if (!dbResult.success) {
-        console.error('Failed to store account in database:', dbResult.error);
+        console.error("Failed to store account in database:", dbResult.error);
         // Continue with success response but log the error
       }
     }
@@ -186,8 +188,8 @@ router.post('/api/unipile/accounts/cookie', async (req, res) => {
     res.status(201).json({
       success: true,
       data: response.data,
-      message: 'LinkedIn account connected successfully',
-      stored_in_db: response.data && response.data.account_id ? true : false
+      message: "LinkedIn account connected successfully",
+      stored_in_db: response.data && response.data.account_id ? true : false,
     });
   } catch (err) {
     handleError(err, res);
@@ -195,18 +197,21 @@ router.post('/api/unipile/accounts/cookie', async (req, res) => {
 });
 
 // Delete account
-router.delete('/api/unipile/accounts/:accountId', async (req, res) => {
+router.delete("/api/unipile/accounts/:accountId", async (req, res) => {
   try {
     const { accountId } = req.params;
 
-    const response = await axios.delete(`${getBaseUrl()}/accounts/${accountId}`, {
-      headers: getHeaders()
-    });
+    const response = await axios.delete(
+      `${getBaseUrl()}/accounts/${accountId}`,
+      {
+        headers: getHeaders(),
+      }
+    );
 
     res.json({
       success: true,
       data: response.data,
-      message: 'Account deleted successfully'
+      message: "Account deleted successfully",
     });
   } catch (err) {
     handleError(err, res);
@@ -216,23 +221,23 @@ router.delete('/api/unipile/accounts/:accountId', async (req, res) => {
 // ==================== HOSTED AUTH ENDPOINTS ====================
 
 // Create hosted authentication link
-router.post('/api/unipile/auth/link', async (req, res) => {
+router.post("/api/unipile/auth/link", async (req, res) => {
   try {
     const {
-      providers = ['LINKEDIN'],
+      providers = ["LINKEDIN"],
       success_redirect_url,
       failure_redirect_url,
       notify_url,
       name,
       user_id,
-      type = 'create'
+      type = "create",
     } = req.body;
 
     // Validate providers
     if (!providers || !Array.isArray(providers) || providers.length === 0) {
       return res.status(400).json({
         success: false,
-        error: 'providers array is required and must not be empty'
+        error: "providers array is required and must not be empty",
       });
     }
 
@@ -242,7 +247,7 @@ router.post('/api/unipile/auth/link', async (req, res) => {
     // Include user_id in notify_url if provided
     let finalNotifyUrl = notify_url;
     if (user_id && notify_url) {
-      const separator = notify_url.includes('?') ? '&' : '?';
+      const separator = notify_url.includes("?") ? "&" : "?";
       finalNotifyUrl = `${notify_url}${separator}user_id=${user_id}`;
     }
 
@@ -257,8 +262,8 @@ router.post('/api/unipile/auth/link', async (req, res) => {
       ...(name && { name }),
       // Use metadata to pass custom data
       metadata: {
-        user_id: user_id
-      }
+        user_id: user_id,
+      },
     };
 
     const response = await axios.post(
@@ -270,9 +275,11 @@ router.post('/api/unipile/auth/link', async (req, res) => {
     res.json({
       success: true,
       data: response.data,
-      message: 'Hosted auth link created successfully',
+      message: "Hosted auth link created successfully",
       user_id: user_id,
-      note: user_id ? 'User ID included for webhook processing' : 'No user ID provided - account will not be stored automatically'
+      note: user_id
+        ? "User ID included for webhook processing"
+        : "No user ID provided - account will not be stored automatically",
     });
   } catch (err) {
     handleError(err, res);
@@ -280,16 +287,17 @@ router.post('/api/unipile/auth/link', async (req, res) => {
 });
 
 // Webhook handler for account creation and errors
-router.post('/api/unipile/webhook/unipile-account', async (req, res) => {
+router.post("/api/unipile/webhook/unipile-account", async (req, res) => {
   try {
-    const { status, account_id, name, provider, error, user_id, metadata } = req.body;
+    const { status, account_id, name, provider, error, user_id, metadata } =
+      req.body;
 
     // Also check for user_id in query parameters (from notify_url) and metadata
     const userIdFromQuery = req.query.user_id;
     const userIdFromMetadata = metadata?.user_id;
     const finalUserId = user_id || userIdFromQuery || userIdFromMetadata;
 
-    console.log('Unipile webhook received:', {
+    console.log("Unipile webhook received:", {
       status,
       account_id,
       name,
@@ -298,282 +306,436 @@ router.post('/api/unipile/webhook/unipile-account', async (req, res) => {
       user_id_from_body: user_id,
       user_id_from_query: userIdFromQuery,
       user_id_from_metadata: userIdFromMetadata,
-      timestamp: new Date().toISOString()
+      timestamp: new Date().toISOString(),
     });
 
-    if (status === 'CREATION_SUCCESS' && account_id) {
-      console.log(`✅ Account created successfully for user ${name || finalUserId}: ${account_id}`);
+    if (status === "CREATION_SUCCESS" && account_id) {
+      console.log(
+        `✅ Account created successfully for user ${
+          name || finalUserId
+        }: ${account_id}`
+      );
 
       // Store account in database if user_id is provided
       if (finalUserId) {
         const dbResult = await connectLinkedInAccount(
           finalUserId,
           account_id,
-          provider || 'LINKEDIN',
-          name || 'LinkedIn Account',
+          provider || "LINKEDIN",
+          name || "LinkedIn Account",
           {
-            connected_via: 'hosted_auth',
-            webhook_data: req.body
+            connected_via: "hosted_auth",
+            webhook_data: req.body,
           }
         );
 
         if (!dbResult.success) {
-          console.error('Failed to store account in database:', dbResult.error);
+          console.error("Failed to store account in database:", dbResult.error);
         }
       } else {
         // If no user_id provided, store with a temporary identifier
         // This allows you to manually associate the account later
         const tempUserId = `temp_${account_id}_${Date.now()}`;
-        console.log(`⚠️ No user_id provided, storing with temporary ID: ${tempUserId}`);
+        console.log(
+          `⚠️ No user_id provided, storing with temporary ID: ${tempUserId}`
+        );
 
         const dbResult = await connectLinkedInAccount(
           tempUserId,
           account_id,
-          provider || 'LINKEDIN',
-          name || 'LinkedIn Account',
+          provider || "LINKEDIN",
+          name || "LinkedIn Account",
           {
-            connected_via: 'hosted_auth',
+            connected_via: "hosted_auth",
             webhook_data: req.body,
             is_temporary: true,
-            needs_user_association: true
+            needs_user_association: true,
           }
         );
 
         if (!dbResult.success) {
-          console.error('Failed to store account in database:', dbResult.error);
+          console.error("Failed to store account in database:", dbResult.error);
         }
       }
 
       res.json({
         success: true,
-        message: 'Account creation processed successfully',
+        message: "Account creation processed successfully",
         stored_in_db: true,
         user_id: finalUserId || `temp_${account_id}_${Date.now()}`,
-        note: finalUserId ? 'Account associated with user' : 'Account stored with temporary ID - needs user association'
+        note: finalUserId
+          ? "Account associated with user"
+          : "Account stored with temporary ID - needs user association",
       });
-    }
-    else if (status === 'CREATION_FAILED') {
-      console.log(`❌ Account creation failed for user ${name || finalUserId}:`, error);
+    } else if (status === "CREATION_FAILED") {
+      console.log(
+        `❌ Account creation failed for user ${name || finalUserId}:`,
+        error
+      );
 
       // Update user status if user_id is provided
       if (finalUserId) {
         const dbResult = await disconnectLinkedInAccount(
           finalUserId,
-          error || 'Account creation failed'
+          error || "Account creation failed"
         );
 
         if (!dbResult.success) {
-          console.error('Failed to update account status in database:', dbResult.error);
+          console.error(
+            "Failed to update account status in database:",
+            dbResult.error
+          );
         }
       }
 
       res.json({
         success: true,
-        message: 'Account creation failure processed',
-        updated_in_db: !!finalUserId
+        message: "Account creation failure processed",
+        updated_in_db: !!finalUserId,
       });
-    }
-    else if (status === 'ACCOUNT_ERROR' || status === 'ACCOUNT_STOPPED') {
+    } else if (status === "ACCOUNT_ERROR" || status === "ACCOUNT_STOPPED") {
       console.log(`⚠️ Account error/stopped for account ${account_id}:`, error);
 
       // Handle account error
-      const dbResult = await handleAccountError(account_id, error || 'Account error occurred');
+      const dbResult = await handleAccountError(
+        account_id,
+        error || "Account error occurred"
+      );
 
       if (!dbResult.success) {
-        console.error('Failed to handle account error in database:', dbResult.error);
+        console.error(
+          "Failed to handle account error in database:",
+          dbResult.error
+        );
       }
 
       res.json({
         success: true,
-        message: 'Account error handled successfully',
-        updated_in_db: dbResult.success
+        message: "Account error handled successfully",
+        updated_in_db: dbResult.success,
       });
-    }
-    else {
-      console.log('⚠️ Unknown webhook status:', status);
+    } else {
+      console.log("⚠️ Unknown webhook status:", status);
       res.json({
         success: true,
-        message: 'Webhook received'
+        message: "Webhook received",
       });
     }
   } catch (err) {
-    console.error('Webhook processing error:', err);
+    console.error("Webhook processing error:", err);
     res.status(500).json({
       success: false,
-      error: 'Webhook processing failed'
+      error: "Webhook processing failed",
     });
   }
 });
 
 // ==================== CHAT ENDPOINTS ====================
 
-
-
-// Get all chats/conversations for a userId
-router.get('/api/unipile/user/:userId/allchats', async (req, res) => {
+// Get all chats/conversations for a userId with enriched profile data
+router.get("/api/unipile/user/:userId/allchats", async (req, res) => {
   try {
     const { userId } = req.params;
-    const { limit = 50, cursor, search } = req.query;
+    const { limit = 50, cursor, search, include_profiles = "true" } = req.query;
 
     const dbResult = await getLinkedInAccountStatus(userId);
 
     if (!dbResult.success || !dbResult.account_id) {
-      return res.status(404).json({ success: false, error: 'No LinkedIn account found' });
+      return res
+        .status(404)
+        .json({ success: false, error: "No LinkedIn account found" });
     }
 
-    const params = new URLSearchParams();
-    params.append('account_id', dbResult.account_id);
-    params.append('limit', limit);
-    if (cursor) params.append('cursor', cursor);
-    if (search) params.append('search', search);
+    const accountId = dbResult.account_id;
 
-    const response = await axios.get(
-      `${getBaseUrl()}/chats?${params}`,
-      { headers: getHeaders() }
-    );
+    const params = new URLSearchParams();
+    params.append("account_id", accountId);
+    params.append("limit", limit);
+    if (cursor) params.append("cursor", cursor);
+    if (search) params.append("search", search);
+
+    const response = await axios.get(`${getBaseUrl()}/chats?${params}`, {
+      headers: getHeaders(),
+    });
+
+    let chatsData = response.data;
+    const chats = chatsData?.items || [];
+
+    // Enrich chats with profile data if requested
+    if (include_profiles === "true" && chats.length > 0) {
+      console.log(`🔄 Enriching ${chats.length} chats with profile data...`);
+
+      // Helper function to fetch profile with caching
+      const fetchProfileForChat = async (chat) => {
+        const attendeeProviderId = chat.attendee_provider_id;
+
+        // Skip invalid provider IDs (like "1337" for LinkedIn offers)
+        if (
+          !attendeeProviderId ||
+          attendeeProviderId === "1337" ||
+          attendeeProviderId.length < 10
+        ) {
+          return {
+            ...chat,
+            attendee_profile: null,
+            profile_fetch_status: "skipped_invalid_id",
+          };
+        }
+
+        // Check cache first
+        const cacheKey = getProfileCacheKey(attendeeProviderId, accountId);
+        const cachedProfile = profileCache.get(cacheKey);
+
+        if (cachedProfile) {
+          console.log(`✅ [Cache HIT] Profile for ${attendeeProviderId}`);
+          return {
+            ...chat,
+            attendee_profile: {
+              provider_id: cachedProfile.provider_id,
+              name: cachedProfile.name || null,
+              headline: cachedProfile.headline || null,
+              profile_picture_url:
+                cachedProfile.profile_picture_url ||
+                cachedProfile.picture ||
+                null,
+              profile_url: cachedProfile.profile_url || null,
+              public_identifier: cachedProfile.public_identifier || null,
+              location: cachedProfile.location || null,
+              network_distance: cachedProfile.network_distance || null,
+            },
+            profile_fetch_status: "cached",
+          };
+        }
+
+        // Fetch from API
+        try {
+          const profileResponse = await axios.get(
+            `${getBaseUrl()}/users/${encodeURIComponent(
+              attendeeProviderId
+            )}?account_id=${accountId}`,
+            { headers: getHeaders() }
+          );
+
+          const profile = profileResponse.data;
+
+          // Cache the profile
+          profileCache.set(cacheKey, profile);
+          console.log(`💾 [Cache SET] Profile for ${attendeeProviderId}`);
+
+          return {
+            ...chat,
+            attendee_profile: {
+              provider_id: profile.provider_id,
+              name: profile.name || null,
+              headline: profile.headline || null,
+              profile_picture_url:
+                profile.profile_picture_url || profile.picture || null,
+              profile_url: profile.profile_url || null,
+              public_identifier: profile.public_identifier || null,
+              location: profile.location || null,
+              network_distance: profile.network_distance || null,
+            },
+            profile_fetch_status: "fetched",
+          };
+        } catch (profileError) {
+          console.warn(
+            `⚠️ Could not fetch profile for ${attendeeProviderId}:`,
+            profileError.message
+          );
+          return {
+            ...chat,
+            attendee_profile: null,
+            profile_fetch_status: "error",
+            profile_fetch_error: profileError.message,
+          };
+        }
+      };
+
+      // Process chats in batches to avoid rate limiting (5 concurrent requests)
+      const batchSize = 5;
+      const enrichedChats = [];
+
+      for (let i = 0; i < chats.length; i += batchSize) {
+        const batch = chats.slice(i, i + batchSize);
+        const batchResults = await Promise.all(batch.map(fetchProfileForChat));
+        enrichedChats.push(...batchResults);
+
+        // Small delay between batches to respect rate limits
+        if (i + batchSize < chats.length) {
+          await new Promise((resolve) => setTimeout(resolve, 100));
+        }
+      }
+
+      // Update the response with enriched chats
+      chatsData = {
+        ...chatsData,
+        items: enrichedChats,
+      };
+
+      console.log(
+        `✅ Enriched ${enrichedChats.length} chats with profile data`
+      );
+    }
 
     res.json({
       success: true,
-      data: response.data,
-      account_id: dbResult.account_id,
-      user_id: userId
+      data: chatsData,
+      account_id: accountId,
+      user_id: userId,
+      profiles_included: include_profiles === "true",
     });
   } catch (err) {
     handleError(err, res);
   }
 });
-
-
 
 // Get a specific conversation/chat by ID for a user
-router.get('/api/unipile/user/:userId/conversations/:chatId', async (req, res) => {
-  try {
-    const { userId, chatId } = req.params;
+router.get(
+  "/api/unipile/user/:userId/conversations/:chatId",
+  async (req, res) => {
+    try {
+      const { userId, chatId } = req.params;
 
-    const dbResult = await getLinkedInAccountStatus(userId);
-    if (!dbResult.success || !dbResult.account_id) {
-      return res.status(404).json({ success: false, error: 'No LinkedIn account found' });
+      const dbResult = await getLinkedInAccountStatus(userId);
+      if (!dbResult.success || !dbResult.account_id) {
+        return res
+          .status(404)
+          .json({ success: false, error: "No LinkedIn account found" });
+      }
+
+      const params = new URLSearchParams();
+      params.append("account_id", dbResult.account_id);
+
+      const response = await axios.get(
+        `${getBaseUrl()}/chats/${chatId}?${params}`,
+        { headers: getHeaders() }
+      );
+
+      res.json({
+        success: true,
+        data: response.data,
+        account_id: dbResult.account_id,
+        chat_id: chatId,
+        user_id: userId,
+      });
+    } catch (err) {
+      handleError(err, res);
     }
-
-    const params = new URLSearchParams();
-    params.append('account_id', dbResult.account_id);
-
-    const response = await axios.get(
-      `${getBaseUrl()}/chats/${chatId}?${params}`,
-      { headers: getHeaders() }
-    );
-
-    res.json({
-      success: true,
-      data: response.data,
-      account_id: dbResult.account_id,
-      chat_id: chatId,
-      user_id: userId
-    });
-  } catch (err) {
-    handleError(err, res);
   }
-});
+);
 
 // Get messages for a userId + chatId
-router.get('/api/unipile/user/:userId/chats/:chatId/messages', async (req, res) => {
-  try {
-    const { userId, chatId } = req.params;
-    const { limit = 50, cursor } = req.query;
+router.get(
+  "/api/unipile/user/:userId/chats/:chatId/messages",
+  async (req, res) => {
+    try {
+      const { userId, chatId } = req.params;
+      const { limit = 50, cursor } = req.query;
 
-    const dbResult = await getLinkedInAccountStatus(userId);
-    if (!dbResult.success || !dbResult.account_id) {
-      return res.status(404).json({ success: false, error: 'No LinkedIn account found' });
+      const dbResult = await getLinkedInAccountStatus(userId);
+      if (!dbResult.success || !dbResult.account_id) {
+        return res
+          .status(404)
+          .json({ success: false, error: "No LinkedIn account found" });
+      }
+
+      const params = new URLSearchParams();
+      params.append("account_id", dbResult.account_id);
+      params.append("limit", limit);
+      if (cursor) params.append("cursor", cursor);
+
+      const response = await axios.get(
+        `${getBaseUrl()}/chats/${chatId}/messages?${params}`,
+        { headers: getHeaders() }
+      );
+
+      res.json({
+        success: true,
+        data: response.data,
+        account_id: dbResult.account_id,
+        chat_id: chatId,
+        user_id: userId,
+      });
+    } catch (err) {
+      handleError(err, res);
     }
-
-    const params = new URLSearchParams();
-    params.append('account_id', dbResult.account_id);
-    params.append('limit', limit);
-    if (cursor) params.append('cursor', cursor);
-
-    const response = await axios.get(
-      `${getBaseUrl()}/chats/${chatId}/messages?${params}`,
-      { headers: getHeaders() }
-    );
-
-    res.json({
-      success: true,
-      data: response.data,
-      account_id: dbResult.account_id,
-      chat_id: chatId,
-      user_id: userId
-    });
-  } catch (err) {
-    handleError(err, res);
   }
-});
-
-
+);
 
 // Get conversation attendees (participants) for a chat
-router.get('/api/unipile/user/:userId/conversations/:chatId/attendees', async (req, res) => {
-  try {
-    const { userId, chatId } = req.params;
+router.get(
+  "/api/unipile/user/:userId/conversations/:chatId/attendees",
+  async (req, res) => {
+    try {
+      const { userId, chatId } = req.params;
 
-    const dbResult = await getLinkedInAccountStatus(userId);
-    if (!dbResult.success || !dbResult.account_id) {
-      return res.status(404).json({ success: false, error: 'No LinkedIn account found' });
+      const dbResult = await getLinkedInAccountStatus(userId);
+      if (!dbResult.success || !dbResult.account_id) {
+        return res
+          .status(404)
+          .json({ success: false, error: "No LinkedIn account found" });
+      }
+
+      const params = new URLSearchParams();
+      params.append("account_id", dbResult.account_id);
+
+      const response = await axios.get(
+        `${getBaseUrl()}/chats/${chatId}/attendees?${params}`,
+        { headers: getHeaders() }
+      );
+
+      res.json({
+        success: true,
+        data: response.data,
+        account_id: dbResult.account_id,
+        chat_id: chatId,
+        user_id: userId,
+      });
+    } catch (err) {
+      handleError(err, res);
     }
-
-    const params = new URLSearchParams();
-    params.append('account_id', dbResult.account_id);
-
-    const response = await axios.get(
-      `${getBaseUrl()}/chats/${chatId}/attendees?${params}`,
-      { headers: getHeaders() }
-    );
-
-    res.json({
-      success: true,
-      data: response.data,
-      account_id: dbResult.account_id,
-      chat_id: chatId,
-      user_id: userId
-    });
-  } catch (err) {
-    handleError(err, res);
   }
-});
+);
 
 // Sync chat (get new messages since timestamp) - with user_id in URL
-router.get('/api/unipile/user/:userId/conversations/:chatId/sync', async (req, res) => {
-  try {
-    const { userId, chatId } = req.params;
-    const { since } = req.query;
+router.get(
+  "/api/unipile/user/:userId/conversations/:chatId/sync",
+  async (req, res) => {
+    try {
+      const { userId, chatId } = req.params;
+      const { since } = req.query;
 
-    const dbResult = await getLinkedInAccountStatus(userId);
-    if (!dbResult.success || !dbResult.account_id) {
-      return res.status(404).json({ success: false, error: 'No LinkedIn account found' });
+      const dbResult = await getLinkedInAccountStatus(userId);
+      if (!dbResult.success || !dbResult.account_id) {
+        return res
+          .status(404)
+          .json({ success: false, error: "No LinkedIn account found" });
+      }
+
+      const params = new URLSearchParams();
+      params.append("account_id", dbResult.account_id);
+      if (since) params.append("since", since);
+
+      const response = await axios.get(
+        `${getBaseUrl()}/chats/${chatId}/sync?${params}`,
+        { headers: getHeaders() }
+      );
+
+      res.json({
+        success: true,
+        data: response.data,
+        account_id: dbResult.account_id,
+        chat_id: chatId,
+        user_id: userId,
+      });
+    } catch (err) {
+      handleError(err, res);
     }
-
-    const params = new URLSearchParams();
-    params.append('account_id', dbResult.account_id);
-    if (since) params.append('since', since);
-
-    const response = await axios.get(
-      `${getBaseUrl()}/chats/${chatId}/sync?${params}`,
-      { headers: getHeaders() }
-    );
-
-    res.json({
-      success: true,
-      data: response.data,
-      account_id: dbResult.account_id,
-      chat_id: chatId,
-      user_id: userId
-    });
-  } catch (err) {
-    handleError(err, res);
   }
-});
+);
 
 // Sync chat (get new messages since timestamp) - legacy endpoint with account_id in query
-router.get('/api/unipile/chats/:chatId/sync', async (req, res) => {
+router.get("/api/unipile/chats/:chatId/sync", async (req, res) => {
   try {
     const { chatId } = req.params;
     const { account_id, since } = req.query;
@@ -581,13 +743,13 @@ router.get('/api/unipile/chats/:chatId/sync', async (req, res) => {
     if (!account_id) {
       return res.status(400).json({
         success: false,
-        error: 'account_id is required'
+        error: "account_id is required",
       });
     }
 
     const params = new URLSearchParams();
-    params.append('account_id', account_id);
-    if (since) params.append('since', since);
+    params.append("account_id", account_id);
+    if (since) params.append("since", since);
 
     const response = await axios.get(
       `${getBaseUrl()}/chats/${chatId}/sync?${params}`,
@@ -596,18 +758,15 @@ router.get('/api/unipile/chats/:chatId/sync', async (req, res) => {
 
     res.json({
       success: true,
-      data: response.data
+      data: response.data,
     });
   } catch (err) {
     handleError(err, res);
   }
 });
 
-
-
-
 // Send LinkedIn message (creates chat if doesn't exist)
-router.post('/api/unipile/linkedin/message', async (req, res) => {
+router.post("/api/unipile/linkedin/message", async (req, res) => {
   try {
     const {
       account_id,
@@ -617,7 +776,7 @@ router.post('/api/unipile/linkedin/message', async (req, res) => {
       message,
       subject,
       use_inmail = false,
-      attachments // Support attachments
+      attachments, // Support attachments
     } = req.body;
 
     // Get account_id from user_id if not provided
@@ -633,21 +792,21 @@ router.post('/api/unipile/linkedin/message', async (req, res) => {
     if (!finalAccountId) {
       return res.status(400).json({
         success: false,
-        error: 'account_id or user_id is required'
+        error: "account_id or user_id is required",
       });
     }
 
     if (!message) {
       return res.status(400).json({
         success: false,
-        error: 'message is required'
+        error: "message is required",
       });
     }
 
     if (!profile_url && !profile_identifier) {
       return res.status(400).json({
         success: false,
-        error: 'Either profile_url or profile_identifier is required'
+        error: "Either profile_url or profile_identifier is required",
       });
     }
 
@@ -656,8 +815,8 @@ router.post('/api/unipile/linkedin/message', async (req, res) => {
     if (profile_url && !profile_identifier) {
       // Handle various LinkedIn URL formats
       const patterns = [
-        /linkedin\.com\/in\/([^\/\?#]+)/,           // Standard profile
-        /linkedin\.com\/company\/([^\/\?#]+)/,      // Company page
+        /linkedin\.com\/in\/([^\/\?#]+)/, // Standard profile
+        /linkedin\.com\/company\/([^\/\?#]+)/, // Company page
         /linkedin\.com\/sales\/people\/([^\/\?#]+)/, // Sales Navigator
       ];
 
@@ -673,7 +832,8 @@ router.post('/api/unipile/linkedin/message', async (req, res) => {
       if (!match) {
         return res.status(400).json({
           success: false,
-          error: 'Invalid LinkedIn profile URL format. Expected: https://linkedin.com/in/username or https://linkedin.com/company/companyname'
+          error:
+            "Invalid LinkedIn profile URL format. Expected: https://linkedin.com/in/username or https://linkedin.com/company/companyname",
         });
       }
     }
@@ -681,60 +841,58 @@ router.post('/api/unipile/linkedin/message', async (req, res) => {
     // Build FormData payload
     const form = new FormData();
 
-    form.append('account_id', finalAccountId);
-    form.append('attendees_ids[]', recipientId);
-    form.append('text', message);
+    form.append("account_id", finalAccountId);
+    form.append("attendees_ids[]", recipientId);
+    form.append("text", message);
 
     if (subject) {
-      form.append('subject', subject);
+      form.append("subject", subject);
     }
 
     if (use_inmail) {
-      form.append('linkedin[inmail]', 'true');
+      form.append("linkedin[inmail]", "true");
     }
 
     // Handle attachments if provided
     if (attachments && Array.isArray(attachments)) {
-      attachments.forEach(attachment => {
+      attachments.forEach((attachment) => {
         if (attachment.path) {
-          form.append('attachments', fs.createReadStream(attachment.path));
+          form.append("attachments", fs.createReadStream(attachment.path));
         }
       });
     }
 
     // Send message (Unipile creates chat if it doesn't exist)
-    const response = await axios.post(
-      `${getBaseUrl()}/chats`,
-      form,
-      {
-        headers: {
-          'X-API-KEY': process.env.UNIPILE_API_KEY,
-          ...form.getHeaders()
-        }
-      }
-    );
+    const response = await axios.post(`${getBaseUrl()}/chats`, form, {
+      headers: {
+        "X-API-KEY": process.env.UNIPILE_API_KEY,
+        ...form.getHeaders(),
+      },
+    });
 
     res.json({
       success: true,
       data: response.data,
-      message: use_inmail ? 'InMail sent successfully' : 'Message sent successfully',
+      message: use_inmail
+        ? "InMail sent successfully"
+        : "Message sent successfully",
       chat_id: response.data.chat_id,
       message_id: response.data.message_id,
       recipient_id: recipientId,
-      account_id: finalAccountId
+      account_id: finalAccountId,
     });
   } catch (err) {
-    console.error('LinkedIn message error:', {
+    console.error("LinkedIn message error:", {
       status: err.response?.status,
       data: err.response?.data,
-      message: err.message
+      message: err.message,
     });
     handleError(err, res);
   }
 });
 
 // Send LinkedIn message (user_id in URL path)
-router.post('/api/unipile/user/:userId/linkedin/message', async (req, res) => {
+router.post("/api/unipile/user/:userId/linkedin/message", async (req, res) => {
   const { userId } = req.params;
   const {
     profile_url,
@@ -742,7 +900,7 @@ router.post('/api/unipile/user/:userId/linkedin/message', async (req, res) => {
     message,
     subject,
     use_inmail = false,
-    attachments
+    attachments,
   } = req.body;
 
   let finalAccountId = null;
@@ -750,13 +908,12 @@ router.post('/api/unipile/user/:userId/linkedin/message', async (req, res) => {
   let recipientId = null;
 
   try {
-
     // Get account_id from user_id
     const dbResult = await getLinkedInAccountStatus(userId);
     if (!dbResult.success || !dbResult.account_id) {
       return res.status(404).json({
         success: false,
-        error: 'No LinkedIn account found for this user'
+        error: "No LinkedIn account found for this user",
       });
     }
 
@@ -766,14 +923,14 @@ router.post('/api/unipile/user/:userId/linkedin/message', async (req, res) => {
     if (!message) {
       return res.status(400).json({
         success: false,
-        error: 'message is required'
+        error: "message is required",
       });
     }
 
     if (!profile_url && !recipientIdentifier) {
       return res.status(400).json({
         success: false,
-        error: 'Either profile_url or profile_identifier is required'
+        error: "Either profile_url or profile_identifier is required",
       });
     }
 
@@ -781,8 +938,8 @@ router.post('/api/unipile/user/:userId/linkedin/message', async (req, res) => {
     if (profile_url && !recipientIdentifier) {
       // Handle various LinkedIn URL formats
       const patterns = [
-        /linkedin\.com\/in\/([^\/\?#]+)/,           // Standard profile
-        /linkedin\.com\/company\/([^\/\?#]+)/,      // Company page
+        /linkedin\.com\/in\/([^\/\?#]+)/, // Standard profile
+        /linkedin\.com\/company\/([^\/\?#]+)/, // Company page
         /linkedin\.com\/sales\/people\/([^\/\?#]+)/, // Sales Navigator
       ];
 
@@ -798,7 +955,8 @@ router.post('/api/unipile/user/:userId/linkedin/message', async (req, res) => {
       if (!match) {
         return res.status(400).json({
           success: false,
-          error: 'Invalid LinkedIn profile URL format. Expected: https://linkedin.com/in/username or https://linkedin.com/company/companyname'
+          error:
+            "Invalid LinkedIn profile URL format. Expected: https://linkedin.com/in/username or https://linkedin.com/company/companyname",
         });
       }
     }
@@ -806,7 +964,7 @@ router.post('/api/unipile/user/:userId/linkedin/message', async (req, res) => {
     if (!recipientIdentifier) {
       return res.status(400).json({
         success: false,
-        error: 'Unable to determine LinkedIn recipient identifier'
+        error: "Unable to determine LinkedIn recipient identifier",
       });
     }
 
@@ -814,77 +972,84 @@ router.post('/api/unipile/user/:userId/linkedin/message', async (req, res) => {
     recipientId = recipientIdentifier;
     try {
       const userResponse = await axios.get(
-        `${getBaseUrl()}/users/${encodeURIComponent(recipientIdentifier)}?account_id=${finalAccountId}`,
+        `${getBaseUrl()}/users/${encodeURIComponent(
+          recipientIdentifier
+        )}?account_id=${finalAccountId}`,
         { headers: getHeaders() }
       );
 
       // Use provider_id if available, otherwise fall back to identifier
       if (userResponse.data?.provider_id) {
         recipientId = userResponse.data.provider_id;
-        console.log(`Found provider_id for ${recipientIdentifier}: ${recipientId}`);
+        console.log(
+          `Found provider_id for ${recipientIdentifier}: ${recipientId}`
+        );
       } else {
-        console.log(`No provider_id found, using identifier: ${recipientIdentifier}`);
+        console.log(
+          `No provider_id found, using identifier: ${recipientIdentifier}`
+        );
       }
     } catch (userError) {
-      console.warn(`Could not fetch user details for ${recipientIdentifier}, using identifier directly:`, userError.message);
+      console.warn(
+        `Could not fetch user details for ${recipientIdentifier}, using identifier directly:`,
+        userError.message
+      );
       // Continue with identifier if user lookup fails - Unipile might accept it
     }
 
     // Build FormData payload
     const form = new FormData();
 
-    form.append('account_id', finalAccountId);
-    form.append('attendees_ids[]', recipientId);
-    form.append('text', message);
+    form.append("account_id", finalAccountId);
+    form.append("attendees_ids[]", recipientId);
+    form.append("text", message);
 
     if (subject) {
-      form.append('subject', subject);
+      form.append("subject", subject);
     }
 
     if (use_inmail) {
-      form.append('linkedin[inmail]', 'true');
+      form.append("linkedin[inmail]", "true");
     }
 
     // Handle attachments if provided
     if (attachments && Array.isArray(attachments)) {
-      attachments.forEach(attachment => {
+      attachments.forEach((attachment) => {
         if (attachment.path) {
-          form.append('attachments', fs.createReadStream(attachment.path));
+          form.append("attachments", fs.createReadStream(attachment.path));
         }
       });
     }
 
     // Send message (Unipile creates chat if it doesn't exist)
-    const response = await axios.post(
-      `${getBaseUrl()}/chats`,
-      form,
-      {
-        headers: {
-          'X-API-KEY': process.env.UNIPILE_API_KEY,
-          ...form.getHeaders()
-        }
-      }
-    );
+    const response = await axios.post(`${getBaseUrl()}/chats`, form, {
+      headers: {
+        "X-API-KEY": process.env.UNIPILE_API_KEY,
+        ...form.getHeaders(),
+      },
+    });
 
     res.json({
       success: true,
       data: response.data,
-      message: use_inmail ? 'InMail sent successfully' : 'Message sent successfully',
+      message: use_inmail
+        ? "InMail sent successfully"
+        : "Message sent successfully",
       chat_id: response.data.chat_id,
       message_id: response.data.message_id,
       recipient_id: recipientId,
       account_id: finalAccountId,
-      user_id: userId
+      user_id: userId,
     });
   } catch (err) {
-    console.error('LinkedIn message error:', {
+    console.error("LinkedIn message error:", {
       status: err.response?.status,
       data: err.response?.data,
       message: err.message,
       url: err.config?.url,
       recipient_id: recipientId,
       account_id: finalAccountId,
-      user_id: userId
+      user_id: userId,
     });
 
     // Provide detailed error information for 422 errors from Unipile
@@ -892,20 +1057,24 @@ router.post('/api/unipile/user/:userId/linkedin/message', async (req, res) => {
       const unipileError = err.response?.data;
       return res.status(422).json({
         success: false,
-        error: unipileError?.error || unipileError?.message || 'Unprocessable Entity - Unable to send message',
-        details: unipileError?.detail || unipileError?.details || unipileError?.title,
+        error:
+          unipileError?.error ||
+          unipileError?.message ||
+          "Unprocessable Entity - Unable to send message",
+        details:
+          unipileError?.detail || unipileError?.details || unipileError?.title,
         type: unipileError?.type,
         recipient_id: recipientId,
         account_id: finalAccountId,
         user_id: userId,
         unipile_response: unipileError,
         possible_reasons: [
-          'Recipient profile not found or invalid',
-          'Account not properly connected to LinkedIn',
-          'Rate limit exceeded',
-          'Recipient is not a connection (may need InMail)',
-          'LinkedIn account has restrictions'
-        ]
+          "Recipient profile not found or invalid",
+          "Account not properly connected to LinkedIn",
+          "Rate limit exceeded",
+          "Recipient is not a connection (may need InMail)",
+          "LinkedIn account has restrictions",
+        ],
       });
     }
 
@@ -914,230 +1083,265 @@ router.post('/api/unipile/user/:userId/linkedin/message', async (req, res) => {
 });
 
 // Get full conversation details with messages and attendee profiles
-router.get('/api/unipile/user/:userId/chats/:chatId/full-messages', async (req, res) => {
-  try {
-    const { userId, chatId } = req.params;
-    const { limit = 100, cursor } = req.query;
+router.get(
+  "/api/unipile/user/:userId/chats/:chatId/full-messages",
+  async (req, res) => {
+    try {
+      const { userId, chatId } = req.params;
+      const { limit = 100, cursor } = req.query;
 
-    const dbResult = await getLinkedInAccountStatus(userId);
-    if (!dbResult.success || !dbResult.account_id) {
-      return res.status(404).json({ success: false, error: 'No LinkedIn account found' });
-    }
+      const dbResult = await getLinkedInAccountStatus(userId);
+      if (!dbResult.success || !dbResult.account_id) {
+        return res
+          .status(404)
+          .json({ success: false, error: "No LinkedIn account found" });
+      }
 
-    const accountId = dbResult.account_id;
+      const accountId = dbResult.account_id;
 
-    // Get current user's profile
-    const currentUserResponse = await axios.get(
-      `${getBaseUrl()}/accounts/${accountId}`,
-      { headers: getHeaders() }
-    );
-    const currentUserProviderId = currentUserResponse.data?.provider_id;
+      // Get current user's profile
+      const currentUserResponse = await axios.get(
+        `${getBaseUrl()}/accounts/${accountId}`,
+        { headers: getHeaders() }
+      );
+      const currentUserProviderId = currentUserResponse.data?.provider_id;
 
-    const params = new URLSearchParams();
-    params.append('account_id', accountId);
-    params.append('limit', limit);
-    if (cursor) params.append('cursor', cursor);
+      const params = new URLSearchParams();
+      params.append("account_id", accountId);
+      params.append("limit", limit);
+      if (cursor) params.append("cursor", cursor);
 
-    const [messagesResponse, chatResponse, attendeesResponse] = await Promise.all([
-      axios.get(`${getBaseUrl()}/chats/${chatId}/messages?${params}`, { headers: getHeaders() }),
-      axios.get(`${getBaseUrl()}/chats/${chatId}?account_id=${accountId}`, { headers: getHeaders() }),
-      axios.get(`${getBaseUrl()}/chats/${chatId}/attendees?account_id=${accountId}`, { headers: getHeaders() })
-    ]);
+      const [messagesResponse, chatResponse, attendeesResponse] =
+        await Promise.all([
+          axios.get(`${getBaseUrl()}/chats/${chatId}/messages?${params}`, {
+            headers: getHeaders(),
+          }),
+          axios.get(`${getBaseUrl()}/chats/${chatId}?account_id=${accountId}`, {
+            headers: getHeaders(),
+          }),
+          axios.get(
+            `${getBaseUrl()}/chats/${chatId}/attendees?account_id=${accountId}`,
+            { headers: getHeaders() }
+          ),
+        ]);
 
-    const messages = messagesResponse.data?.messages || messagesResponse.data?.items || [];
-    const chatInfo = chatResponse.data || {};
-    const attendeesData = attendeesResponse.data?.attendees || attendeesResponse.data?.items || attendeesResponse.data || [];
-    const attendees = Array.isArray(attendeesData) ? attendeesData : [];
+      const messages =
+        messagesResponse.data?.messages || messagesResponse.data?.items || [];
+      const chatInfo = chatResponse.data || {};
+      const attendeesData =
+        attendeesResponse.data?.attendees ||
+        attendeesResponse.data?.items ||
+        attendeesResponse.data ||
+        [];
+      const attendees = Array.isArray(attendeesData) ? attendeesData : [];
 
-    // Remove duplicate attendees based on provider_id
-    const uniqueAttendees = attendees.filter((attendee, index, self) =>
-      index === self.findIndex(a => a.provider_id === attendee.provider_id)
-    );
-
-    // Find current user's attendee profile
-    const currentUserAttendee = uniqueAttendees.find(attendee =>
-      attendee.provider_id === currentUserProviderId || attendee.is_self === 1
-    );
-
-    // Find other attendees (excluding current user)
-    const otherAttendees = uniqueAttendees.filter(attendee =>
-      attendee.provider_id !== currentUserProviderId && attendee.is_self !== 1
-    );
-
-    // Log raw message structure from Unipile for debugging (first message only)
-    if (messages.length > 0) {
-      console.log('🔍 Raw Unipile message structure (first message):', JSON.stringify(messages[0], null, 2));
-      console.log('🔍 All available fields in first message:', Object.keys(messages[0]));
-    }
-
-    // Process messages with clean structure
-    const processedMessages = messages.map(msg => {
-      const isMyMessage = msg.is_sender === 1;
-      const senderAttendee = uniqueAttendees.find(attendee =>
-        attendee.provider_id === msg.sender_id
+      // Remove duplicate attendees based on provider_id
+      const uniqueAttendees = attendees.filter(
+        (attendee, index, self) =>
+          index ===
+          self.findIndex((a) => a.provider_id === attendee.provider_id)
       );
 
-      // Extract seen status - check multiple possible field names from Unipile
-      // Unipile might use: seen, read, seen_at, read_at, is_seen, is_read, read_status, etc.
-      let seenStatus = null;
+      // Find current user's attendee profile
+      const currentUserAttendee = uniqueAttendees.find(
+        (attendee) =>
+          attendee.provider_id === currentUserProviderId ||
+          attendee.is_self === 1
+      );
 
-      // Check for direct 'seen' field (most common)
-      if (msg.seen !== undefined && msg.seen !== null) {
-        seenStatus = msg.seen;
-      }
-      // Check for 'read' field (alternative naming)
-      else if (msg.read !== undefined && msg.read !== null) {
-        seenStatus = msg.read;
-      }
-      // Check for boolean 'is_seen' or 'is_read'
-      else if (msg.is_seen !== undefined) {
-        seenStatus = msg.is_seen ? 1 : 0;
-      }
-      else if (msg.is_read !== undefined) {
-        seenStatus = msg.is_read ? 1 : 0;
-      }
-      // Check for timestamp-based fields (if timestamp exists, it's been seen)
-      else if (msg.seen_at) {
-        seenStatus = 1;
-      }
-      else if (msg.read_at) {
-        seenStatus = 1;
-      }
-      // Default to 0 if no seen status found
-      else {
-        seenStatus = 0;
+      // Find other attendees (excluding current user)
+      const otherAttendees = uniqueAttendees.filter(
+        (attendee) =>
+          attendee.provider_id !== currentUserProviderId &&
+          attendee.is_self !== 1
+      );
+
+      // Log raw message structure from Unipile for debugging (first message only)
+      if (messages.length > 0) {
+        console.log(
+          "🔍 Raw Unipile message structure (first message):",
+          JSON.stringify(messages[0], null, 2)
+        );
+        console.log(
+          "🔍 All available fields in first message:",
+          Object.keys(messages[0])
+        );
       }
 
-      return {
-        id: msg.id,
-        text: msg.text,
-        timestamp: msg.timestamp,
-        is_my_message: isMyMessage,
-        is_sender: msg.is_sender,
-        sender_id: msg.sender_id,
-        message_type: msg.message_type,
-        delivered: msg.delivered,
-        seen: seenStatus,
-        reactions: msg.reactions || [],
-        attachments: msg.attachments || []
-        // Removed duplicate profile fields
-      };
-    }).reverse(); // Reverse to show oldest first (like real chat)
+      // Process messages with clean structure
+      const processedMessages = messages
+        .map((msg) => {
+          const isMyMessage = msg.is_sender === 1;
+          const senderAttendee = uniqueAttendees.find(
+            (attendee) => attendee.provider_id === msg.sender_id
+          );
 
-    const myMessages = processedMessages.filter(msg => msg.is_my_message);
-    const attendeeMessages = processedMessages.filter(msg => !msg.is_my_message);
+          // Extract seen status - check multiple possible field names from Unipile
+          // Unipile might use: seen, read, seen_at, read_at, is_seen, is_read, read_status, etc.
+          let seenStatus = null;
 
-    // Clean, polished response
-    res.json({
-      success: true,
-      data: {
-        // Clean message lists without duplicate profiles
-        messages: processedMessages,
-        my_messages: myMessages,
-        attendee_messages: attendeeMessages,
+          // Check for direct 'seen' field (most common)
+          if (msg.seen !== undefined && msg.seen !== null) {
+            seenStatus = msg.seen;
+          }
+          // Check for 'read' field (alternative naming)
+          else if (msg.read !== undefined && msg.read !== null) {
+            seenStatus = msg.read;
+          }
+          // Check for boolean 'is_seen' or 'is_read'
+          else if (msg.is_seen !== undefined) {
+            seenStatus = msg.is_seen ? 1 : 0;
+          } else if (msg.is_read !== undefined) {
+            seenStatus = msg.is_read ? 1 : 0;
+          }
+          // Check for timestamp-based fields (if timestamp exists, it's been seen)
+          else if (msg.seen_at) {
+            seenStatus = 1;
+          } else if (msg.read_at) {
+            seenStatus = 1;
+          }
+          // Default to 0 if no seen status found
+          else {
+            seenStatus = 0;
+          }
 
-        // Single source of truth for profiles
-        participants: {
-          current_user: currentUserAttendee ? {
-            id: currentUserAttendee.id,
-            name: currentUserAttendee.name,
-            picture_url: currentUserAttendee.picture_url,
-            profile_url: currentUserAttendee.profile_url,
-            occupation: currentUserAttendee.specifics?.occupation
-          } : null,
+          return {
+            id: msg.id,
+            text: msg.text,
+            timestamp: msg.timestamp,
+            is_my_message: isMyMessage,
+            is_sender: msg.is_sender,
+            sender_id: msg.sender_id,
+            message_type: msg.message_type,
+            delivered: msg.delivered,
+            seen: seenStatus,
+            reactions: msg.reactions || [],
+            attachments: msg.attachments || [],
+            // Removed duplicate profile fields
+          };
+        })
+        .reverse(); // Reverse to show oldest first (like real chat)
 
-          other_attendees: otherAttendees.map(attendee => ({
-            id: attendee.id,
-            name: attendee.name,
-            picture_url: attendee.picture_url,
-            profile_url: attendee.profile_url,
-            occupation: attendee.specifics?.occupation,
-            network_distance: attendee.specifics?.network_distance
-          }))
+      const myMessages = processedMessages.filter((msg) => msg.is_my_message);
+      const attendeeMessages = processedMessages.filter(
+        (msg) => !msg.is_my_message
+      );
+
+      // Clean, polished response
+      res.json({
+        success: true,
+        data: {
+          // Clean message lists without duplicate profiles
+          messages: processedMessages,
+          my_messages: myMessages,
+          attendee_messages: attendeeMessages,
+
+          // Single source of truth for profiles
+          participants: {
+            current_user: currentUserAttendee
+              ? {
+                  id: currentUserAttendee.id,
+                  name: currentUserAttendee.name,
+                  picture_url: currentUserAttendee.picture_url,
+                  profile_url: currentUserAttendee.profile_url,
+                  occupation: currentUserAttendee.specifics?.occupation,
+                }
+              : null,
+
+            other_attendees: otherAttendees.map((attendee) => ({
+              id: attendee.id,
+              name: attendee.name,
+              picture_url: attendee.picture_url,
+              profile_url: attendee.profile_url,
+              occupation: attendee.specifics?.occupation,
+              network_distance: attendee.specifics?.network_distance,
+            })),
+          },
+
+          // Simplified chat info
+          chat_info: {
+            id: chatInfo.id,
+            unread_count: chatInfo.unread_count,
+            last_message: chatInfo.lastMessage
+              ? {
+                  text: chatInfo.lastMessage.text,
+                  timestamp: chatInfo.lastMessage.timestamp,
+                  is_my_message: chatInfo.lastMessage.is_sender === 1,
+                }
+              : null,
+          },
+
+          pagination: {
+            cursor:
+              messagesResponse.data?.pagination?.cursor ||
+              messagesResponse.data?.cursor ||
+              messagesResponse.data?.next_cursor ||
+              null,
+            has_more:
+              messagesResponse.data?.pagination?.has_more !== undefined
+                ? messagesResponse.data.pagination.has_more
+                : messagesResponse.data?.has_more !== undefined
+                ? messagesResponse.data.has_more
+                : !!messagesResponse.data?.cursor ||
+                  !!messagesResponse.data?.pagination?.cursor,
+            limit: parseInt(limit),
+            total:
+              messagesResponse.data?.pagination?.total ||
+              messagesResponse.data?.total ||
+              processedMessages.length,
+          },
         },
-
-        // Simplified chat info
-        chat_info: {
-          id: chatInfo.id,
-          unread_count: chatInfo.unread_count,
-          last_message: chatInfo.lastMessage ? {
-            text: chatInfo.lastMessage.text,
-            timestamp: chatInfo.lastMessage.timestamp,
-            is_my_message: chatInfo.lastMessage.is_sender === 1
-          } : null
+        meta: {
+          account_id: accountId,
+          chat_id: chatId,
+          user_id: userId,
+          total_messages: processedMessages.length,
+          my_message_count: myMessages.length,
+          attendee_message_count: attendeeMessages.length,
+          participant_count: uniqueAttendees.length,
         },
-
-        pagination: {
-          cursor: messagesResponse.data?.pagination?.cursor ||
-            messagesResponse.data?.cursor ||
-            messagesResponse.data?.next_cursor ||
-            null,
-          has_more: messagesResponse.data?.pagination?.has_more !== undefined
-            ? messagesResponse.data.pagination.has_more
-            : (messagesResponse.data?.has_more !== undefined
-              ? messagesResponse.data.has_more
-              : (!!messagesResponse.data?.cursor || !!messagesResponse.data?.pagination?.cursor)),
-          limit: parseInt(limit),
-          total: messagesResponse.data?.pagination?.total ||
-            messagesResponse.data?.total ||
-            processedMessages.length
-        }
-      },
-      meta: {
-        account_id: accountId,
-        chat_id: chatId,
-        user_id: userId,
-        total_messages: processedMessages.length,
-        my_message_count: myMessages.length,
-        attendee_message_count: attendeeMessages.length,
-        participant_count: uniqueAttendees.length
-      }
-    });
-  } catch (err) {
-    console.error('Polished messages API error:', err.message);
-    handleError(err, res);
+      });
+    } catch (err) {
+      console.error("Polished messages API error:", err.message);
+      handleError(err, res);
+    }
   }
-});
-
-
-
-
+);
 
 // ==================== ACCOUNT MANAGEMENT ENDPOINTS ====================
 
-
 // Get LinkedIn account status for a user (from database)
-router.get('/api/unipile/account/status/:userId', async (req, res) => {
+router.get("/api/unipile/account/status/:userId", async (req, res) => {
   try {
     const { userId } = req.params;
 
     if (!userId) {
       return res.status(400).json({
         success: false,
-        error: 'user_id is required'
+        error: "user_id is required",
       });
     }
 
     const result = await getLinkedInAccountStatus(userId);
     res.json(result);
   } catch (err) {
-    console.error('Error getting account status:', err);
+    console.error("Error getting account status:", err);
     res.status(500).json({
       success: false,
-      error: 'Failed to get account status'
+      error: "Failed to get account status",
     });
   }
 });
 
 // Get live LinkedIn account status from Unipile API
-router.get('/api/unipile/account/live-status/:userId', async (req, res) => {
+router.get("/api/unipile/account/live-status/:userId", async (req, res) => {
   try {
     const { userId } = req.params;
 
     if (!userId) {
       return res.status(400).json({
         success: false,
-        error: 'user_id is required'
+        error: "user_id is required",
       });
     }
 
@@ -1148,8 +1352,8 @@ router.get('/api/unipile/account/live-status/:userId', async (req, res) => {
       return res.json({
         success: true,
         connected: false,
-        message: 'No LinkedIn account found in database',
-        source: 'database'
+        message: "No LinkedIn account found in database",
+        source: "database",
       });
     }
 
@@ -1163,7 +1367,7 @@ router.get('/api/unipile/account/live-status/:userId', async (req, res) => {
 
     // Parse the Unipile response to determine connection status
     let isConnected = false;
-    let connectionStatus = 'unknown';
+    let connectionStatus = "unknown";
     let lastError = null;
     let sources = [];
     let linkedinProfile = null;
@@ -1172,10 +1376,11 @@ router.get('/api/unipile/account/live-status/:userId', async (req, res) => {
       sources = unipileAccount.sources;
 
       // Check if any source has status "OK" (based on your API response)
-      const activeSource = sources.find(source =>
-        source.status === 'OK' ||
-        source.status === 'active' ||
-        source.status === 'connected'
+      const activeSource = sources.find(
+        (source) =>
+          source.status === "OK" ||
+          source.status === "active" ||
+          source.status === "connected"
       );
 
       if (activeSource) {
@@ -1183,20 +1388,23 @@ router.get('/api/unipile/account/live-status/:userId', async (req, res) => {
         connectionStatus = activeSource.status;
       } else {
         isConnected = false;
-        connectionStatus = sources.length > 0 ? sources[0].status : 'unknown';
-        lastError = sources.length > 0 ? sources[0].error : 'No active sources';
+        connectionStatus = sources.length > 0 ? sources[0].status : "unknown";
+        lastError = sources.length > 0 ? sources[0].error : "No active sources";
       }
     }
 
     // Extract LinkedIn profile information if available
-    if (unipileAccount.connection_params && unipileAccount.connection_params.im) {
+    if (
+      unipileAccount.connection_params &&
+      unipileAccount.connection_params.im
+    ) {
       linkedinProfile = {
         id: unipileAccount.connection_params.im.id,
         publicIdentifier: unipileAccount.connection_params.im.publicIdentifier,
         username: unipileAccount.connection_params.im.username,
         premiumId: unipileAccount.connection_params.im.premiumId,
         premiumFeatures: unipileAccount.connection_params.im.premiumFeatures,
-        organizations: unipileAccount.connection_params.im.organizations
+        organizations: unipileAccount.connection_params.im.organizations,
       };
     }
 
@@ -1206,18 +1414,18 @@ router.get('/api/unipile/account/live-status/:userId', async (req, res) => {
         await connectLinkedInAccount(
           userId,
           dbResult.account_id,
-          'LINKEDIN',
+          "LINKEDIN",
           dbResult.name,
           {
             ...dbResult.metadata,
             last_live_check: new Date(),
-            live_status: connectionStatus
+            live_status: connectionStatus,
           }
         );
       } else {
         await disconnectLinkedInAccount(
           userId,
-          lastError || 'Account disconnected (live check)'
+          lastError || "Account disconnected (live check)"
         );
       }
     }
@@ -1235,16 +1443,15 @@ router.get('/api/unipile/account/live-status/:userId', async (req, res) => {
       linkedin_profile: linkedinProfile,
       unipile_data: unipileAccount,
       last_checked: new Date(),
-      source: 'unipile_live',
+      source: "unipile_live",
       database_status: {
         connected: dbResult.connected,
         connected_at: dbResult.connected_at,
-        last_error: dbResult.last_error
-      }
+        last_error: dbResult.last_error,
+      },
     });
-
   } catch (err) {
-    console.error('Error getting live account status:', err);
+    console.error("Error getting live account status:", err);
 
     // If Unipile API fails, fall back to database status
     try {
@@ -1255,88 +1462,88 @@ router.get('/api/unipile/account/live-status/:userId', async (req, res) => {
         account_id: dbResult.account_id,
         name: dbResult.name,
         last_error: dbResult.last_error,
-        source: 'database_fallback',
+        source: "database_fallback",
         unipile_error: err.response?.data?.error || err.message,
-        note: 'Unipile API unavailable, showing database status'
+        note: "Unipile API unavailable, showing database status",
       });
     } catch (dbErr) {
       res.status(500).json({
         success: false,
-        error: 'Failed to get account status from both Unipile and database',
+        error: "Failed to get account status from both Unipile and database",
         unipile_error: err.response?.data?.error || err.message,
-        database_error: dbErr.message
+        database_error: dbErr.message,
       });
     }
   }
 });
 
 // Disconnect LinkedIn account
-router.post('/api/unipile/account/disconnect', async (req, res) => {
+router.post("/api/unipile/account/disconnect", async (req, res) => {
   try {
     const { user_id, reason } = req.body;
 
     if (!user_id) {
       return res.status(400).json({
         success: false,
-        error: 'user_id is required'
+        error: "user_id is required",
       });
     }
 
     // Get current status before disconnect
     const currentAccount = await getAccountStatus(user_id);
-    console.log('Before disconnect - Status:', currentAccount.status);
+    console.log("Before disconnect - Status:", currentAccount.status);
 
     const result = await disconnectLinkedInAccount(user_id, reason);
 
     // Verify status was updated
     const updatedAccount = await getAccountStatus(user_id);
-    console.log('After disconnect - Status:', updatedAccount.status);
+    console.log("After disconnect - Status:", updatedAccount.status);
 
     res.json({
       ...result,
       previous_status: currentAccount.status,
-      current_status: updatedAccount.status
+      current_status: updatedAccount.status,
     });
   } catch (err) {
-    console.error('Error disconnecting account:', err);
+    console.error("Error disconnecting account:", err);
     res.status(500).json({
       success: false,
-      error: 'Failed to disconnect account'
+      error: "Failed to disconnect account",
     });
   }
 });
 
 // Refresh LinkedIn account (reconnect with new credentials)
-router.post('/api/unipile/account/refresh', async (req, res) => {
+router.post("/api/unipile/account/refresh", async (req, res) => {
   try {
     const { user_id, access_token, user_agent, name } = req.body;
 
     if (!user_id) {
       return res.status(400).json({
         success: false,
-        error: 'user_id is required'
+        error: "user_id is required",
       });
     }
 
     if (!access_token || !user_agent) {
       return res.status(400).json({
         success: false,
-        error: 'access_token (li_at) and user_agent are required for refresh'
+        error: "access_token (li_at) and user_agent are required for refresh",
       });
     }
 
     // Create new account with Unipile using FormData
     const form = new FormData();
 
-    form.append('provider', 'LINKEDIN');
-    form.append('access_token', access_token);
-    form.append('user_agent', user_agent);
+    form.append("provider", "LINKEDIN");
+    form.append("access_token", access_token);
+    form.append("user_agent", user_agent);
 
     const response = await axios.post(`${getBaseUrl()}/accounts`, form, {
       headers: {
-        'X-API-KEY': process.env.UNIPILE_API_KEY,
-        ...form.getHeaders()
-      }
+        "X-API-KEY": process.env.UNIPILE_API_KEY,
+        ...form.getHeaders(),
+      },
     });
 
     if (response.data && response.data.account_id) {
@@ -1344,65 +1551,64 @@ router.post('/api/unipile/account/refresh', async (req, res) => {
       const dbResult = await refreshLinkedInAccount(
         user_id,
         response.data.account_id,
-        name || 'LinkedIn Account',
+        name || "LinkedIn Account",
         {
           user_agent: user_agent,
-          connected_via: 'refresh',
-          unipile_response: response.data
+          connected_via: "refresh",
+          unipile_response: response.data,
         }
       );
 
       res.json({
         success: true,
         data: response.data,
-        message: 'LinkedIn account refreshed successfully',
-        stored_in_db: dbResult.success
+        message: "LinkedIn account refreshed successfully",
+        stored_in_db: dbResult.success,
       });
     } else {
       res.status(400).json({
         success: false,
-        error: 'Failed to create new account with Unipile'
+        error: "Failed to create new account with Unipile",
       });
     }
   } catch (err) {
-    console.error('Error refreshing account:', err);
+    console.error("Error refreshing account:", err);
     handleError(err, res);
   }
 });
 
 // Delete LinkedIn account completely
-router.delete('/api/unipile/account/delete/:userId', async (req, res) => {
+router.delete("/api/unipile/account/delete/:userId", async (req, res) => {
   try {
     const { userId } = req.params;
 
     if (!userId) {
       return res.status(400).json({
         success: false,
-        error: 'user_id is required'
+        error: "user_id is required",
       });
     }
 
     const result = await deleteLinkedInAccount(userId);
     res.json(result);
   } catch (err) {
-    console.error('Error deleting account:', err);
+    console.error("Error deleting account:", err);
     res.status(500).json({
       success: false,
-      error: 'Failed to delete account'
+      error: "Failed to delete account",
     });
   }
 });
 
-
 // Restart LinkedIn account (restore connection)
-router.post('/api/unipile/account/restart/:userId', async (req, res) => {
+router.post("/api/unipile/account/restart/:userId", async (req, res) => {
   try {
     const { userId } = req.params;
 
     if (!userId) {
       return res.status(400).json({
         success: false,
-        error: 'user_id is required'
+        error: "user_id is required",
       });
     }
 
@@ -1412,7 +1618,7 @@ router.post('/api/unipile/account/restart/:userId', async (req, res) => {
     if (!dbResult.success || !dbResult.account_id) {
       return res.status(404).json({
         success: false,
-        error: 'No LinkedIn account found for this user'
+        error: "No LinkedIn account found for this user",
       });
     }
 
@@ -1427,27 +1633,26 @@ router.post('/api/unipile/account/restart/:userId', async (req, res) => {
     await connectLinkedInAccount(
       userId,
       dbResult.account_id,
-      'LINKEDIN',
+      "LINKEDIN",
       dbResult.name,
       {
         ...dbResult.metadata,
         last_restart_attempt: new Date(),
         restart_response: response.data,
-        connected_via: dbResult.metadata?.connected_via || 'restart'
+        connected_via: dbResult.metadata?.connected_via || "restart",
       }
     );
 
     res.json({
       success: true,
-      message: 'Account restart initiated successfully',
+      message: "Account restart initiated successfully",
       account_id: dbResult.account_id,
       user_id: userId,
       unipile_response: response.data,
-      restart_attempted_at: new Date()
+      restart_attempted_at: new Date(),
     });
-
   } catch (err) {
-    console.error('Error restarting account:', err);
+    console.error("Error restarting account:", err);
 
     // If restart fails, still update database with error
     try {
@@ -1459,35 +1664,34 @@ router.post('/api/unipile/account/restart/:userId', async (req, res) => {
         );
       }
     } catch (dbErr) {
-      console.error('Error updating database after restart failure:', dbErr);
+      console.error("Error updating database after restart failure:", dbErr);
     }
 
     res.status(500).json({
       success: false,
-      error: 'Failed to restart account',
+      error: "Failed to restart account",
       unipile_error: err.response?.data?.error || err.message,
-      account_id: err.config?.url?.split('/').pop() || 'unknown'
+      account_id: err.config?.url?.split("/").pop() || "unknown",
     });
   }
 });
 
 // Get LinkedIn account details by account_id (Pure Unipile API)
-router.get('/api/unipile/account/:accountId/details', async (req, res) => {
+router.get("/api/unipile/account/:accountId/details", async (req, res) => {
   try {
     const { accountId } = req.params;
 
     if (!accountId) {
       return res.status(400).json({
         success: false,
-        error: 'account_id is required'
+        error: "account_id is required",
       });
     }
 
     // Fetch account details from Unipile only
-    const response = await axios.get(
-      `${getBaseUrl()}/accounts/${accountId}`,
-      { headers: getHeaders() }
-    );
+    const response = await axios.get(`${getBaseUrl()}/accounts/${accountId}`, {
+      headers: getHeaders(),
+    });
 
     const unipileAccount = response.data;
 
@@ -1508,23 +1712,20 @@ router.get('/api/unipile/account/:accountId/details', async (req, res) => {
         groups: unipileAccount.groups,
         object: unipileAccount.object,
         fetched_at: new Date(),
-        source: 'unipile_api'
-      }
+        source: "unipile_api",
+      },
     });
-
   } catch (err) {
-    console.error('Error getting account details:', err);
+    console.error("Error getting account details:", err);
 
     res.status(500).json({
       success: false,
-      error: 'Failed to get account details',
+      error: "Failed to get account details",
       unipile_error: err.response?.data?.error || err.message,
-      account_id: accountId
+      account_id: accountId,
     });
   }
 });
-
-
 
 // ==================== LINKEDIN CONNECTION INVITE ====================
 
@@ -1773,17 +1974,12 @@ router.get('/api/unipile/account/:accountId/details', async (req, res) => {
 //     handleError(err, res);
 //   }
 // });
-router.post('/api/unipile/linkedin/invite', async (req, res) => {
+router.post("/api/unipile/linkedin/invite", async (req, res) => {
   let invitePayload = null; // Declare at function scope for error handling
 
   try {
-    const {
-      account_id,
-      user_id,
-      profile_url,
-      profile_identifier,
-      message
-    } = req.body;
+    const { account_id, user_id, profile_url, profile_identifier, message } =
+      req.body;
 
     // Get account_id from user_id if not provided
     let finalAccountId = account_id;
@@ -1800,12 +1996,12 @@ router.post('/api/unipile/linkedin/invite', async (req, res) => {
       invitePayload = {
         account_id: finalAccountId || null,
         provider_id: null,
-        ...(message && message.trim() ? { message: message.trim() } : {})
+        ...(message && message.trim() ? { message: message.trim() } : {}),
       };
       return res.status(400).json({
         success: false,
-        error: 'account_id or user_id is required',
-        invitePayload: invitePayload
+        error: "account_id or user_id is required",
+        invitePayload: invitePayload,
       });
     }
 
@@ -1814,12 +2010,12 @@ router.post('/api/unipile/linkedin/invite', async (req, res) => {
       invitePayload = {
         account_id: finalAccountId,
         provider_id: null,
-        ...(message && message.trim() ? { message: message.trim() } : {})
+        ...(message && message.trim() ? { message: message.trim() } : {}),
       };
       return res.status(400).json({
         success: false,
-        error: 'Either profile_url or profile_identifier is required',
-        invitePayload: invitePayload
+        error: "Either profile_url or profile_identifier is required",
+        invitePayload: invitePayload,
       });
     }
 
@@ -1829,7 +2025,7 @@ router.post('/api/unipile/linkedin/invite', async (req, res) => {
       const patterns = [
         /linkedin\.com\/in\/([^\/\?#]+)/,
         /linkedin\.com\/sales\/people\/([^,]+)/,
-        /linkedin\.com\/sales\/lead\/([^,]+)/
+        /linkedin\.com\/sales\/lead\/([^,]+)/,
       ];
 
       let match = null;
@@ -1846,21 +2042,24 @@ router.post('/api/unipile/linkedin/invite', async (req, res) => {
         invitePayload = {
           account_id: finalAccountId,
           provider_id: null,
-          ...(message && message.trim() ? { message: message.trim() } : {})
+          ...(message && message.trim() ? { message: message.trim() } : {}),
         };
         return res.status(400).json({
           success: false,
-          error: 'Invalid LinkedIn profile URL format. Expected: https://linkedin.com/in/username',
-          invitePayload: invitePayload
+          error:
+            "Invalid LinkedIn profile URL format. Expected: https://linkedin.com/in/username",
+          invitePayload: invitePayload,
         });
       }
     }
 
-    console.log('Step 1: Fetching user details for:', recipientIdentifier);
+    console.log("Step 1: Fetching user details for:", recipientIdentifier);
 
     // STEP 1: Get user details to obtain provider_id
     const userResponse = await axios.get(
-      `${getBaseUrl()}/users/${encodeURIComponent(recipientIdentifier)}?account_id=${finalAccountId}`,
+      `${getBaseUrl()}/users/${encodeURIComponent(
+        recipientIdentifier
+      )}?account_id=${finalAccountId}`,
       { headers: getHeaders() }
     );
 
@@ -1869,24 +2068,24 @@ router.post('/api/unipile/linkedin/invite', async (req, res) => {
       invitePayload = {
         account_id: finalAccountId,
         provider_id: null,
-        ...(message && message.trim() ? { message: message.trim() } : {})
+        ...(message && message.trim() ? { message: message.trim() } : {}),
       };
       return res.status(404).json({
         success: false,
-        error: 'Could not find LinkedIn user or retrieve provider_id',
+        error: "Could not find LinkedIn user or retrieve provider_id",
         identifier: recipientIdentifier,
         user_response: userResponse.data,
-        invitePayload: invitePayload
+        invitePayload: invitePayload,
       });
     }
 
     const providerUserId = userResponse.data.provider_id;
-    console.log('Step 2: Found provider_id:', providerUserId);
+    console.log("Step 2: Found provider_id:", providerUserId);
 
     // STEP 2: Send invitation - Build JSON payload
     invitePayload = {
       account_id: finalAccountId,
-      provider_id: providerUserId
+      provider_id: providerUserId,
     };
 
     // Only add message if provided
@@ -1894,52 +2093,47 @@ router.post('/api/unipile/linkedin/invite', async (req, res) => {
       invitePayload.message = message.trim();
     }
 
-    console.log('Step 3: Sending invitation with payload:', invitePayload);
+    console.log("Step 3: Sending invitation with payload:", invitePayload);
 
     // Send as JSON, not FormData
     const inviteResponse = await axios.post(
       `${getBaseUrl()}/users/invite`,
       invitePayload,
       {
-        headers: getHeaders('application/json')
+        headers: getHeaders("application/json"),
       }
     );
 
-    console.log('Step 4: Invitation sent successfully');
+    console.log("Step 4: Invitation sent successfully");
 
     res.json({
       success: true,
       data: inviteResponse.data,
-      message: 'Connection request sent successfully',
+      message: "Connection request sent successfully",
       invitePayload: invitePayload,
       recipient: {
         identifier: recipientIdentifier,
         provider_id: providerUserId,
         name: userResponse.data.name || null,
         headline: userResponse.data.headline || null,
-        profile_url: userResponse.data.profile_url || profile_url
+        profile_url: userResponse.data.profile_url || profile_url,
       },
       account_id: finalAccountId,
-      invitation_sent_at: new Date()
+      invitation_sent_at: new Date(),
     });
-
   } catch (err) {
     // Enhanced logging with full error details
-    console.error('LinkedIn invitation error:', {
+    console.error("LinkedIn invitation error:", {
       status: err.response?.status,
       statusText: err.response?.statusText,
       error: err.response?.data,
       message: err.message,
-      url: err.config?.url
+      url: err.config?.url,
     });
 
     // If invitePayload is null, try to reconstruct it from request body
     if (!invitePayload) {
-      const {
-        account_id,
-        user_id,
-        message
-      } = req.body;
+      const { account_id, user_id, message } = req.body;
 
       // Try to get account_id from user_id if not provided
       let finalAccountId = account_id;
@@ -1957,7 +2151,7 @@ router.post('/api/unipile/linkedin/invite', async (req, res) => {
       invitePayload = {
         account_id: finalAccountId || null,
         provider_id: null,
-        ...(message && message.trim() ? { message: message.trim() } : {})
+        ...(message && message.trim() ? { message: message.trim() } : {}),
       };
     }
 
@@ -1973,30 +2167,30 @@ router.post('/api/unipile/linkedin/invite', async (req, res) => {
         error: unipileError,
         message: err.message,
         url: err.config?.url,
-        invitePayload: invitePayload
+        invitePayload: invitePayload,
       });
     }
 
     // Handle network errors or other non-Unipile errors
     // Modify handleError to include invitePayload by using a custom response
     const status = err.response?.status || 500;
-    const errorMessage = err.response?.data?.error || err.message || 'Internal server error';
+    const errorMessage =
+      err.response?.data?.error || err.message || "Internal server error";
 
     res.status(status).json({
       success: false,
       error: errorMessage,
-      invitePayload: invitePayload
+      invitePayload: invitePayload,
     });
   }
 });
-
 
 /**
  * Direct LinkedIn Invite API
  * Used when provider_id and account_id are already known.
  * Simply calls Unipile /users/invite directly.
  */
-router.post('/api/unipile/linkedin/directinvite', async (req, res) => {
+router.post("/api/unipile/linkedin/directinvite", async (req, res) => {
   try {
     const { provider_id, account_id } = req.body;
 
@@ -2004,39 +2198,37 @@ router.post('/api/unipile/linkedin/directinvite', async (req, res) => {
     if (!provider_id || !account_id) {
       return res.status(400).json({
         success: false,
-        error: 'provider_id and account_id are required'
+        error: "provider_id and account_id are required",
       });
     }
 
-    console.log('🚀 Direct invite triggered:', { provider_id, account_id });
+    console.log("🚀 Direct invite triggered:", { provider_id, account_id });
 
     const payload = {
       provider_id,
-      account_id
+      account_id,
     };
 
     // Make Unipile API call
-    const response = await axios.post(
-      `${getBaseUrl()}/users/invite`,
-      payload,
-      { headers: getHeaders('application/json') }
-    );
+    const response = await axios.post(`${getBaseUrl()}/users/invite`, payload, {
+      headers: getHeaders("application/json"),
+    });
 
-    console.log('✅ Direct invite success:', response.data);
+    console.log("✅ Direct invite success:", response.data);
 
     res.json({
       success: true,
       data: response.data,
-      message: 'Direct connection request sent successfully',
+      message: "Direct connection request sent successfully",
       payload_sent: payload,
-      invited_at: new Date()
+      invited_at: new Date(),
     });
   } catch (err) {
-    console.error('❌ Direct invite error:', {
+    console.error("❌ Direct invite error:", {
       status: err.response?.status,
       data: err.response?.data,
       message: err.message,
-      url: err.config?.url
+      url: err.config?.url,
     });
 
     if (err.response?.data) {
@@ -2044,413 +2236,496 @@ router.post('/api/unipile/linkedin/directinvite', async (req, res) => {
         success: false,
         error: err.response.data,
         message: err.message,
-        url: err.config?.url
+        url: err.config?.url,
       });
     }
 
     handleError(err, res);
   }
 });
-
 
 // ==================== CHECK CONNECTION STATUS ====================
 
 // Check if a specific user is in your network
-router.get('/api/unipile/linkedin/connection-status/:identifier', async (req, res) => {
-  try {
-    const { identifier } = req.params;
-    const { account_id, user_id } = req.query;
-
-    // Get account_id from user_id if not provided
-    let finalAccountId = account_id;
-    if (!finalAccountId && user_id) {
-      const dbResult = await getLinkedInAccountStatus(user_id);
-      if (dbResult.success && dbResult.account_id) {
-        finalAccountId = dbResult.account_id;
-      }
-    }
-
-    if (!finalAccountId) {
-      return res.status(400).json({
-        success: false,
-        error: 'account_id or user_id is required'
-      });
-    }
-
-    // Get user details first
-    const userResponse = await axios.get(
-      `${getBaseUrl()}/users/${encodeURIComponent(identifier)}?account_id=${finalAccountId}`,
-      { headers: getHeaders() }
-    );
-
-    if (!userResponse.data || !userResponse.data.provider_id) {
-      return res.status(404).json({
-        success: false,
-        error: 'User not found',
-        identifier: identifier
-      });
-    }
-
-    const providerUserId = userResponse.data.provider_id;
-
-    let connectionStatus = 'not_connected';
-    let connectionData = null;
-    let invitationData = null;
-
-    // Check existing connections
+router.get(
+  "/api/unipile/linkedin/connection-status/:identifier",
+  async (req, res) => {
     try {
-      const connectionsResponse = await axios.get(
-        `${getBaseUrl()}/connections?account_id=${finalAccountId}&limit=1000`,
+      const { identifier } = req.params;
+      const { account_id, user_id } = req.query;
+
+      // Get account_id from user_id if not provided
+      let finalAccountId = account_id;
+      if (!finalAccountId && user_id) {
+        const dbResult = await getLinkedInAccountStatus(user_id);
+        if (dbResult.success && dbResult.account_id) {
+          finalAccountId = dbResult.account_id;
+        }
+      }
+
+      if (!finalAccountId) {
+        return res.status(400).json({
+          success: false,
+          error: "account_id or user_id is required",
+        });
+      }
+
+      // Get user details first
+      const userResponse = await axios.get(
+        `${getBaseUrl()}/users/${encodeURIComponent(
+          identifier
+        )}?account_id=${finalAccountId}`,
         { headers: getHeaders() }
       );
 
-      const existingConnection = connectionsResponse.data.items?.find(
-        connection => connection.provider_id === providerUserId
-      );
-
-      if (existingConnection) {
-        connectionStatus = 'connected';
-        connectionData = existingConnection;
+      if (!userResponse.data || !userResponse.data.provider_id) {
+        return res.status(404).json({
+          success: false,
+          error: "User not found",
+          identifier: identifier,
+        });
       }
-    } catch (connectionsError) {
-      console.warn('Could not fetch connections:', connectionsError.message);
-    }
 
-    // Check pending invitations if not connected
-    if (connectionStatus === 'not_connected') {
+      const providerUserId = userResponse.data.provider_id;
+
+      let connectionStatus = "not_connected";
+      let connectionData = null;
+      let invitationData = null;
+
+      // Check existing connections
       try {
-        const invitationsResponse = await axios.get(
-          `${getBaseUrl()}/users/invitations/sent?account_id=${finalAccountId}`,
+        const connectionsResponse = await axios.get(
+          `${getBaseUrl()}/connections?account_id=${finalAccountId}&limit=1000`,
           { headers: getHeaders() }
         );
 
-        const pendingInvitation = invitationsResponse.data.items?.find(
-          invitation => invitation.provider_id === providerUserId
+        const existingConnection = connectionsResponse.data.items?.find(
+          (connection) => connection.provider_id === providerUserId
         );
 
-        if (pendingInvitation) {
-          connectionStatus = 'invitation_pending';
-          invitationData = pendingInvitation;
+        if (existingConnection) {
+          connectionStatus = "connected";
+          connectionData = existingConnection;
         }
-      } catch (invitationsError) {
-        console.warn('Could not fetch invitations:', invitationsError.message);
+      } catch (connectionsError) {
+        console.warn("Could not fetch connections:", connectionsError.message);
       }
-    }
 
-    res.json({
-      success: true,
-      connection_status: connectionStatus,
-      user: {
-        identifier: identifier,
-        provider_id: providerUserId,
-        name: userResponse.data.name || null,
-        headline: userResponse.data.headline || null,
-        profile_url: userResponse.data.profile_url || null
-      },
-      connection: connectionData,
-      invitation: invitationData,
-      checked_at: new Date()
-    });
+      // Check pending invitations if not connected
+      if (connectionStatus === "not_connected") {
+        try {
+          const invitationsResponse = await axios.get(
+            `${getBaseUrl()}/users/invitations/sent?account_id=${finalAccountId}`,
+            { headers: getHeaders() }
+          );
 
-  } catch (err) {
-    console.error('Connection status check error:', err.response?.data || err.message);
+          const pendingInvitation = invitationsResponse.data.items?.find(
+            (invitation) => invitation.provider_id === providerUserId
+          );
 
-    if (err.response?.status === 404) {
-      return res.status(404).json({
-        success: false,
-        error: 'User not found',
-        identifier: req.params.identifier
+          if (pendingInvitation) {
+            connectionStatus = "invitation_pending";
+            invitationData = pendingInvitation;
+          }
+        } catch (invitationsError) {
+          console.warn(
+            "Could not fetch invitations:",
+            invitationsError.message
+          );
+        }
+      }
+
+      res.json({
+        success: true,
+        connection_status: connectionStatus,
+        user: {
+          identifier: identifier,
+          provider_id: providerUserId,
+          name: userResponse.data.name || null,
+          headline: userResponse.data.headline || null,
+          profile_url: userResponse.data.profile_url || null,
+        },
+        connection: connectionData,
+        invitation: invitationData,
+        checked_at: new Date(),
       });
-    }
+    } catch (err) {
+      console.error(
+        "Connection status check error:",
+        err.response?.data || err.message
+      );
 
-    handleError(err, res);
+      if (err.response?.status === 404) {
+        return res.status(404).json({
+          success: false,
+          error: "User not found",
+          identifier: req.params.identifier,
+        });
+      }
+
+      handleError(err, res);
+    }
   }
-});
+);
 
 // ==================== ENHANCED CONNECTION STATUS WITH INVITATION TRACKING ====================
 
-
-
 // ==================== GET USER DETAILS (Helper) ====================
 
+router.get(
+  "/api/unipile/linkedin/fetch-profile/:identifier",
+  async (req, res) => {
+    try {
+      const { identifier } = req.params;
+      const { account_id, user_id, force_refresh } = req.query;
 
-
-router.get('/api/unipile/linkedin/fetch-profile/:identifier', async (req, res) => {
-  try {
-    const { identifier } = req.params;
-    const { account_id, user_id, force_refresh } = req.query;
-
-    // Get account_id from user_id if not provided
-    let finalAccountId = account_id;
-    if (!finalAccountId && user_id) {
-      const dbResult = await getLinkedInAccountStatus(user_id);
-      if (dbResult.success && dbResult.account_id) {
-        finalAccountId = dbResult.account_id;
-      }
-    }
-
-    if (!finalAccountId) {
-      return res.status(400).json({
-        success: false,
-        error: 'account_id or user_id is required'
-      });
-    }
-
-    // Check cache first (unless force_refresh is requested)
-    const cacheKey = getProfileCacheKey(identifier, finalAccountId);
-    let userProfile = null;
-    let fromCache = false;
-
-    if (force_refresh !== 'true' && force_refresh !== '1') {
-      const cachedData = profileCache.get(cacheKey);
-      if (cachedData) {
-        userProfile = cachedData;
-        fromCache = true;
-        console.log(`✅ [Cache HIT] Profile for ${identifier} (account: ${finalAccountId})`);
-      }
-    }
-
-    // If not in cache, fetch from Unipile API
-    if (!userProfile) {
-      console.log(`🔄 [Cache MISS] Fetching profile for ${identifier} from Unipile API`);
-      const response = await axios.get(
-        `${getBaseUrl()}/users/${encodeURIComponent(identifier)}?account_id=${finalAccountId}`,
-        { headers: getHeaders() }
-      );
-
-      userProfile = response.data;
-
-      // Cache the profile data
-      profileCache.set(cacheKey, userProfile);
-      console.log(`💾 [Cache SET] Profile for ${identifier} cached for 30 minutes`);
-    }
-    let chatId = null;
-    let hasExistingChat = false;
-
-    // Only check for chat if profile is connected (has network_distance)
-    const networkDistance = userProfile?.network_distance;
-    const isConnected = networkDistance !== undefined && networkDistance !== null;
-
-    // Try to find chat ID only if user is connected to the profile
-    if (isConnected) {
-      const providerId = userProfile?.provider_id;
-      const publicIdentifier = userProfile?.public_identifier || identifier;
-
-      if (providerId || publicIdentifier) {
-        // Check cache for chat lookup first
-        const chatCacheKey = getChatCacheKey(finalAccountId, providerId || publicIdentifier);
-        let chatResult = null;
-        let chatFromCache = false;
-
-        if (force_refresh !== 'true' && force_refresh !== '1') {
-          const cachedChat = chatCache.get(chatCacheKey);
-          if (cachedChat) {
-            chatResult = cachedChat;
-            chatFromCache = true;
-            console.log(`✅ [Cache HIT] Chat lookup for ${providerId || publicIdentifier}`);
-          }
+      // Get account_id from user_id if not provided
+      let finalAccountId = account_id;
+      if (!finalAccountId && user_id) {
+        const dbResult = await getLinkedInAccountStatus(user_id);
+        if (dbResult.success && dbResult.account_id) {
+          finalAccountId = dbResult.account_id;
         }
+      }
 
-        // Helper function to find chat with timeout
-        const findChatWithTimeout = async (timeoutMs = 3000) => {
-          // Return cached result if available
-          if (chatResult) {
-            return chatResult;
+      if (!finalAccountId) {
+        return res.status(400).json({
+          success: false,
+          error: "account_id or user_id is required",
+        });
+      }
+
+      // Check cache first (unless force_refresh is requested)
+      const cacheKey = getProfileCacheKey(identifier, finalAccountId);
+      let userProfile = null;
+      let fromCache = false;
+
+      if (force_refresh !== "true" && force_refresh !== "1") {
+        const cachedData = profileCache.get(cacheKey);
+        if (cachedData) {
+          userProfile = cachedData;
+          fromCache = true;
+          console.log(
+            `✅ [Cache HIT] Profile for ${identifier} (account: ${finalAccountId})`
+          );
+        }
+      }
+
+      // If not in cache, fetch from Unipile API
+      if (!userProfile) {
+        console.log(
+          `🔄 [Cache MISS] Fetching profile for ${identifier} from Unipile API`
+        );
+        const response = await axios.get(
+          `${getBaseUrl()}/users/${encodeURIComponent(
+            identifier
+          )}?account_id=${finalAccountId}`,
+          { headers: getHeaders() }
+        );
+
+        userProfile = response.data;
+
+        // Cache the profile data
+        profileCache.set(cacheKey, userProfile);
+        console.log(
+          `💾 [Cache SET] Profile for ${identifier} cached for 30 minutes`
+        );
+      }
+      let chatId = null;
+      let hasExistingChat = false;
+
+      // Only check for chat if profile is connected (has network_distance)
+      const networkDistance = userProfile?.network_distance;
+      const isConnected =
+        networkDistance !== undefined && networkDistance !== null;
+
+      // Try to find chat ID only if user is connected to the profile
+      if (isConnected) {
+        const providerId = userProfile?.provider_id;
+        const publicIdentifier = userProfile?.public_identifier || identifier;
+
+        if (providerId || publicIdentifier) {
+          // Check cache for chat lookup first
+          const chatCacheKey = getChatCacheKey(
+            finalAccountId,
+            providerId || publicIdentifier
+          );
+          let chatResult = null;
+          let chatFromCache = false;
+
+          if (force_refresh !== "true" && force_refresh !== "1") {
+            const cachedChat = chatCache.get(chatCacheKey);
+            if (cachedChat) {
+              chatResult = cachedChat;
+              chatFromCache = true;
+              console.log(
+                `✅ [Cache HIT] Chat lookup for ${
+                  providerId || publicIdentifier
+                }`
+              );
+            }
           }
 
-          return Promise.race([
-            (async () => {
-              try {
-                console.log(`🔄 [Cache MISS] Fetching chats for ${providerId || publicIdentifier}`);
-                // Fetch chats with higher limit to find existing chats (only for connected profiles)
-                const chatsResponse = await axios.get(
-                  `${getBaseUrl()}/chats?account_id=${finalAccountId}&limit=250`,
-                  { headers: getHeaders() }
-                );
+          // Helper function to find chat with timeout
+          const findChatWithTimeout = async (timeoutMs = 3000) => {
+            // Return cached result if available
+            if (chatResult) {
+              return chatResult;
+            }
 
-                const chats = chatsResponse.data?.chats || chatsResponse.data?.items || chatsResponse.data || [];
-                const chatsArray = Array.isArray(chats) ? chats : [];
+            return Promise.race([
+              (async () => {
+                try {
+                  console.log(
+                    `🔄 [Cache MISS] Fetching chats for ${
+                      providerId || publicIdentifier
+                    }`
+                  );
+                  // Fetch chats with higher limit to find existing chats (only for connected profiles)
+                  const chatsResponse = await axios.get(
+                    `${getBaseUrl()}/chats?account_id=${finalAccountId}&limit=250`,
+                    { headers: getHeaders() }
+                  );
 
-                console.log(`Searching through ${chatsArray.length} chats for connected profile: ${providerId || publicIdentifier}`);
+                  const chats =
+                    chatsResponse.data?.chats ||
+                    chatsResponse.data?.items ||
+                    chatsResponse.data ||
+                    [];
+                  const chatsArray = Array.isArray(chats) ? chats : [];
 
-                // First, try to find chat where attendees are included in the response
-                let userChat = chatsArray.find(chat => {
-                  const attendees = chat.attendees || chat.participants || [];
-                  if (!Array.isArray(attendees)) return false;
+                  console.log(
+                    `Searching through ${
+                      chatsArray.length
+                    } chats for connected profile: ${
+                      providerId || publicIdentifier
+                    }`
+                  );
 
-                  return attendees.some(attendee => {
-                    // Match by provider_id (most reliable)
-                    if (providerId && (attendee.provider_id === providerId || attendee.id === providerId)) {
-                      return true;
-                    }
-                    // Match by public_identifier as fallback
-                    if (publicIdentifier && (
-                      attendee.public_identifier === publicIdentifier ||
-                      attendee.identifier === publicIdentifier ||
-                      attendee.username === publicIdentifier
-                    )) {
-                      return true;
-                    }
-                    return false;
-                  });
-                });
+                  // First, try to find chat where attendees are included in the response
+                  let userChat = chatsArray.find((chat) => {
+                    const attendees = chat.attendees || chat.participants || [];
+                    if (!Array.isArray(attendees)) return false;
 
-                // If not found in initial response, fetch attendees for limited number of chats
-                if (!userChat && chatsArray.length > 0) {
-                  console.log('Chat not found in initial response, checking attendees for first 20 chats...');
-
-                  // Only check first 20 chats to avoid long delays
-                  const maxChatsToCheck = Math.min(chatsArray.length, 20);
-                  for (let i = 0; i < maxChatsToCheck; i++) {
-                    const chat = chatsArray[i];
-                    try {
-                      const currentChatId = chat.id || chat.chat_id || chat.chatId;
-                      if (!currentChatId) continue;
-
-                      const attendeesResponse = await axios.get(
-                        `${getBaseUrl()}/chats/${currentChatId}/attendees?account_id=${finalAccountId}`,
-                        { headers: getHeaders() }
-                      );
-
-                      const attendeesData = attendeesResponse.data?.attendees ||
-                        attendeesResponse.data?.items ||
-                        attendeesResponse.data || [];
-                      const attendees = Array.isArray(attendeesData) ? attendeesData : [];
-
-                      // Check for match by provider_id or public_identifier
-                      const foundAttendee = attendees.find(attendee => {
-                        // Match by provider_id (most reliable)
-                        if (providerId && (
-                          attendee.provider_id === providerId ||
-                          attendee.id === providerId ||
-                          attendee.account_id === providerId
-                        )) {
-                          return true;
-                        }
-                        // Match by public_identifier as fallback
-                        if (publicIdentifier && (
-                          attendee.public_identifier === publicIdentifier ||
-                          attendee.identifier === publicIdentifier ||
-                          attendee.username === publicIdentifier ||
-                          attendee.profile_url?.includes(publicIdentifier)
-                        )) {
-                          return true;
-                        }
-                        return false;
-                      });
-
-                      if (foundAttendee) {
-                        userChat = chat;
-                        console.log(`Found matching chat: ${currentChatId} for ${providerId || publicIdentifier}`);
-                        break;
+                    return attendees.some((attendee) => {
+                      // Match by provider_id (most reliable)
+                      if (
+                        providerId &&
+                        (attendee.provider_id === providerId ||
+                          attendee.id === providerId)
+                      ) {
+                        return true;
                       }
-                    } catch (attendeeError) {
-                      // Continue to next chat if this one fails
-                      continue;
+                      // Match by public_identifier as fallback
+                      if (
+                        publicIdentifier &&
+                        (attendee.public_identifier === publicIdentifier ||
+                          attendee.identifier === publicIdentifier ||
+                          attendee.username === publicIdentifier)
+                      ) {
+                        return true;
+                      }
+                      return false;
+                    });
+                  });
+
+                  // If not found in initial response, fetch attendees for limited number of chats
+                  if (!userChat && chatsArray.length > 0) {
+                    console.log(
+                      "Chat not found in initial response, checking attendees for first 20 chats..."
+                    );
+
+                    // Only check first 20 chats to avoid long delays
+                    const maxChatsToCheck = Math.min(chatsArray.length, 20);
+                    for (let i = 0; i < maxChatsToCheck; i++) {
+                      const chat = chatsArray[i];
+                      try {
+                        const currentChatId =
+                          chat.id || chat.chat_id || chat.chatId;
+                        if (!currentChatId) continue;
+
+                        const attendeesResponse = await axios.get(
+                          `${getBaseUrl()}/chats/${currentChatId}/attendees?account_id=${finalAccountId}`,
+                          { headers: getHeaders() }
+                        );
+
+                        const attendeesData =
+                          attendeesResponse.data?.attendees ||
+                          attendeesResponse.data?.items ||
+                          attendeesResponse.data ||
+                          [];
+                        const attendees = Array.isArray(attendeesData)
+                          ? attendeesData
+                          : [];
+
+                        // Check for match by provider_id or public_identifier
+                        const foundAttendee = attendees.find((attendee) => {
+                          // Match by provider_id (most reliable)
+                          if (
+                            providerId &&
+                            (attendee.provider_id === providerId ||
+                              attendee.id === providerId ||
+                              attendee.account_id === providerId)
+                          ) {
+                            return true;
+                          }
+                          // Match by public_identifier as fallback
+                          if (
+                            publicIdentifier &&
+                            (attendee.public_identifier === publicIdentifier ||
+                              attendee.identifier === publicIdentifier ||
+                              attendee.username === publicIdentifier ||
+                              attendee.profile_url?.includes(publicIdentifier))
+                          ) {
+                            return true;
+                          }
+                          return false;
+                        });
+
+                        if (foundAttendee) {
+                          userChat = chat;
+                          console.log(
+                            `Found matching chat: ${currentChatId} for ${
+                              providerId || publicIdentifier
+                            }`
+                          );
+                          break;
+                        }
+                      } catch (attendeeError) {
+                        // Continue to next chat if this one fails
+                        continue;
+                      }
                     }
                   }
-                }
 
-                // Extract chat ID
-                if (userChat) {
-                  const foundChatId = userChat.id || userChat.chat_id || userChat.chatId || null;
-                  console.log(`Chat found: ${foundChatId} for user ${providerId || publicIdentifier}`);
-                  const result = { chatId: foundChatId, hasExistingChat: !!foundChatId };
-                  
-                  // Cache the chat lookup result
-                  chatCache.set(chatCacheKey, result);
-                  console.log(`💾 [Cache SET] Chat lookup for ${providerId || publicIdentifier} cached for 10 minutes`);
-                  
-                  return result;
-                } else {
-                  console.log(`No chat found for user ${providerId || publicIdentifier}`);
-                  const result = { chatId: null, hasExistingChat: false };
-                  
-                  // Cache negative result too (to avoid repeated lookups)
-                  chatCache.set(chatCacheKey, result);
-                  
-                  return result;
-                }
-              } catch (chatError) {
-                console.error('Could not fetch chat ID:', chatError.message);
-                console.error('Chat error details:', chatError.response?.data || chatError.message);
-                return { chatId: null, hasExistingChat: false };
-              }
-            })(),
-            new Promise((resolve) =>
-              setTimeout(() => {
-                console.log('Chat lookup timeout - returning profile without chat info');
-                resolve({ chatId: null, hasExistingChat: false, timeout: true });
-              }, timeoutMs)
-            )
-          ]);
-        };
+                  // Extract chat ID
+                  if (userChat) {
+                    const foundChatId =
+                      userChat.id ||
+                      userChat.chat_id ||
+                      userChat.chatId ||
+                      null;
+                    console.log(
+                      `Chat found: ${foundChatId} for user ${
+                        providerId || publicIdentifier
+                      }`
+                    );
+                    const result = {
+                      chatId: foundChatId,
+                      hasExistingChat: !!foundChatId,
+                    };
 
-        // Try to find chat with 3 second timeout (non-blocking)
-        try {
-          if (!chatResult) {
-            chatResult = await findChatWithTimeout(3000);
+                    // Cache the chat lookup result
+                    chatCache.set(chatCacheKey, result);
+                    console.log(
+                      `💾 [Cache SET] Chat lookup for ${
+                        providerId || publicIdentifier
+                      } cached for 10 minutes`
+                    );
+
+                    return result;
+                  } else {
+                    console.log(
+                      `No chat found for user ${providerId || publicIdentifier}`
+                    );
+                    const result = { chatId: null, hasExistingChat: false };
+
+                    // Cache negative result too (to avoid repeated lookups)
+                    chatCache.set(chatCacheKey, result);
+
+                    return result;
+                  }
+                } catch (chatError) {
+                  console.error("Could not fetch chat ID:", chatError.message);
+                  console.error(
+                    "Chat error details:",
+                    chatError.response?.data || chatError.message
+                  );
+                  return { chatId: null, hasExistingChat: false };
+                }
+              })(),
+              new Promise((resolve) =>
+                setTimeout(() => {
+                  console.log(
+                    "Chat lookup timeout - returning profile without chat info"
+                  );
+                  resolve({
+                    chatId: null,
+                    hasExistingChat: false,
+                    timeout: true,
+                  });
+                }, timeoutMs)
+              ),
+            ]);
+          };
+
+          // Try to find chat with 3 second timeout (non-blocking)
+          try {
+            if (!chatResult) {
+              chatResult = await findChatWithTimeout(3000);
+            }
+            chatId = chatResult.chatId;
+            hasExistingChat = chatResult.hasExistingChat;
+          } catch (error) {
+            console.error("Chat lookup error:", error.message);
+            // Continue without chat ID if chat fetch fails
           }
-          chatId = chatResult.chatId;
-          hasExistingChat = chatResult.hasExistingChat;
-        } catch (error) {
-          console.error('Chat lookup error:', error.message);
-          // Continue without chat ID if chat fetch fails
+        } else {
+          console.log(
+            "No provider_id or public_identifier found in user profile, skipping chat lookup"
+          );
         }
       } else {
-        console.log('No provider_id or public_identifier found in user profile, skipping chat lookup');
+        console.log(
+          "Profile not connected (no network_distance), skipping chat lookup"
+        );
       }
-    } else {
-      console.log('Profile not connected (no network_distance), skipping chat lookup');
-    }
 
-    res.json({
-      success: true,
-      data: userProfile,
-      user: {
-        provider_id: userProfile.provider_id,
-        name: userProfile.name,
-        headline: userProfile.headline,
-        profile_url: userProfile.profile_url,
-        picture: userProfile.profile_picture_url,
-        identifier: identifier,
-        location: userProfile.location,
-        industry: userProfile.industry,
-        summary: userProfile.summary,
-        experience: userProfile.experience,
-        education: userProfile.education,
-        skills: userProfile.skills,
-        connections_count: userProfile.connections_count,
-        followers_count: userProfile.follower_count
-      },
-      chat_info: {
-        chat_id: chatId,
-        has_existing_chat: hasExistingChat
-      },
-      account_id: finalAccountId,
-      cached: fromCache,
-      fetched_at: new Date()
-    });
-
-  } catch (err) {
-    console.error('Get user error:', err.response?.data || err.message);
-
-    if (err.response?.status === 404) {
-      return res.status(404).json({
-        success: false,
-        error: 'User not found',
-        identifier: req.params.identifier
+      res.json({
+        success: true,
+        data: userProfile,
+        user: {
+          provider_id: userProfile.provider_id,
+          name: userProfile.name,
+          headline: userProfile.headline,
+          profile_url: userProfile.profile_url,
+          picture: userProfile.profile_picture_url,
+          identifier: identifier,
+          location: userProfile.location,
+          industry: userProfile.industry,
+          summary: userProfile.summary,
+          experience: userProfile.experience,
+          education: userProfile.education,
+          skills: userProfile.skills,
+          connections_count: userProfile.connections_count,
+          followers_count: userProfile.follower_count,
+        },
+        chat_info: {
+          chat_id: chatId,
+          has_existing_chat: hasExistingChat,
+        },
+        account_id: finalAccountId,
+        cached: fromCache,
+        fetched_at: new Date(),
       });
+    } catch (err) {
+      console.error("Get user error:", err.response?.data || err.message);
+
+      if (err.response?.status === 404) {
+        return res.status(404).json({
+          success: false,
+          error: "User not found",
+          identifier: req.params.identifier,
+        });
+      }
+
+      handleError(err, res);
     }
-
-    handleError(err, res);
   }
-});
-
-
+);
 
 // Get current user's own LinkedIn profile
-router.get('/api/unipile/linkedin/user/me', async (req, res) => {
+router.get("/api/unipile/linkedin/user/me", async (req, res) => {
   try {
     const { account_id, user_id } = req.query;
 
@@ -2495,34 +2770,32 @@ router.get('/api/unipile/linkedin/user/me', async (req, res) => {
         followers_count: response.data.followers_count,
         premium_features: response.data.premium_features,
         organizations: response.data.organizations,
-        contact_info: response.data.contact_info
+        contact_info: response.data.contact_info,
       },
       account_id: finalAccountId,
-      fetched_at: new Date()
+      fetched_at: new Date(),
     });
-
   } catch (err) {
-    console.error('Get current user profile error:', err.response?.data || err.message);
+    console.error(
+      "Get current user profile error:",
+      err.response?.data || err.message
+    );
 
     if (err.response?.status === 404) {
       return res.status(404).json({
         success: false,
-        message: 'User profile not found',
-        details: 'User has not connected a LinkedIn account yet'
+        message: "User profile not found",
+        details: "User has not connected a LinkedIn account yet",
       });
     }
-
-
 
     handleError(err, res);
   }
 });
 
-
-
 // Check connection/invitation status
 // Check connection/invitation status - FIXED VERSION
-router.get('/api/unipile/linkedin/status/:identifier', async (req, res) => {
+router.get("/api/unipile/linkedin/status/:identifier", async (req, res) => {
   try {
     const { identifier } = req.params;
     const { user_id } = req.query;
@@ -2531,7 +2804,7 @@ router.get('/api/unipile/linkedin/status/:identifier', async (req, res) => {
     if (!user_id) {
       return res.status(400).json({
         success: false,
-        error: 'user_id query parameter is required'
+        error: "user_id query parameter is required",
       });
     }
 
@@ -2540,39 +2813,47 @@ router.get('/api/unipile/linkedin/status/:identifier', async (req, res) => {
     if (!dbResult.success || !dbResult.account_id) {
       return res.status(404).json({
         success: false,
-        error: 'No LinkedIn account found for this user'
+        error: "No LinkedIn account found for this user",
       });
     }
 
     const accountId = dbResult.account_id;
-    console.log(`🔍 Checking LinkedIn status for: ${identifier}, account: ${accountId}`);
+    console.log(
+      `🔍 Checking LinkedIn status for: ${identifier}, account: ${accountId}`
+    );
 
     // STEP 1: Check connections (1st degree)
     try {
       const connectionsResponse = await axios.get(
-        `${getBaseUrl()}/connections?account_id=${accountId}&search=${encodeURIComponent(identifier)}`,
+        `${getBaseUrl()}/connections?account_id=${accountId}&search=${encodeURIComponent(
+          identifier
+        )}`,
         { headers: getHeaders() }
       );
 
-      console.log('🔗 Connections check:', JSON.stringify(connectionsResponse.data, null, 2));
+      console.log(
+        "🔗 Connections check:",
+        JSON.stringify(connectionsResponse.data, null, 2)
+      );
 
       // Check if user is in connections
-      const connectedUser = connectionsResponse.data.items?.find(connection =>
-        connection.public_identifier === identifier ||
-        connection.provider_id === identifier ||
-        connection.profile_url?.includes(identifier)
+      const connectedUser = connectionsResponse.data.items?.find(
+        (connection) =>
+          connection.public_identifier === identifier ||
+          connection.provider_id === identifier ||
+          connection.profile_url?.includes(identifier)
       );
 
       if (connectedUser) {
         return res.json({
           success: true,
-          status: 'connected',
+          status: "connected",
           user: connectedUser,
-          message: 'Already connected on LinkedIn'
+          message: "Already connected on LinkedIn",
         });
       }
     } catch (connectionsError) {
-      console.log('No connections found or error:', connectionsError.message);
+      console.log("No connections found or error:", connectionsError.message);
     }
 
     // STEP 2: Check pending invitations
@@ -2582,74 +2863,88 @@ router.get('/api/unipile/linkedin/status/:identifier', async (req, res) => {
         { headers: getHeaders() }
       );
 
-      console.log('📨 Pending invitations:', JSON.stringify(invitesResponse.data, null, 2));
+      console.log(
+        "📨 Pending invitations:",
+        JSON.stringify(invitesResponse.data, null, 2)
+      );
 
       // Find pending invitation for this user
-      const pendingInvite = invitesResponse.data.items?.find(invite =>
-        invite.user_public_identifier === identifier ||
-        invite.user_provider_id === identifier ||
-        invite.user_profile_url?.includes(identifier) ||
-        invite.invitation_identifier === identifier
+      const pendingInvite = invitesResponse.data.items?.find(
+        (invite) =>
+          invite.user_public_identifier === identifier ||
+          invite.user_provider_id === identifier ||
+          invite.user_profile_url?.includes(identifier) ||
+          invite.invitation_identifier === identifier
       );
 
       if (pendingInvite) {
         return res.json({
           success: true,
-          status: 'pending',
+          status: "pending",
           invitation: pendingInvite,
-          message: 'Invitation already sent and pending'
+          message: "Invitation already sent and pending",
         });
       }
     } catch (invitesError) {
-      console.log('Error checking invitations:', invitesError.message);
+      console.log("Error checking invitations:", invitesError.message);
     }
 
     // STEP 3: Check if we can invite (profile exists)
     try {
       const profileResponse = await axios.get(
-        `${getBaseUrl()}/users/${encodeURIComponent(identifier)}?account_id=${accountId}`,
+        `${getBaseUrl()}/users/${encodeURIComponent(
+          identifier
+        )}?account_id=${accountId}`,
         { headers: getHeaders() }
       );
 
-      console.log('👤 Profile found:', JSON.stringify(profileResponse.data, null, 2));
+      console.log(
+        "👤 Profile found:",
+        JSON.stringify(profileResponse.data, null, 2)
+      );
 
       // If profile exists but not connected and no pending invite
       if (profileResponse.data) {
         return res.json({
           success: true,
-          status: 'can_invite',
+          status: "can_invite",
           user: profileResponse.data,
-          message: 'Profile found - can send invitation'
+          message: "Profile found - can send invitation",
         });
       }
     } catch (profileError) {
       // Profile not found or other error
-      console.log('Profile check result:', profileError.response?.status, profileError.message);
+      console.log(
+        "Profile check result:",
+        profileError.response?.status,
+        profileError.message
+      );
     }
 
     // If we get here, user not found or can't be invited
     res.json({
       success: true,
-      status: 'not_found',
-      message: 'User not found or cannot be invited'
+      status: "not_found",
+      message: "User not found or cannot be invited",
     });
-
   } catch (err) {
-    console.error('❌ Error checking LinkedIn status:', err.response?.data || err.message);
+    console.error(
+      "❌ Error checking LinkedIn status:",
+      err.response?.data || err.message
+    );
 
     res.status(500).json({
       success: false,
-      error: 'Failed to check LinkedIn status',
-      details: err.message
+      error: "Failed to check LinkedIn status",
+      details: err.message,
     });
   }
 });
 
-
 // ==================== COMPANY ENDPOINTS ====================
 
 // Get Company Info
-router.get('/api/unipile/companyinfo/:identifier', async (req, res) => {
+router.get("/api/unipile/companyinfo/:identifier", async (req, res) => {
   try {
     const { identifier } = req.params;
     const { user_id } = req.query;
@@ -2657,76 +2952,78 @@ router.get('/api/unipile/companyinfo/:identifier', async (req, res) => {
     if (!user_id) {
       return res.status(400).json({
         success: false,
-        error: 'user_id is required'
+        error: "user_id is required",
       });
     }
 
     const dbResult = await getLinkedInAccountStatus(user_id);
     if (!dbResult.success || !dbResult.account_id) {
-      return res.status(404).json({ success: false, error: 'No LinkedIn account found' });
+      return res
+        .status(404)
+        .json({ success: false, error: "No LinkedIn account found" });
     }
 
     const response = await axios.get(
-      `${getBaseUrl()}/linkedin/company/${identifier}?account_id=${dbResult.account_id}`,
+      `${getBaseUrl()}/linkedin/company/${identifier}?account_id=${
+        dbResult.account_id
+      }`,
       { headers: getHeaders() }
     );
 
     res.json({
       success: true,
-      data: response.data
+      data: response.data,
     });
   } catch (err) {
     handleError(err, res);
   }
 });
 
-
-
 // Reconnect a disconnected LinkedIn account in Unipile
-router.post('/api/unipile/linkedin/reconnect', async (req, res) => {
+router.post("/api/unipile/linkedin/reconnect", async (req, res) => {
   try {
     const { user_id } = req.query; // or req.body if you prefer
     const {
-      auth_type,          // "basic" | "cookie"
+      auth_type, // "basic" | "cookie"
       username,
       password,
-      access_token,       // li_at
-      premium_token,      // li_a (optional)
+      access_token, // li_at
+      premium_token, // li_a (optional)
       country,
       ip,
-      proxy,              // { protocol, host, port, username?, password? }
+      proxy, // { protocol, host, port, username?, password? }
       user_agent,
-      sync_limit,         // { chats?: string|number, messages?: string|number }
-      disabled_features,  // ["linkedin_recruiter", ...]
-      recruiter_contract_id
+      sync_limit, // { chats?: string|number, messages?: string|number }
+      disabled_features, // ["linkedin_recruiter", ...]
+      recruiter_contract_id,
     } = req.body;
 
     // 1) Validate base params
     if (!user_id) {
       return res.status(400).json({
         success: false,
-        error: 'user_id query parameter is required'
+        error: "user_id query parameter is required",
       });
     }
 
-    if (!auth_type || !['basic', 'cookie'].includes(auth_type)) {
+    if (!auth_type || !["basic", "cookie"].includes(auth_type)) {
       return res.status(400).json({
         success: false,
-        error: 'auth_type must be "basic" or "cookie"'
+        error: 'auth_type must be "basic" or "cookie"',
       });
     }
 
-    if (auth_type === 'basic' && (!username || !password)) {
+    if (auth_type === "basic" && (!username || !password)) {
       return res.status(400).json({
         success: false,
-        error: 'username and password are required for basic auth'
+        error: "username and password are required for basic auth",
       });
     }
 
-    if (auth_type === 'cookie' && !access_token) {
+    if (auth_type === "cookie" && !access_token) {
       return res.status(400).json({
         success: false,
-        error: 'access_token (li_at) is required for cookie auth'
+        error: "access_token (li_at) is required for cookie auth",
       });
     }
 
@@ -2735,37 +3032,39 @@ router.post('/api/unipile/linkedin/reconnect', async (req, res) => {
     if (!dbResult.success || !dbResult.account_id) {
       return res.status(404).json({
         success: false,
-        error: 'No LinkedIn account found for this user'
+        error: "No LinkedIn account found for this user",
       });
     }
 
     const accountId = dbResult.account_id;
-    console.log(`♻️ Reconnecting LinkedIn for user ${user_id}, account: ${accountId}`);
+    console.log(
+      `♻️ Reconnecting LinkedIn for user ${user_id}, account: ${accountId}`
+    );
 
     // 3) Build Unipile payload
     const basePayload = {
-      provider: 'LINKEDIN',
+      provider: "LINKEDIN",
       country,
       ip,
       proxy,
       user_agent,
       sync_limit,
       disabled_features,
-      recruiter_contract_id
+      recruiter_contract_id,
     };
 
     let payload;
-    if (auth_type === 'basic') {
+    if (auth_type === "basic") {
       payload = {
         ...basePayload,
         username,
-        password
+        password,
       };
     } else {
       payload = {
         ...basePayload,
         access_token,
-        premium_token
+        premium_token,
       };
     }
 
@@ -2777,32 +3076,36 @@ router.post('/api/unipile/linkedin/reconnect', async (req, res) => {
       { headers: getHeaders() }
     );
 
-    console.log('✅ Reconnect response:', JSON.stringify(reconnectResponse.data, null, 2));
+    console.log(
+      "✅ Reconnect response:",
+      JSON.stringify(reconnectResponse.data, null, 2)
+    );
 
     return res.json({
       success: true,
-      message: 'LinkedIn account reconnect triggered successfully',
-      data: reconnectResponse.data
+      message: "LinkedIn account reconnect triggered successfully",
+      data: reconnectResponse.data,
     });
-
   } catch (err) {
-    console.error('❌ Error reconnecting LinkedIn account:', err.response?.data || err.message);
+    console.error(
+      "❌ Error reconnecting LinkedIn account:",
+      err.response?.data || err.message
+    );
 
     // Bubble up Unipile error status if available
     const status = err.response?.status || 500;
     return res.status(status).json({
       success: false,
-      error: 'Failed to reconnect LinkedIn account',
-      details: err.response?.data || err.message
+      error: "Failed to reconnect LinkedIn account",
+      details: err.response?.data || err.message,
     });
   }
 });
 
-
 // ==================== CACHE MANAGEMENT ====================
 
 // Get cache statistics
-router.get('/api/unipile/cache/stats', (req, res) => {
+router.get("/api/unipile/cache/stats", (req, res) => {
   const profileStats = profileCache.getStats();
   const chatStats = chatCache.getStats();
 
@@ -2814,68 +3117,68 @@ router.get('/api/unipile/cache/stats', (req, res) => {
         hits: profileStats.hits,
         misses: profileStats.misses,
         ksize: profileStats.ksize,
-        vsize: profileStats.vsize
+        vsize: profileStats.vsize,
       },
       chat_cache: {
         keys: chatStats.keys,
         hits: chatStats.hits,
         misses: chatStats.misses,
         ksize: chatStats.ksize,
-        vsize: chatStats.vsize
-      }
+        vsize: chatStats.vsize,
+      },
     },
     cache_config: {
-      profile_ttl: '30 minutes',
-      chat_ttl: '10 minutes'
-    }
+      profile_ttl: "30 minutes",
+      chat_ttl: "10 minutes",
+    },
   });
 });
 
 // Clear profile cache
-router.delete('/api/unipile/cache/profile', (req, res) => {
+router.delete("/api/unipile/cache/profile", (req, res) => {
   const beforeCount = profileCache.keys().length;
   profileCache.flushAll();
-  
+
   res.json({
     success: true,
-    message: 'Profile cache cleared',
-    cleared_keys: beforeCount
+    message: "Profile cache cleared",
+    cleared_keys: beforeCount,
   });
 });
 
 // Clear chat cache
-router.delete('/api/unipile/cache/chat', (req, res) => {
+router.delete("/api/unipile/cache/chat", (req, res) => {
   const beforeCount = chatCache.keys().length;
   chatCache.flushAll();
-  
+
   res.json({
     success: true,
-    message: 'Chat cache cleared',
-    cleared_keys: beforeCount
+    message: "Chat cache cleared",
+    cleared_keys: beforeCount,
   });
 });
 
 // Clear all caches
-router.delete('/api/unipile/cache/all', (req, res) => {
+router.delete("/api/unipile/cache/all", (req, res) => {
   const profileCount = profileCache.keys().length;
   const chatCount = chatCache.keys().length;
-  
+
   profileCache.flushAll();
   chatCache.flushAll();
-  
+
   res.json({
     success: true,
-    message: 'All caches cleared',
+    message: "All caches cleared",
     cleared_keys: {
       profile: profileCount,
       chat: chatCount,
-      total: profileCount + chatCount
-    }
+      total: profileCount + chatCount,
+    },
   });
 });
 
 // Clear specific profile from cache
-router.delete('/api/unipile/cache/profile/:identifier', async (req, res) => {
+router.delete("/api/unipile/cache/profile/:identifier", async (req, res) => {
   try {
     const { identifier } = req.params;
     const { account_id, user_id } = req.query;
@@ -2892,48 +3195,50 @@ router.delete('/api/unipile/cache/profile/:identifier', async (req, res) => {
     if (!finalAccountId) {
       return res.status(400).json({
         success: false,
-        error: 'account_id or user_id is required'
+        error: "account_id or user_id is required",
       });
     }
 
     const cacheKey = getProfileCacheKey(identifier, finalAccountId);
     const deleted = profileCache.del(cacheKey);
-    
+
     res.json({
       success: true,
-      message: deleted ? 'Profile removed from cache' : 'Profile not found in cache',
+      message: deleted
+        ? "Profile removed from cache"
+        : "Profile not found in cache",
       cache_key: cacheKey,
-      deleted: deleted
+      deleted: deleted,
     });
   } catch (err) {
     res.status(500).json({
       success: false,
-      error: 'Failed to clear cache entry',
-      message: err.message
+      error: "Failed to clear cache entry",
+      message: err.message,
     });
   }
 });
 
 // ==================== HEALTH CHECK ====================
 
-router.get('/api/unipile/health', (req, res) => {
+router.get("/api/unipile/health", (req, res) => {
   const profileStats = profileCache.getStats();
   const chatStats = chatCache.getStats();
 
   res.json({
     success: true,
-    message: 'Unipile API proxy is running',
+    message: "Unipile API proxy is running",
     config: {
       subdomain: process.env.UNIPILE_SUBDOMAIN,
       port: process.env.UNIPILE_PORT,
-      api_key_configured: !!process.env.UNIPILE_API_KEY
+      api_key_configured: !!process.env.UNIPILE_API_KEY,
     },
     cache_status: {
       profile_cache_keys: profileStats.keys,
       chat_cache_keys: chatStats.keys,
       profile_cache_hits: profileStats.hits,
-      chat_cache_hits: chatStats.hits
-    }
+      chat_cache_hits: chatStats.hits,
+    },
   });
 });
 
