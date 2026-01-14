@@ -3476,4 +3476,39 @@ router.get("/api/unipile/user/:userId/inmail/credits", async (req, res) => {
     handleError(err, res);
   }
 });
+// ==================== fetch all ist all invitations sent ====================
+
+router.get("/api/unipile/user/:userId/fetch/invitations", async (req, res) => {
+  try {
+    const { userId } = req.params;
+    const { limit = 50, cursor } = req.query;
+
+    const dbResult = await getLinkedInAccountStatus(userId);
+    if (!dbResult.success || !dbResult.account_id) {
+      return res
+        .status(404)
+        .json({ success: false, error: "No LinkedIn account found" });
+    }
+
+    const accountId = dbResult.account_id;
+    const params = new URLSearchParams();
+    params.append("account_id", accountId);
+    if (limit) params.append("limit", limit);
+    if (cursor) params.append("cursor", cursor);
+
+    const response = await axios.get(
+      `${getBaseUrl()}/users/invite/sent?${params}`,
+      { headers: getHeaders() }
+    );
+
+    res.json({
+      success: true,
+      invitations: response.data,
+      account_id: accountId,
+    });
+  } catch (err) {
+    handleError(err, res);
+  }
+});
+
 module.exports = router;
