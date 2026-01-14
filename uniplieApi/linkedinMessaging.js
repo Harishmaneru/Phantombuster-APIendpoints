@@ -3628,7 +3628,7 @@ router.get("/api/unipile/user/:userId/fetch/invitations", async (req, res) => {
     handleError(err, res);
   }
 });
-// ==================== Cancel an invitation ====================
+
 // ==================== Cancel an invitation ====================
 router.delete(
   "/api/unipile/user/:userId/cancel/invitation/:invitationId",
@@ -3662,5 +3662,346 @@ router.delete(
     }
   }
 );
+// ==================== LinkedIn Search API (Unified) ====================
+// Single endpoint for all LinkedIn search operations:
+// - People Search (Classic, Sales Navigator, Recruiter)
+// - Companies Search (Classic, Sales Navigator)
+// - Posts Search (Classic only)
+// - Jobs Search (Classic only)
+// - Search from URL (paste any LinkedIn search URL)
+// - Get Search Parameters (location IDs, industry IDs, company IDs, etc.)
+//
+// USAGE:
+// 1. To get Location/Industry/Company IDs:
+//    GET /api/unipile/user/:userId/linkedin/search?action=parameters&type=LOCATION&keywords=India
+//
+// 2. To search people/companies/posts/jobs:
+//    POST /api/unipile/user/:userId/linkedin/search
+//    Body: { "api": "classic", "category": "people", "keywords": "Software Engineer", "location": ["102713980"] }
+//
+// 3. To search from LinkedIn URL:
+//    POST /api/unipile/user/:userId/linkedin/search
+//    Body: { "url": "https://www.linkedin.com/search/results/people/?keywords=..." }
+
+router.all("/api/unipile/user/:userId/linkedin/search", async (req, res) => {
+  try {
+    const { userId } = req.params;
+    const {
+      limit = 25,
+      cursor,
+      action,
+      type,
+      keywords: queryKeywords,
+      api: queryApi,
+    } = req.query;
+
+    const dbResult = await getLinkedInAccountStatus(userId);
+    if (!dbResult.success || !dbResult.account_id) {
+      return res.status(404).json({
+        success: false,
+        error: "No LinkedIn account found",
+      });
+    }
+
+    const accountId = dbResult.account_id;
+
+    // ============ GET: Fetch Search Parameters (Location IDs, Industry IDs, etc.) ============
+    if (req.method === "GET" || action === "parameters") {
+      const paramType = type || "LOCATION";
+      const keywords = queryKeywords;
+      const api = queryApi || "classic";
+
+      // Valid parameter types
+      const validTypes = [
+        "LOCATION",
+        "REGION",
+        "POSTAL_CODE",
+        "INDUSTRY",
+        "SALES_INDUSTRY",
+        "COMPANY",
+        "SCHOOL",
+        "SERVICE",
+        "JOB_TITLE",
+        "JOB_FUNCTION",
+        "DEPARTMENT",
+        "SKILL",
+        "GROUPS",
+        "PEOPLE",
+        "CONNECTIONS",
+        "SAVED_SEARCHES",
+        "RECENT_SEARCHES",
+        "ACCOUNT_LISTS",
+        "LEAD_LISTS",
+        "HIRING_PROJECTS",
+        "PERSONA",
+        "TECHNOLOGIES",
+        "DEGREE",
+        "SAVED_FILTERS",
+      ];
+
+      if (!validTypes.includes(paramType.toUpperCase())) {
+        return res.status(400).json({
+          success: false,
+          error: `Invalid type. Valid types: ${validTypes.join(", ")}`,
+        });
+      }
+
+      // Build query params for Unipile API
+      const params = new URLSearchParams();
+      params.append("account_id", accountId);
+      params.append("type", paramType);
+      if (keywords) params.append("keywords", keywords);
+      params.append("limit", limit);
+      if (api !== "classic") params.append("api", api);
+
+      console.log(
+        `🔍 LinkedIn Search Parameters: type=${paramType}, keywords=${
+          keywords || "none"
+        }`
+      );
+
+      const response = await axios.get(
+        `${getBaseUrl()}/linkedin/search/parameters?${params}`,
+        { headers: getHeaders() }
+      );
+
+      return res.json({
+        success: true,
+        data: response.data,
+        type: paramType,
+        keywords: keywords || null,
+        account_id: accountId,
+        usage: `Use the 'id' field from items to filter your search. Example: { "location": ["${
+          response.data?.items?.[0]?.id || "123456"
+        }"] }`,
+      });
+    }
+
+    // ============ POST: Perform Search ============
+    if (req.method === "POST") {
+      const searchBody = req.body;
+
+      // Handle URL-based search (just paste a LinkedIn URL)
+      if (searchBody.url) {
+        const params = new URLSearchParams();
+        params.append("account_id", accountId);
+        params.append("limit", limit);
+        if (cursor) params.append("cursor", cursor);
+
+        console.log("🔗 LinkedIn Search from URL:", searchBody.url);
+
+        const response = await axios.post(
+          `${getBaseUrl()}/linkedin/search?${params}`,
+          { url: searchBody.url },
+          { headers: getHeaders() }
+        );
+
+        return res.json({
+          success: true,
+          data: response.data,
+          search_type: "from_url",
+          source_url: searchBody.url,
+          account_id: accountId,
+          results_count: response.data?.items?.length || 0,
+        });
+      }
+
+      // Validate required fields for regular search
+      if (!searchBody.api) {
+        return res.status(400).json({
+          success: false,
+          error: "Missing required field: api",
+          valid_values: ["classic", "sales_navigator", "recruiter"],
+          note: "You can pass location/industry/company/school as names (e.g., 'India') - they will be auto-converted to IDs!",
+          examples: {
+            people_search: {
+              api: "classic",
+              category: "people",
+              keywords: "Software Engineer",
+              location: ["India", "Hyderabad"], // Names auto-convert to IDs!
+            },
+            companies_search: {
+              api: "classic",
+              category: "companies",
+              keywords: "Technology",
+              industry: ["Software Development"], // Names auto-convert to IDs!
+              has_job_offers: true,
+            },
+            posts_search: {
+              api: "classic",
+              category: "posts",
+              keywords: "AI",
+              date_posted: "past_week",
+            },
+            jobs_search: {
+              api: "classic",
+              category: "jobs",
+              keywords: "Developer",
+              location: ["Remote"],
+              presence: ["remote"],
+            },
+          },
+        });
+      }
+
+      if (!searchBody.category) {
+        return res.status(400).json({
+          success: false,
+          error: "Missing required field: category",
+          valid_values: ["people", "companies", "posts", "jobs"],
+        });
+      }
+
+      // Hardcode network_distance to [1, 2, 3] for people and companies search
+      if (
+        searchBody.category === "people" ||
+        searchBody.category === "companies"
+      ) {
+        if (!searchBody.network_distance) {
+          searchBody.network_distance = [1, 2, 3];
+        }
+      }
+
+      // ============ AUTO-CONVERT STRING NAMES TO IDs ============
+      // Helper function to check if a value is a numeric ID
+      const isNumericId = (val) => /^\d+$/.test(String(val));
+
+      // Helper function to resolve names to IDs
+      const resolveNamesToIds = async (values, paramType) => {
+        if (!values || !Array.isArray(values) || values.length === 0) {
+          return values;
+        }
+
+        const resolvedIds = [];
+
+        for (const value of values) {
+          // If already a numeric ID, keep it
+          if (isNumericId(value)) {
+            resolvedIds.push(value);
+            continue;
+          }
+
+          // It's a name string, resolve to ID
+          try {
+            const lookupParams = new URLSearchParams();
+            lookupParams.append("account_id", accountId);
+            lookupParams.append("type", paramType);
+            lookupParams.append("keywords", value);
+            lookupParams.append("limit", "5");
+
+            console.log(`🔄 Resolving ${paramType}: "${value}" to ID...`);
+
+            const lookupResponse = await axios.get(
+              `${getBaseUrl()}/linkedin/search/parameters?${lookupParams}`,
+              { headers: getHeaders() }
+            );
+
+            const items = lookupResponse.data?.items || [];
+            if (items.length > 0) {
+              // Use the first (best) match
+              const matchedId = items[0].id;
+              console.log(
+                `✅ Resolved "${value}" → ${matchedId} (${items[0].title})`
+              );
+              resolvedIds.push(matchedId);
+            } else {
+              console.warn(`⚠️ No ${paramType} found for: "${value}"`);
+            }
+          } catch (err) {
+            console.error(
+              `❌ Failed to resolve ${paramType} "${value}":`,
+              err.message
+            );
+          }
+        }
+
+        return resolvedIds.length > 0 ? resolvedIds : undefined;
+      };
+
+      // Auto-resolve location names to IDs
+      if (searchBody.location && Array.isArray(searchBody.location)) {
+        const hasNames = searchBody.location.some((v) => !isNumericId(v));
+        if (hasNames) {
+          searchBody.location = await resolveNamesToIds(
+            searchBody.location,
+            "LOCATION"
+          );
+        }
+      }
+
+      // Auto-resolve industry names to IDs (for classic API)
+      if (searchBody.industry && Array.isArray(searchBody.industry)) {
+        const hasNames = searchBody.industry.some((v) => !isNumericId(v));
+        if (hasNames) {
+          const industryType =
+            searchBody.api === "sales_navigator"
+              ? "SALES_INDUSTRY"
+              : "INDUSTRY";
+          searchBody.industry = await resolveNamesToIds(
+            searchBody.industry,
+            industryType
+          );
+        }
+      }
+
+      // Auto-resolve company names to IDs
+      if (searchBody.company && Array.isArray(searchBody.company)) {
+        const hasNames = searchBody.company.some((v) => !isNumericId(v));
+        if (hasNames) {
+          searchBody.company = await resolveNamesToIds(
+            searchBody.company,
+            "COMPANY"
+          );
+        }
+      }
+
+      // Auto-resolve school names to IDs
+      if (searchBody.school && Array.isArray(searchBody.school)) {
+        const hasNames = searchBody.school.some((v) => !isNumericId(v));
+        if (hasNames) {
+          searchBody.school = await resolveNamesToIds(
+            searchBody.school,
+            "SCHOOL"
+          );
+        }
+      }
+
+      // Build URL with query params
+      const params = new URLSearchParams();
+      params.append("account_id", accountId);
+      params.append("limit", limit);
+      if (cursor) params.append("cursor", cursor);
+
+      console.log(
+        `🔍 LinkedIn ${searchBody.category} Search (${searchBody.api}):`,
+        JSON.stringify(searchBody, null, 2)
+      );
+
+      const response = await axios.post(
+        `${getBaseUrl()}/linkedin/search?${params}`,
+        searchBody,
+        { headers: getHeaders() }
+      );
+
+      return res.json({
+        success: true,
+        data: response.data,
+        search_type: searchBody.category,
+        api: searchBody.api,
+        account_id: accountId,
+        results_count: response.data?.items?.length || 0,
+      });
+    }
+
+    // Method not allowed
+    return res.status(405).json({
+      success: false,
+      error:
+        "Method not allowed. Use GET for search parameters, POST for search.",
+    });
+  } catch (err) {
+    handleError(err, res);
+  }
+});
 
 module.exports = router;
