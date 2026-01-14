@@ -3645,9 +3645,9 @@ router.delete(
 
       const accountId = dbResult.account_id;
 
-      // Unipile API usually expects DELETE /users/invite/{invitation_id}
+      // Unipile API endpoint for canceling sent invitation
       const response = await axios.delete(
-        `${getBaseUrl()}/users/invite/${invitationId}?account_id=${accountId}`,
+        `${getBaseUrl()}/users/invite/sent/${invitationId}?account_id=${accountId}`,
         { headers: getHeaders() }
       );
 
