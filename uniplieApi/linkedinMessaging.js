@@ -3447,4 +3447,33 @@ router.get("/api/unipile/health", (req, res) => {
   });
 });
 
+// ==================== Inmail Credits ====================
+
+router.get("/api/unipile/user/:userId/inmail/credits", async (req, res) => {
+  try {
+    const { userId } = req.params;
+
+    const dbResult = await getLinkedInAccountStatus(userId);
+    if (!dbResult.success || !dbResult.account_id) {
+      return res
+        .status(404)
+        .json({ success: false, error: "No LinkedIn account found" });
+    }
+
+    const accountId = dbResult.account_id;
+
+    const response = await axios.get(
+      `${getBaseUrl()}/linkedin/inmail_balance?account_id=${accountId}`,
+      { headers: getHeaders() }
+    );
+
+    res.json({
+      success: true,
+      credits: response.data,
+      account_id: accountId,
+    });
+  } catch (err) {
+    handleError(err, res);
+  }
+});
 module.exports = router;
