@@ -3983,13 +3983,143 @@ router.all("/api/unipile/user/:userId/linkedin/search", async (req, res) => {
         { headers: getHeaders() }
       );
 
+      let searchResults = response.data;
+      let enrichedCount = 0;
+
+      // ============ PROFILE ENRICHMENT (for People search only) ============
+      // When enrich_profiles=true, fetch full profile details for each person
+      const shouldEnrich =
+        req.query.enrich_profiles === "true" &&
+        searchBody.category === "people" &&
+        searchResults?.items?.length > 0;
+
+      if (shouldEnrich) {
+        console.log(
+          `🔄 Enriching ${searchResults.items.length} profiles with full details...`
+        );
+        const startTime = Date.now();
+
+        // Helper to fetch full profile
+        const fetchFullProfile = async (person) => {
+          const providerId = person.id || person.public_identifier;
+          if (!providerId) return person;
+
+          // Check cache first
+          const cacheKey = getProfileCacheKey(providerId, accountId);
+          const cachedProfile = profileCache.get(cacheKey);
+
+          if (cachedProfile) {
+            return {
+              ...person,
+              full_profile: cachedProfile,
+              enrichment_status: "cached",
+            };
+          }
+
+          try {
+            const profileResponse = await axios.get(
+              `${getBaseUrl()}/users/${encodeURIComponent(
+                providerId
+              )}?account_id=${accountId}`,
+              { headers: getHeaders(), timeout: 5000 }
+            );
+
+            const fullProfile = profileResponse.data;
+
+            // Cache the profile
+            profileCache.set(cacheKey, fullProfile);
+
+            // Return enriched person object
+            return {
+              ...person,
+              full_profile: {
+                // Basic info
+                first_name: fullProfile.first_name,
+                last_name: fullProfile.last_name,
+                headline: fullProfile.headline,
+                summary: fullProfile.summary,
+                location: fullProfile.location,
+
+                // Contact & social
+                email: fullProfile.email,
+                phone: fullProfile.phone,
+                websites: fullProfile.websites,
+
+                // Professional details
+                skills: fullProfile.skills || [],
+                languages: fullProfile.languages || [],
+                certifications: fullProfile.certifications || [],
+
+                // Experience & Education
+                work_experience:
+                  fullProfile.work_experience || fullProfile.positions || [],
+                education: fullProfile.education || [],
+
+                // Additional
+                connections_count: fullProfile.connections_count,
+                followers_count: fullProfile.followers_count,
+                is_open_to_work: fullProfile.is_open_to_work,
+                is_hiring: fullProfile.is_hiring,
+                premium: fullProfile.premium,
+              },
+              enrichment_status: "fetched",
+            };
+          } catch (err) {
+            console.warn(
+              `⚠️ Failed to enrich profile ${providerId}:`,
+              err.message
+            );
+            return {
+              ...person,
+              full_profile: null,
+              enrichment_status: "error",
+            };
+          }
+        };
+
+        // Process profiles in parallel (max 5 concurrent to avoid rate limits)
+        const batchSize = 5;
+        const enrichedItems = [];
+
+        for (let i = 0; i < searchResults.items.length; i += batchSize) {
+          const batch = searchResults.items.slice(i, i + batchSize);
+          const enrichedBatch = await Promise.all(batch.map(fetchFullProfile));
+          enrichedItems.push(...enrichedBatch);
+
+          // Small delay between batches
+          if (i + batchSize < searchResults.items.length) {
+            await new Promise((resolve) => setTimeout(resolve, 100));
+          }
+        }
+
+        searchResults = {
+          ...searchResults,
+          items: enrichedItems,
+        };
+
+        enrichedCount = enrichedItems.filter(
+          (p) =>
+            p.enrichment_status === "fetched" ||
+            p.enrichment_status === "cached"
+        ).length;
+        const elapsed = Date.now() - startTime;
+        console.log(
+          `✅ Enriched ${enrichedCount}/${searchResults.items.length} profiles in ${elapsed}ms`
+        );
+      }
+
       return res.json({
         success: true,
-        data: response.data,
+        data: searchResults,
         search_type: searchBody.category,
         api: searchBody.api,
         account_id: accountId,
-        results_count: response.data?.items?.length || 0,
+        results_count: searchResults?.items?.length || 0,
+        ...(shouldEnrich && {
+          profiles_enriched: enrichedCount,
+          enrichment_note:
+            "Full profile details included in 'full_profile' field for each person",
+        }),
       });
     }
 
