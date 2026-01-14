@@ -432,8 +432,8 @@ router.post("/api/unipile/webhook/unipile-account", async (req, res) => {
 
 // ==================== CHAT ENDPOINTS ====================
 
-// Get all chats/conversations for a userId - FAST VERSION
-// Profile fetching is now optional and uses aggressive parallelization with timeouts
+// Get all chats/conversations for a userId - FAST VERSION with profile enrichment
+// Profile data is included by default for chat UI (name, headline, picture, location)
 router.get("/api/unipile/user/:userId/allchats", async (req, res) => {
   try {
     const { userId } = req.params;
@@ -441,7 +441,8 @@ router.get("/api/unipile/user/:userId/allchats", async (req, res) => {
       limit = 50,
       cursor,
       search,
-      include_profiles = "false",
+      include_profiles = "true", // Now defaults to true for chat UI
+      skip_profiles = "false", // New param to explicitly skip profile fetching
     } = req.query;
 
     const dbResult = await getLinkedInAccountStatus(userId);
@@ -467,11 +468,14 @@ router.get("/api/unipile/user/:userId/allchats", async (req, res) => {
     let chatsData = response.data;
     const chats = chatsData?.items || [];
 
-    // Fast profile enrichment with aggressive timeouts (only when explicitly requested)
-    if (include_profiles === "true" && chats.length > 0) {
-      console.log(
-        `🚀 Fast enriching ${chats.length} chats with profile data...`
-      );
+    // Determine if we should fetch profiles
+    const shouldFetchProfiles =
+      skip_profiles !== "true" &&
+      include_profiles === "true" &&
+      chats.length > 0;
+
+    if (shouldFetchProfiles) {
+      console.log(`🚀 Enriching ${chats.length} chats with profile data...`);
       const startTime = Date.now();
 
       // Helper: fetch single profile with timeout
@@ -484,11 +488,7 @@ router.get("/api/unipile/user/:userId/allchats", async (req, res) => {
           attendeeProviderId === "1337" ||
           attendeeProviderId.length < 10
         ) {
-          return {
-            ...chat,
-            attendee_profile: null,
-            profile_fetch_status: "skipped",
-          };
+          return createCleanChatItem(chat, null, "skipped");
         }
 
         // Check cache first (instant)
@@ -496,23 +496,7 @@ router.get("/api/unipile/user/:userId/allchats", async (req, res) => {
         const cachedProfile = profileCache.get(cacheKey);
 
         if (cachedProfile) {
-          return {
-            ...chat,
-            attendee_profile: {
-              provider_id: cachedProfile.provider_id,
-              name: cachedProfile.name || null,
-              headline: cachedProfile.headline || null,
-              profile_picture_url:
-                cachedProfile.profile_picture_url ||
-                cachedProfile.picture ||
-                null,
-              profile_url: cachedProfile.profile_url || null,
-              public_identifier: cachedProfile.public_identifier || null,
-              location: cachedProfile.location || null,
-              network_distance: cachedProfile.network_distance || null,
-            },
-            profile_fetch_status: "cached",
-          };
+          return createCleanChatItem(chat, cachedProfile, "cached");
         }
 
         // Fetch with timeout
@@ -537,28 +521,59 @@ router.get("/api/unipile/user/:userId/allchats", async (req, res) => {
           // Cache the profile
           profileCache.set(cacheKey, profile);
 
-          return {
-            ...chat,
-            attendee_profile: {
-              provider_id: profile.provider_id,
-              name: profile.name || null,
-              headline: profile.headline || null,
-              profile_picture_url:
-                profile.profile_picture_url || profile.picture || null,
-              profile_url: profile.profile_url || null,
-              public_identifier: profile.public_identifier || null,
-              location: profile.location || null,
-              network_distance: profile.network_distance || null,
-            },
-            profile_fetch_status: "fetched",
-          };
+          return createCleanChatItem(chat, profile, "fetched");
         } catch (err) {
-          return {
-            ...chat,
-            attendee_profile: null,
-            profile_fetch_status: "timeout_or_error",
+          return createCleanChatItem(chat, null, "timeout_or_error");
+        }
+      };
+
+      // Helper: Create clean chat item with only essential fields
+      const createCleanChatItem = (chat, profile, fetchStatus) => {
+        // Build attendee profile with essential fields only
+        let attendeeProfile = null;
+        if (profile) {
+          // Handle both full profile and cached profile formats
+          const firstName = profile.first_name || "";
+          const lastName = profile.last_name || "";
+          const fullName =
+            profile.name ||
+            (firstName && lastName ? `${firstName} ${lastName}`.trim() : null);
+
+          attendeeProfile = {
+            provider_id: profile.provider_id || null,
+            name: fullName,
+            first_name: firstName || null,
+            last_name: lastName || null,
+            headline: profile.headline || null,
+            profile_picture_url:
+              profile.profile_picture_url || profile.picture || null,
+            location: profile.location || null,
+            public_identifier: profile.public_identifier || null,
           };
         }
+
+        // Return clean chat item with only essential fields
+        return {
+          id: chat.id,
+          name: chat.name || null,
+          type: chat.type,
+          unread: chat.unread,
+          unread_count: chat.unread_count,
+          archived: chat.archived,
+          pinned: chat.pinned,
+          timestamp: chat.timestamp,
+          account_id: chat.account_id,
+          provider_id: chat.provider_id,
+          attendee_provider_id: chat.attendee_provider_id,
+          // Profile data for UI
+          attendee_profile: attendeeProfile,
+          profile_fetch_status: fetchStatus,
+          // Optional fields (included if present)
+          ...(chat.subject && { subject: chat.subject }),
+          ...(chat.content_type && { content_type: chat.content_type }),
+          ...(chat.read_only && { read_only: chat.read_only }),
+          ...(chat.muted_until && { muted_until: chat.muted_until }),
+        };
       };
 
       // Process ALL profiles in parallel with individual timeouts (much faster)
@@ -566,19 +581,55 @@ router.get("/api/unipile/user/:userId/allchats", async (req, res) => {
         chats.map((chat) => fetchProfileWithTimeout(chat, 1500))
       );
 
-      chatsData = { ...chatsData, items: enrichedChats };
-
       const elapsed = Date.now() - startTime;
       console.log(`✅ Enriched ${enrichedChats.length} chats in ${elapsed}ms`);
-    }
 
-    res.json({
-      success: true,
-      data: chatsData,
-      account_id: accountId,
-      user_id: userId,
-      profiles_included: include_profiles === "true",
-    });
+      // Return streamlined response
+      res.json({
+        success: true,
+        data: {
+          object: chatsData.object,
+          items: enrichedChats,
+          cursor: chatsData.cursor || null,
+        },
+        account_id: accountId,
+        user_id: userId,
+        profiles_included: true,
+        enrichment_time_ms: elapsed,
+      });
+    } else {
+      // Return chats without profile enrichment (when explicitly skipped)
+      const cleanChats = chats.map((chat) => ({
+        id: chat.id,
+        name: chat.name || null,
+        type: chat.type,
+        unread: chat.unread,
+        unread_count: chat.unread_count,
+        archived: chat.archived,
+        pinned: chat.pinned,
+        timestamp: chat.timestamp,
+        account_id: chat.account_id,
+        provider_id: chat.provider_id,
+        attendee_provider_id: chat.attendee_provider_id,
+        attendee_profile: null,
+        ...(chat.subject && { subject: chat.subject }),
+        ...(chat.content_type && { content_type: chat.content_type }),
+        ...(chat.read_only && { read_only: chat.read_only }),
+        ...(chat.muted_until && { muted_until: chat.muted_until }),
+      }));
+
+      res.json({
+        success: true,
+        data: {
+          object: chatsData.object,
+          items: cleanChats,
+          cursor: chatsData.cursor || null,
+        },
+        account_id: accountId,
+        user_id: userId,
+        profiles_included: false,
+      });
+    }
   } catch (err) {
     handleError(err, res);
   }
