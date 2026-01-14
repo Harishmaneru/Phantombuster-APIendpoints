@@ -3508,39 +3508,80 @@ router.get("/api/unipile/user/:userId/fetch/invitations", async (req, res) => {
       // Helper to fetch profile (similar to chat enrichment)
       const fetchProfileForInvitation = async (invitation) => {
         const providerId = invitation.invited_user_id;
+        const publicId = invitation.invited_user_public_id;
 
-        if (!providerId) return { ...invitation, status: "pending" }; // Default status
+        if (!providerId && !publicId)
+          return { ...invitation, status: "pending" }; // Default status
 
-        // Check cache
-        const cacheKey = getProfileCacheKey(providerId, accountId);
-        const cachedProfile = profileCache.get(cacheKey);
-
-        if (cachedProfile) {
-          return enrichInvitationWithProfile(invitation, cachedProfile);
+        // Check cache with providerId
+        if (providerId) {
+          const cacheKey = getProfileCacheKey(providerId, accountId);
+          const cachedProfile = profileCache.get(cacheKey);
+          if (cachedProfile) {
+            return enrichInvitationWithProfile(invitation, cachedProfile);
+          }
         }
 
-        try {
-          // Fetch profile with timeout
-          const profileResponse = await axios.get(
-            `${getBaseUrl()}/users/${encodeURIComponent(
-              providerId
-            )}?account_id=${accountId}`,
-            { headers: getHeaders(), timeout: 2000 }
-          );
+        // Try fetching with providerId first
+        if (providerId) {
+          try {
+            const profileResponse = await axios.get(
+              `${getBaseUrl()}/users/${encodeURIComponent(
+                providerId
+              )}?account_id=${accountId}`,
+              { headers: getHeaders(), timeout: 5000 }
+            );
 
-          const profile = profileResponse.data;
-          profileCache.set(cacheKey, profile);
-          return enrichInvitationWithProfile(invitation, profile);
-        } catch (err) {
-          // Fallback if fetch fails: use existing data
-          return {
-            ...invitation,
-            status: invitation.status || "pending",
-            headline: invitation.invited_user_description || null,
-            designation: invitation.invited_user_description || null,
-            location: null,
-          };
+            const profile = profileResponse.data;
+            // Cache it
+            const cacheKey = getProfileCacheKey(providerId, accountId);
+            profileCache.set(cacheKey, profile);
+
+            return enrichInvitationWithProfile(invitation, profile);
+          } catch (err) {
+            console.warn(
+              `⚠️ Failed to fetch profile by ID ${providerId}: ${err.message}`
+            );
+            // Fallthrough to try publicId
+          }
         }
+
+        // Fallback: Try fetching by publicId if available
+        if (publicId) {
+          try {
+            const profileResponse = await axios.get(
+              `${getBaseUrl()}/users/${encodeURIComponent(
+                publicId
+              )}?account_id=${accountId}`,
+              { headers: getHeaders(), timeout: 5000 }
+            );
+
+            const profile = profileResponse.data;
+            // Cache it if we have a providerId now
+            if (profile.provider_id) {
+              const cacheKey = getProfileCacheKey(
+                profile.provider_id,
+                accountId
+              );
+              profileCache.set(cacheKey, profile);
+            }
+
+            return enrichInvitationWithProfile(invitation, profile);
+          } catch (err) {
+            console.warn(
+              `⚠️ Failed to fetch profile by Public ID ${publicId}: ${err.message}`
+            );
+          }
+        }
+
+        // Absolute fallback: return original with defaults
+        return {
+          ...invitation,
+          status: invitation.status || "pending",
+          headline: invitation.invited_user_description || null,
+          designation: invitation.invited_user_description || null,
+          location: null,
+        };
       };
 
       // Helper to merge profile data
