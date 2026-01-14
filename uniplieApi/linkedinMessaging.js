@@ -3501,9 +3501,84 @@ router.get("/api/unipile/user/:userId/fetch/invitations", async (req, res) => {
       { headers: getHeaders() }
     );
 
+    let invitations = response.data.items || [];
+
+    // Enrich with profile details if we have items
+    if (invitations.length > 0) {
+      // Helper to fetch profile (similar to chat enrichment)
+      const fetchProfileForInvitation = async (invitation) => {
+        const providerId = invitation.invited_user_id;
+
+        if (!providerId) return { ...invitation, status: "pending" }; // Default status
+
+        // Check cache
+        const cacheKey = getProfileCacheKey(providerId, accountId);
+        const cachedProfile = profileCache.get(cacheKey);
+
+        if (cachedProfile) {
+          return enrichInvitationWithProfile(invitation, cachedProfile);
+        }
+
+        try {
+          // Fetch profile with timeout
+          const profileResponse = await axios.get(
+            `${getBaseUrl()}/users/${encodeURIComponent(
+              providerId
+            )}?account_id=${accountId}`,
+            { headers: getHeaders(), timeout: 2000 }
+          );
+
+          const profile = profileResponse.data;
+          profileCache.set(cacheKey, profile);
+          return enrichInvitationWithProfile(invitation, profile);
+        } catch (err) {
+          // Fallback if fetch fails: use existing data
+          return {
+            ...invitation,
+            status: invitation.status || "pending",
+            headline: invitation.invited_user_description || null,
+            designation: invitation.invited_user_description || null,
+            location: null,
+          };
+        }
+      };
+
+      // Helper to merge profile data
+      const enrichInvitationWithProfile = (invitation, profile) => {
+        return {
+          ...invitation,
+          status: invitation.status || "pending", // Default to pending for sent invitations
+          headline:
+            profile.headline || invitation.invited_user_description || null,
+          designation:
+            profile.occupation ||
+            profile.headline ||
+            invitation.invited_user_description ||
+            null,
+          location: profile.location || null,
+          invited_user_profile_picture_url:
+            profile.profile_picture_url ||
+            profile.picture ||
+            invitation.invited_user_profile_picture_url ||
+            null,
+          // Add extra useful fields
+          invited_user_public_identifier:
+            profile.public_identifier || invitation.invited_user_public_id,
+        };
+      };
+
+      // Execute in parallel
+      invitations = await Promise.all(
+        invitations.map(fetchProfileForInvitation)
+      );
+    }
+
     res.json({
       success: true,
-      invitations: response.data,
+      invitations: {
+        items: invitations,
+        cursor: response.data.cursor,
+      },
       account_id: accountId,
     });
   } catch (err) {
