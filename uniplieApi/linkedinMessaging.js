@@ -3626,5 +3626,36 @@ router.get("/api/unipile/user/:userId/fetch/invitations", async (req, res) => {
     handleError(err, res);
   }
 });
+// ==================== Cancel an invitation ====================
+router.post("/api/unipile/user/:userId/cancel/invitation", async (req, res) => {
+  try {
+    const { userId } = req.params;
+    const { invitationId } = req.body;
 
+    const dbResult = await getLinkedInAccountStatus(userId);
+    if (!dbResult.success || !dbResult.account_id) {
+      return res
+        .status(404)
+        .json({ success: false, error: "No LinkedIn account found" });
+    }
+
+    const accountId = dbResult.account_id;
+    const response = await axios.post(
+      `${getBaseUrl()}/users/invite/cancel`,
+      {
+        account_id: accountId,
+        invitation_id: invitationId,
+      },
+      { headers: getHeaders() }
+    );
+
+    res.json({
+      success: true,
+      invitation_id: invitationId,
+      account_id: accountId,
+    });
+  } catch (err) {
+    handleError(err, res);
+  }
+});
 module.exports = router;
