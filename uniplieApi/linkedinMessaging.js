@@ -3577,6 +3577,7 @@ router.get("/api/unipile/user/:userId/fetch/invitations", async (req, res) => {
         // Absolute fallback: return original with defaults
         return {
           ...invitation,
+          invitation_id: invitation.id,
           status: invitation.status || "pending",
           headline: invitation.invited_user_description || null,
           designation: invitation.invited_user_description || null,
@@ -3603,6 +3604,7 @@ router.get("/api/unipile/user/:userId/fetch/invitations", async (req, res) => {
             invitation.invited_user_profile_picture_url ||
             null,
           // Add extra useful fields
+          invitation_id: invitation.id,
           invited_user_public_identifier:
             profile.public_identifier || invitation.invited_user_public_id,
         };
