@@ -3627,35 +3627,38 @@ router.get("/api/unipile/user/:userId/fetch/invitations", async (req, res) => {
   }
 });
 // ==================== Cancel an invitation ====================
-router.post("/api/unipile/user/:userId/cancel/invitation", async (req, res) => {
-  try {
-    const { userId } = req.params;
-    const { invitationId } = req.body;
+// ==================== Cancel an invitation ====================
+router.delete(
+  "/api/unipile/user/:userId/cancel/invitation/:invitationId",
+  async (req, res) => {
+    try {
+      const { userId, invitationId } = req.params;
 
-    const dbResult = await getLinkedInAccountStatus(userId);
-    if (!dbResult.success || !dbResult.account_id) {
-      return res
-        .status(404)
-        .json({ success: false, error: "No LinkedIn account found" });
-    }
+      const dbResult = await getLinkedInAccountStatus(userId);
+      if (!dbResult.success || !dbResult.account_id) {
+        return res
+          .status(404)
+          .json({ success: false, error: "No LinkedIn account found" });
+      }
 
-    const accountId = dbResult.account_id;
-    const response = await axios.post(
-      `${getBaseUrl()}/users/invite/cancel`,
-      {
-        account_id: accountId,
+      const accountId = dbResult.account_id;
+
+      // Unipile API usually expects DELETE /users/invite/{invitation_id}
+      const response = await axios.delete(
+        `${getBaseUrl()}/users/invite/${invitationId}?account_id=${accountId}`,
+        { headers: getHeaders() }
+      );
+
+      res.json({
+        success: true,
         invitation_id: invitationId,
-      },
-      { headers: getHeaders() }
-    );
-
-    res.json({
-      success: true,
-      invitation_id: invitationId,
-      account_id: accountId,
-    });
-  } catch (err) {
-    handleError(err, res);
+        account_id: accountId,
+        message: "Invitation canceled successfully",
+      });
+    } catch (err) {
+      handleError(err, res);
+    }
   }
-});
+);
+
 module.exports = router;
