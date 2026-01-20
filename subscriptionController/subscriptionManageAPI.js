@@ -26,12 +26,12 @@ connectToMongoDB();
 const SubscriptionFlagsSchema = new mongoose.Schema({
     userId: { type: String, required: true },
     app: { type: String, required: true },
-    subscription: { type: Object, required: true }, // dynamic object from frontend
+    subscription: { type: Object, required: true },
     usage: { type: Object, default: {} }
 }, {
     timestamps: true,
     minimize: false, // Ensure empty objects are saved
-    collection: 'subscription_flags' 
+    collection: 'subscription_flags'
 });
 
 // Use a unique model name to avoid conflicts with existing Subscription model
@@ -115,13 +115,17 @@ async function updateUsage(req, res) {
 
         const sub = await SubscriptionFlags.findOne({ userId, app });
         if (!sub) {
-            return res.status(404).json({ success: false, message: "Subscription not found" });
+            return res.status(200).json({ 
+                success: true, 
+                hasSubscription: false,  // Clear boolean flag
+                message: "No subscription found" 
+            });
         }
 
         // Check if subscription is active
         const paymentStatus = sub.subscription.payment?.status;
         const allowedStatuses = ['active', 'trialing', 'paid', 'succeeded'];
-        
+
         if (sub.subscription.payment && paymentStatus && !allowedStatuses.includes(paymentStatus)) {
             console.log(`UpdateUsage: Subscription not active for userId: ${userId}, app: ${app}. Status: ${paymentStatus}`);
             return res.status(403).json({
@@ -253,7 +257,7 @@ async function checkUsageLimit(req, res) {
         // Check if subscription is active
         const paymentStatus = sub.subscription.payment?.status;
         const allowedStatuses = ['active', 'trialing', 'paid', 'succeeded'];
-        
+
         if (sub.subscription.payment && paymentStatus && !allowedStatuses.includes(paymentStatus)) {
             console.log(`CheckUsageLimit: Subscription not active for userId: ${userId}, app: ${app}. Status: ${paymentStatus}`);
             return res.status(403).json({
