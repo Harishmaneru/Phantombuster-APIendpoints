@@ -25,7 +25,7 @@ const validateConfig = () => {
 
   if (missing.length > 0) {
     throw new Error(
-      `Missing required environment variables: ${missing.join(", ")}`
+      `Missing required environment variables: ${missing.join(", ")}`,
     );
   }
 };
@@ -176,7 +176,7 @@ router.post("/api/unipile/accounts/cookie", async (req, res) => {
           user_agent: user_agent,
           connected_via: "cookie",
           unipile_response: response.data,
-        }
+        },
       );
 
       if (!dbResult.success) {
@@ -205,7 +205,7 @@ router.delete("/api/unipile/accounts/:accountId", async (req, res) => {
       `${getBaseUrl()}/accounts/${accountId}`,
       {
         headers: getHeaders(),
-      }
+      },
     );
 
     res.json({
@@ -269,7 +269,7 @@ router.post("/api/unipile/auth/link", async (req, res) => {
     const response = await axios.post(
       `${getBaseUrl()}/hosted/accounts/link`,
       payload,
-      { headers: getHeaders() }
+      { headers: getHeaders() },
     );
 
     res.json({
@@ -313,7 +313,7 @@ router.post("/api/unipile/webhook/unipile-account", async (req, res) => {
       console.log(
         `✅ Account created successfully for user ${
           name || finalUserId
-        }: ${account_id}`
+        }: ${account_id}`,
       );
 
       // Store account in database if user_id is provided
@@ -326,7 +326,7 @@ router.post("/api/unipile/webhook/unipile-account", async (req, res) => {
           {
             connected_via: "hosted_auth",
             webhook_data: req.body,
-          }
+          },
         );
 
         if (!dbResult.success) {
@@ -337,7 +337,7 @@ router.post("/api/unipile/webhook/unipile-account", async (req, res) => {
         // This allows you to manually associate the account later
         const tempUserId = `temp_${account_id}_${Date.now()}`;
         console.log(
-          `⚠️ No user_id provided, storing with temporary ID: ${tempUserId}`
+          `⚠️ No user_id provided, storing with temporary ID: ${tempUserId}`,
         );
 
         const dbResult = await connectLinkedInAccount(
@@ -350,7 +350,7 @@ router.post("/api/unipile/webhook/unipile-account", async (req, res) => {
             webhook_data: req.body,
             is_temporary: true,
             needs_user_association: true,
-          }
+          },
         );
 
         if (!dbResult.success) {
@@ -370,20 +370,20 @@ router.post("/api/unipile/webhook/unipile-account", async (req, res) => {
     } else if (status === "CREATION_FAILED") {
       console.log(
         `❌ Account creation failed for user ${name || finalUserId}:`,
-        error
+        error,
       );
 
       // Update user status if user_id is provided
       if (finalUserId) {
         const dbResult = await disconnectLinkedInAccount(
           finalUserId,
-          error || "Account creation failed"
+          error || "Account creation failed",
         );
 
         if (!dbResult.success) {
           console.error(
             "Failed to update account status in database:",
-            dbResult.error
+            dbResult.error,
           );
         }
       }
@@ -399,13 +399,13 @@ router.post("/api/unipile/webhook/unipile-account", async (req, res) => {
       // Handle account error
       const dbResult = await handleAccountError(
         account_id,
-        error || "Account error occurred"
+        error || "Account error occurred",
       );
 
       if (!dbResult.success) {
         console.error(
           "Failed to handle account error in database:",
-          dbResult.error
+          dbResult.error,
         );
       }
 
@@ -506,13 +506,13 @@ router.get("/api/unipile/user/:userId/allchats", async (req, res) => {
         try {
           const profilePromise = axios.get(
             `${getBaseUrl()}/users/${encodeURIComponent(
-              attendeeProviderId
+              attendeeProviderId,
             )}?account_id=${accountId}`,
-            { headers: getHeaders(), timeout: timeoutMs }
+            { headers: getHeaders(), timeout: timeoutMs },
           );
 
           const timeoutPromise = new Promise((_, reject) =>
-            setTimeout(() => reject(new Error("timeout")), timeoutMs)
+            setTimeout(() => reject(new Error("timeout")), timeoutMs),
           );
 
           const profileResponse = await Promise.race([
@@ -581,7 +581,7 @@ router.get("/api/unipile/user/:userId/allchats", async (req, res) => {
 
       // Process ALL profiles in parallel with individual timeouts (much faster)
       const enrichedChats = await Promise.all(
-        chats.map((chat) => fetchProfileWithTimeout(chat, 1500))
+        chats.map((chat) => fetchProfileWithTimeout(chat, 1500)),
       );
 
       const elapsed = Date.now() - startTime;
@@ -668,7 +668,7 @@ router.post("/api/unipile/user/:userId/batch-profiles", async (req, res) => {
     const TIMEOUT_MS = Math.min(parseInt(timeout_ms) || 5000, 10000); // Max 10s timeout
 
     console.log(
-      `📥 Batch fetching ${provider_ids.length} profiles (batch size: ${BATCH_SIZE}, timeout: ${TIMEOUT_MS}ms)`
+      `📥 Batch fetching ${provider_ids.length} profiles (batch size: ${BATCH_SIZE}, timeout: ${TIMEOUT_MS}ms)`,
     );
 
     // Helper: Build clean profile object
@@ -718,12 +718,12 @@ router.post("/api/unipile/user/:userId/batch-profiles", async (req, res) => {
       try {
         const response = await axios.get(
           `${getBaseUrl()}/users/${encodeURIComponent(
-            providerId
+            providerId,
           )}?account_id=${accountId}`,
           {
             headers: getHeaders(),
             timeout: TIMEOUT_MS,
-          }
+          },
         );
         const p = response.data;
 
@@ -740,8 +740,8 @@ router.post("/api/unipile/user/:userId/batch-profiles", async (req, res) => {
           err.code === "ECONNABORTED" || err.message === "timeout"
             ? "timeout"
             : err.response?.status === 404
-            ? "not_found"
-            : "error";
+              ? "not_found"
+              : "error";
 
         console.warn(`⚠️ Failed to fetch profile ${providerId}: ${errorType}`);
         return { provider_id: providerId, profile: null, status: errorType };
@@ -770,11 +770,11 @@ router.post("/api/unipile/user/:userId/batch-profiles", async (req, res) => {
       (r) =>
         r.status === "error" ||
         r.status === "timeout" ||
-        r.status === "not_found"
+        r.status === "not_found",
     ).length;
 
     console.log(
-      `✅ Batch profiles complete: ${fetchedCount} fetched, ${cachedCount} cached, ${errorCount} errors (${elapsed}ms)`
+      `✅ Batch profiles complete: ${fetchedCount} fetched, ${cachedCount} cached, ${errorCount} errors (${elapsed}ms)`,
     );
 
     res.json({
@@ -813,7 +813,7 @@ router.get(
 
       const response = await axios.get(
         `${getBaseUrl()}/chats/${chatId}?${params}`,
-        { headers: getHeaders() }
+        { headers: getHeaders() },
       );
 
       res.json({
@@ -826,7 +826,7 @@ router.get(
     } catch (err) {
       handleError(err, res);
     }
-  }
+  },
 );
 
 // Get messages for a userId + chatId
@@ -851,7 +851,7 @@ router.get(
 
       const response = await axios.get(
         `${getBaseUrl()}/chats/${chatId}/messages?${params}`,
-        { headers: getHeaders() }
+        { headers: getHeaders() },
       );
 
       res.json({
@@ -864,7 +864,7 @@ router.get(
     } catch (err) {
       handleError(err, res);
     }
-  }
+  },
 );
 
 // Get conversation attendees (participants) for a chat
@@ -886,7 +886,7 @@ router.get(
 
       const response = await axios.get(
         `${getBaseUrl()}/chats/${chatId}/attendees?${params}`,
-        { headers: getHeaders() }
+        { headers: getHeaders() },
       );
 
       res.json({
@@ -899,7 +899,7 @@ router.get(
     } catch (err) {
       handleError(err, res);
     }
-  }
+  },
 );
 
 // Sync chat (get new messages since timestamp) - with user_id in URL
@@ -923,7 +923,7 @@ router.get(
 
       const response = await axios.get(
         `${getBaseUrl()}/chats/${chatId}/sync?${params}`,
-        { headers: getHeaders() }
+        { headers: getHeaders() },
       );
 
       res.json({
@@ -936,7 +936,7 @@ router.get(
     } catch (err) {
       handleError(err, res);
     }
-  }
+  },
 );
 
 // Sync chat (get new messages since timestamp) - legacy endpoint with account_id in query
@@ -958,7 +958,7 @@ router.get("/api/unipile/chats/:chatId/sync", async (req, res) => {
 
     const response = await axios.get(
       `${getBaseUrl()}/chats/${chatId}/sync?${params}`,
-      { headers: getHeaders() }
+      { headers: getHeaders() },
     );
 
     res.json({
@@ -1178,26 +1178,26 @@ router.post("/api/unipile/user/:userId/linkedin/message", async (req, res) => {
     try {
       const userResponse = await axios.get(
         `${getBaseUrl()}/users/${encodeURIComponent(
-          recipientIdentifier
+          recipientIdentifier,
         )}?account_id=${finalAccountId}`,
-        { headers: getHeaders() }
+        { headers: getHeaders() },
       );
 
       // Use provider_id if available, otherwise fall back to identifier
       if (userResponse.data?.provider_id) {
         recipientId = userResponse.data.provider_id;
         console.log(
-          `Found provider_id for ${recipientIdentifier}: ${recipientId}`
+          `Found provider_id for ${recipientIdentifier}: ${recipientId}`,
         );
       } else {
         console.log(
-          `No provider_id found, using identifier: ${recipientIdentifier}`
+          `No provider_id found, using identifier: ${recipientIdentifier}`,
         );
       }
     } catch (userError) {
       console.warn(
         `Could not fetch user details for ${recipientIdentifier}, using identifier directly:`,
-        userError.message
+        userError.message,
       );
       // Continue with identifier if user lookup fails - Unipile might accept it
     }
@@ -1307,7 +1307,7 @@ router.get(
       // Get current user's profile
       const currentUserResponse = await axios.get(
         `${getBaseUrl()}/accounts/${accountId}`,
-        { headers: getHeaders() }
+        { headers: getHeaders() },
       );
       const currentUserProviderId = currentUserResponse.data?.provider_id;
 
@@ -1326,7 +1326,7 @@ router.get(
           }),
           axios.get(
             `${getBaseUrl()}/chats/${chatId}/attendees?account_id=${accountId}`,
-            { headers: getHeaders() }
+            { headers: getHeaders() },
           ),
         ]);
 
@@ -1344,32 +1344,32 @@ router.get(
       const uniqueAttendees = attendees.filter(
         (attendee, index, self) =>
           index ===
-          self.findIndex((a) => a.provider_id === attendee.provider_id)
+          self.findIndex((a) => a.provider_id === attendee.provider_id),
       );
 
       // Find current user's attendee profile
       const currentUserAttendee = uniqueAttendees.find(
         (attendee) =>
           attendee.provider_id === currentUserProviderId ||
-          attendee.is_self === 1
+          attendee.is_self === 1,
       );
 
       // Find other attendees (excluding current user)
       const otherAttendees = uniqueAttendees.filter(
         (attendee) =>
           attendee.provider_id !== currentUserProviderId &&
-          attendee.is_self !== 1
+          attendee.is_self !== 1,
       );
 
       // Log raw message structure from Unipile for debugging (first message only)
       if (messages.length > 0) {
         console.log(
           "🔍 Raw Unipile message structure (first message):",
-          JSON.stringify(messages[0], null, 2)
+          JSON.stringify(messages[0], null, 2),
         );
         console.log(
           "🔍 All available fields in first message:",
-          Object.keys(messages[0])
+          Object.keys(messages[0]),
         );
       }
 
@@ -1378,7 +1378,7 @@ router.get(
         .map((msg) => {
           const isMyMessage = msg.is_sender === 1;
           const senderAttendee = uniqueAttendees.find(
-            (attendee) => attendee.provider_id === msg.sender_id
+            (attendee) => attendee.provider_id === msg.sender_id,
           );
 
           // Extract seen status - check multiple possible field names from Unipile
@@ -1429,7 +1429,7 @@ router.get(
 
       const myMessages = processedMessages.filter((msg) => msg.is_my_message);
       const attendeeMessages = processedMessages.filter(
-        (msg) => !msg.is_my_message
+        (msg) => !msg.is_my_message,
       );
 
       // Clean, polished response
@@ -1486,9 +1486,9 @@ router.get(
               messagesResponse.data?.pagination?.has_more !== undefined
                 ? messagesResponse.data.pagination.has_more
                 : messagesResponse.data?.has_more !== undefined
-                ? messagesResponse.data.has_more
-                : !!messagesResponse.data?.cursor ||
-                  !!messagesResponse.data?.pagination?.cursor,
+                  ? messagesResponse.data.has_more
+                  : !!messagesResponse.data?.cursor ||
+                    !!messagesResponse.data?.pagination?.cursor,
             limit: parseInt(limit),
             total:
               messagesResponse.data?.pagination?.total ||
@@ -1510,7 +1510,7 @@ router.get(
       console.error("Polished messages API error:", err.message);
       handleError(err, res);
     }
-  }
+  },
 );
 
 // ==================== ACCOUNT MANAGEMENT ENDPOINTS ====================
@@ -1565,7 +1565,7 @@ router.get("/api/unipile/account/live-status/:userId", async (req, res) => {
     // Now fetch live status from Unipile
     const response = await axios.get(
       `${getBaseUrl()}/accounts/${dbResult.account_id}`,
-      { headers: getHeaders() }
+      { headers: getHeaders() },
     );
 
     const unipileAccount = response.data;
@@ -1585,7 +1585,7 @@ router.get("/api/unipile/account/live-status/:userId", async (req, res) => {
         (source) =>
           source.status === "OK" ||
           source.status === "active" ||
-          source.status === "connected"
+          source.status === "connected",
       );
 
       if (activeSource) {
@@ -1625,12 +1625,12 @@ router.get("/api/unipile/account/live-status/:userId", async (req, res) => {
             ...dbResult.metadata,
             last_live_check: new Date(),
             live_status: connectionStatus,
-          }
+          },
         );
       } else {
         await disconnectLinkedInAccount(
           userId,
-          lastError || "Account disconnected (live check)"
+          lastError || "Account disconnected (live check)",
         );
       }
     }
@@ -1761,7 +1761,7 @@ router.post("/api/unipile/account/refresh", async (req, res) => {
           user_agent: user_agent,
           connected_via: "refresh",
           unipile_response: response.data,
-        }
+        },
       );
 
       res.json({
@@ -1794,8 +1794,38 @@ router.delete("/api/unipile/account/delete/:userId", async (req, res) => {
       });
     }
 
+    // 1. Get the account_id from our database first
+    const dbResult = await getLinkedInAccountStatus(userId);
+    let unipileDeletionStatus = "skipped";
+
+    if (dbResult.success && dbResult.account_id) {
+      try {
+        console.log(`Deleting account ${dbResult.account_id} from Unipile...`);
+        // 2. Delete from Unipile
+        await axios.delete(`${getBaseUrl()}/accounts/${dbResult.account_id}`, {
+          headers: getHeaders(),
+        });
+        unipileDeletionStatus = "success";
+        console.log("Successfully deleted from Unipile");
+      } catch (unipileErr) {
+        console.error(
+          "Error deleting from Unipile:",
+          unipileErr.response?.data || unipileErr.message,
+        );
+        // We continue to delete from DB even if Unipile fails (e.g. 404 if already deleted)
+        unipileDeletionStatus = "failed";
+      }
+    } else {
+      console.log("No account_id found, skipping Unipile deletion");
+    }
+
+    // 3. Delete from our database
     const result = await deleteLinkedInAccount(userId);
-    res.json(result);
+
+    res.json({
+      ...result,
+      unipile_deletion: unipileDeletionStatus,
+    });
   } catch (err) {
     console.error("Error deleting account:", err);
     res.status(500).json({
@@ -1831,7 +1861,7 @@ router.post("/api/unipile/account/restart/:userId", async (req, res) => {
     const response = await axios.post(
       `${getBaseUrl()}/accounts/${dbResult.account_id}/restart`,
       {},
-      { headers: getHeaders() }
+      { headers: getHeaders() },
     );
 
     // Update database to reflect restart attempt
@@ -1845,7 +1875,7 @@ router.post("/api/unipile/account/restart/:userId", async (req, res) => {
         last_restart_attempt: new Date(),
         restart_response: response.data,
         connected_via: dbResult.metadata?.connected_via || "restart",
-      }
+      },
     );
 
     res.json({
@@ -1865,7 +1895,7 @@ router.post("/api/unipile/account/restart/:userId", async (req, res) => {
       if (dbResult.success && dbResult.account_id) {
         await disconnectLinkedInAccount(
           req.params.userId,
-          `Restart failed: ${err.response?.data?.error || err.message}`
+          `Restart failed: ${err.response?.data?.error || err.message}`,
         );
       }
     } catch (dbErr) {
@@ -2263,9 +2293,9 @@ router.post("/api/unipile/linkedin/invite", async (req, res) => {
     // STEP 1: Get user details to obtain provider_id
     const userResponse = await axios.get(
       `${getBaseUrl()}/users/${encodeURIComponent(
-        recipientIdentifier
+        recipientIdentifier,
       )}?account_id=${finalAccountId}`,
-      { headers: getHeaders() }
+      { headers: getHeaders() },
     );
 
     if (!userResponse.data || !userResponse.data.provider_id) {
@@ -2306,7 +2336,7 @@ router.post("/api/unipile/linkedin/invite", async (req, res) => {
       invitePayload,
       {
         headers: getHeaders("application/json"),
-      }
+      },
     );
 
     console.log("Step 4: Invitation sent successfully");
@@ -2478,9 +2508,9 @@ router.get(
       // Get user details first
       const userResponse = await axios.get(
         `${getBaseUrl()}/users/${encodeURIComponent(
-          identifier
+          identifier,
         )}?account_id=${finalAccountId}`,
-        { headers: getHeaders() }
+        { headers: getHeaders() },
       );
 
       if (!userResponse.data || !userResponse.data.provider_id) {
@@ -2501,11 +2531,11 @@ router.get(
       try {
         const connectionsResponse = await axios.get(
           `${getBaseUrl()}/connections?account_id=${finalAccountId}&limit=1000`,
-          { headers: getHeaders() }
+          { headers: getHeaders() },
         );
 
         const existingConnection = connectionsResponse.data.items?.find(
-          (connection) => connection.provider_id === providerUserId
+          (connection) => connection.provider_id === providerUserId,
         );
 
         if (existingConnection) {
@@ -2521,11 +2551,11 @@ router.get(
         try {
           const invitationsResponse = await axios.get(
             `${getBaseUrl()}/users/invitations/sent?account_id=${finalAccountId}`,
-            { headers: getHeaders() }
+            { headers: getHeaders() },
           );
 
           const pendingInvitation = invitationsResponse.data.items?.find(
-            (invitation) => invitation.provider_id === providerUserId
+            (invitation) => invitation.provider_id === providerUserId,
           );
 
           if (pendingInvitation) {
@@ -2535,7 +2565,7 @@ router.get(
         } catch (invitationsError) {
           console.warn(
             "Could not fetch invitations:",
-            invitationsError.message
+            invitationsError.message,
           );
         }
       }
@@ -2557,7 +2587,7 @@ router.get(
     } catch (err) {
       console.error(
         "Connection status check error:",
-        err.response?.data || err.message
+        err.response?.data || err.message,
       );
 
       if (err.response?.status === 404) {
@@ -2570,7 +2600,7 @@ router.get(
 
       handleError(err, res);
     }
-  }
+  },
 );
 
 // ==================== ENHANCED CONNECTION STATUS WITH INVITATION TRACKING ====================
@@ -2611,7 +2641,7 @@ router.get(
           userProfile = cachedData;
           fromCache = true;
           console.log(
-            `✅ [Cache HIT] Profile for ${identifier} (account: ${finalAccountId})`
+            `✅ [Cache HIT] Profile for ${identifier} (account: ${finalAccountId})`,
           );
         }
       }
@@ -2619,13 +2649,13 @@ router.get(
       // If not in cache, fetch from Unipile API
       if (!userProfile) {
         console.log(
-          `🔄 [Cache MISS] Fetching profile for ${identifier} from Unipile API`
+          `🔄 [Cache MISS] Fetching profile for ${identifier} from Unipile API`,
         );
         const response = await axios.get(
           `${getBaseUrl()}/users/${encodeURIComponent(
-            identifier
+            identifier,
           )}?account_id=${finalAccountId}`,
-          { headers: getHeaders() }
+          { headers: getHeaders() },
         );
 
         userProfile = response.data;
@@ -2633,7 +2663,7 @@ router.get(
         // Cache the profile data
         profileCache.set(cacheKey, userProfile);
         console.log(
-          `💾 [Cache SET] Profile for ${identifier} cached for 30 minutes`
+          `💾 [Cache SET] Profile for ${identifier} cached for 30 minutes`,
         );
       }
       let chatId = null;
@@ -2653,7 +2683,7 @@ router.get(
           // Check cache for chat lookup first
           const chatCacheKey = getChatCacheKey(
             finalAccountId,
-            providerId || publicIdentifier
+            providerId || publicIdentifier,
           );
           let chatResult = null;
           let chatFromCache = false;
@@ -2666,7 +2696,7 @@ router.get(
               console.log(
                 `✅ [Cache HIT] Chat lookup for ${
                   providerId || publicIdentifier
-                }`
+                }`,
               );
             }
           }
@@ -2684,12 +2714,12 @@ router.get(
                   console.log(
                     `🔄 [Cache MISS] Fetching chats for ${
                       providerId || publicIdentifier
-                    }`
+                    }`,
                   );
                   // Fetch chats with higher limit to find existing chats (only for connected profiles)
                   const chatsResponse = await axios.get(
                     `${getBaseUrl()}/chats?account_id=${finalAccountId}&limit=250`,
-                    { headers: getHeaders() }
+                    { headers: getHeaders() },
                   );
 
                   const chats =
@@ -2704,7 +2734,7 @@ router.get(
                       chatsArray.length
                     } chats for connected profile: ${
                       providerId || publicIdentifier
-                    }`
+                    }`,
                   );
 
                   // First, try to find chat where attendees are included in the response
@@ -2737,7 +2767,7 @@ router.get(
                   // If not found in initial response, fetch attendees for limited number of chats
                   if (!userChat && chatsArray.length > 0) {
                     console.log(
-                      "Chat not found in initial response, checking attendees for first 20 chats..."
+                      "Chat not found in initial response, checking attendees for first 20 chats...",
                     );
 
                     // Only check first 20 chats to avoid long delays
@@ -2751,7 +2781,7 @@ router.get(
 
                         const attendeesResponse = await axios.get(
                           `${getBaseUrl()}/chats/${currentChatId}/attendees?account_id=${finalAccountId}`,
-                          { headers: getHeaders() }
+                          { headers: getHeaders() },
                         );
 
                         const attendeesData =
@@ -2792,7 +2822,7 @@ router.get(
                           console.log(
                             `Found matching chat: ${currentChatId} for ${
                               providerId || publicIdentifier
-                            }`
+                            }`,
                           );
                           break;
                         }
@@ -2813,7 +2843,7 @@ router.get(
                     console.log(
                       `Chat found: ${foundChatId} for user ${
                         providerId || publicIdentifier
-                      }`
+                      }`,
                     );
                     const result = {
                       chatId: foundChatId,
@@ -2825,13 +2855,13 @@ router.get(
                     console.log(
                       `💾 [Cache SET] Chat lookup for ${
                         providerId || publicIdentifier
-                      } cached for 10 minutes`
+                      } cached for 10 minutes`,
                     );
 
                     return result;
                   } else {
                     console.log(
-                      `No chat found for user ${providerId || publicIdentifier}`
+                      `No chat found for user ${providerId || publicIdentifier}`,
                     );
                     const result = { chatId: null, hasExistingChat: false };
 
@@ -2844,7 +2874,7 @@ router.get(
                   console.error("Could not fetch chat ID:", chatError.message);
                   console.error(
                     "Chat error details:",
-                    chatError.response?.data || chatError.message
+                    chatError.response?.data || chatError.message,
                   );
                   return { chatId: null, hasExistingChat: false };
                 }
@@ -2852,14 +2882,14 @@ router.get(
               new Promise((resolve) =>
                 setTimeout(() => {
                   console.log(
-                    "Chat lookup timeout - returning profile without chat info"
+                    "Chat lookup timeout - returning profile without chat info",
                   );
                   resolve({
                     chatId: null,
                     hasExistingChat: false,
                     timeout: true,
                   });
-                }, timeoutMs)
+                }, timeoutMs),
               ),
             ]);
           };
@@ -2877,12 +2907,12 @@ router.get(
           }
         } else {
           console.log(
-            "No provider_id or public_identifier found in user profile, skipping chat lookup"
+            "No provider_id or public_identifier found in user profile, skipping chat lookup",
           );
         }
       } else {
         console.log(
-          "Profile not connected (no network_distance), skipping chat lookup"
+          "Profile not connected (no network_distance), skipping chat lookup",
         );
       }
 
@@ -2926,7 +2956,7 @@ router.get(
 
       handleError(err, res);
     }
-  }
+  },
 );
 
 // Get current user's own LinkedIn profile
@@ -2953,7 +2983,7 @@ router.get("/api/unipile/linkedin/user/me", async (req, res) => {
     // Call Unipile API to get current user's profile
     const response = await axios.get(
       `${getBaseUrl()}/users/me?account_id=${finalAccountId}`,
-      { headers: getHeaders() }
+      { headers: getHeaders() },
     );
 
     res.json({
@@ -2983,7 +3013,7 @@ router.get("/api/unipile/linkedin/user/me", async (req, res) => {
   } catch (err) {
     console.error(
       "Get current user profile error:",
-      err.response?.data || err.message
+      err.response?.data || err.message,
     );
 
     if (err.response?.status === 404) {
@@ -3024,21 +3054,21 @@ router.get("/api/unipile/linkedin/status/:identifier", async (req, res) => {
 
     const accountId = dbResult.account_id;
     console.log(
-      `🔍 Checking LinkedIn status for: ${identifier}, account: ${accountId}`
+      `🔍 Checking LinkedIn status for: ${identifier}, account: ${accountId}`,
     );
 
     // STEP 1: Check connections (1st degree)
     try {
       const connectionsResponse = await axios.get(
         `${getBaseUrl()}/connections?account_id=${accountId}&search=${encodeURIComponent(
-          identifier
+          identifier,
         )}`,
-        { headers: getHeaders() }
+        { headers: getHeaders() },
       );
 
       console.log(
         "🔗 Connections check:",
-        JSON.stringify(connectionsResponse.data, null, 2)
+        JSON.stringify(connectionsResponse.data, null, 2),
       );
 
       // Check if user is in connections
@@ -3046,7 +3076,7 @@ router.get("/api/unipile/linkedin/status/:identifier", async (req, res) => {
         (connection) =>
           connection.public_identifier === identifier ||
           connection.provider_id === identifier ||
-          connection.profile_url?.includes(identifier)
+          connection.profile_url?.includes(identifier),
       );
 
       if (connectedUser) {
@@ -3065,12 +3095,12 @@ router.get("/api/unipile/linkedin/status/:identifier", async (req, res) => {
     try {
       const invitesResponse = await axios.get(
         `${getBaseUrl()}/users/invitations/sent?account_id=${accountId}`,
-        { headers: getHeaders() }
+        { headers: getHeaders() },
       );
 
       console.log(
         "📨 Pending invitations:",
-        JSON.stringify(invitesResponse.data, null, 2)
+        JSON.stringify(invitesResponse.data, null, 2),
       );
 
       // Find pending invitation for this user
@@ -3079,7 +3109,7 @@ router.get("/api/unipile/linkedin/status/:identifier", async (req, res) => {
           invite.user_public_identifier === identifier ||
           invite.user_provider_id === identifier ||
           invite.user_profile_url?.includes(identifier) ||
-          invite.invitation_identifier === identifier
+          invite.invitation_identifier === identifier,
       );
 
       if (pendingInvite) {
@@ -3098,14 +3128,14 @@ router.get("/api/unipile/linkedin/status/:identifier", async (req, res) => {
     try {
       const profileResponse = await axios.get(
         `${getBaseUrl()}/users/${encodeURIComponent(
-          identifier
+          identifier,
         )}?account_id=${accountId}`,
-        { headers: getHeaders() }
+        { headers: getHeaders() },
       );
 
       console.log(
         "👤 Profile found:",
-        JSON.stringify(profileResponse.data, null, 2)
+        JSON.stringify(profileResponse.data, null, 2),
       );
 
       // If profile exists but not connected and no pending invite
@@ -3122,7 +3152,7 @@ router.get("/api/unipile/linkedin/status/:identifier", async (req, res) => {
       console.log(
         "Profile check result:",
         profileError.response?.status,
-        profileError.message
+        profileError.message,
       );
     }
 
@@ -3135,7 +3165,7 @@ router.get("/api/unipile/linkedin/status/:identifier", async (req, res) => {
   } catch (err) {
     console.error(
       "❌ Error checking LinkedIn status:",
-      err.response?.data || err.message
+      err.response?.data || err.message,
     );
 
     res.status(500).json({
@@ -3172,7 +3202,7 @@ router.get("/api/unipile/companyinfo/:identifier", async (req, res) => {
       `${getBaseUrl()}/linkedin/company/${identifier}?account_id=${
         dbResult.account_id
       }`,
-      { headers: getHeaders() }
+      { headers: getHeaders() },
     );
 
     res.json({
@@ -3243,7 +3273,7 @@ router.post("/api/unipile/linkedin/reconnect", async (req, res) => {
 
     const accountId = dbResult.account_id;
     console.log(
-      `♻️ Reconnecting LinkedIn for user ${user_id}, account: ${accountId}`
+      `♻️ Reconnecting LinkedIn for user ${user_id}, account: ${accountId}`,
     );
 
     // 3) Build Unipile payload
@@ -3278,12 +3308,12 @@ router.post("/api/unipile/linkedin/reconnect", async (req, res) => {
     const reconnectResponse = await axios.post(
       `${getBaseUrl()}/accounts/${accountId}`,
       payload,
-      { headers: getHeaders() }
+      { headers: getHeaders() },
     );
 
     console.log(
       "✅ Reconnect response:",
-      JSON.stringify(reconnectResponse.data, null, 2)
+      JSON.stringify(reconnectResponse.data, null, 2),
     );
 
     return res.json({
@@ -3294,7 +3324,7 @@ router.post("/api/unipile/linkedin/reconnect", async (req, res) => {
   } catch (err) {
     console.error(
       "❌ Error reconnecting LinkedIn account:",
-      err.response?.data || err.message
+      err.response?.data || err.message,
     );
 
     // Bubble up Unipile error status if available
@@ -3464,7 +3494,7 @@ router.get("/api/unipile/user/:userId/inmail/credits", async (req, res) => {
 
     const response = await axios.get(
       `${getBaseUrl()}/linkedin/inmail_balance?account_id=${accountId}`,
-      { headers: getHeaders() }
+      { headers: getHeaders() },
     );
 
     res.json({
@@ -3498,7 +3528,7 @@ router.get("/api/unipile/user/:userId/fetch/invitations", async (req, res) => {
 
     const response = await axios.get(
       `${getBaseUrl()}/users/invite/sent?${params}`,
-      { headers: getHeaders() }
+      { headers: getHeaders() },
     );
 
     let invitations = response.data.items || [];
@@ -3527,9 +3557,9 @@ router.get("/api/unipile/user/:userId/fetch/invitations", async (req, res) => {
           try {
             const profileResponse = await axios.get(
               `${getBaseUrl()}/users/${encodeURIComponent(
-                providerId
+                providerId,
               )}?account_id=${accountId}`,
-              { headers: getHeaders(), timeout: 5000 }
+              { headers: getHeaders(), timeout: 5000 },
             );
 
             const profile = profileResponse.data;
@@ -3540,7 +3570,7 @@ router.get("/api/unipile/user/:userId/fetch/invitations", async (req, res) => {
             return enrichInvitationWithProfile(invitation, profile);
           } catch (err) {
             console.warn(
-              `⚠️ Failed to fetch profile by ID ${providerId}: ${err.message}`
+              `⚠️ Failed to fetch profile by ID ${providerId}: ${err.message}`,
             );
             // Fallthrough to try publicId
           }
@@ -3551,9 +3581,9 @@ router.get("/api/unipile/user/:userId/fetch/invitations", async (req, res) => {
           try {
             const profileResponse = await axios.get(
               `${getBaseUrl()}/users/${encodeURIComponent(
-                publicId
+                publicId,
               )}?account_id=${accountId}`,
-              { headers: getHeaders(), timeout: 5000 }
+              { headers: getHeaders(), timeout: 5000 },
             );
 
             const profile = profileResponse.data;
@@ -3561,7 +3591,7 @@ router.get("/api/unipile/user/:userId/fetch/invitations", async (req, res) => {
             if (profile.provider_id) {
               const cacheKey = getProfileCacheKey(
                 profile.provider_id,
-                accountId
+                accountId,
               );
               profileCache.set(cacheKey, profile);
             }
@@ -3569,7 +3599,7 @@ router.get("/api/unipile/user/:userId/fetch/invitations", async (req, res) => {
             return enrichInvitationWithProfile(invitation, profile);
           } catch (err) {
             console.warn(
-              `⚠️ Failed to fetch profile by Public ID ${publicId}: ${err.message}`
+              `⚠️ Failed to fetch profile by Public ID ${publicId}: ${err.message}`,
             );
           }
         }
@@ -3612,7 +3642,7 @@ router.get("/api/unipile/user/:userId/fetch/invitations", async (req, res) => {
 
       // Execute in parallel
       invitations = await Promise.all(
-        invitations.map(fetchProfileForInvitation)
+        invitations.map(fetchProfileForInvitation),
       );
     }
 
@@ -3648,7 +3678,7 @@ router.delete(
       // Unipile API endpoint for canceling sent invitation
       const response = await axios.delete(
         `${getBaseUrl()}/users/invite/sent/${invitationId}?account_id=${accountId}`,
-        { headers: getHeaders() }
+        { headers: getHeaders() },
       );
 
       res.json({
@@ -3660,7 +3690,7 @@ router.delete(
     } catch (err) {
       handleError(err, res);
     }
-  }
+  },
 );
 // ==================== LinkedIn Search API (Unified) ====================
 // Single endpoint for all LinkedIn search operations:
@@ -3757,12 +3787,12 @@ router.all("/api/unipile/user/:userId/linkedin/search", async (req, res) => {
       console.log(
         `🔍 LinkedIn Search Parameters: type=${paramType}, keywords=${
           keywords || "none"
-        }`
+        }`,
       );
 
       const response = await axios.get(
         `${getBaseUrl()}/linkedin/search/parameters?${params}`,
-        { headers: getHeaders() }
+        { headers: getHeaders() },
       );
 
       return res.json({
@@ -3793,7 +3823,7 @@ router.all("/api/unipile/user/:userId/linkedin/search", async (req, res) => {
         const response = await axios.post(
           `${getBaseUrl()}/linkedin/search?${params}`,
           { url: searchBody.url },
-          { headers: getHeaders() }
+          { headers: getHeaders() },
         );
 
         return res.json({
@@ -3893,7 +3923,7 @@ router.all("/api/unipile/user/:userId/linkedin/search", async (req, res) => {
 
             const lookupResponse = await axios.get(
               `${getBaseUrl()}/linkedin/search/parameters?${lookupParams}`,
-              { headers: getHeaders() }
+              { headers: getHeaders() },
             );
 
             const items = lookupResponse.data?.items || [];
@@ -3901,7 +3931,7 @@ router.all("/api/unipile/user/:userId/linkedin/search", async (req, res) => {
               // Use the first (best) match
               const matchedId = items[0].id;
               console.log(
-                `✅ Resolved "${value}" → ${matchedId} (${items[0].title})`
+                `✅ Resolved "${value}" → ${matchedId} (${items[0].title})`,
               );
               resolvedIds.push(matchedId);
             } else {
@@ -3910,7 +3940,7 @@ router.all("/api/unipile/user/:userId/linkedin/search", async (req, res) => {
           } catch (err) {
             console.error(
               `❌ Failed to resolve ${paramType} "${value}":`,
-              err.message
+              err.message,
             );
           }
         }
@@ -3924,7 +3954,7 @@ router.all("/api/unipile/user/:userId/linkedin/search", async (req, res) => {
         if (hasNames) {
           searchBody.location = await resolveNamesToIds(
             searchBody.location,
-            "LOCATION"
+            "LOCATION",
           );
         }
       }
@@ -3939,7 +3969,7 @@ router.all("/api/unipile/user/:userId/linkedin/search", async (req, res) => {
               : "INDUSTRY";
           searchBody.industry = await resolveNamesToIds(
             searchBody.industry,
-            industryType
+            industryType,
           );
         }
       }
@@ -3950,7 +3980,7 @@ router.all("/api/unipile/user/:userId/linkedin/search", async (req, res) => {
         if (hasNames) {
           searchBody.company = await resolveNamesToIds(
             searchBody.company,
-            "COMPANY"
+            "COMPANY",
           );
         }
       }
@@ -3961,7 +3991,7 @@ router.all("/api/unipile/user/:userId/linkedin/search", async (req, res) => {
         if (hasNames) {
           searchBody.school = await resolveNamesToIds(
             searchBody.school,
-            "SCHOOL"
+            "SCHOOL",
           );
         }
       }
@@ -3974,13 +4004,13 @@ router.all("/api/unipile/user/:userId/linkedin/search", async (req, res) => {
 
       console.log(
         `🔍 LinkedIn ${searchBody.category} Search (${searchBody.api}):`,
-        JSON.stringify(searchBody, null, 2)
+        JSON.stringify(searchBody, null, 2),
       );
 
       const response = await axios.post(
         `${getBaseUrl()}/linkedin/search?${params}`,
         searchBody,
-        { headers: getHeaders() }
+        { headers: getHeaders() },
       );
 
       let searchResults = response.data;
@@ -3995,7 +4025,7 @@ router.all("/api/unipile/user/:userId/linkedin/search", async (req, res) => {
 
       if (shouldEnrich) {
         console.log(
-          `🔄 Enriching ${searchResults.items.length} profiles with full details...`
+          `🔄 Enriching ${searchResults.items.length} profiles with full details...`,
         );
         const startTime = Date.now();
 
@@ -4019,9 +4049,9 @@ router.all("/api/unipile/user/:userId/linkedin/search", async (req, res) => {
           try {
             const profileResponse = await axios.get(
               `${getBaseUrl()}/users/${encodeURIComponent(
-                providerId
+                providerId,
               )}?account_id=${accountId}`,
-              { headers: getHeaders(), timeout: 5000 }
+              { headers: getHeaders(), timeout: 5000 },
             );
 
             const fullProfile = profileResponse.data;
@@ -4067,7 +4097,7 @@ router.all("/api/unipile/user/:userId/linkedin/search", async (req, res) => {
           } catch (err) {
             console.warn(
               `⚠️ Failed to enrich profile ${providerId}:`,
-              err.message
+              err.message,
             );
             return {
               ...person,
@@ -4100,11 +4130,11 @@ router.all("/api/unipile/user/:userId/linkedin/search", async (req, res) => {
         enrichedCount = enrichedItems.filter(
           (p) =>
             p.enrichment_status === "fetched" ||
-            p.enrichment_status === "cached"
+            p.enrichment_status === "cached",
         ).length;
         const elapsed = Date.now() - startTime;
         console.log(
-          `✅ Enriched ${enrichedCount}/${searchResults.items.length} profiles in ${elapsed}ms`
+          `✅ Enriched ${enrichedCount}/${searchResults.items.length} profiles in ${elapsed}ms`,
         );
       }
 
