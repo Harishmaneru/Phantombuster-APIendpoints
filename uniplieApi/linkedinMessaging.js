@@ -3712,7 +3712,6 @@ router.delete(
 // 3. To search from LinkedIn URL:
 //    POST /api/unipile/user/:userId/linkedin/search
 //    Body: { "url": "https://www.linkedin.com/search/results/people/?keywords=..." }
-
 router.all("/api/unipile/user/:userId/linkedin/search", async (req, res) => {
   try {
     const { userId } = req.params;
