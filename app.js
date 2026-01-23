@@ -119,6 +119,8 @@ const linkedinMessaging = require("./uniplieApi/linkedinMessaging.js");
 
 const notifyAPI = require("./notifyAPI/sendEmail.js");
 
+const smtp2goAPI = require("./smtp2goAPI/emailApi.js");
+
 const subscriptionManageAPI = require("./subscriptionController/subscriptionManageAPI.js");
 
 // Nylas Email API
@@ -260,6 +262,7 @@ app.use(signupApi.router);
 app.use(manageSubscriptions.router);
 app.use(linkedinMessaging);
 app.use(notifyAPI.router);
+app.use("/api/smtp2go", smtp2goAPI);
 app.use(subscriptionManageAPI.router);
 app.use(nameCheapDomainApi.router);
 
