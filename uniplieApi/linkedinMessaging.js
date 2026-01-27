@@ -1413,6 +1413,31 @@ router.get(
           "🔍 All available fields in first message:",
           Object.keys(messages[0]),
         );
+        
+        // Log messages with reactions or attachments for debugging
+        const messagesWithReactions = messages.filter(
+          (msg) =>
+            (msg.reactions && msg.reactions.length > 0) ||
+            (msg.reaction && msg.reaction.length > 0) ||
+            (msg.message_reactions && msg.message_reactions.length > 0),
+        );
+        const messagesWithAttachments = messages.filter(
+          (msg) =>
+            (msg.attachments && msg.attachments.length > 0) ||
+            (msg.attachment && msg.attachment.length > 0) ||
+            (msg.message_attachments && msg.message_attachments.length > 0),
+        );
+        
+        if (messagesWithReactions.length > 0) {
+          console.log(
+            `✅ Found ${messagesWithReactions.length} message(s) with reactions`,
+          );
+        }
+        if (messagesWithAttachments.length > 0) {
+          console.log(
+            `✅ Found ${messagesWithAttachments.length} message(s) with attachments`,
+          );
+        }
       }
 
       // Process messages with clean structure
@@ -1452,6 +1477,30 @@ router.get(
             seenStatus = 0;
           }
 
+          // Extract reactions - check multiple possible field names from Unipile
+          let reactions = [];
+          if (msg.reactions && Array.isArray(msg.reactions)) {
+            reactions = msg.reactions;
+          } else if (msg.reaction && Array.isArray(msg.reaction)) {
+            reactions = msg.reaction;
+          } else if (msg.message_reactions && Array.isArray(msg.message_reactions)) {
+            reactions = msg.message_reactions;
+          } else if (msg.reactions_data && Array.isArray(msg.reactions_data)) {
+            reactions = msg.reactions_data;
+          }
+
+          // Extract attachments - check multiple possible field names from Unipile
+          let attachments = [];
+          if (msg.attachments && Array.isArray(msg.attachments)) {
+            attachments = msg.attachments;
+          } else if (msg.attachment && Array.isArray(msg.attachment)) {
+            attachments = msg.attachment;
+          } else if (msg.message_attachments && Array.isArray(msg.message_attachments)) {
+            attachments = msg.message_attachments;
+          } else if (msg.attachments_data && Array.isArray(msg.attachments_data)) {
+            attachments = msg.attachments_data;
+          }
+
           return {
             id: msg.id,
             text: msg.text,
@@ -1462,8 +1511,8 @@ router.get(
             message_type: msg.message_type,
             delivered: msg.delivered,
             seen: seenStatus,
-            reactions: msg.reactions || [],
-            attachments: msg.attachments || [],
+            reactions: reactions, // Preserve all reaction data
+            attachments: attachments, // Preserve all attachment data with full fields
             // Removed duplicate profile fields
           };
         })
