@@ -1,9 +1,9 @@
 const express = require("express");
 const axios = require("axios");
 const FormData = require("form-data");
-const fs = require("fs");
 const NodeCache = require("node-cache");
 const router = express.Router();
+const upload = require("../middlewares/upload");
 
 // Import LinkedIn account service
 const {
@@ -971,321 +971,363 @@ router.get("/api/unipile/chats/:chatId/sync", async (req, res) => {
 });
 
 // Send LinkedIn message (creates chat if doesn't exist)
-router.post("/api/unipile/linkedin/message", async (req, res) => {
-  try {
+router.post(
+  "/api/unipile/linkedin/message",
+  upload.fields([
+    { name: "video_message", maxCount: 1 },
+    { name: "audio_message", maxCount: 1 },
+    { name: "attachment", maxCount: 1 },
+  ]),
+  async (req, res) => {
+    try {
+      const {
+        account_id,
+        user_id, // Add this to lookup account_id
+        profile_url,
+        profile_identifier,
+        message,
+        subject,
+        use_inmail = false,
+      } = req.body;
+
+      // Get account_id from user_id if not provided
+      let finalAccountId = account_id;
+      if (!finalAccountId && user_id) {
+        const dbResult = await getLinkedInAccountStatus(user_id);
+        if (dbResult.success && dbResult.account_id) {
+          finalAccountId = dbResult.account_id;
+        }
+      }
+
+      // Validation
+      if (!finalAccountId) {
+        return res.status(400).json({
+          success: false,
+          error: "account_id or user_id is required",
+        });
+      }
+
+      if (!message) {
+        return res.status(400).json({
+          success: false,
+          error: "message is required",
+        });
+      }
+
+      if (!profile_url && !profile_identifier) {
+        return res.status(400).json({
+          success: false,
+          error: "Either profile_url or profile_identifier is required",
+        });
+      }
+
+      // Extract LinkedIn identifier from URL if provided
+      let recipientId = profile_identifier;
+      if (profile_url && !profile_identifier) {
+        // Handle various LinkedIn URL formats
+        const patterns = [
+          /linkedin\.com\/in\/([^\/\?#]+)/, // Standard profile
+          /linkedin\.com\/company\/([^\/\?#]+)/, // Company page
+          /linkedin\.com\/sales\/people\/([^\/\?#]+)/, // Sales Navigator
+        ];
+
+        let match = null;
+        for (const pattern of patterns) {
+          match = profile_url.match(pattern);
+          if (match) {
+            recipientId = match[1];
+            break;
+          }
+        }
+
+        if (!match) {
+          return res.status(400).json({
+            success: false,
+            error:
+              "Invalid LinkedIn profile URL format. Expected: https://linkedin.com/in/username or https://linkedin.com/company/companyname",
+          });
+        }
+      }
+
+      // Build FormData payload
+      const form = new FormData();
+
+      form.append("account_id", finalAccountId);
+      form.append("attendees_ids[]", recipientId);
+      form.append("text", message);
+
+      if (subject) {
+        form.append("subject", subject);
+      }
+
+      if (use_inmail) {
+        form.append("linkedin[inmail]", "true");
+      }
+
+      // 🔥 MEDIA HANDLING (ONLY ONE - priority: video > audio > attachment)
+      if (req.files?.video_message) {
+        const file = req.files.video_message[0];
+        form.append("video_message", file.buffer, {
+          filename: file.originalname,
+          contentType: file.mimetype,
+        });
+      } else if (req.files?.audio_message) {
+        const file = req.files.audio_message[0];
+        form.append("audio_message", file.buffer, {
+          filename: file.originalname,
+          contentType: file.mimetype,
+        });
+      } else if (req.files?.attachment) {
+        const file = req.files.attachment[0];
+        form.append("attachments", file.buffer, {
+          filename: file.originalname,
+          contentType: file.mimetype,
+        });
+      }
+
+      // Send message (Unipile creates chat if it doesn't exist)
+      const response = await axios.post(`${getBaseUrl()}/chats`, form, {
+        headers: {
+          "X-API-KEY": process.env.UNIPILE_API_KEY,
+          ...form.getHeaders(),
+        },
+        maxBodyLength: Infinity,
+        maxContentLength: Infinity,
+      });
+
+      res.json({
+        success: true,
+        data: response.data,
+        message: use_inmail
+          ? "InMail sent successfully"
+          : "Message sent successfully",
+        chat_id: response.data.chat_id,
+        message_id: response.data.message_id,
+        recipient_id: recipientId,
+        account_id: finalAccountId,
+      });
+    } catch (err) {
+      console.error("LinkedIn message error:", {
+        status: err.response?.status,
+        data: err.response?.data,
+        message: err.message,
+      });
+      handleError(err, res);
+    }
+  }
+);
+
+// Send LinkedIn message (user_id in URL path)
+router.post(
+  "/api/unipile/user/:userId/linkedin/message",
+  upload.fields([
+    { name: "video_message", maxCount: 1 },
+    { name: "audio_message", maxCount: 1 },
+    { name: "attachment", maxCount: 1 },
+  ]),
+  async (req, res) => {
+    const { userId } = req.params;
     const {
-      account_id,
-      user_id, // Add this to lookup account_id
       profile_url,
       profile_identifier,
       message,
       subject,
       use_inmail = false,
-      attachments, // Support attachments
     } = req.body;
 
-    // Get account_id from user_id if not provided
-    let finalAccountId = account_id;
-    if (!finalAccountId && user_id) {
-      const dbResult = await getLinkedInAccountStatus(user_id);
-      if (dbResult.success && dbResult.account_id) {
-        finalAccountId = dbResult.account_id;
-      }
-    }
+    let finalAccountId = null;
+    let recipientIdentifier = profile_identifier || null;
+    let recipientId = null;
 
-    // Validation
-    if (!finalAccountId) {
-      return res.status(400).json({
-        success: false,
-        error: "account_id or user_id is required",
-      });
-    }
-
-    if (!message) {
-      return res.status(400).json({
-        success: false,
-        error: "message is required",
-      });
-    }
-
-    if (!profile_url && !profile_identifier) {
-      return res.status(400).json({
-        success: false,
-        error: "Either profile_url or profile_identifier is required",
-      });
-    }
-
-    // Extract LinkedIn identifier from URL if provided
-    let recipientId = profile_identifier;
-    if (profile_url && !profile_identifier) {
-      // Handle various LinkedIn URL formats
-      const patterns = [
-        /linkedin\.com\/in\/([^\/\?#]+)/, // Standard profile
-        /linkedin\.com\/company\/([^\/\?#]+)/, // Company page
-        /linkedin\.com\/sales\/people\/([^\/\?#]+)/, // Sales Navigator
-      ];
-
-      let match = null;
-      for (const pattern of patterns) {
-        match = profile_url.match(pattern);
-        if (match) {
-          recipientId = match[1];
-          break;
-        }
-      }
-
-      if (!match) {
-        return res.status(400).json({
-          success: false,
-          error:
-            "Invalid LinkedIn profile URL format. Expected: https://linkedin.com/in/username or https://linkedin.com/company/companyname",
-        });
-      }
-    }
-
-    // Build FormData payload
-    const form = new FormData();
-
-    form.append("account_id", finalAccountId);
-    form.append("attendees_ids[]", recipientId);
-    form.append("text", message);
-
-    if (subject) {
-      form.append("subject", subject);
-    }
-
-    if (use_inmail) {
-      form.append("linkedin[inmail]", "true");
-    }
-
-    // Handle attachments if provided
-    if (attachments && Array.isArray(attachments)) {
-      attachments.forEach((attachment) => {
-        if (attachment.path) {
-          form.append("attachments", fs.createReadStream(attachment.path));
-        }
-      });
-    }
-
-    // Send message (Unipile creates chat if it doesn't exist)
-    const response = await axios.post(`${getBaseUrl()}/chats`, form, {
-      headers: {
-        "X-API-KEY": process.env.UNIPILE_API_KEY,
-        ...form.getHeaders(),
-      },
-    });
-
-    res.json({
-      success: true,
-      data: response.data,
-      message: use_inmail
-        ? "InMail sent successfully"
-        : "Message sent successfully",
-      chat_id: response.data.chat_id,
-      message_id: response.data.message_id,
-      recipient_id: recipientId,
-      account_id: finalAccountId,
-    });
-  } catch (err) {
-    console.error("LinkedIn message error:", {
-      status: err.response?.status,
-      data: err.response?.data,
-      message: err.message,
-    });
-    handleError(err, res);
-  }
-});
-
-// Send LinkedIn message (user_id in URL path)
-router.post("/api/unipile/user/:userId/linkedin/message", async (req, res) => {
-  const { userId } = req.params;
-  const {
-    profile_url,
-    profile_identifier,
-    message,
-    subject,
-    use_inmail = false,
-    attachments,
-  } = req.body;
-
-  let finalAccountId = null;
-  let recipientIdentifier = profile_identifier || null;
-  let recipientId = null;
-
-  try {
-    // Get account_id from user_id
-    const dbResult = await getLinkedInAccountStatus(userId);
-    if (!dbResult.success || !dbResult.account_id) {
-      return res.status(404).json({
-        success: false,
-        error: "No LinkedIn account found for this user",
-      });
-    }
-
-    finalAccountId = dbResult.account_id;
-
-    // Validation
-    if (!message) {
-      return res.status(400).json({
-        success: false,
-        error: "message is required",
-      });
-    }
-
-    if (!profile_url && !recipientIdentifier) {
-      return res.status(400).json({
-        success: false,
-        error: "Either profile_url or profile_identifier is required",
-      });
-    }
-
-    // Extract LinkedIn identifier from URL if provided
-    if (profile_url && !recipientIdentifier) {
-      // Handle various LinkedIn URL formats
-      const patterns = [
-        /linkedin\.com\/in\/([^\/\?#]+)/, // Standard profile
-        /linkedin\.com\/company\/([^\/\?#]+)/, // Company page
-        /linkedin\.com\/sales\/people\/([^\/\?#]+)/, // Sales Navigator
-      ];
-
-      let match = null;
-      for (const pattern of patterns) {
-        match = profile_url.match(pattern);
-        if (match) {
-          recipientIdentifier = match[1];
-          break;
-        }
-      }
-
-      if (!match) {
-        return res.status(400).json({
-          success: false,
-          error:
-            "Invalid LinkedIn profile URL format. Expected: https://linkedin.com/in/username or https://linkedin.com/company/companyname",
-        });
-      }
-    }
-
-    if (!recipientIdentifier) {
-      return res.status(400).json({
-        success: false,
-        error: "Unable to determine LinkedIn recipient identifier",
-      });
-    }
-
-    // Try to get provider_id from Unipile API (more reliable than public identifier)
-    recipientId = recipientIdentifier;
     try {
-      const userResponse = await axios.get(
-        `${getBaseUrl()}/users/${encodeURIComponent(
-          recipientIdentifier,
-        )}?account_id=${finalAccountId}`,
-        { headers: getHeaders() },
-      );
-
-      // Use provider_id if available, otherwise fall back to identifier
-      if (userResponse.data?.provider_id) {
-        recipientId = userResponse.data.provider_id;
-        console.log(
-          `Found provider_id for ${recipientIdentifier}: ${recipientId}`,
-        );
-      } else {
-        console.log(
-          `No provider_id found, using identifier: ${recipientIdentifier}`,
-        );
+      // Get account_id from user_id
+      const dbResult = await getLinkedInAccountStatus(userId);
+      if (!dbResult.success || !dbResult.account_id) {
+        return res.status(404).json({
+          success: false,
+          error: "No LinkedIn account found for this user",
+        });
       }
-    } catch (userError) {
-      console.warn(
-        `Could not fetch user details for ${recipientIdentifier}, using identifier directly:`,
-        userError.message,
-      );
-      // Continue with identifier if user lookup fails - Unipile might accept it
-    }
 
-    // Build FormData payload
-    const form = new FormData();
+      finalAccountId = dbResult.account_id;
 
-    form.append("account_id", finalAccountId);
-    form.append("attendees_ids[]", recipientId);
-    form.append("text", message);
+      // Validation
+      if (!message) {
+        return res.status(400).json({
+          success: false,
+          error: "message is required",
+        });
+      }
 
-    if (subject) {
-      form.append("subject", subject);
-    }
+      if (!profile_url && !recipientIdentifier) {
+        return res.status(400).json({
+          success: false,
+          error: "Either profile_url or profile_identifier is required",
+        });
+      }
 
-    if (use_inmail) {
-      form.append("linkedin[inmail]", "true");
-    }
+      // Extract LinkedIn identifier from URL if provided
+      if (profile_url && !recipientIdentifier) {
+        // Handle various LinkedIn URL formats
+        const patterns = [
+          /linkedin\.com\/in\/([^\/\?#]+)/, // Standard profile
+          /linkedin\.com\/company\/([^\/\?#]+)/, // Company page
+          /linkedin\.com\/sales\/people\/([^\/\?#]+)/, // Sales Navigator
+        ];
 
-    // Handle attachments if provided
-    if (attachments && Array.isArray(attachments)) {
-      attachments.forEach((attachment) => {
-        if (attachment.path) {
-          form.append("attachments", fs.createReadStream(attachment.path));
+        let match = null;
+        for (const pattern of patterns) {
+          match = profile_url.match(pattern);
+          if (match) {
+            recipientIdentifier = match[1];
+            break;
+          }
         }
+
+        if (!match) {
+          return res.status(400).json({
+            success: false,
+            error:
+              "Invalid LinkedIn profile URL format. Expected: https://linkedin.com/in/username or https://linkedin.com/company/companyname",
+          });
+        }
+      }
+
+      if (!recipientIdentifier) {
+        return res.status(400).json({
+          success: false,
+          error: "Unable to determine LinkedIn recipient identifier",
+        });
+      }
+
+      // Try to get provider_id from Unipile API (more reliable than public identifier)
+      recipientId = recipientIdentifier;
+      try {
+        const userResponse = await axios.get(
+          `${getBaseUrl()}/users/${encodeURIComponent(
+            recipientIdentifier,
+          )}?account_id=${finalAccountId}`,
+          { headers: getHeaders() },
+        );
+
+        // Use provider_id if available, otherwise fall back to identifier
+        if (userResponse.data?.provider_id) {
+          recipientId = userResponse.data.provider_id;
+          console.log(
+            `Found provider_id for ${recipientIdentifier}: ${recipientId}`,
+          );
+        } else {
+          console.log(
+            `No provider_id found, using identifier: ${recipientIdentifier}`,
+          );
+        }
+      } catch (userError) {
+        console.warn(
+          `Could not fetch user details for ${recipientIdentifier}, using identifier directly:`,
+          userError.message,
+        );
+        // Continue with identifier if user lookup fails - Unipile might accept it
+      }
+
+      // Build FormData payload
+      const form = new FormData();
+
+      form.append("account_id", finalAccountId);
+      form.append("attendees_ids[]", recipientId);
+      form.append("text", message);
+
+      if (subject) {
+        form.append("subject", subject);
+      }
+
+      if (use_inmail) {
+        form.append("linkedin[inmail]", "true");
+      }
+
+      // 🔥 MEDIA HANDLING (ONLY ONE - priority: video > audio > attachment)
+      if (req.files?.video_message) {
+        const file = req.files.video_message[0];
+        form.append("video_message", file.buffer, {
+          filename: file.originalname,
+          contentType: file.mimetype,
+        });
+      } else if (req.files?.audio_message) {
+        const file = req.files.audio_message[0];
+        form.append("audio_message", file.buffer, {
+          filename: file.originalname,
+          contentType: file.mimetype,
+        });
+      } else if (req.files?.attachment) {
+        const file = req.files.attachment[0];
+        form.append("attachments", file.buffer, {
+          filename: file.originalname,
+          contentType: file.mimetype,
+        });
+      }
+
+      // Send message (Unipile creates chat if it doesn't exist)
+      const response = await axios.post(`${getBaseUrl()}/chats`, form, {
+        headers: {
+          "X-API-KEY": process.env.UNIPILE_API_KEY,
+          ...form.getHeaders(),
+        },
+        maxBodyLength: Infinity,
+        maxContentLength: Infinity,
       });
-    }
 
-    // Send message (Unipile creates chat if it doesn't exist)
-    const response = await axios.post(`${getBaseUrl()}/chats`, form, {
-      headers: {
-        "X-API-KEY": process.env.UNIPILE_API_KEY,
-        ...form.getHeaders(),
-      },
-    });
-
-    res.json({
-      success: true,
-      data: response.data,
-      message: use_inmail
-        ? "InMail sent successfully"
-        : "Message sent successfully",
-      chat_id: response.data.chat_id,
-      message_id: response.data.message_id,
-      recipient_id: recipientId,
-      account_id: finalAccountId,
-      user_id: userId,
-    });
-  } catch (err) {
-    console.error("LinkedIn message error:", {
-      status: err.response?.status,
-      data: err.response?.data,
-      message: err.message,
-      url: err.config?.url,
-      recipient_id: recipientId,
-      account_id: finalAccountId,
-      user_id: userId,
-    });
-
-    // Provide detailed error information for 422 errors from Unipile
-    if (err.response?.status === 422) {
-      const unipileError = err.response?.data;
-      return res.status(422).json({
-        success: false,
-        error:
-          unipileError?.error ||
-          unipileError?.message ||
-          "Unprocessable Entity - Unable to send message",
-        details:
-          unipileError?.detail || unipileError?.details || unipileError?.title,
-        type: unipileError?.type,
+      res.json({
+        success: true,
+        data: response.data,
+        message: use_inmail
+          ? "InMail sent successfully"
+          : "Message sent successfully",
+        chat_id: response.data.chat_id,
+        message_id: response.data.message_id,
         recipient_id: recipientId,
         account_id: finalAccountId,
         user_id: userId,
-        unipile_response: unipileError,
-        possible_reasons: [
-          "Recipient profile not found or invalid",
-          "Account not properly connected to LinkedIn",
-          "Rate limit exceeded",
-          "Recipient is not a connection (may need InMail)",
-          "LinkedIn account has restrictions",
-        ],
       });
-    }
+    } catch (err) {
+      console.error("LinkedIn message error:", {
+        status: err.response?.status,
+        data: err.response?.data,
+        message: err.message,
+        url: err.config?.url,
+        recipient_id: recipientId,
+        account_id: finalAccountId,
+        user_id: userId,
+      });
 
-    handleError(err, res);
+      // Provide detailed error information for 422 errors from Unipile
+      if (err.response?.status === 422) {
+        const unipileError = err.response?.data;
+        return res.status(422).json({
+          success: false,
+          error:
+            unipileError?.error ||
+            unipileError?.message ||
+            "Unprocessable Entity - Unable to send message",
+          details:
+            unipileError?.detail || unipileError?.details || unipileError?.title,
+          type: unipileError?.type,
+          recipient_id: recipientId,
+          account_id: finalAccountId,
+          user_id: userId,
+          unipile_response: unipileError,
+          possible_reasons: [
+            "Recipient profile not found or invalid",
+            "Account not properly connected to LinkedIn",
+            "Rate limit exceeded",
+            "Recipient is not a connection (may need InMail)",
+            "LinkedIn account has restrictions",
+          ],
+        });
+      }
+
+      handleError(err, res);
+    }
   }
-});
+);
 
 // Get full conversation details with messages and attendee profiles
 router.get(
