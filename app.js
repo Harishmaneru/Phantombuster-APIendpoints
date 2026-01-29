@@ -193,8 +193,9 @@ app.use("/slack/rb2b-ri-visitors", slackRouter);
 // Mount Slack Logger webhook routes
 app.use("/webhooks/slackLogger", slackLoggerRouter);
 
-// Global middleware for parsing JSON (before all routes)
-app.use(express.json());
+// Global middleware for parsing JSON with increased limits (fixes 413 Payload Too Large for email attachments etc.)
+app.use(express.json({ limit: '100mb' }));
+app.use(express.urlencoded({ limit: '100mb', extended: true }));
 
 // Mount OpenTok webhook routes
 app.use(opentokWebhookRouter.router);
