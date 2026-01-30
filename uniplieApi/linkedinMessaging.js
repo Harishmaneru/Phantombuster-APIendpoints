@@ -2721,42 +2721,25 @@ router.get(
         });
       }
 
-      // Check cache first (unless force_refresh is requested)
-      const cacheKey = getProfileCacheKey(identifier, finalAccountId);
-      let userProfile = null;
-      let fromCache = false;
+      /**
+       * NOTE: Profile caching is intentionally disabled for this endpoint.
+       * Reason: Unipile's `/users/:identifier` payload can include dynamic fields
+       * (e.g. `invitation`) that must remain fresh for the profile screen UX.
+       *
+       * We keep caching for bulk/enrichment endpoints (batch-profiles, chats, search).
+       */
+      console.log(
+        `🔄 Fetching fresh profile for ${identifier} (account: ${finalAccountId})`,
+      );
+      const response = await axios.get(
+        `${getBaseUrl()}/users/${encodeURIComponent(
+          identifier,
+        )}?account_id=${finalAccountId}`,
+        { headers: getHeaders() },
+      );
 
-      if (force_refresh !== "true" && force_refresh !== "1") {
-        const cachedData = profileCache.get(cacheKey);
-        if (cachedData) {
-          userProfile = cachedData;
-          fromCache = true;
-          console.log(
-            `✅ [Cache HIT] Profile for ${identifier} (account: ${finalAccountId})`,
-          );
-        }
-      }
-
-      // If not in cache, fetch from Unipile API
-      if (!userProfile) {
-        console.log(
-          `🔄 [Cache MISS] Fetching profile for ${identifier} from Unipile API`,
-        );
-        const response = await axios.get(
-          `${getBaseUrl()}/users/${encodeURIComponent(
-            identifier,
-          )}?account_id=${finalAccountId}`,
-          { headers: getHeaders() },
-        );
-
-        userProfile = response.data;
-
-        // Cache the profile data
-        profileCache.set(cacheKey, userProfile);
-        console.log(
-          `💾 [Cache SET] Profile for ${identifier} cached for 30 minutes`,
-        );
-      }
+      const userProfile = response.data;
+      const fromCache = false;
       let chatId = null;
       let hasExistingChat = false;
 
