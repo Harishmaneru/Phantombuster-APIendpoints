@@ -2056,251 +2056,176 @@ router.get("/api/unipile/account/:accountId/details", async (req, res) => {
 // ==================== LINKEDIN CONNECTION INVITE ====================
 
 // Send LinkedIn connection request
-// router.post('/api/unipile/linkedin/invite', async (req, res) => {
-//   try {
-//     const {
-//       account_id,
-//       user_id,
-//       profile_url,
-//       profile_identifier,
-//       message
-//     } = req.body;
 
-//     // Get account_id from user_id if not provided
-//     let finalAccountId = account_id;
-//     if (!finalAccountId && user_id) {
-//       const dbResult = await getLinkedInAccountStatus(user_id);
-//       if (dbResult.success && dbResult.account_id) {
-//         finalAccountId = dbResult.account_id;
-//       }
-//     }
-
-//     // Validation
-//     if (!finalAccountId) {
-//       return res.status(400).json({
-//         success: false,
-//         error: 'account_id or user_id is required'
-//       });
-//     }
-
-//     if (!profile_url && !profile_identifier) {
-//       return res.status(400).json({
-//         success: false,
-//         error: 'Either profile_url or profile_identifier is required'
-//       });
-//     }
-
-//     // Extract LinkedIn identifier from URL
-//     let recipientIdentifier = profile_identifier;
-//     if (profile_url && !profile_identifier) {
-//       const patterns = [
-//         /linkedin\.com\/in\/([^\/\?#]+)/,
-//         /linkedin\.com\/sales\/people\/([^,]+)/,
-//         /linkedin\.com\/sales\/lead\/([^,]+)/
-//       ];
-
-//       let match = null;
-//       for (const pattern of patterns) {
-//         match = profile_url.match(pattern);
-//         if (match) {
-//           recipientIdentifier = match[1];
-//           break;
-//         }
-//       }
-
-//       if (!match) {
-//         return res.status(400).json({
-//           success: false,
-//           error: 'Invalid LinkedIn profile URL format. Expected: https://linkedin.com/in/username'
-//         });
-//       }
-//     }
-
-//     console.log('Step 1: Fetching user details for:', recipientIdentifier);
-
-//     // STEP 1: Get user details to obtain provider_id
-//     const userResponse = await axios.get(
-//       `${getBaseUrl()}/users/${encodeURIComponent(recipientIdentifier)}?account_id=${finalAccountId}`,
-//       { headers: getHeaders() }
-//     );
-
-//     if (!userResponse.data || !userResponse.data.provider_id) {
-//       return res.status(404).json({
-//         success: false,
-//         error: 'Could not find LinkedIn user or retrieve provider_id',
-//         identifier: recipientIdentifier,
-//         user_response: userResponse.data
-//       });
-//     }
-
-//     const providerUserId = userResponse.data.provider_id;
-//     console.log('Step 2: Found provider_id:', providerUserId);
-
-//     // STEP 2: Send invitation - Build JSON payload (NOT FormData!)
-//     const invitePayload = {
-//       account_id: finalAccountId,
-//       provider_id: providerUserId // ✅ Correct field name
-//     };
-
-//     // Only add message if provided
-//     if (message && message.trim()) {
-//       invitePayload.message = message.trim();
-//     }
-
-//     console.log('Step 3: Sending invitation with payload:', invitePayload);
-
-//     // Send as JSON, not FormData
-//     const inviteResponse = await axios.post(
-//       `${getBaseUrl()}/users/invite`,
-//       invitePayload,
-//       {
-//         headers: getHeaders('application/json') // Send as JSON
-//       }
-//     );
-
-//     console.log('Step 4: Invitation sent successfully');
-
-//     res.json({
-//       success: true,
-//       data: inviteResponse.data,
-//       message: 'Connection request sent successfully',
-//       recipient: {
-//         identifier: recipientIdentifier,
-//         provider_id: providerUserId,
-//         name: userResponse.data.name || null,
-//         headline: userResponse.data.headline || null,
-//         profile_url: userResponse.data.profile_url || profile_url
-//       },
-//       account_id: finalAccountId,
-//       invitation_sent_at: new Date()
-//     });
-
-//   } catch (err) {
-//     // Enhanced logging with full error details
-//     console.error('LinkedIn invitation error:', {
-//       status: err.response?.status,
-//       statusText: err.response?.statusText,
-//       error: err.response?.data,
-//       message: err.message,
-//       url: err.config?.url
-//     });
-
-//     // Handle specific error cases
-//     if (err.response?.status === 404) {
-//       return res.status(404).json({
-//         success: false,
-//         error: 'LinkedIn user not found',
-//         details: err.response?.data?.detail || 'The profile identifier could not be found',
-//         identifier: req.body.profile_identifier || req.body.profile_url
-//       });
-//     }
-
-//     if (err.response?.status === 422) {
-//       const unipileError = err.response?.data;
-//       const errorType = unipileError?.type;
-
-//       // Handle specific error types with detailed responses
-//       if (errorType === 'errors/cannot_resend_yet') {
-//         return res.status(422).json({
-//           success: false,
-//           status: 422,
-//           statusText: err.response?.statusText || 'Unprocessable Entity',
-//           error: {
-//             status: 422,
-//             type: unipileError?.type,
-//             title: unipileError?.title,
-//             detail: unipileError?.detail || unipileError?.error || 'You have reached a temporary provider limit. Please try again later.'
-//           },
-//           message: err.message || 'Request failed with status code 422',
-//           url: err.config?.url
-//         });
-//       }
-
-//       if (errorType === 'errors/already_invited_recently') {
-//         return res.status(422).json({
-//           success: false,
-//           status: 422,
-//           statusText: err.response?.statusText || 'Unprocessable Entity',
-//           error: {
-//             status: 422,
-//             type: unipileError?.type,
-//             title: unipileError?.title || 'Already sent invitation recently',
-//             detail: unipileError?.detail || 'You have already sent a connection request to this user recently'
-//           },
-//           message: err.message || 'Request failed with status code 422',
-//           url: err.config?.url
-//         });
-//       }
-
-//       if (errorType === 'errors/cannot_invite_attendee') {
-//         return res.status(422).json({
-//           success: false,
-//           status: 422,
-//           statusText: err.response?.statusText || 'Unprocessable Entity',
-//           error: {
-//             status: 422,
-//             type: unipileError?.type,
-//             title: unipileError?.title || 'Cannot send invitation',
-//             detail: unipileError?.detail || 'You are already connected to this user or the invitation cannot be sent'
-//           },
-//           message: err.message || 'Request failed with status code 422',
-//           url: err.config?.url
-//         });
-//       }
-
-//       if (errorType === 'errors/limit_exceeded') {
-//         return res.status(422).json({
-//           success: false,
-//           status: 422,
-//           statusText: err.response?.statusText || 'Unprocessable Entity',
-//           error: {
-//             status: 422,
-//             type: unipileError?.type,
-//             title: unipileError?.title || 'Invitation limit exceeded',
-//             detail: unipileError?.detail || 'LinkedIn weekly invitation limit reached'
-//           },
-//           message: err.message || 'Request failed with status code 422',
-//           url: err.config?.url
-//         });
-//       }
-
-//       // Generic 422 error handler - return full error details
-//       return res.status(422).json({
-//         success: false,
-//         status: 422,
-//         statusText: err.response?.statusText || 'Unprocessable Entity',
-//         error: {
-//           status: 422,
-//           type: unipileError?.type,
-//           title: unipileError?.title,
-//           detail: unipileError?.detail || unipileError?.error || 'Unprocessable Entity'
-//         },
-//         message: err.message || 'Request failed with status code 422',
-//         url: err.config?.url
-//       });
-//     }
-
-//     if (err.response?.status === 429) {
-//       return res.status(429).json({
-//         success: false,
-//         error: 'Rate limit exceeded',
-//         details: 'Too many requests. Please try again later.'
-//       });
-//     }
-
-//     if (err.response?.status === 400) {
-//       return res.status(400).json({
-//         success: false,
-//         error: 'Bad request',
-//         details: err.response?.data?.detail || err.response?.data?.title || 'Invalid parameters',
-//         unipile_error: err.response?.data
-//       });
-//     }
-
-//     handleError(err, res);
-//   }
-// });
+/**
+ * LinkedIn Connection Invite (provider_id-based)
+ *
+ * Frontend payload (recommended):
+ * { "user_id": "...", "provider_id": "...", "message": "..." }
+ *
+ * Optional fields to keep the previous response recipient format richer:
+ * - profile_identifier (public identifier)
+ * - profile_url
+ * - name
+ * - headline
+ */
 router.post("/api/unipile/linkedin/invite", async (req, res) => {
+  let invitePayload = null; // Declare at function scope for error handling
+
+  try {
+    const {
+      account_id,
+      user_id,
+      provider_id,
+      message,
+      profile_identifier,
+      profile_url,
+      name,
+      headline,
+    } = req.body;
+
+    // Get account_id from user_id if not provided
+    let finalAccountId = account_id;
+    if (!finalAccountId && user_id) {
+      const dbResult = await getLinkedInAccountStatus(user_id);
+      if (dbResult.success && dbResult.account_id) {
+        finalAccountId = dbResult.account_id;
+      }
+    }
+
+    // Validation
+    if (!finalAccountId) {
+      invitePayload = {
+        account_id: finalAccountId || null,
+        provider_id: provider_id || null,
+        ...(message && message.trim() ? { message: message.trim() } : {}),
+      };
+      return res.status(400).json({
+        success: false,
+        error: "account_id or user_id is required",
+        invitePayload: invitePayload,
+      });
+    }
+
+    if (!provider_id) {
+      invitePayload = {
+        account_id: finalAccountId,
+        provider_id: null,
+        ...(message && message.trim() ? { message: message.trim() } : {}),
+      };
+      return res.status(400).json({
+        success: false,
+        error: "provider_id is required",
+        invitePayload: invitePayload,
+      });
+    }
+
+    // Build JSON payload for Unipile
+    invitePayload = {
+      account_id: finalAccountId,
+      provider_id: provider_id,
+    };
+
+    // Only add message if provided
+    if (message && message.trim()) {
+      invitePayload.message = message.trim();
+      if (invitePayload.message.length > 300) {
+        return res.status(400).json({
+          success: false,
+          error: "message is too long (max 300 characters)",
+          invitePayload: invitePayload,
+        });
+      }
+    }
+
+    console.log("Sending invitation with payload:", invitePayload);
+
+    const inviteResponse = await axios.post(
+      `${getBaseUrl()}/users/invite`,
+      invitePayload,
+      {
+        headers: getHeaders("application/json"),
+      },
+    );
+
+    res.json({
+      success: true,
+      data: inviteResponse.data,
+      message: "Connection request sent successfully",
+      invitePayload: invitePayload,
+      recipient: {
+        identifier: profile_identifier || null,
+        provider_id: provider_id,
+        name: name || null,
+        headline: headline || null,
+        profile_url: profile_url || null,
+      },
+      account_id: finalAccountId,
+      invitation_sent_at: new Date(),
+    });
+  } catch (err) {
+    console.error("LinkedIn invitation error:", {
+      status: err.response?.status,
+      statusText: err.response?.statusText,
+      error: err.response?.data,
+      message: err.message,
+      url: err.config?.url,
+    });
+
+    // If invitePayload is null, try to reconstruct it from request body
+    if (!invitePayload) {
+      const { account_id, user_id, provider_id, message } = req.body;
+
+      // Try to get account_id from user_id if not provided
+      let finalAccountId = account_id;
+      if (!finalAccountId && user_id) {
+        try {
+          const dbResult = await getLinkedInAccountStatus(user_id);
+          if (dbResult.success && dbResult.account_id) {
+            finalAccountId = dbResult.account_id;
+          }
+        } catch (dbErr) {
+          // Ignore DB errors during error reconstruction
+        }
+      }
+
+      invitePayload = {
+        account_id: finalAccountId || null,
+        provider_id: provider_id || null,
+        ...(message && message.trim() ? { message: message.trim() } : {}),
+      };
+    }
+
+    // If Unipile returned an error response, forward it directly
+    if (err.response?.data) {
+      const unipileError = err.response.data;
+      const statusCode = err.response.status;
+
+      return res.status(statusCode).json({
+        success: false,
+        status: statusCode,
+        statusText: err.response?.statusText,
+        error: unipileError,
+        message: err.message,
+        url: err.config?.url,
+        invitePayload: invitePayload,
+      });
+    }
+
+    const status = err.response?.status || 500;
+    const errorMessage =
+      err.response?.data?.error || err.message || "Internal server error";
+
+    res.status(status).json({
+      success: false,
+      error: errorMessage,
+      invitePayload: invitePayload,
+    });
+  }
+});
+
+// Legacy (linkedin profile URL-based) invite endpoint preserved for future use.
+router.post("/api/unipile/linkedin/invite-legacy", async (req, res) => {
   let invitePayload = null; // Declare at function scope for error handling
 
   try {
@@ -2417,6 +2342,13 @@ router.post("/api/unipile/linkedin/invite", async (req, res) => {
     // Only add message if provided
     if (message && message.trim()) {
       invitePayload.message = message.trim();
+      if (invitePayload.message.length > 300) {
+        return res.status(400).json({
+          success: false,
+          error: "message is too long (max 300 characters)",
+          invitePayload: invitePayload,
+        });
+      }
     }
 
     console.log("Step 3: Sending invitation with payload:", invitePayload);
@@ -2498,7 +2430,6 @@ router.post("/api/unipile/linkedin/invite", async (req, res) => {
     }
 
     // Handle network errors or other non-Unipile errors
-    // Modify handleError to include invitePayload by using a custom response
     const status = err.response?.status || 500;
     const errorMessage =
       err.response?.data?.error || err.message || "Internal server error";
