@@ -1,11 +1,15 @@
 // Endpoint: POST /add-caller-id
 // Client sends: { phoneNumber: '+15550001234' }
+const express = require("express");
+const axios = require("axios");
+
+const router = express.Router();
 
 const accountSid = process.env.TWILIO_ACCOUNT_SID;
 const authToken = process.env.TWILIO_AUTH_TOKEN;
 const client = require("twilio")(accountSid, authToken);
 
-app.post("/twilio/validate-phone", async (req, res) => {
+router.post("/twilio/validate-phone", async (req, res) => {
   const { phoneNumber } = req.body;
 
   try {
@@ -28,3 +32,5 @@ app.post("/twilio/validate-phone", async (req, res) => {
     res.status(500).json({ error: error.message });
   }
 });
+
+module.exports = router;

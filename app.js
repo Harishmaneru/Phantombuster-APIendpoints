@@ -123,6 +123,8 @@ const smtp2goAPI = require("./smtp2goAPI/emailApi.js");
 
 const subscriptionManageAPI = require("./subscriptionController/subscriptionManageAPI.js");
 
+const twilioAPI = require("./TwilioAPI/phoneValidation.js");
+
 // Nylas Email API
 const nylasEmailAPI = require("./nylasAPI/nylasemailAPI.js");
 
@@ -194,8 +196,8 @@ app.use("/slack/rb2b-ri-visitors", slackRouter);
 app.use("/webhooks/slackLogger", slackLoggerRouter);
 
 // Global middleware for parsing JSON with increased limits (fixes 413 Payload Too Large for email attachments etc.)
-app.use(express.json({ limit: '100mb' }));
-app.use(express.urlencoded({ limit: '100mb', extended: true }));
+app.use(express.json({ limit: "100mb" }));
+app.use(express.urlencoded({ limit: "100mb", extended: true }));
 
 // Mount OpenTok webhook routes
 app.use(opentokWebhookRouter.router);
@@ -273,6 +275,8 @@ app.use(supabaseApi);
 
 // Mount OpenAI Email Reply API routes
 app.use("/api/openai", openAI);
+
+app.use("/api/twilio", twilioAPI);
 
 const options = {
   key: fs.readFileSync("./onepgr.com.key", "utf8"),
