@@ -10,12 +10,12 @@ const authToken = process.env.TWILIO_AUTH_TOKEN;
 const client = require("twilio")(accountSid, authToken);
 
 router.post("/validate-phone", async (req, res) => {
-  const { phoneNumber, friendlyName } = req.body;
+  const { phoneNumber, name } = req.body;
 
   try {
     const callerId = await client.outgoingCallerIds.create({
       phoneNumber: phoneNumber,
-      friendlyName: friendlyName || "Anonymous User",
+      friendlyName: name || "Anonymous User",
     });
 
     // CRITICAL: This returns a 'validationCode'.
