@@ -23,6 +23,7 @@
     "cheerio": "^1.0.0",
     "compression": "^1.8.0",
     "cors": "^2.8.5",
+    "country-state-city": "^3.2.1",
     "date-fns": "^4.1.0",
     "dotenv": "^16.6.1",
     "express": "^4.21.2",
