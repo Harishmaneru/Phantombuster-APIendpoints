@@ -52,7 +52,7 @@ const handleError = (err, res) => {
 // Get all followers for a user
 // Unipile API: GET /api/v1/users/followers
 // Query params: account_id (required), limit, cursor
-router.get("/api/unipile/user/:userId/followers", async (req, res) => {
+router.get("/api/unipile/:userId/followers", async (req, res) => {
   try {
     const { userId } = req.params;
     const { limit = 50, cursor } = req.query;
@@ -86,6 +86,50 @@ router.get("/api/unipile/user/:userId/followers", async (req, res) => {
       data: response.data,
       account_id: accountId,
       user_id: userId,
+    });
+  } catch (err) {
+    handleError(err, res);
+  }
+});
+
+router.get("/api/unipile/:userId/linkedin/relations", async (req, res) => {
+  try {
+    const { userId } = req.params;
+    const { limit = 100, cursor, title } = req.query; // `title` is your optional filter
+
+    // 1️⃣ Grab the LinkedIn account_id you already resolve elsewhere
+    const dbResult = await getLinkedInAccountStatus(userId);
+    if (!dbResult.success || !dbResult.account_id) {
+      return res
+        .status(404)
+        .json({ success: false, error: "No LinkedIn account found" });
+    }
+    const accountId = dbResult.account_id;
+
+    // 2️⃣ Call Unipile
+    const params = new URLSearchParams();
+    params.append("account_id", accountId);
+    params.append("limit", limit);
+    if (cursor) params.append("cursor", cursor);
+
+    const apiResp = await axios.get(
+      `${getBaseUrl()}/users/relations?${params}`,
+      { headers: getHeaders() },
+    );
+
+    // 3️⃣ Optional title filtering (case-insensitive substring match)
+    let items = apiResp.data.items || [];
+    if (title) {
+      const kw = String(title).toLowerCase();
+      items = items.filter((r) => r.headline?.toLowerCase().includes(kw));
+    }
+
+    return res.json({
+      success: true,
+      data: items,
+      next_cursor: apiResp.data.cursor || null,
+      results_count: items.length,
+      filtered_by_title: title || null,
     });
   } catch (err) {
     handleError(err, res);
