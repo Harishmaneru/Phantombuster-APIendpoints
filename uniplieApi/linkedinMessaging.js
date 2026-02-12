@@ -1114,7 +1114,7 @@ router.post(
       });
       handleError(err, res);
     }
-  }
+  },
 );
 
 // Send LinkedIn message (user_id in URL path)
@@ -1308,7 +1308,9 @@ router.post(
             unipileError?.message ||
             "Unprocessable Entity - Unable to send message",
           details:
-            unipileError?.detail || unipileError?.details || unipileError?.title,
+            unipileError?.detail ||
+            unipileError?.details ||
+            unipileError?.title,
           type: unipileError?.type,
           recipient_id: recipientId,
           account_id: finalAccountId,
@@ -1326,7 +1328,7 @@ router.post(
 
       handleError(err, res);
     }
-  }
+  },
 );
 
 // Get full conversation details with messages and attendee profiles
@@ -1413,7 +1415,7 @@ router.get(
           "🔍 All available fields in first message:",
           Object.keys(messages[0]),
         );
-        
+
         // Log messages with reactions or attachments for debugging
         const messagesWithReactions = messages.filter(
           (msg) =>
@@ -1427,7 +1429,7 @@ router.get(
             (msg.attachment && msg.attachment.length > 0) ||
             (msg.message_attachments && msg.message_attachments.length > 0),
         );
-        
+
         if (messagesWithReactions.length > 0) {
           console.log(
             `✅ Found ${messagesWithReactions.length} message(s) with reactions`,
@@ -1483,7 +1485,10 @@ router.get(
             reactions = msg.reactions;
           } else if (msg.reaction && Array.isArray(msg.reaction)) {
             reactions = msg.reaction;
-          } else if (msg.message_reactions && Array.isArray(msg.message_reactions)) {
+          } else if (
+            msg.message_reactions &&
+            Array.isArray(msg.message_reactions)
+          ) {
             reactions = msg.message_reactions;
           } else if (msg.reactions_data && Array.isArray(msg.reactions_data)) {
             reactions = msg.reactions_data;
@@ -1495,9 +1500,15 @@ router.get(
             attachments = msg.attachments;
           } else if (msg.attachment && Array.isArray(msg.attachment)) {
             attachments = msg.attachment;
-          } else if (msg.message_attachments && Array.isArray(msg.message_attachments)) {
+          } else if (
+            msg.message_attachments &&
+            Array.isArray(msg.message_attachments)
+          ) {
             attachments = msg.message_attachments;
-          } else if (msg.attachments_data && Array.isArray(msg.attachments_data)) {
+          } else if (
+            msg.attachments_data &&
+            Array.isArray(msg.attachments_data)
+          ) {
             attachments = msg.attachments_data;
           }
 
@@ -4142,6 +4153,115 @@ router.all("/api/unipile/user/:userId/linkedin/search", async (req, res) => {
         );
       }
 
+      // ============ POST ENRICHMENT (for Posts search only) ============
+      // When enrich_posts=true, fetch comments & reactions for each post
+      const shouldEnrichPosts =
+        req.query.enrich_posts === "true" &&
+        searchBody.category === "posts" &&
+        searchResults?.items?.length > 0;
+
+      let postsEnrichedCount = 0;
+
+      if (shouldEnrichPosts) {
+        console.log(
+          `🔄 Enriching ${searchResults.items.length} posts with comments & reactions...`,
+        );
+        const startTime = Date.now();
+
+        // Helper: build LinkedIn profile URL
+        const buildLinkedInUrl = (actor) => {
+          if (!actor || !actor.public_identifier) return null;
+          return actor.is_company
+            ? `https://www.linkedin.com/company/${actor.public_identifier}`
+            : `https://www.linkedin.com/in/${actor.public_identifier}`;
+        };
+
+        // Helper to enrich a single post
+        const enrichPost = async (post) => {
+          const postId = post.social_id || post.id;
+          if (!postId) return { ...post, enrichment_status: "skipped" };
+
+          const encodedPostId = encodeURIComponent(postId);
+
+          try {
+            // Fetch comments and reactions in parallel
+            const [commentsRes, reactionsRes] = await Promise.allSettled([
+              axios.get(
+                `${getBaseUrl()}/posts/${encodedPostId}/comments?account_id=${accountId}&limit=50`,
+                { headers: getHeaders(), timeout: 10000 },
+              ),
+              axios.get(
+                `${getBaseUrl()}/posts/${encodedPostId}/reactions?account_id=${accountId}&limit=50`,
+                { headers: getHeaders(), timeout: 10000 },
+              ),
+            ]);
+
+            const comments =
+              commentsRes.status === "fulfilled"
+                ? commentsRes.value.data?.items || []
+                : [];
+            const reactions =
+              reactionsRes.status === "fulfilled"
+                ? reactionsRes.value.data?.items || []
+                : [];
+
+            // Add profile URL to the post author
+            const authorProfileUrl = buildLinkedInUrl(post.author);
+
+            return {
+              ...post,
+              author_profile_url: authorProfileUrl,
+              comments: {
+                items: comments,
+                total: comments.length,
+              },
+              reactions_detail: {
+                items: reactions,
+                total: reactions.length,
+              },
+              enrichment_status: "fetched",
+            };
+          } catch (err) {
+            console.warn(`⚠️ Failed to enrich post ${postId}:`, err.message);
+            return {
+              ...post,
+              author_profile_url: buildLinkedInUrl(post.author),
+              comments: { items: [], total: 0 },
+              reactions_detail: { items: [], total: 0 },
+              enrichment_status: "error",
+            };
+          }
+        };
+
+        // Process posts in batches of 3 to avoid rate limits
+        const batchSize = 3;
+        const enrichedItems = [];
+
+        for (let i = 0; i < searchResults.items.length; i += batchSize) {
+          const batch = searchResults.items.slice(i, i + batchSize);
+          const enrichedBatch = await Promise.all(batch.map(enrichPost));
+          enrichedItems.push(...enrichedBatch);
+
+          // Small delay between batches
+          if (i + batchSize < searchResults.items.length) {
+            await new Promise((resolve) => setTimeout(resolve, 200));
+          }
+        }
+
+        searchResults = {
+          ...searchResults,
+          items: enrichedItems,
+        };
+
+        postsEnrichedCount = enrichedItems.filter(
+          (p) => p.enrichment_status === "fetched",
+        ).length;
+        const elapsed = Date.now() - startTime;
+        console.log(
+          `✅ Enriched ${postsEnrichedCount}/${searchResults.items.length} posts in ${elapsed}ms`,
+        );
+      }
+
       return res.json({
         success: true,
         data: searchResults,
@@ -4153,6 +4273,11 @@ router.all("/api/unipile/user/:userId/linkedin/search", async (req, res) => {
           profiles_enriched: enrichedCount,
           enrichment_note:
             "Full profile details included in 'full_profile' field for each person",
+        }),
+        ...(shouldEnrichPosts && {
+          posts_enriched: postsEnrichedCount,
+          enrichment_note:
+            "Comments, reactions, and author profile URL included for each post",
         }),
       });
     }
