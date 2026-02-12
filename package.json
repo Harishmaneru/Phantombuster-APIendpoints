@@ -59,6 +59,7 @@
     "puppeteer-extra-plugin-anonymize-ua": "^2.4.6",
     "puppeteer-extra-plugin-stealth": "^2.11.2",
     "qs": "^6.11.2",
+    "react-select": "^5.10.2",
     "slack-block-builder": "^2.8.0",
     "stripe": "^18.0.0",
     "twilio": "^5.12.0",
