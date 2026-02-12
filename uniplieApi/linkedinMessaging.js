@@ -4155,6 +4155,9 @@ router.all("/api/unipile/user/:userId/linkedin/search", async (req, res) => {
 
       // ============ POST ENRICHMENT (for Posts search only) ============
       // When enrich_posts=true, fetch comments & reactions for each post
+      // Use comments_limit and reactions_limit query params to control preview size
+      const commentsLimit = parseInt(req.query.comments_limit) || 3;
+      const reactionsLimit = parseInt(req.query.reactions_limit) || 10;
       const shouldEnrichPosts =
         req.query.enrich_posts === "true" &&
         searchBody.category === "posts" &&
@@ -4164,7 +4167,7 @@ router.all("/api/unipile/user/:userId/linkedin/search", async (req, res) => {
 
       if (shouldEnrichPosts) {
         console.log(
-          `🔄 Enriching ${searchResults.items.length} posts with comments & reactions...`,
+          `🔄 Enriching ${searchResults.items.length} posts (comments_limit=${commentsLimit}, reactions_limit=${reactionsLimit})...`,
         );
         const startTime = Date.now();
 
@@ -4187,23 +4190,23 @@ router.all("/api/unipile/user/:userId/linkedin/search", async (req, res) => {
             // Fetch comments and reactions in parallel
             const [commentsRes, reactionsRes] = await Promise.allSettled([
               axios.get(
-                `${getBaseUrl()}/posts/${encodedPostId}/comments?account_id=${accountId}&limit=50`,
+                `${getBaseUrl()}/posts/${encodedPostId}/comments?account_id=${accountId}&limit=${commentsLimit}`,
                 { headers: getHeaders(), timeout: 10000 },
               ),
               axios.get(
-                `${getBaseUrl()}/posts/${encodedPostId}/reactions?account_id=${accountId}&limit=50`,
+                `${getBaseUrl()}/posts/${encodedPostId}/reactions?account_id=${accountId}&limit=${reactionsLimit}`,
                 { headers: getHeaders(), timeout: 10000 },
               ),
             ]);
 
-            const comments =
+            const commentsData =
               commentsRes.status === "fulfilled"
-                ? commentsRes.value.data?.items || []
-                : [];
-            const reactions =
+                ? commentsRes.value.data
+                : { items: [] };
+            const reactionsData =
               reactionsRes.status === "fulfilled"
-                ? reactionsRes.value.data?.items || []
-                : [];
+                ? reactionsRes.value.data
+                : { items: [] };
 
             // Add profile URL to the post author
             const authorProfileUrl = buildLinkedInUrl(post.author);
@@ -4211,13 +4214,17 @@ router.all("/api/unipile/user/:userId/linkedin/search", async (req, res) => {
             return {
               ...post,
               author_profile_url: authorProfileUrl,
-              comments: {
-                items: comments,
-                total: comments.length,
+              comments_preview: {
+                items: commentsData.items || [],
+                count: (commentsData.items || []).length,
+                has_more: !!commentsData.cursor,
+                cursor: commentsData.cursor || null,
               },
-              reactions_detail: {
-                items: reactions,
-                total: reactions.length,
+              reactions_preview: {
+                items: reactionsData.items || [],
+                count: (reactionsData.items || []).length,
+                has_more: !!reactionsData.cursor,
+                cursor: reactionsData.cursor || null,
               },
               enrichment_status: "fetched",
             };
@@ -4226,8 +4233,18 @@ router.all("/api/unipile/user/:userId/linkedin/search", async (req, res) => {
             return {
               ...post,
               author_profile_url: buildLinkedInUrl(post.author),
-              comments: { items: [], total: 0 },
-              reactions_detail: { items: [], total: 0 },
+              comments_preview: {
+                items: [],
+                count: 0,
+                has_more: false,
+                cursor: null,
+              },
+              reactions_preview: {
+                items: [],
+                count: 0,
+                has_more: false,
+                cursor: null,
+              },
               enrichment_status: "error",
             };
           }
