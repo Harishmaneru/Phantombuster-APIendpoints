@@ -3982,9 +3982,11 @@ router.all("/api/unipile/user/:userId/linkedin/search", async (req, res) => {
       };
 
       // Auto-resolve location names to IDs
-      // Sales Navigator uses REGION type; Classic uses LOCATION
+      // Sales Navigator People uses REGION; SN Companies uses LOCATION; Classic uses LOCATION
       const locationParamType =
-        searchBody.api === "sales_navigator" ? "REGION" : "LOCATION";
+        searchBody.api === "sales_navigator" && searchBody.category === "people"
+          ? "REGION"
+          : "LOCATION";
       if (searchBody.location && Array.isArray(searchBody.location)) {
         const hasNames = searchBody.location.some((v) => !isNumericId(v));
         if (hasNames) {
