@@ -3963,30 +3963,65 @@ router.all("/api/unipile/user/:userId/linkedin/search", async (req, res) => {
         return resolvedIds.length > 0 ? resolvedIds : undefined;
       };
 
+      // Helper to resolve include/exclude nested objects (Sales Navigator format)
+      const resolveNestedObject = async (obj, paramType) => {
+        if (!obj || typeof obj !== "object") return obj;
+        if (obj.include && Array.isArray(obj.include)) {
+          const hasNames = obj.include.some((v) => !isNumericId(v));
+          if (hasNames) {
+            obj.include = await resolveNamesToIds(obj.include, paramType);
+          }
+        }
+        if (obj.exclude && Array.isArray(obj.exclude)) {
+          const hasNames = obj.exclude.some((v) => !isNumericId(v));
+          if (hasNames) {
+            obj.exclude = await resolveNamesToIds(obj.exclude, paramType);
+          }
+        }
+        return obj;
+      };
+
       // Auto-resolve location names to IDs
+      // Sales Navigator uses REGION type; Classic uses LOCATION
+      const locationParamType =
+        searchBody.api === "sales_navigator" ? "REGION" : "LOCATION";
       if (searchBody.location && Array.isArray(searchBody.location)) {
         const hasNames = searchBody.location.some((v) => !isNumericId(v));
         if (hasNames) {
           searchBody.location = await resolveNamesToIds(
             searchBody.location,
-            "LOCATION",
+            locationParamType,
           );
         }
+      } else if (
+        searchBody.location &&
+        typeof searchBody.location === "object"
+      ) {
+        searchBody.location = await resolveNestedObject(
+          searchBody.location,
+          locationParamType,
+        );
       }
 
-      // Auto-resolve industry names to IDs (for classic API)
+      // Auto-resolve industry names to IDs
+      const industryParamType =
+        searchBody.api === "sales_navigator" ? "SALES_INDUSTRY" : "INDUSTRY";
       if (searchBody.industry && Array.isArray(searchBody.industry)) {
         const hasNames = searchBody.industry.some((v) => !isNumericId(v));
         if (hasNames) {
-          const industryType =
-            searchBody.api === "sales_navigator"
-              ? "SALES_INDUSTRY"
-              : "INDUSTRY";
           searchBody.industry = await resolveNamesToIds(
             searchBody.industry,
-            industryType,
+            industryParamType,
           );
         }
+      } else if (
+        searchBody.industry &&
+        typeof searchBody.industry === "object"
+      ) {
+        searchBody.industry = await resolveNestedObject(
+          searchBody.industry,
+          industryParamType,
+        );
       }
 
       // Auto-resolve company names to IDs
@@ -3998,6 +4033,11 @@ router.all("/api/unipile/user/:userId/linkedin/search", async (req, res) => {
             "COMPANY",
           );
         }
+      } else if (searchBody.company && typeof searchBody.company === "object") {
+        searchBody.company = await resolveNestedObject(
+          searchBody.company,
+          "COMPANY",
+        );
       }
 
       // Auto-resolve school names to IDs
@@ -4009,6 +4049,11 @@ router.all("/api/unipile/user/:userId/linkedin/search", async (req, res) => {
             "SCHOOL",
           );
         }
+      } else if (searchBody.school && typeof searchBody.school === "object") {
+        searchBody.school = await resolveNestedObject(
+          searchBody.school,
+          "SCHOOL",
+        );
       }
 
       // Build URL with query params
