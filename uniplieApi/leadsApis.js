@@ -92,37 +92,70 @@ router.get("/api/unipile/:userId/followers", async (req, res) => {
   }
 });
 
-// Helper: check if a relation matches ANY of the keywords
-const matchesTitle = (relation, keywords) => {
+// Helper: parse comma-separated filter string into keyword array
+const parseKeywords = (value) =>
+  value
+    ? String(value)
+        .split(",")
+        .map((k) => k.trim().toLowerCase())
+        .filter(Boolean)
+    : [];
+
+// Helper: check if text matches ANY keyword (OR logic within a filter)
+const matchesAny = (text, keywords) => {
+  if (keywords.length === 0) return true; // no filter = pass
+  const lc = (text || "").toLowerCase();
+  return keywords.some((kw) => {
+    // Direct substring match
+    if (lc.includes(kw)) return true;
+    // Word-boundary match: all words in the keyword appear in text
+    const kwWords = kw.split(/\s+/).filter(Boolean);
+    if (kwWords.length > 1 && kwWords.every((w) => lc.includes(w))) return true;
+    return false;
+  });
+};
+
+// Helper: check if a relation passes ALL active filters (AND between filter types)
+const matchesFilters = (relation, { titleKw, locationKw, industryKw }) => {
   const headline = (relation.headline || "").toLowerCase();
   const firstName = (relation.first_name || "").toLowerCase();
   const lastName = (relation.last_name || "").toLowerCase();
   const fullName = `${firstName} ${lastName}`;
-  const searchableText = `${headline} | ${fullName}`;
+  const location = (relation.location || "").toLowerCase();
+  const industry = (relation.industry || "").toLowerCase();
 
-  return keywords.some((kw) => {
-    // 1) Direct substring match on headline  (e.g. "ceo" inside "CEO & Founder")
-    if (headline.includes(kw)) return true;
+  // --- Title filter (checks headline + name) ---
+  if (titleKw.length > 0) {
+    const searchable = `${headline} | ${fullName}`;
+    const titleMatch = titleKw.some((kw) => {
+      if (headline.includes(kw)) return true;
+      const kwWords = kw.split(/\s+/).filter(Boolean);
+      if (kwWords.length > 1 && kwWords.every((w) => searchable.includes(w)))
+        return true;
+      if (fullName.includes(kw)) return true;
+      return false;
+    });
+    if (!titleMatch) return false;
+  }
 
-    // 2) Word-boundary match: every word in the keyword appears in the headline
-    //    e.g. keyword "vp sales" matches headline "VP of Sales at Acme"
-    const kwWords = kw.split(/\s+/).filter(Boolean);
-    if (kwWords.length > 1) {
-      const allWordsMatch = kwWords.every((w) => searchableText.includes(w));
-      if (allWordsMatch) return true;
-    }
+  // --- Location filter (checks location field) ---
+  if (locationKw.length > 0) {
+    if (!matchesAny(location, locationKw)) return false;
+  }
 
-    // 3) Name match (in case someone searches by person name)
-    if (fullName.includes(kw)) return true;
+  // --- Industry filter (checks industry field + headline as fallback) ---
+  if (industryKw.length > 0) {
+    const industryText = `${industry} | ${headline}`;
+    if (!matchesAny(industryText, industryKw)) return false;
+  }
 
-    return false;
-  });
+  return true;
 };
 
 router.get("/api/unipile/:userId/linkedin/relations", async (req, res) => {
   try {
     const { userId } = req.params;
-    const { limit = 100, cursor, title } = req.query;
+    const { limit = 100, cursor, title, location, industry } = req.query;
 
     // 1️⃣ Resolve userId → Unipile account_id
     const dbResult = await getLinkedInAccountStatus(userId);
@@ -133,13 +166,12 @@ router.get("/api/unipile/:userId/linkedin/relations", async (req, res) => {
     }
     const accountId = dbResult.account_id;
 
-    // 2️⃣ Parse keywords: split by comma, trim & lowercase each
-    const keywords = title
-      ? String(title)
-          .split(",")
-          .map((k) => k.trim().toLowerCase())
-          .filter(Boolean)
-      : [];
+    // 2️⃣ Parse all filters
+    const titleKw = parseKeywords(title);
+    const locationKw = parseKeywords(location);
+    const industryKw = parseKeywords(industry);
+    const hasFilters =
+      titleKw.length > 0 || locationKw.length > 0 || industryKw.length > 0;
 
     const maxResults = Math.min(Number(limit) || 100, 500); // cap at 500
     const PAGE_SIZE = 100; // fetch 100 per Unipile page
@@ -166,7 +198,7 @@ router.get("/api/unipile/:userId/linkedin/relations", async (req, res) => {
       totalScanned += items.length;
       pagesFetched++;
 
-      if (keywords.length === 0) {
+      if (!hasFilters) {
         // No filter — return raw results (single page, respect original behavior)
         matchedItems = items;
         nextCursor = apiResp.data.cursor || null;
@@ -174,7 +206,9 @@ router.get("/api/unipile/:userId/linkedin/relations", async (req, res) => {
       }
 
       // Filter this page and accumulate matches
-      const pageMatches = items.filter((r) => matchesTitle(r, keywords));
+      const pageMatches = items.filter((r) =>
+        matchesFilters(r, { titleKw, locationKw, industryKw }),
+      );
       matchedItems.push(...pageMatches);
 
       nextCursor = apiResp.data.cursor || null;
@@ -200,8 +234,16 @@ router.get("/api/unipile/:userId/linkedin/relations", async (req, res) => {
       results_count: finalItems.length,
       total_scanned: totalScanned,
       pages_fetched: pagesFetched,
-      filtered_by_title: title || null,
-      keywords_used: keywords.length > 0 ? keywords : null,
+      filters_applied: {
+        title: title || null,
+        location: location || null,
+        industry: industry || null,
+      },
+      keywords_used: {
+        title: titleKw.length > 0 ? titleKw : null,
+        location: locationKw.length > 0 ? locationKw : null,
+        industry: industryKw.length > 0 ? industryKw : null,
+      },
     });
   } catch (err) {
     handleError(err, res);
