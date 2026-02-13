@@ -268,12 +268,28 @@ router.get("/api/linkedin/search-companies", async (req, res) => {
       },
     );
 
-    const results = (response.data || []).map((company) => ({
-      name: company.name,
-      domain: company.domain,
-      logo: company.logo,
-      linkedinUrl: `https://www.linkedin.com/company/${slugifyCompanyName(company.name)}`, // best‑guess URL
-    }));
+    const results = (response.data || [])
+      .map((company) => {
+        const slug = slugifyCompanyName(company.name);
+        return {
+          name: company.name,
+          domain: company.domain,
+          logo: company.logo,
+          linkedinUrl: slug ? `https://www.linkedin.com/company/${slug}` : null,
+        };
+      })
+      .filter((company) => {
+        // Remove companies with empty LinkedIn URLs (non-Latin names)
+        if (!company.linkedinUrl) return false;
+        // Remove weak matches — company name should contain the search query
+        const nameLower = company.name.toLowerCase();
+        const queryLower = query.toLowerCase();
+        return (
+          nameLower.includes(queryLower) ||
+          queryLower.includes(nameLower) ||
+          (company.domain && company.domain.toLowerCase().includes(queryLower))
+        );
+      });
 
     // Store in cache
     cache.set(cacheKey, results);
