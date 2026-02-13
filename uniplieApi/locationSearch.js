@@ -1,5 +1,6 @@
 const express = require("express");
 const router = express.Router();
+const axios = require("axios");
 const { Country, State, City } = require("country-state-city");
 
 // Initialize searchable location index in memory
@@ -158,6 +159,60 @@ router.get("/api/linkedin/search-locations", (req, res) => {
     res.status(500).json({
       success: false,
       error: "Internal server error during location search",
+    });
+  }
+});
+
+// ==================== COMPANY SEARCH ENDPOINT ====================
+// Uses Clearbit's free Autocomplete API (no API key required)
+// Provides LinkedIn-style company typeahead suggestions
+
+router.get("/api/linkedin/search-companies", async (req, res) => {
+  try {
+    const { keywords, q } = req.query;
+    const query = (keywords || q || "").trim();
+
+    if (!query || query.length < 2) {
+      return res.json({
+        success: true,
+        result: [],
+      });
+    }
+
+    // Clearbit Autocomplete API - free, no auth required
+    const response = await axios.get(
+      "https://autocomplete.clearbit.com/v1/companies/suggest",
+      {
+        params: { query },
+        timeout: 5000,
+      },
+    );
+
+    const results = (response.data || []).map((company) => ({
+      name: company.name,
+      domain: company.domain,
+      logo: company.logo,
+    }));
+
+    return res.json({
+      success: true,
+      result: results,
+    });
+  } catch (error) {
+    console.error("Company search error:", error.message);
+
+    // If Clearbit is down, return empty results instead of 500
+    if (error.code === "ECONNABORTED" || error.response?.status >= 500) {
+      return res.json({
+        success: true,
+        result: [],
+        warning: "Company search service temporarily unavailable",
+      });
+    }
+
+    res.status(500).json({
+      success: false,
+      error: "Internal server error during company search",
     });
   }
 });
