@@ -3918,6 +3918,18 @@ router.all("/api/unipile/user/:userId/linkedin/search", async (req, res) => {
         }
 
         const resolvedIds = [];
+        const unresolvedNames = [];
+
+        // Score how well a result title matches the search query
+        const matchScore = (title, query) => {
+          const t = title.toLowerCase();
+          const q = query.toLowerCase();
+          if (t === q) return 100; // Exact match
+          if (t.startsWith(q)) return 80; // Starts with query
+          if (t.includes(q)) return 60; // Contains query
+          if (q.split(/\s+/).every((word) => t.includes(word))) return 40; // All words present
+          return 0;
+        };
 
         for (const value of values) {
           // If already a numeric ID, keep it
@@ -3932,7 +3944,7 @@ router.all("/api/unipile/user/:userId/linkedin/search", async (req, res) => {
             lookupParams.append("account_id", accountId);
             lookupParams.append("type", paramType);
             lookupParams.append("keywords", value);
-            lookupParams.append("limit", "5");
+            lookupParams.append("limit", "15");
 
             console.log(`🔄 Resolving ${paramType}: "${value}" to ID...`);
 
@@ -3941,23 +3953,75 @@ router.all("/api/unipile/user/:userId/linkedin/search", async (req, res) => {
               { headers: getHeaders() },
             );
 
-            const items = lookupResponse.data?.items || [];
+            let items = lookupResponse.data?.items || [];
+
+            // If no results, try with individual words (e.g., "Finance" might match "Financial Services")
+            if (items.length === 0 && value.length >= 3) {
+              // Retry with a shorter/broader keyword (first word or trimmed)
+              const words = value.trim().split(/\s+/);
+              if (words.length > 1) {
+                // Try first word only
+                const retryParams = new URLSearchParams();
+                retryParams.append("account_id", accountId);
+                retryParams.append("type", paramType);
+                retryParams.append("keywords", words[0]);
+                retryParams.append("limit", "15");
+
+                console.log(
+                  `🔄 Retrying ${paramType} with broader keyword: "${words[0]}"...`,
+                );
+
+                const retryResponse = await axios.get(
+                  `${getBaseUrl()}/linkedin/search/parameters?${retryParams}`,
+                  { headers: getHeaders() },
+                );
+                items = retryResponse.data?.items || [];
+              }
+            }
+
             if (items.length > 0) {
-              // Use the first (best) match
-              const matchedId = items[0].id;
-              console.log(
-                `✅ Resolved "${value}" → ${matchedId} (${items[0].title})`,
-              );
-              resolvedIds.push(matchedId);
+              // Score all results and pick the best match
+              const scored = items
+                .map((item) => ({
+                  ...item,
+                  score: matchScore(item.title, value),
+                }))
+                .filter((item) => item.score > 0)
+                .sort((a, b) => b.score - a.score);
+
+              if (scored.length > 0) {
+                const best = scored[0];
+                console.log(
+                  `✅ Resolved "${value}" → ${best.id} (${best.title}, score: ${best.score})`,
+                );
+                resolvedIds.push(best.id);
+              } else {
+                // No good match by score, use the first result as fallback
+                const fallback = items[0];
+                console.log(
+                  `✅ Resolved "${value}" → ${fallback.id} (${fallback.title}, best available match)`,
+                );
+                resolvedIds.push(fallback.id);
+              }
             } else {
-              console.warn(`⚠️ No ${paramType} found for: "${value}"`);
+              console.warn(
+                `⚠️ No ${paramType} found for: "${value}" — skipped`,
+              );
+              unresolvedNames.push(value);
             }
           } catch (err) {
             console.error(
               `❌ Failed to resolve ${paramType} "${value}":`,
               err.message,
             );
+            unresolvedNames.push(value);
           }
+        }
+
+        if (unresolvedNames.length > 0) {
+          console.warn(
+            `⚠️ Could not resolve ${paramType}: ${unresolvedNames.join(", ")}`,
+          );
         }
 
         return resolvedIds.length > 0 ? resolvedIds : undefined;
