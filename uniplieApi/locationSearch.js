@@ -167,24 +167,104 @@ router.get("/api/linkedin/search-locations", (req, res) => {
 // Uses Clearbit's free Autocomplete API (no API key required)
 // Provides LinkedIn-style company typeahead suggestions
 
+// router.get("/api/linkedin/search-companies", async (req, res) => {
+//   try {
+//     const { keywords, q } = req.query;
+//     const query = (keywords || q || "").trim();
+
+//     if (!query || query.length < 2) {
+//       return res.json({
+//         success: true,
+//         result: [],
+//       });
+//     }
+
+//     // Clearbit Autocomplete API - free, no auth required
+//     const response = await axios.get(
+//       "https://autocomplete.clearbit.com/v1/companies/suggest",
+//       {
+//         params: { query },
+//         timeout: 5000,
+//       },
+//     );
+
+//     const results = (response.data || []).map((company) => ({
+//       name: company.name,
+//       domain: company.domain,
+//       logo: company.logo,
+//     }));
+
+//     return res.json({
+//       success: true,
+//       result: results,
+//     });
+//   } catch (error) {
+//     console.error("Company search error:", error.message);
+
+//     // If Clearbit is down, return empty results instead of 500
+//     if (error.code === "ECONNABORTED" || error.response?.status >= 500) {
+//       return res.json({
+//         success: true,
+//         result: [],
+//         warning: "Company search service temporarily unavailable",
+//       });
+//     }
+
+//     res.status(500).json({
+//       success: false,
+//       error: "Internal server error during company search",
+//     });
+//   }
+// });
+
+// Simple in-memory cache with TTL (500ms)
+const cache = new Map();
+const CACHE_TTL = 500; // milliseconds
+
+// Helper: slugify company name for LinkedIn URL
+function slugifyCompanyName(name) {
+  return name
+    .toLowerCase()
+    .replace(/[^\w\s-]/g, "") // remove non-alphanumeric except spaces/hyphens
+    .replace(/\s+/g, "-") // spaces to hyphens
+    .replace(/--+/g, "-") // collapse multiple hyphens
+    .replace(/^-+|-+$/g, ""); // trim hyphens from ends
+}
+
 router.get("/api/linkedin/search-companies", async (req, res) => {
+  const start = Date.now();
+
   try {
     const { keywords, q } = req.query;
     const query = (keywords || q || "").trim();
 
+    // Return empty if query is too short
     if (!query || query.length < 2) {
       return res.json({
         success: true,
         result: [],
+        meta: { responseTimeMs: Date.now() - start },
       });
     }
 
-    // Clearbit Autocomplete API - free, no auth required
+    // Check cache first
+    const cacheKey = `clearbit:${query}`;
+    if (cache.has(cacheKey)) {
+      const cached = cache.get(cacheKey);
+      console.log(`[Cache hit] ${query} (${Date.now() - start}ms)`);
+      return res.json({
+        success: true,
+        result: cached,
+        meta: { cached: true, responseTimeMs: Date.now() - start },
+      });
+    }
+
+    // Call Clearbit Autocomplete API (free, no auth)
     const response = await axios.get(
       "https://autocomplete.clearbit.com/v1/companies/suggest",
       {
         params: { query },
-        timeout: 5000,
+        timeout: 5000, // 5 seconds max
       },
     );
 
@@ -192,27 +272,40 @@ router.get("/api/linkedin/search-companies", async (req, res) => {
       name: company.name,
       domain: company.domain,
       logo: company.logo,
+      linkedinUrl: `https://www.linkedin.com/company/${slugifyCompanyName(company.name)}`, // best‑guess URL
     }));
 
+    // Store in cache
+    cache.set(cacheKey, results);
+    setTimeout(() => cache.delete(cacheKey), CACHE_TTL);
+
+    console.log(`[Clearbit] ${query} (${Date.now() - start}ms)`);
     return res.json({
       success: true,
       result: results,
+      meta: { cached: false, responseTimeMs: Date.now() - start },
     });
   } catch (error) {
-    console.error("Company search error:", error.message);
+    console.error(
+      `Company search error (${Date.now() - start}ms):`,
+      error.message,
+    );
 
-    // If Clearbit is down, return empty results instead of 500
+    // If Clearbit is down or times out, return empty with warning
     if (error.code === "ECONNABORTED" || error.response?.status >= 500) {
       return res.json({
         success: true,
         result: [],
         warning: "Company search service temporarily unavailable",
+        meta: { responseTimeMs: Date.now() - start },
       });
     }
 
+    // Unexpected errors – still return 500
     res.status(500).json({
       success: false,
       error: "Internal server error during company search",
+      meta: { responseTimeMs: Date.now() - start },
     });
   }
 });
