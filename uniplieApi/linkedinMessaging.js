@@ -4440,9 +4440,35 @@ router.get("/api/unipile/:userId/company/:identifier", async (req, res) => {
       { headers: getHeaders() },
     );
 
+    const companyData = response.data;
+    let jobs = [];
+
+    // Fetch recent jobs for this company
+    try {
+      const companyId = companyData.id || companyData.public_identifier;
+      if (companyId) {
+        // Use Unipile search API to find jobs for this company
+        // Note: Sending company ID as an array to the 'company' filter
+        const jobsResponse = await axios.post(
+          `${getBaseUrl()}/linkedin/search?account_id=${accountId}`,
+          {
+            api: "classic",
+            category: "jobs",
+            company: [companyId],
+            limit: 5,
+          },
+          { headers: getHeaders() },
+        );
+        jobs = jobsResponse.data.items || [];
+      }
+    } catch (err) {
+      console.warn("⚠️ Failed to fetch company jobs:", err.message);
+    }
+
     res.json({
       success: true,
-      data: response.data,
+      data: companyData,
+      jobs: jobs,
       account_id: accountId,
     });
   } catch (err) {
