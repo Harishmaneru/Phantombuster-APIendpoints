@@ -3897,11 +3897,8 @@ router.all("/api/unipile/user/:userId/linkedin/search", async (req, res) => {
         });
       }
 
-      // Hardcode network_distance to [1, 2, 3] for people and companies search
-      if (
-        searchBody.category === "people" ||
-        searchBody.category === "companies"
-      ) {
+      // Hardcode network_distance to [1, 2, 3] for people search only
+      if (searchBody.category === "people") {
         if (!searchBody.network_distance) {
           searchBody.network_distance = [1, 2, 3];
         }
