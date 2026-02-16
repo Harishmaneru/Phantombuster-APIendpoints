@@ -83,7 +83,7 @@ const initializeLocations = () => {
 
   isInitialized = true;
   console.log(
-    `✅ Location index created with ${locationIndex.length} locations (Cities: ${cityCount}) in ${
+    `Location index created with ${locationIndex.length} locations (Cities: ${cityCount}) in ${
       Date.now() - startTime
     }ms`,
   );
@@ -163,59 +163,88 @@ router.get("/api/linkedin/search-locations", (req, res) => {
   }
 });
 
+// ==================== INDUSTRY SEARCH ENDPOINT ====================
+// Uses static LinkedIn industry lists (V1 & V2) for instant, free lookups
+// Merged list prioritized for Sales Navigator (V2) but includes Classic (V1)
+//
+// Usage:
+//   GET /api/linkedin/search-industries?keywords=soft
+//   GET /api/linkedin/search-industries?q=tech
+
+const { INDUSTRY_V1, INDUSTRY_V2 } = require("./linkedinIndustries");
+
+// Pre-compute unified industry list (deduplicated by ID)
+// Priority: V2 (Sales Navigator) > V1 (Classic)
+const unifiedIndustriesDetails = new Map();
+
+// 1. Add all V2 industries (Sales Nav) - Preferred
+INDUSTRY_V2.forEach((item) => unifiedIndustriesDetails.set(item.id, item));
+
+// 2. Add V1 industries only if ID doesn't exist (Classic)
+INDUSTRY_V1.forEach((item) => {
+  if (!unifiedIndustriesDetails.has(item.id)) {
+    unifiedIndustriesDetails.set(item.id, item);
+  }
+});
+
+const UNIFIED_INDUSTRIES = Array.from(unifiedIndustriesDetails.values());
+
+router.get("/api/linkedin/search-industries", (req, res) => {
+  try {
+    const { keywords, q, limit = 25 } = req.query;
+
+    const query = (keywords || q || "").trim().toLowerCase();
+
+    if (!query || query.length < 2) {
+      return res.json({
+        success: true,
+        result: [],
+      });
+    }
+
+    // Filter results from the unified list
+    // 1. Exact match (rare)
+    // 2. Starts with query
+    // 3. Contains query
+    const matches = UNIFIED_INDUSTRIES.filter((item) =>
+      item.title.toLowerCase().includes(query),
+    )
+      .sort((a, b) => {
+        const aTitle = a.title.toLowerCase();
+        const bTitle = b.title.toLowerCase();
+
+        // Exact match first
+        if (aTitle === query) return -1;
+        if (bTitle === query) return 1;
+
+        // Starts with second
+        const aStarts = aTitle.startsWith(query);
+        const bStarts = bTitle.startsWith(query);
+        if (aStarts && !bStarts) return -1;
+        if (!aStarts && bStarts) return 1;
+
+        // Alphabetical
+        return aTitle.localeCompare(bTitle);
+      })
+      .slice(0, Number(limit));
+
+    return res.json({
+      success: true,
+      result: matches,
+      cached: true,
+    });
+  } catch (error) {
+    console.error("Industry search error:", error.message);
+    res.status(500).json({
+      success: false,
+      error: "Internal server error during industry search",
+    });
+  }
+});
+
 // ==================== COMPANY SEARCH ENDPOINT ====================
 // Uses Clearbit's free Autocomplete API (no API key required)
 // Provides LinkedIn-style company typeahead suggestions
-
-// router.get("/api/linkedin/search-companies", async (req, res) => {
-//   try {
-//     const { keywords, q } = req.query;
-//     const query = (keywords || q || "").trim();
-
-//     if (!query || query.length < 2) {
-//       return res.json({
-//         success: true,
-//         result: [],
-//       });
-//     }
-
-//     // Clearbit Autocomplete API - free, no auth required
-//     const response = await axios.get(
-//       "https://autocomplete.clearbit.com/v1/companies/suggest",
-//       {
-//         params: { query },
-//         timeout: 5000,
-//       },
-//     );
-
-//     const results = (response.data || []).map((company) => ({
-//       name: company.name,
-//       domain: company.domain,
-//       logo: company.logo,
-//     }));
-
-//     return res.json({
-//       success: true,
-//       result: results,
-//     });
-//   } catch (error) {
-//     console.error("Company search error:", error.message);
-
-//     // If Clearbit is down, return empty results instead of 500
-//     if (error.code === "ECONNABORTED" || error.response?.status >= 500) {
-//       return res.json({
-//         success: true,
-//         result: [],
-//         warning: "Company search service temporarily unavailable",
-//       });
-//     }
-
-//     res.status(500).json({
-//       success: false,
-//       error: "Internal server error during company search",
-//     });
-//   }
-// });
 
 // Simple in-memory cache with TTL (500ms)
 const cache = new Map();
