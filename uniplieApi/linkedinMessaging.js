@@ -4418,4 +4418,36 @@ router.all("/api/unipile/user/:userId/linkedin/search", async (req, res) => {
   }
 });
 
+// ==================== Company Profile ====================
+router.get("/api/unipile/:userId/company/:identifier", async (req, res) => {
+  try {
+    const { userId, identifier } = req.params;
+
+    const dbResult = await getLinkedInAccountStatus(userId);
+    if (!dbResult.success || !dbResult.account_id) {
+      return res.status(404).json({
+        success: false,
+        error: "No LinkedIn account found",
+      });
+    }
+
+    const accountId = dbResult.account_id;
+
+    console.log(`🔍 Fetching company profile for: ${identifier}`);
+
+    const response = await axios.get(
+      `${getBaseUrl()}/linkedin/company/${encodeURIComponent(identifier)}?account_id=${accountId}`,
+      { headers: getHeaders() },
+    );
+
+    res.json({
+      success: true,
+      data: response.data,
+      account_id: accountId,
+    });
+  } catch (err) {
+    handleError(err, res);
+  }
+});
+
 module.exports = router;
