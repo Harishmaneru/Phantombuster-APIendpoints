@@ -340,6 +340,12 @@ router.post("/api/unipile/auth/link", async (req, res) => {
 // Webhook handler for account creation and errors
 router.post("/api/unipile/webhook/unipile-account", async (req, res) => {
   try {
+    console.log("=============== WEBHOOK DEBUG START ===============");
+    console.log("Headers:", JSON.stringify(req.headers, null, 2));
+    console.log("Raw Body Type:", typeof req.body);
+    console.log("Raw Body:", JSON.stringify(req.body, null, 2));
+    console.log("=============== WEBHOOK DEBUG END ===============");
+
     const { status, account_id, name, provider, error, user_id, metadata } =
       req.body;
 
