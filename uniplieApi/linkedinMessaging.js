@@ -218,6 +218,57 @@ router.delete("/api/unipile/accounts/:accountId", async (req, res) => {
   }
 });
 
+// Validate OTP / Checkpoint for LinkedIn account
+router.post("/api/unipile/account/validate-otp", async (req, res) => {
+  try {
+    const { user_id, code } = req.body;
+
+    if (!user_id || !code) {
+      return res.status(400).json({
+        success: false,
+        error: "user_id and code are required",
+      });
+    }
+
+    // Get the account_id from our database
+    const dbResult = await getLinkedInAccountStatus(user_id);
+
+    if (!dbResult.success || !dbResult.account_id) {
+      return res.status(404).json({
+        success: false,
+        error: "No LinkedIn account found for this user",
+      });
+    }
+
+    const accountId = dbResult.account_id;
+
+    console.log(`Validating OTP for account ${accountId}...`);
+
+    const payload = {
+      provider: "LINKEDIN",
+      account_id: accountId,
+      code: code,
+    };
+
+    // Call Unipile checkpoint API
+    const response = await axios.post(
+      `${getBaseUrl()}/accounts/checkpoint`,
+      payload,
+      {
+        headers: getHeaders(),
+      },
+    );
+
+    res.json({
+      success: true,
+      data: response.data,
+      message: "OTP validated successfully",
+    });
+  } catch (err) {
+    handleError(err, res);
+  }
+});
+
 // ==================== HOSTED AUTH ENDPOINTS ====================
 
 // Create hosted authentication link
