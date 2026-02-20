@@ -14,6 +14,7 @@ const {
   handleAccountError,
   getAllLinkedInAccounts,
   deleteLinkedInAccount,
+  updateLinkedInAccountStatusByAccountId,
 } = require("./linkedinAccountService");
 
 // ==================== MIDDLEWARE ====================
@@ -340,150 +341,121 @@ router.post("/api/unipile/auth/link", async (req, res) => {
 // Webhook handler for account creation and errors
 router.post("/api/unipile/webhook/unipile-account", async (req, res) => {
   try {
-    console.log("=============== WEBHOOK DEBUG START ===============");
-    console.log("Headers:", JSON.stringify(req.headers, null, 2));
-    console.log("Raw Body Type:", typeof req.body);
-    console.log("Raw Body:", JSON.stringify(req.body, null, 2));
-    console.log("=============== WEBHOOK DEBUG END ===============");
+    console.log("=============== WEBHOOK PAYLOAD ===============");
+    console.log(JSON.stringify(req.body, null, 2));
 
-    const { status, account_id, name, provider, error, user_id, metadata } =
-      req.body;
+    // Initialize variables
+    let status, account_id, name, provider, error, user_id, metadata;
+    let eventType = "UNKNOWN";
 
-    // Also check for user_id in query parameters (from notify_url) and metadata
+    // 1. Handle AccountStatus events (CONNECTING, OK, SYNC_SUCCESS, STOPPED, etc.)
+    if (req.body.AccountStatus) {
+      const { AccountStatus } = req.body;
+      account_id = AccountStatus.account_id;
+      status = AccountStatus.message; // "OK", "CONNECTING", "SYNC_SUCCESS", etc.
+      provider = AccountStatus.account_type;
+      eventType = "AccountStatus";
+    }
+    // 2. Handle Account events (CREATION_SUCCESS, CREATION_FAILED)
+    else if (req.body.Account) {
+      // This structure might vary, adapting based on typical patterns or documentation
+      // If Unipile sends "Account" for creation events
+      const { Account } = req.body;
+      account_id = Account.id || Account.account_id;
+      status = Account.status || "CREATION_SUCCESS";
+      name = Account.name;
+      provider = Account.provider || Account.type;
+      eventType = "Account";
+    }
+    // 3. Fallback to flat structure (what we had before, in case other events use it)
+    else {
+      ({ status, account_id, name, provider, error, user_id, metadata } =
+        req.body);
+      eventType = "Flat";
+    }
+
+    // Attempt to find user_id from query or metadata if not extracted yet
     const userIdFromQuery = req.query.user_id;
-    const userIdFromMetadata = metadata?.user_id;
+    // Metadata might be nested in the event object or at root
+    const metadataFromEvent = req.body.metadata || req.body.Account?.metadata;
+    const userIdFromMetadata = metadataFromEvent?.user_id;
+
+    // Final user_id resolution
     const finalUserId = user_id || userIdFromQuery || userIdFromMetadata;
 
-    console.log("Unipile webhook received:", {
+    console.log(`Processing ${eventType} event:`, {
       status,
       account_id,
-      name,
-      provider,
-      user_id: finalUserId,
-      user_id_from_body: user_id,
-      user_id_from_query: userIdFromQuery,
-      user_id_from_metadata: userIdFromMetadata,
-      timestamp: new Date().toISOString(),
+      finalUserId,
     });
 
-    if (status === "CREATION_SUCCESS" && account_id) {
-      console.log(
-        `✅ Account created successfully for user ${
-          name || finalUserId
-        }: ${account_id}`,
-      );
+    // --- LOGIC HANDLING ---
 
-      // Store account in database if user_id is provided
+    // Case A: Account Created Successfully
+    if (
+      (status === "CREATION_SUCCESS" || status === "OK") &&
+      account_id &&
+      eventType === "Account"
+    ) {
+      console.log(`✅ Account created/active: ${account_id}`);
+
       if (finalUserId) {
+        // Update/Connect in DB
+        // ... (existing logic to connect account)
         const dbResult = await connectLinkedInAccount(
           finalUserId,
           account_id,
           provider || "LINKEDIN",
           name || "LinkedIn Account",
           {
-            connected_via: "hosted_auth",
+            connected_via: "webhook",
             webhook_data: req.body,
+            status: status,
           },
         );
-
-        if (!dbResult.success) {
-          console.error("Failed to store account in database:", dbResult.error);
-        }
-      } else {
-        // If no user_id provided, store with a temporary identifier
-        // This allows you to manually associate the account later
-        const tempUserId = `temp_${account_id}_${Date.now()}`;
-        console.log(
-          `⚠️ No user_id provided, storing with temporary ID: ${tempUserId}`,
-        );
-
-        const dbResult = await connectLinkedInAccount(
-          tempUserId,
-          account_id,
-          provider || "LINKEDIN",
-          name || "LinkedIn Account",
-          {
-            connected_via: "hosted_auth",
-            webhook_data: req.body,
-            is_temporary: true,
-            needs_user_association: true,
-          },
-        );
-
-        if (!dbResult.success) {
-          console.error("Failed to store account in database:", dbResult.error);
-        }
+        if (!dbResult.success)
+          console.error("DB Connect Error:", dbResult.error);
       }
-
-      res.json({
-        success: true,
-        message: "Account creation processed successfully",
-        stored_in_db: true,
-        user_id: finalUserId || `temp_${account_id}_${Date.now()}`,
-        note: finalUserId
-          ? "Account associated with user"
-          : "Account stored with temporary ID - needs user association",
-      });
-    } else if (status === "CREATION_FAILED") {
-      console.log(
-        `❌ Account creation failed for user ${name || finalUserId}:`,
-        error,
-      );
-
-      // Update user status if user_id is provided
-      if (finalUserId) {
-        const dbResult = await disconnectLinkedInAccount(
-          finalUserId,
-          error || "Account creation failed",
-        );
-
-        if (!dbResult.success) {
-          console.error(
-            "Failed to update account status in database:",
-            dbResult.error,
-          );
-        }
-      }
-
-      res.json({
-        success: true,
-        message: "Account creation failure processed",
-        updated_in_db: !!finalUserId,
-      });
-    } else if (status === "ACCOUNT_ERROR" || status === "ACCOUNT_STOPPED") {
-      console.log(`⚠️ Account error/stopped for account ${account_id}:`, error);
-
-      // Handle account error
-      const dbResult = await handleAccountError(
-        account_id,
-        error || "Account error occurred",
-      );
-
-      if (!dbResult.success) {
-        console.error(
-          "Failed to handle account error in database:",
-          dbResult.error,
-        );
-      }
-
-      res.json({
-        success: true,
-        message: "Account error handled successfully",
-        updated_in_db: dbResult.success,
-      });
-    } else {
-      console.log("⚠️ Unknown webhook status:", status);
-      res.json({
-        success: true,
-        message: "Webhook received",
-      });
     }
+    // Case B: Handling AccountStatus events (Lifecycle updates)
+    else if (eventType === "AccountStatus" && account_id) {
+      console.log(`ℹ️ Account Status Update: ${status} for ${account_id}`);
+
+      // Update DB by account_id (no user_id required)
+      const updateResult = await updateLinkedInAccountStatusByAccountId(
+        account_id,
+        status,
+        req.body,
+      );
+
+      if (!updateResult.success && updateResult.match_count === 0) {
+        console.warn(
+          `⚠️ Could not update status for account ${account_id} - account not found in DB.`,
+        );
+      }
+    }
+
+    // Case C: Explicit Errors/Stopped (Fallback if not caught by AccountStatus)
+    else if (
+      (status === "CREATION_FAILED" ||
+        status === "STOPPED" ||
+        status === "ERROR") &&
+      finalUserId
+    ) {
+      console.error(
+        `❌ Account Issue: ${status} - ${error || "No error details"}`,
+      );
+      // Handle error/disconnection logic
+      await disconnectLinkedInAccount(
+        finalUserId,
+        error || `Account status: ${status}`,
+      );
+    }
+
+    res.json({ success: true, message: "Webhook processed" });
   } catch (err) {
     console.error("Webhook processing error:", err);
-    res.status(500).json({
-      success: false,
-      error: "Webhook processing failed",
-    });
+    res.status(500).json({ success: false, error: err.message });
   }
 });
 
@@ -2704,6 +2676,17 @@ router.get(
       const { identifier } = req.params;
       const { account_id, user_id, force_refresh } = req.query;
 
+      // ✅ optional: allow client to override what sections to fetch
+      // defaults to "*" (all sections)
+      // usage: ?linkedin_sections=experience&linkedin_sections=education ...
+      const requestedSections = req.query.linkedin_sections;
+      const linkedinSections =
+        requestedSections === undefined
+          ? ["*"] // ✅ default: get ALL sections
+          : Array.isArray(requestedSections)
+            ? requestedSections
+            : [requestedSections];
+
       // Get account_id from user_id if not provided
       let finalAccountId = account_id;
       if (!finalAccountId && user_id) {
@@ -2724,48 +2707,67 @@ router.get(
        * NOTE: Profile caching is intentionally disabled for this endpoint.
        * Reason: Unipile's `/users/:identifier` payload can include dynamic fields
        * (e.g. `invitation`) that must remain fresh for the profile screen UX.
-       *
-       * We keep caching for bulk/enrichment endpoints (batch-profiles, chats, search).
        */
       console.log(
-        `🔄 Fetching fresh profile for ${identifier} (account: ${finalAccountId})`,
+        `🔄 Fetching fresh FULL profile for ${identifier} (account: ${finalAccountId})`,
       );
+
+      // ✅ build params safely (handles repeated linkedin_sections)
+      const params = new URLSearchParams();
+      params.set("account_id", finalAccountId);
+
+      // add linkedin_sections (repeat query param)
+      linkedinSections.forEach((s) => params.append("linkedin_sections", s));
+
       const response = await axios.get(
-        `${getBaseUrl()}/users/${encodeURIComponent(
-          identifier,
-        )}?account_id=${finalAccountId}`,
+        `${getBaseUrl()}/users/${encodeURIComponent(identifier)}?${params.toString()}`,
         { headers: getHeaders() },
       );
 
       const userProfile = response.data;
       const fromCache = false;
+
+      // ---------------------------
+      // ✅ normalize fields (Unipile often uses work_experience)
+      // ---------------------------
+      const normalizedExperience =
+        userProfile?.experience ??
+        userProfile?.work_experience ??
+        userProfile?.workExperience ??
+        [];
+
+      const normalizedEducation = userProfile?.education ?? [];
+      const normalizedSkills = userProfile?.skills ?? [];
+
+      // Optional: Unipile may return throttled_sections when LinkedIn throttles
+      const throttledSections =
+        userProfile?.throttled_sections ?? userProfile?.throttledSections ?? [];
+
+      // ---------------------------
+      // Existing chat lookup logic (kept as-is)
+      // ---------------------------
       let chatId = null;
       let hasExistingChat = false;
 
-      // Only check for chat if profile is connected (has network_distance)
       const networkDistance = userProfile?.network_distance;
       const isConnected =
         networkDistance !== undefined && networkDistance !== null;
 
-      // Try to find chat ID only if user is connected to the profile
       if (isConnected) {
         const providerId = userProfile?.provider_id;
         const publicIdentifier = userProfile?.public_identifier || identifier;
 
         if (providerId || publicIdentifier) {
-          // Check cache for chat lookup first
           const chatCacheKey = getChatCacheKey(
             finalAccountId,
             providerId || publicIdentifier,
           );
           let chatResult = null;
-          let chatFromCache = false;
 
           if (force_refresh !== "true" && force_refresh !== "1") {
             const cachedChat = chatCache.get(chatCacheKey);
             if (cachedChat) {
               chatResult = cachedChat;
-              chatFromCache = true;
               console.log(
                 `✅ [Cache HIT] Chat lookup for ${
                   providerId || publicIdentifier
@@ -2774,12 +2776,8 @@ router.get(
             }
           }
 
-          // Helper function to find chat with timeout
           const findChatWithTimeout = async (timeoutMs = 3000) => {
-            // Return cached result if available
-            if (chatResult) {
-              return chatResult;
-            }
+            if (chatResult) return chatResult;
 
             return Promise.race([
               (async () => {
@@ -2789,7 +2787,7 @@ router.get(
                       providerId || publicIdentifier
                     }`,
                   );
-                  // Fetch chats with higher limit to find existing chats (only for connected profiles)
+
                   const chatsResponse = await axios.get(
                     `${getBaseUrl()}/chats?account_id=${finalAccountId}&limit=250`,
                     { headers: getHeaders() },
@@ -2802,21 +2800,11 @@ router.get(
                     [];
                   const chatsArray = Array.isArray(chats) ? chats : [];
 
-                  console.log(
-                    `Searching through ${
-                      chatsArray.length
-                    } chats for connected profile: ${
-                      providerId || publicIdentifier
-                    }`,
-                  );
-
-                  // First, try to find chat where attendees are included in the response
                   let userChat = chatsArray.find((chat) => {
                     const attendees = chat.attendees || chat.participants || [];
                     if (!Array.isArray(attendees)) return false;
 
                     return attendees.some((attendee) => {
-                      // Match by provider_id (most reliable)
                       if (
                         providerId &&
                         (attendee.provider_id === providerId ||
@@ -2824,7 +2812,6 @@ router.get(
                       ) {
                         return true;
                       }
-                      // Match by public_identifier as fallback
                       if (
                         publicIdentifier &&
                         (attendee.public_identifier === publicIdentifier ||
@@ -2837,13 +2824,7 @@ router.get(
                     });
                   });
 
-                  // If not found in initial response, fetch attendees for limited number of chats
                   if (!userChat && chatsArray.length > 0) {
-                    console.log(
-                      "Chat not found in initial response, checking attendees for first 20 chats...",
-                    );
-
-                    // Only check first 20 chats to avoid long delays
                     const maxChatsToCheck = Math.min(chatsArray.length, 20);
                     for (let i = 0; i < maxChatsToCheck; i++) {
                       const chat = chatsArray[i];
@@ -2866,9 +2847,7 @@ router.get(
                           ? attendeesData
                           : [];
 
-                        // Check for match by provider_id or public_identifier
                         const foundAttendee = attendees.find((attendee) => {
-                          // Match by provider_id (most reliable)
                           if (
                             providerId &&
                             (attendee.provider_id === providerId ||
@@ -2877,7 +2856,6 @@ router.get(
                           ) {
                             return true;
                           }
-                          // Match by public_identifier as fallback
                           if (
                             publicIdentifier &&
                             (attendee.public_identifier === publicIdentifier ||
@@ -2892,71 +2870,40 @@ router.get(
 
                         if (foundAttendee) {
                           userChat = chat;
-                          console.log(
-                            `Found matching chat: ${currentChatId} for ${
-                              providerId || publicIdentifier
-                            }`,
-                          );
                           break;
                         }
                       } catch (attendeeError) {
-                        // Continue to next chat if this one fails
                         continue;
                       }
                     }
                   }
 
-                  // Extract chat ID
                   if (userChat) {
                     const foundChatId =
                       userChat.id ||
                       userChat.chat_id ||
                       userChat.chatId ||
                       null;
-                    console.log(
-                      `Chat found: ${foundChatId} for user ${
-                        providerId || publicIdentifier
-                      }`,
-                    );
+
                     const result = {
                       chatId: foundChatId,
                       hasExistingChat: !!foundChatId,
                     };
 
-                    // Cache the chat lookup result
                     chatCache.set(chatCacheKey, result);
-                    console.log(
-                      `💾 [Cache SET] Chat lookup for ${
-                        providerId || publicIdentifier
-                      } cached for 10 minutes`,
-                    );
-
                     return result;
                   } else {
-                    console.log(
-                      `No chat found for user ${providerId || publicIdentifier}`,
-                    );
                     const result = { chatId: null, hasExistingChat: false };
-
-                    // Cache negative result too (to avoid repeated lookups)
                     chatCache.set(chatCacheKey, result);
-
                     return result;
                   }
                 } catch (chatError) {
                   console.error("Could not fetch chat ID:", chatError.message);
-                  console.error(
-                    "Chat error details:",
-                    chatError.response?.data || chatError.message,
-                  );
                   return { chatId: null, hasExistingChat: false };
                 }
               })(),
               new Promise((resolve) =>
                 setTimeout(() => {
-                  console.log(
-                    "Chat lookup timeout - returning profile without chat info",
-                  );
                   resolve({
                     chatId: null,
                     hasExistingChat: false,
@@ -2967,7 +2914,6 @@ router.get(
             ]);
           };
 
-          // Try to find chat with 3 second timeout (non-blocking)
           try {
             if (!chatResult) {
               chatResult = await findChatWithTimeout(3000);
@@ -2976,37 +2922,39 @@ router.get(
             hasExistingChat = chatResult.hasExistingChat;
           } catch (error) {
             console.error("Chat lookup error:", error.message);
-            // Continue without chat ID if chat fetch fails
           }
-        } else {
-          console.log(
-            "No provider_id or public_identifier found in user profile, skipping chat lookup",
-          );
         }
-      } else {
-        console.log(
-          "Profile not connected (no network_distance), skipping chat lookup",
-        );
       }
 
+      // ✅ response: keep your shape, but ensure fields exist
       res.json({
         success: true,
-        data: userProfile,
+        data: userProfile, // full raw profile (with all sections)
         user: {
           provider_id: userProfile.provider_id,
-          name: userProfile.name,
+          name:
+            userProfile.name ||
+            [userProfile.first_name, userProfile.last_name]
+              .filter(Boolean)
+              .join(" "),
           headline: userProfile.headline,
           profile_url: userProfile.profile_url,
           picture: userProfile.profile_picture_url,
-          identifier: identifier,
+          identifier,
           location: userProfile.location,
           industry: userProfile.industry,
-          summary: userProfile.summary,
-          experience: userProfile.experience,
-          education: userProfile.education,
-          skills: userProfile.skills,
+
+          // ✅ normalized fields you asked for
+          experience: normalizedExperience,
+          education: normalizedEducation,
+          skills: normalizedSkills,
+
           connections_count: userProfile.connections_count,
           followers_count: userProfile.follower_count,
+        },
+        meta: {
+          linkedin_sections_requested: linkedinSections,
+          throttled_sections: throttledSections,
         },
         chat_info: {
           chat_id: chatId,
@@ -3031,6 +2979,341 @@ router.get(
     }
   },
 );
+
+// router.get(
+//   "/api/unipile/linkedin/fetch-profile/:identifier",
+//   async (req, res) => {
+//     try {
+//       const { identifier } = req.params;
+//       const { account_id, user_id, force_refresh } = req.query;
+
+//       // Get account_id from user_id if not provided
+//       let finalAccountId = account_id;
+//       if (!finalAccountId && user_id) {
+//         const dbResult = await getLinkedInAccountStatus(user_id);
+//         if (dbResult.success && dbResult.account_id) {
+//           finalAccountId = dbResult.account_id;
+//         }
+//       }
+
+//       if (!finalAccountId) {
+//         return res.status(400).json({
+//           success: false,
+//           error: "account_id or user_id is required",
+//         });
+//       }
+
+//       /**
+//        * NOTE: Profile caching is intentionally disabled for this endpoint.
+//        * Reason: Unipile's `/users/:identifier` payload can include dynamic fields
+//        * (e.g. `invitation`) that must remain fresh for the profile screen UX.
+//        *
+//        * We keep caching for bulk/enrichment endpoints (batch-profiles, chats, search).
+//        */
+//       console.log(
+//         `🔄 Fetching fresh profile for ${identifier} (account: ${finalAccountId})`,
+//       );
+//       const response = await axios.get(
+//         `${getBaseUrl()}/users/${encodeURIComponent(
+//           identifier,
+//         )}?account_id=${finalAccountId}`,
+//         { headers: getHeaders() },
+//       );
+
+//       const userProfile = response.data;
+//       const fromCache = false;
+//       let chatId = null;
+//       let hasExistingChat = false;
+
+//       // Only check for chat if profile is connected (has network_distance)
+//       const networkDistance = userProfile?.network_distance;
+//       const isConnected =
+//         networkDistance !== undefined && networkDistance !== null;
+
+//       // Try to find chat ID only if user is connected to the profile
+//       if (isConnected) {
+//         const providerId = userProfile?.provider_id;
+//         const publicIdentifier = userProfile?.public_identifier || identifier;
+
+//         if (providerId || publicIdentifier) {
+//           // Check cache for chat lookup first
+//           const chatCacheKey = getChatCacheKey(
+//             finalAccountId,
+//             providerId || publicIdentifier,
+//           );
+//           let chatResult = null;
+//           let chatFromCache = false;
+
+//           if (force_refresh !== "true" && force_refresh !== "1") {
+//             const cachedChat = chatCache.get(chatCacheKey);
+//             if (cachedChat) {
+//               chatResult = cachedChat;
+//               chatFromCache = true;
+//               console.log(
+//                 `✅ [Cache HIT] Chat lookup for ${
+//                   providerId || publicIdentifier
+//                 }`,
+//               );
+//             }
+//           }
+
+//           // Helper function to find chat with timeout
+//           const findChatWithTimeout = async (timeoutMs = 3000) => {
+//             // Return cached result if available
+//             if (chatResult) {
+//               return chatResult;
+//             }
+
+//             return Promise.race([
+//               (async () => {
+//                 try {
+//                   console.log(
+//                     `🔄 [Cache MISS] Fetching chats for ${
+//                       providerId || publicIdentifier
+//                     }`,
+//                   );
+//                   // Fetch chats with higher limit to find existing chats (only for connected profiles)
+//                   const chatsResponse = await axios.get(
+//                     `${getBaseUrl()}/chats?account_id=${finalAccountId}&limit=250`,
+//                     { headers: getHeaders() },
+//                   );
+
+//                   const chats =
+//                     chatsResponse.data?.chats ||
+//                     chatsResponse.data?.items ||
+//                     chatsResponse.data ||
+//                     [];
+//                   const chatsArray = Array.isArray(chats) ? chats : [];
+
+//                   console.log(
+//                     `Searching through ${
+//                       chatsArray.length
+//                     } chats for connected profile: ${
+//                       providerId || publicIdentifier
+//                     }`,
+//                   );
+
+//                   // First, try to find chat where attendees are included in the response
+//                   let userChat = chatsArray.find((chat) => {
+//                     const attendees = chat.attendees || chat.participants || [];
+//                     if (!Array.isArray(attendees)) return false;
+
+//                     return attendees.some((attendee) => {
+//                       // Match by provider_id (most reliable)
+//                       if (
+//                         providerId &&
+//                         (attendee.provider_id === providerId ||
+//                           attendee.id === providerId)
+//                       ) {
+//                         return true;
+//                       }
+//                       // Match by public_identifier as fallback
+//                       if (
+//                         publicIdentifier &&
+//                         (attendee.public_identifier === publicIdentifier ||
+//                           attendee.identifier === publicIdentifier ||
+//                           attendee.username === publicIdentifier)
+//                       ) {
+//                         return true;
+//                       }
+//                       return false;
+//                     });
+//                   });
+
+//                   // If not found in initial response, fetch attendees for limited number of chats
+//                   if (!userChat && chatsArray.length > 0) {
+//                     console.log(
+//                       "Chat not found in initial response, checking attendees for first 20 chats...",
+//                     );
+
+//                     // Only check first 20 chats to avoid long delays
+//                     const maxChatsToCheck = Math.min(chatsArray.length, 20);
+//                     for (let i = 0; i < maxChatsToCheck; i++) {
+//                       const chat = chatsArray[i];
+//                       try {
+//                         const currentChatId =
+//                           chat.id || chat.chat_id || chat.chatId;
+//                         if (!currentChatId) continue;
+
+//                         const attendeesResponse = await axios.get(
+//                           `${getBaseUrl()}/chats/${currentChatId}/attendees?account_id=${finalAccountId}`,
+//                           { headers: getHeaders() },
+//                         );
+
+//                         const attendeesData =
+//                           attendeesResponse.data?.attendees ||
+//                           attendeesResponse.data?.items ||
+//                           attendeesResponse.data ||
+//                           [];
+//                         const attendees = Array.isArray(attendeesData)
+//                           ? attendeesData
+//                           : [];
+
+//                         // Check for match by provider_id or public_identifier
+//                         const foundAttendee = attendees.find((attendee) => {
+//                           // Match by provider_id (most reliable)
+//                           if (
+//                             providerId &&
+//                             (attendee.provider_id === providerId ||
+//                               attendee.id === providerId ||
+//                               attendee.account_id === providerId)
+//                           ) {
+//                             return true;
+//                           }
+//                           // Match by public_identifier as fallback
+//                           if (
+//                             publicIdentifier &&
+//                             (attendee.public_identifier === publicIdentifier ||
+//                               attendee.identifier === publicIdentifier ||
+//                               attendee.username === publicIdentifier ||
+//                               attendee.profile_url?.includes(publicIdentifier))
+//                           ) {
+//                             return true;
+//                           }
+//                           return false;
+//                         });
+
+//                         if (foundAttendee) {
+//                           userChat = chat;
+//                           console.log(
+//                             `Found matching chat: ${currentChatId} for ${
+//                               providerId || publicIdentifier
+//                             }`,
+//                           );
+//                           break;
+//                         }
+//                       } catch (attendeeError) {
+//                         // Continue to next chat if this one fails
+//                         continue;
+//                       }
+//                     }
+//                   }
+
+//                   // Extract chat ID
+//                   if (userChat) {
+//                     const foundChatId =
+//                       userChat.id ||
+//                       userChat.chat_id ||
+//                       userChat.chatId ||
+//                       null;
+//                     console.log(
+//                       `Chat found: ${foundChatId} for user ${
+//                         providerId || publicIdentifier
+//                       }`,
+//                     );
+//                     const result = {
+//                       chatId: foundChatId,
+//                       hasExistingChat: !!foundChatId,
+//                     };
+
+//                     // Cache the chat lookup result
+//                     chatCache.set(chatCacheKey, result);
+//                     console.log(
+//                       `💾 [Cache SET] Chat lookup for ${
+//                         providerId || publicIdentifier
+//                       } cached for 10 minutes`,
+//                     );
+
+//                     return result;
+//                   } else {
+//                     console.log(
+//                       `No chat found for user ${providerId || publicIdentifier}`,
+//                     );
+//                     const result = { chatId: null, hasExistingChat: false };
+
+//                     // Cache negative result too (to avoid repeated lookups)
+//                     chatCache.set(chatCacheKey, result);
+
+//                     return result;
+//                   }
+//                 } catch (chatError) {
+//                   console.error("Could not fetch chat ID:", chatError.message);
+//                   console.error(
+//                     "Chat error details:",
+//                     chatError.response?.data || chatError.message,
+//                   );
+//                   return { chatId: null, hasExistingChat: false };
+//                 }
+//               })(),
+//               new Promise((resolve) =>
+//                 setTimeout(() => {
+//                   console.log(
+//                     "Chat lookup timeout - returning profile without chat info",
+//                   );
+//                   resolve({
+//                     chatId: null,
+//                     hasExistingChat: false,
+//                     timeout: true,
+//                   });
+//                 }, timeoutMs),
+//               ),
+//             ]);
+//           };
+
+//           // Try to find chat with 3 second timeout (non-blocking)
+//           try {
+//             if (!chatResult) {
+//               chatResult = await findChatWithTimeout(3000);
+//             }
+//             chatId = chatResult.chatId;
+//             hasExistingChat = chatResult.hasExistingChat;
+//           } catch (error) {
+//             console.error("Chat lookup error:", error.message);
+//             // Continue without chat ID if chat fetch fails
+//           }
+//         } else {
+//           console.log(
+//             "No provider_id or public_identifier found in user profile, skipping chat lookup",
+//           );
+//         }
+//       } else {
+//         console.log(
+//           "Profile not connected (no network_distance), skipping chat lookup",
+//         );
+//       }
+
+//       res.json({
+//         success: true,
+//         data: userProfile,
+//         user: {
+//           provider_id: userProfile.provider_id,
+//           name: userProfile.name,
+//           headline: userProfile.headline,
+//           profile_url: userProfile.profile_url,
+//           picture: userProfile.profile_picture_url,
+//           identifier: identifier,
+//           location: userProfile.location,
+//           industry: userProfile.industry,
+//           summary: userProfile.summary,
+//           experience: userProfile.experience,
+//           education: userProfile.education,
+//           skills: userProfile.skills,
+//           connections_count: userProfile.connections_count,
+//           followers_count: userProfile.follower_count,
+//         },
+//         chat_info: {
+//           chat_id: chatId,
+//           has_existing_chat: hasExistingChat,
+//         },
+//         account_id: finalAccountId,
+//         cached: fromCache,
+//         fetched_at: new Date(),
+//       });
+//     } catch (err) {
+//       console.error("Get user error:", err.response?.data || err.message);
+
+//       if (err.response?.status === 404) {
+//         return res.status(404).json({
+//           success: false,
+//           error: "User not found",
+//           identifier: req.params.identifier,
+//         });
+//       }
+
+//       handleError(err, res);
+//     }
+//   },
+// );
 
 // Get current user's own LinkedIn profile
 router.get("/api/unipile/linkedin/user/me", async (req, res) => {
