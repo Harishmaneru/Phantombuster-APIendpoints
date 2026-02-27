@@ -128,6 +128,8 @@ const subscriptionManageAPI = require("./subscriptionController/subscriptionMana
 
 const twilioAPI = require("./TwilioAPI/phoneValidation.js");
 
+const dncLookup = require("./dncLookup/dncLookup.js");
+
 // Nylas Email API
 const nylasEmailAPI = require("./nylasAPI/nylasemailAPI.js");
 
@@ -283,6 +285,8 @@ app.use(supabaseApi);
 app.use("/api/openai", openAI);
 
 app.use("/api/twilio", twilioAPI);
+
+app.use("/api/dnc", dncLookup);
 
 const options = {
   key: fs.readFileSync("./onepgr.com.key", "utf8"),
