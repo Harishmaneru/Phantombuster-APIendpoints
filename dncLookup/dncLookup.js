@@ -22,6 +22,7 @@ async function lookupSinglePhone(phone, token) {
     params: {
       phone: phone,
       token: token,
+      output: "json",
     },
     headers: {
       Accept: "application/json",
