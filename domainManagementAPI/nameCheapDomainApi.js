@@ -5572,6 +5572,39 @@ router.post(
         throw new Error("Nameserver creation failed");
       }
     } catch (error) {
+      if (
+        error.message &&
+        error.message.includes(
+          "A host object with that hostname already exists",
+        )
+      ) {
+        console.log(
+          `[Nameserver API] Nameserver ${nameserver} already exists for ${domain}, treating as success.`,
+        );
+
+        try {
+          // Update database with new nameserver info since it exists
+          await updateDomainInDatabase(userId, domain, {
+            "dnsConfiguration.customNameservers": true,
+            "dnsConfiguration.lastDNSUpdate": new Date(),
+          });
+        } catch (dbError) {
+          console.error(
+            "[Nameserver API] DB update failed for existing nameserver:",
+            dbError.message,
+          );
+        }
+
+        return res.json({
+          success: true,
+          message: "Nameserver already exists and is configured",
+          domain: domain.toLowerCase(),
+          nameserver: nameserver,
+          ipAddress: ipAddress || "",
+          data: { isExisting: true },
+        });
+      }
+
       console.error(
         "[Nameserver API] Error creating nameserver:",
         error.message,
