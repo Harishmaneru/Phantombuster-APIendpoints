@@ -449,53 +449,30 @@ const { MongoClient } = require("mongodb");
 // MongoDB connection using environment variable
 const url = process.env.ONEPGR_MONGO_URI;
 let client, LinkedInAccounts;
-let connectionPromise = null;
 
-/**
- * Enhanced connection logic to prevent race conditions.
- * Ensures only one connection attempt is made even if multiple functions call it simultaneously.
- */
 async function connectMongoDb() {
-  if (connectionPromise) return connectionPromise;
-
-  connectionPromise = (async () => {
-    try {
-      if (!process.env.ONEPGR_MONGO_URI) {
-        console.warn(
-          "⚠️ ONEPGR_MONGO_URI environment variable not set, using default localhost connection",
-        );
-      }
-
-      client = await MongoClient.connect(url || "mongodb://localhost:27017");
-      LinkedInAccounts = client
-        .db("onepgr_apps")
-        .collection("unipile-LinkedIn-data");
-
-      console.log(
-        "------------------LinkedIn Accounts MongoDB Connected---------------",
+  try {
+    if (!process.env.ONEPGR_MONGO_URI) {
+      console.warn(
+        "⚠️ ONEPGR_MONGO_URI environment variable not set, using default localhost connection",
       );
-      return true;
-    } catch (err) {
-      console.error("MongoDB connection error:", err);
-      connectionPromise = null; // Reset to allow retry on next call
-      throw err;
     }
-  })();
 
-  return connectionPromise;
-}
-
-/**
- * Helper to ensure the database is connected before executing any query.
- */
-async function ensureConnected() {
-  if (!LinkedInAccounts) {
-    await connectMongoDb();
+    client = await MongoClient.connect(url);
+    LinkedInAccounts = client
+      .db("onepgr_apps")
+      .collection("unipile-LinkedIn-data");
+    console.log(
+      "------------------LinkedIn Accounts MongoDB Connected---------------",
+    );
+  } catch (err) {
+    console.error("MongoDB connection error:", err);
+    process.exit(1);
   }
 }
 
-// Start connection attempt immediately on file load
-connectMongoDb().catch(() => {});
+// Initialize connection
+connectMongoDb();
 
 /**
  * Connect a LinkedIn account to a user
@@ -513,9 +490,8 @@ async function connectLinkedInAccount(
   name = null,
   metadata = {},
 ) {
-  await ensureConnected();
   try {
-    const updateData = {
+    const accountData = {
       user_id: userId,
       account_id: accountId,
       provider: provider,
@@ -524,30 +500,55 @@ async function connectLinkedInAccount(
       connected_at: new Date(),
       last_error: null,
       metadata: metadata,
+      created_at: new Date(),
       updated_at: new Date(),
     };
 
-    // Using upsert prevents issues where the user might double-click the connect button
-    const result = await LinkedInAccounts.updateOne(
-      { user_id: userId, provider: "LINKEDIN" },
-      {
-        $set: updateData,
-        $setOnInsert: { created_at: new Date() },
-      },
-      { upsert: true },
-    );
+    // Check if user already has a LinkedIn account
+    const existingAccount = await LinkedInAccounts.findOne({
+      user_id: userId,
+      provider: "LINKEDIN",
+    });
 
-    const action = result.upsertedCount > 0 ? "created" : "updated";
-    console.log(
-      `✅ ${action === "created" ? "Created new" : "Updated"} LinkedIn account for user ${userId}: ${accountId}`,
-    );
+    if (existingAccount) {
+      // Update existing account
+      const result = await LinkedInAccounts.updateOne(
+        { user_id: userId, provider: "LINKEDIN" },
+        {
+          $set: {
+            account_id: accountId,
+            name: name,
+            connected: true,
+            connected_at: new Date(),
+            last_error: null,
+            metadata: metadata,
+            updated_at: new Date(),
+          },
+        },
+      );
 
-    return {
-      success: true,
-      message: `LinkedIn account ${action} successfully`,
-      account_id: accountId,
-      action: action,
-    };
+      console.log(
+        `✅ Updated LinkedIn account for user ${userId}: ${accountId}`,
+      );
+      return {
+        success: true,
+        message: "LinkedIn account updated successfully",
+        account_id: accountId,
+        action: "updated",
+      };
+    } else {
+      // Create new account
+      const result = await LinkedInAccounts.insertOne(accountData);
+      console.log(
+        `✅ Created new LinkedIn account for user ${userId}: ${accountId}`,
+      );
+      return {
+        success: true,
+        message: "LinkedIn account connected successfully",
+        account_id: accountId,
+        action: "created",
+      };
+    }
   } catch (error) {
     console.error("Error connecting LinkedIn account:", error);
     return {
@@ -565,7 +566,6 @@ async function connectLinkedInAccount(
  * @returns {Promise<Object>} - Result of the operation
  */
 async function disconnectLinkedInAccount(userId, reason = "User disconnected") {
-  await ensureConnected();
   try {
     const result = await LinkedInAccounts.updateOne(
       { user_id: userId, provider: "LINKEDIN" },
@@ -610,7 +610,6 @@ async function disconnectLinkedInAccount(userId, reason = "User disconnected") {
  * @returns {Promise<Object>} - Account status
  */
 async function getLinkedInAccountStatus(userId) {
-  await ensureConnected();
   try {
     const account = await LinkedInAccounts.findOne({
       user_id: userId,
@@ -658,7 +657,6 @@ async function refreshLinkedInAccount(
   name = null,
   metadata = {},
 ) {
-  await ensureConnected();
   try {
     const result = await LinkedInAccounts.updateOne(
       { user_id: userId, provider: "LINKEDIN" },
@@ -676,7 +674,7 @@ async function refreshLinkedInAccount(
     );
 
     if (result.matchedCount === 0) {
-      // If no existing account, create a new one using the connect function
+      // If no existing account, create a new one
       return await connectLinkedInAccount(
         userId,
         newAccountId,
@@ -712,7 +710,6 @@ async function refreshLinkedInAccount(
  * @returns {Promise<Object>} - Result of the operation
  */
 async function handleAccountError(accountId, error) {
-  await ensureConnected();
   try {
     const result = await LinkedInAccounts.updateOne(
       { account_id: accountId },
@@ -754,85 +751,11 @@ async function handleAccountError(accountId, error) {
 }
 
 /**
- * Update LinkedIn account status by account ID
- * @param {string} accountId - Unipile account ID
- * @param {string} status - New status
- * @param {Object} webhookData - Full webhook payload
- * @returns {Promise<Object>} - Result of the operation
- */
-async function updateLinkedInAccountStatusByAccountId(
-  accountId,
-  status,
-  webhookData = {},
-) {
-  await ensureConnected();
-  try {
-    const updateFields = {
-      status: status,
-      updated_at: new Date(),
-      webhook_data: webhookData,
-    };
-
-    // If status is OK, mark as connected
-    if (
-      status === "OK" ||
-      status === "CREATION_SUCCESS" ||
-      status === "SYNC_SUCCESS"
-    ) {
-      updateFields.connected = true;
-      updateFields.last_error = null;
-      updateFields.connected_at = new Date(); // Update connected time only on fresh success
-    }
-    // If status indicates an issue but not full failure (e.g., STOPPED, CREDENTIALS)
-    else if (
-      status === "STOPPED" ||
-      status === "CREDENTIALS" ||
-      status === "ERROR"
-    ) {
-      updateFields.connected = false;
-      updateFields.last_error = `Account status: ${status}`;
-    }
-
-    const result = await LinkedInAccounts.updateOne(
-      { account_id: accountId },
-      { $set: updateFields },
-    );
-
-    if (result.matchedCount === 0) {
-      console.warn(
-        `⚠️ Account ${accountId} not found in database for status update: ${status}`,
-      );
-      return {
-        success: false,
-        message: "Account not found in database",
-        match_count: 0,
-      };
-    }
-
-    console.log(`✅ Updated account ${accountId} status to ${status}`);
-    return {
-      success: true,
-      message: "Account status updated",
-      account_id: accountId,
-      status: status,
-    };
-  } catch (error) {
-    console.error("Error updating account status by ID:", error);
-    return {
-      success: false,
-      message: "Failed to update account status",
-      error: error.message,
-    };
-  }
-}
-
-/**
  * Get all LinkedIn accounts (for admin purposes)
  * @param {Object} filters - Optional filters
  * @returns {Promise<Object>} - List of accounts
  */
 async function getAllLinkedInAccounts(filters = {}) {
-  await ensureConnected();
   try {
     const accounts = await LinkedInAccounts.find(filters).toArray();
     return {
@@ -856,7 +779,6 @@ async function getAllLinkedInAccounts(filters = {}) {
  * @returns {Promise<Object>} - Result of the operation
  */
 async function deleteLinkedInAccount(userId) {
-  await ensureConnected();
   try {
     const result = await LinkedInAccounts.deleteOne({
       user_id: userId,
@@ -893,5 +815,4 @@ module.exports = {
   handleAccountError,
   getAllLinkedInAccounts,
   deleteLinkedInAccount,
-  updateLinkedInAccountStatusByAccountId,
 };
