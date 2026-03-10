@@ -339,71 +339,188 @@ router.post("/api/unipile/auth/link", async (req, res) => {
 });
 
 // Webhook handler for account creation and errors
+// router.post("/api/unipile/webhook/unipile-account", async (req, res) => {
+//   try {
+//     console.log("=============== WEBHOOK PAYLOAD ===============");
+//     console.log(JSON.stringify(req.body, null, 2));
+
+//     // Initialize variables
+//     let status, account_id, name, provider, error, user_id, metadata;
+//     let eventType = "UNKNOWN";
+
+//     // 1. Handle AccountStatus events (CONNECTING, OK, SYNC_SUCCESS, STOPPED, etc.)
+//     if (req.body.AccountStatus) {
+//       const { AccountStatus } = req.body;
+//       account_id = AccountStatus.account_id;
+//       status = AccountStatus.message; // "OK", "CONNECTING", "SYNC_SUCCESS", etc.
+//       provider = AccountStatus.account_type;
+//       eventType = "AccountStatus";
+//     }
+//     // 2. Handle Account events (CREATION_SUCCESS, CREATION_FAILED)
+//     else if (req.body.Account) {
+//       // This structure might vary, adapting based on typical patterns or documentation
+//       // If Unipile sends "Account" for creation events
+//       const { Account } = req.body;
+//       account_id = Account.id || Account.account_id;
+//       status = Account.status || "CREATION_SUCCESS";
+//       name = Account.name;
+//       provider = Account.provider || Account.type;
+//       eventType = "Account";
+//     }
+//     // 3. Fallback to flat structure (what we had before, in case other events use it)
+//     else {
+//       ({ status, account_id, name, provider, error, user_id, metadata } =
+//         req.body);
+//       eventType = "Flat";
+//     }
+
+//     // Attempt to find user_id from query or metadata if not extracted yet
+//     const userIdFromQuery = req.query.user_id;
+//     // Metadata might be nested in the event object or at root
+//     const metadataFromEvent = req.body.metadata || req.body.Account?.metadata;
+//     const userIdFromMetadata = metadataFromEvent?.user_id;
+
+//     // Final user_id resolution
+//     const finalUserId = user_id || userIdFromQuery || userIdFromMetadata;
+
+//     console.log(`Processing ${eventType} event:`, {
+//       status,
+//       account_id,
+//       finalUserId,
+//     });
+
+//     // --- LOGIC HANDLING ---
+
+//     // Case A: Account Created Successfully
+//     if (
+//       (status === "CREATION_SUCCESS" || status === "OK") &&
+//       account_id &&
+//       eventType === "Account"
+//     ) {
+//       console.log(`✅ Account created/active: ${account_id}`);
+
+//       if (finalUserId) {
+//         // Update/Connect in DB
+//         // ... (existing logic to connect account)
+//         const dbResult = await connectLinkedInAccount(
+//           finalUserId,
+//           account_id,
+//           provider || "LINKEDIN",
+//           name || "LinkedIn Account",
+//           {
+//             connected_via: "webhook",
+//             webhook_data: req.body,
+//             status: status,
+//           },
+//         );
+//         if (!dbResult.success)
+//           console.error("DB Connect Error:", dbResult.error);
+//       }
+//     }
+//     // Case B: Handling AccountStatus events (Lifecycle updates)
+//     else if (eventType === "AccountStatus" && account_id) {
+//       console.log(`ℹ️ Account Status Update: ${status} for ${account_id}`);
+
+//       // Update DB by account_id (no user_id required)
+//       const updateResult = await updateLinkedInAccountStatusByAccountId(
+//         account_id,
+//         status,
+//         req.body,
+//       );
+
+//       if (!updateResult.success && updateResult.match_count === 0) {
+//         console.warn(
+//           `⚠️ Could not update status for account ${account_id} - account not found in DB.`,
+//         );
+//       }
+//     }
+
+//     // Case C: Explicit Errors/Stopped (Fallback if not caught by AccountStatus)
+//     else if (
+//       (status === "CREATION_FAILED" ||
+//         status === "STOPPED" ||
+//         status === "ERROR") &&
+//       finalUserId
+//     ) {
+//       console.error(
+//         `❌ Account Issue: ${status} - ${error || "No error details"}`,
+//       );
+//       // Handle error/disconnection logic
+//       await disconnectLinkedInAccount(
+//         finalUserId,
+//         error || `Account status: ${status}`,
+//       );
+//     }
+
+//     res.json({ success: true, message: "Webhook processed" });
+//   } catch (err) {
+//     console.error("Webhook processing error:", err);
+//     res.status(500).json({ success: false, error: err.message });
+//   }
+// });
+
+// Webhook handler for account creation and errors
 router.post("/api/unipile/webhook/unipile-account", async (req, res) => {
   try {
     console.log("=============== WEBHOOK PAYLOAD ===============");
     console.log(JSON.stringify(req.body, null, 2));
 
-    // Initialize variables
-    let status, account_id, name, provider, error, user_id, metadata;
-    let eventType = "UNKNOWN";
+    let status, account_id, name, provider, error;
 
-    // 1. Handle AccountStatus events (CONNECTING, OK, SYNC_SUCCESS, STOPPED, etc.)
+    // Extract data safely regardless of Unipile's payload shape
     if (req.body.AccountStatus) {
-      const { AccountStatus } = req.body;
-      account_id = AccountStatus.account_id;
-      status = AccountStatus.message; // "OK", "CONNECTING", "SYNC_SUCCESS", etc.
-      provider = AccountStatus.account_type;
-      eventType = "AccountStatus";
-    }
-    // 2. Handle Account events (CREATION_SUCCESS, CREATION_FAILED)
-    else if (req.body.Account) {
-      // This structure might vary, adapting based on typical patterns or documentation
-      // If Unipile sends "Account" for creation events
-      const { Account } = req.body;
-      account_id = Account.id || Account.account_id;
-      status = Account.status || "CREATION_SUCCESS";
-      name = Account.name;
-      provider = Account.provider || Account.type;
-      eventType = "Account";
-    }
-    // 3. Fallback to flat structure (what we had before, in case other events use it)
-    else {
-      ({ status, account_id, name, provider, error, user_id, metadata } =
-        req.body);
-      eventType = "Flat";
+      account_id = req.body.AccountStatus.account_id;
+      status = req.body.AccountStatus.message; // "OK", "STOPPED", etc.
+      provider = req.body.AccountStatus.account_type;
+    } else if (req.body.Account) {
+      account_id = req.body.Account.id || req.body.Account.account_id;
+      status = req.body.Account.status || "CREATION_SUCCESS";
+      name = req.body.Account.name;
+      provider = req.body.Account.provider || req.body.Account.type;
+    } else {
+      ({ status, account_id, name, provider, error } = req.body);
     }
 
-    // Attempt to find user_id from query or metadata if not extracted yet
-    const userIdFromQuery = req.query.user_id;
-    // Metadata might be nested in the event object or at root
-    const metadataFromEvent = req.body.metadata || req.body.Account?.metadata;
-    const userIdFromMetadata = metadataFromEvent?.user_id;
+    // Resolve user_id from various possible locations
+    const finalUserId =
+      req.body.user_id ||
+      req.query.user_id ||
+      req.body.metadata?.user_id ||
+      req.body.Account?.metadata?.user_id;
 
-    // Final user_id resolution
-    const finalUserId = user_id || userIdFromQuery || userIdFromMetadata;
+    console.log(
+      `Processing Webhook: status=${status}, account_id=${account_id}, user_id=${finalUserId}`,
+    );
 
-    console.log(`Processing ${eventType} event:`, {
-      status,
-      account_id,
-      finalUserId,
-    });
+    if (!account_id) {
+      return res.json({
+        success: true,
+        message: "No account_id in payload, ignoring.",
+      });
+    }
 
-    // --- LOGIC HANDLING ---
-
-    // Case A: Account Created Successfully
+    // --- CASE 1: SUCCESSFUL CONNECTION OR SYNC ---
     if (
-      (status === "CREATION_SUCCESS" || status === "OK") &&
-      account_id &&
-      eventType === "Account"
+      ["CREATION_SUCCESS", "OK", "SYNC_SUCCESS", "CONNECTED"].includes(status)
     ) {
-      console.log(`✅ Account created/active: ${account_id}`);
+      // First, try to update the account if it already exists in the DB
+      const updateResult = await updateLinkedInAccountStatusByAccountId(
+        account_id,
+        status,
+        req.body,
+      );
 
-      if (finalUserId) {
-        // Update/Connect in DB
-        // ... (existing logic to connect account)
-        const dbResult = await connectLinkedInAccount(
-          finalUserId,
+      // 🔥 THE FIX: If the account DOES NOT exist in the DB, we MUST create it
+      if (!updateResult.success || updateResult.match_count === 0) {
+        console.log(
+          `⚠️ Account ${account_id} not found in DB. Creating new record...`,
+        );
+
+        // Restore your fallback temporary ID logic
+        const targetUserId = finalUserId || `temp_${account_id}_${Date.now()}`;
+
+        await connectLinkedInAccount(
+          targetUserId,
           account_id,
           provider || "LINKEDIN",
           name || "LinkedIn Account",
@@ -411,48 +528,47 @@ router.post("/api/unipile/webhook/unipile-account", async (req, res) => {
             connected_via: "webhook",
             webhook_data: req.body,
             status: status,
+            is_temporary: !finalUserId,
+            needs_user_association: !finalUserId,
           },
         );
-        if (!dbResult.success)
-          console.error("DB Connect Error:", dbResult.error);
+      } else {
+        console.log(
+          `✅ Updated existing account ${account_id} to status ${status}`,
+        );
       }
     }
-    // Case B: Handling AccountStatus events (Lifecycle updates)
-    else if (eventType === "AccountStatus" && account_id) {
-      console.log(`ℹ️ Account Status Update: ${status} for ${account_id}`);
+    // --- CASE 2: ERRORS AND DISCONNECTIONS ---
+    else if (
+      [
+        "CREATION_FAILED",
+        "STOPPED",
+        "ERROR",
+        "ACCOUNT_ERROR",
+        "ACCOUNT_STOPPED",
+      ].includes(status)
+    ) {
+      console.error(
+        `❌ Account Issue: ${status} - ${error || "Check Unipile Dashboard"}`,
+      );
 
-      // Update DB by account_id (no user_id required)
-      const updateResult = await updateLinkedInAccountStatusByAccountId(
+      // Disconnect in DB if we know the user
+      if (finalUserId) {
+        await disconnectLinkedInAccount(
+          finalUserId,
+          error || `Status: ${status}`,
+        );
+      }
+
+      // Also update the status by account ID to ensure it's marked disconnected
+      await updateLinkedInAccountStatusByAccountId(
         account_id,
         status,
         req.body,
       );
-
-      if (!updateResult.success && updateResult.match_count === 0) {
-        console.warn(
-          `⚠️ Could not update status for account ${account_id} - account not found in DB.`,
-        );
-      }
     }
 
-    // Case C: Explicit Errors/Stopped (Fallback if not caught by AccountStatus)
-    else if (
-      (status === "CREATION_FAILED" ||
-        status === "STOPPED" ||
-        status === "ERROR") &&
-      finalUserId
-    ) {
-      console.error(
-        `❌ Account Issue: ${status} - ${error || "No error details"}`,
-      );
-      // Handle error/disconnection logic
-      await disconnectLinkedInAccount(
-        finalUserId,
-        error || `Account status: ${status}`,
-      );
-    }
-
-    res.json({ success: true, message: "Webhook processed" });
+    res.json({ success: true, message: "Webhook processed successfully" });
   } catch (err) {
     console.error("Webhook processing error:", err);
     res.status(500).json({ success: false, error: err.message });
