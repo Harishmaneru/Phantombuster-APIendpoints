@@ -482,6 +482,90 @@ router.post("/api/senderemail/smtpauth", async (req, res) => {
   }
 });
 
+// 🏥 Health Check - Verify SMTP & IMAP connectivity
+router.post("/api/email/healthcheck", async (req, res) => {
+  const { token, email } = req.body;
+
+  if (!token || !email) {
+    return res
+      .status(400)
+      .json({ success: false, error: "Missing token or email" });
+  }
+
+  const smtp = await SMTPAuth.findOne({ email, token });
+  if (!smtp) {
+    return res
+      .status(403)
+      .json({ success: false, error: "Invalid token or email" });
+  }
+
+  let decryptedPass;
+  try {
+    decryptedPass = decrypt(smtp.pass);
+  } catch (err) {
+    return res.status(500).json({
+      success: false,
+      error: "Failed to decrypt stored credentials",
+    });
+  }
+
+  const results = { smtp: null, imap: null };
+
+  // Test SMTP
+  try {
+    const transporter = nodemailer.createTransport({
+      host: smtp.host,
+      port: smtp.port,
+      secure: smtp.port === 465,
+      auth: { user: email, pass: decryptedPass },
+      tls: { rejectUnauthorized: false },
+      connectionTimeout: 10000,
+    });
+    await transporter.verify();
+    results.smtp = { success: true, host: smtp.host, port: smtp.port };
+  } catch (err) {
+    results.smtp = {
+      success: false,
+      host: smtp.host,
+      port: smtp.port,
+      error: err.message,
+    };
+  }
+
+  // Test IMAP
+  const imapHost = smtp.host.replace("smtp.", "imap.");
+  try {
+    const client = new ImapFlow({
+      host: imapHost,
+      port: 993,
+      secure: true,
+      auth: { user: email, pass: decryptedPass },
+      logger: false,
+      timeout: 10000,
+    });
+    await client.connect();
+    await client.logout();
+    results.imap = { success: true, host: imapHost, port: 993 };
+  } catch (err) {
+    results.imap = {
+      success: false,
+      host: imapHost,
+      port: 993,
+      error: err.message,
+    };
+  }
+
+  const allHealthy = results.smtp.success && results.imap.success;
+
+  return res.status(allHealthy ? 200 : 503).json({
+    success: allHealthy,
+    email,
+    status: allHealthy ? "healthy" : "degraded",
+    services: results,
+    timestamp: new Date().toISOString(),
+  });
+});
+
 // 2️⃣ Send Email
 // router.post('/api/emailsend', async (req, res) => {
 //   try {
