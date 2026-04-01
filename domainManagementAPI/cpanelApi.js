@@ -23,6 +23,7 @@ const { slackLogger } = require('../webhooks/slackLogger');
 const WHM_HOST = process.env.WHM_HOST;
 const MASTER_USER = process.env.CPANEL_MASTER_USER;
 const CPANEL_TOKEN = process.env.CPANEL_TOKEN;
+const WHM_TOKEN = process.env.WHM_TOKEN;
 
 // Create custom HTTPS agent
 const agent = new https.Agent({
@@ -33,7 +34,7 @@ const agent = new https.Agent({
 
 // Validate environment variables
 if (!WHM_HOST || !MASTER_USER || !CPANEL_TOKEN) {
-  console.error('Missing environment variables:', { WHM_HOST, MASTER_USER, CPANEL_TOKEN });
+  console.error('Missing environment variables:', { WHM_HOST, MASTER_USER, CPANEL_TOKEN: !!CPANEL_TOKEN, WHM_TOKEN: !!WHM_TOKEN });
   throw new Error('Missing required environment variables');
 }
 
@@ -113,7 +114,7 @@ async function whmRequest(functionName, params = {}) {
     const response = await axios.get(url, {
       httpsAgent: agent,
       headers: {
-        'Authorization': `WHM ${MASTER_USER}:${CPANEL_TOKEN}`,
+        'Authorization': `WHM ${MASTER_USER}:${WHM_TOKEN || CPANEL_TOKEN}`,
         'Accept': 'application/json',
         'Content-Type': 'application/json'
       },
