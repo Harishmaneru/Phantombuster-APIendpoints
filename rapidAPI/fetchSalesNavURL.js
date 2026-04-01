@@ -52,7 +52,9 @@ async function fetchSalesNavURL(salesNavUrl, limit = 25) {
             console.log(`Status check attempt ${retries + 1}: ${status}`);
 
             if (status === 'done') break;
-            if (status === 'pending') {
+            
+            const isProcessingStatus = ['pending', 'processing', 'in-progress', 'in_progress', 'queued'].includes(status);
+            if (isProcessingStatus) {
                 retries++;
                 await new Promise(resolve => setTimeout(resolve, retryDelay));
                 continue;
@@ -61,12 +63,14 @@ async function fetchSalesNavURL(salesNavUrl, limit = 25) {
             throw new Error(`Unexpected search status: ${status}`);
         }
 
-        if (retries === maxRetries && status === 'pending') {
+        const finalIsProcessing = ['pending', 'processing', 'in-progress', 'in_progress', 'queued'].includes(status);
+        if (retries === maxRetries && finalIsProcessing) {
             return {
                 status: 0,
                 salesNavigatorQueueMessage: {
                     request_id: requestId,
-                    message: 'Your search was added to queue. Please wait and try again later!'
+                    search_status: status,
+                    message: `Your search is currently taking longer to resolve and is in '${status}' state in the background. Please wait and try checking the status later using your request_id.`
                 }
             };
         }
