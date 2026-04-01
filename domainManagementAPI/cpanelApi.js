@@ -1,9 +1,9 @@
-const express = require('express');
+const express = require("express");
 const router = express.Router();
-const axios = require('axios');
-const https = require('https');
-const rateLimit = require('express-rate-limit');
-const qs = require('qs');
+const axios = require("axios");
+const https = require("https");
+const rateLimit = require("express-rate-limit");
+const qs = require("qs");
 
 // Required Environment Variables:
 // - WHM_HOST: IP address or hostname of your WHM server
@@ -11,13 +11,13 @@ const qs = require('qs');
 // - CPANEL_TOKEN: cPanel API token for the master user
 // Note: DMARC operations now use cPanel UAPI (same as email operations) instead of WHM API
 // Import the NamecheapDomain model from the existing schema
-const { NamecheapDomain } = require('./nameCheapDomainApi.js');
+const { NamecheapDomain } = require("./nameCheapDomainApi.js");
 
 // Import simple file logging system
-const fileLogger = require('../loggingSystem/fileLogger');
+const fileLogger = require("../loggingSystem/fileLogger");
 
 // Import Slack logger for webhook logging
-const { slackLogger } = require('../webhooks/slackLogger');
+const { slackLogger } = require("../webhooks/slackLogger");
 
 // Configuration - USE IP ADDRESS HERE
 const WHM_HOST = process.env.WHM_HOST;
@@ -29,13 +29,18 @@ const WHM_TOKEN = process.env.WHM_TOKEN;
 const agent = new https.Agent({
   rejectUnauthorized: false,
   family: 4,
-  timeout: 60000
+  timeout: 60000,
 });
 
 // Validate environment variables
 if (!WHM_HOST || !MASTER_USER || !CPANEL_TOKEN) {
-  console.error('Missing environment variables:', { WHM_HOST, MASTER_USER, CPANEL_TOKEN: !!CPANEL_TOKEN, WHM_TOKEN: !!WHM_TOKEN });
-  throw new Error('Missing required environment variables');
+  console.error("Missing environment variables:", {
+    WHM_HOST,
+    MASTER_USER,
+    CPANEL_TOKEN: !!CPANEL_TOKEN,
+    WHM_TOKEN: !!WHM_TOKEN,
+  });
+  throw new Error("Missing required environment variables");
 }
 
 // Rate limiting middleware
@@ -44,7 +49,7 @@ const emailCreationLimiter = rateLimit({
   max: 10, // limit each IP to 10 email creation requests per windowMs
   message: {
     success: false,
-    error: 'Too many email creation requests, please try again later.'
+    error: "Too many email creation requests, please try again later.",
   },
   standardHeaders: true,
   legacyHeaders: false,
@@ -52,13 +57,18 @@ const emailCreationLimiter = rateLimit({
 
 // Input validation functions
 function isValidDomain(domain) {
-  const domainRegex = /^[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*$/;
+  const domainRegex =
+    /^[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*$/;
   return domainRegex.test(domain) && domain.length <= 253;
 }
 
 function isValidEmailUser(username) {
   const usernameRegex = /^[a-zA-Z0-9._%+-]+$/;
-  return usernameRegex.test(username) && username.length >= 3 && username.length <= 64;
+  return (
+    usernameRegex.test(username) &&
+    username.length >= 3 &&
+    username.length <= 64
+  );
 }
 
 function isValidPassword(password) {
@@ -66,35 +76,35 @@ function isValidPassword(password) {
 }
 
 // cPanel API helper functions
-async function cpanelRequest(endpoint, params = {}, method = 'GET') {
+async function cpanelRequest(endpoint, params = {}, method = "GET") {
   try {
     let url = `https://${WHM_HOST}:2083/execute/${endpoint}`;
     let requestConfig = {
       httpsAgent: agent,
       headers: {
-        'Authorization': `cpanel ${MASTER_USER}:${CPANEL_TOKEN}`,
-        'Accept': 'application/json',
-        'Content-Type': 'application/json'
+        Authorization: `cpanel ${MASTER_USER}:${CPANEL_TOKEN}`,
+        Accept: "application/json",
+        "Content-Type": "application/json",
       },
-      timeout: 30000
+      timeout: 30000,
     };
 
-    if (method === 'GET') {
+    if (method === "GET") {
       const queryString = new URLSearchParams(params).toString();
-      url += queryString ? '?' + queryString : '';
-      console.log('cPanel API Request (GET):', url);
+      url += queryString ? "?" + queryString : "";
+      console.log("cPanel API Request (GET):", url);
     } else {
-      requestConfig.method = 'POST';
+      requestConfig.method = "POST";
       requestConfig.data = params;
-      console.log('cPanel API Request (POST):', url, 'with data:', params);
+      console.log("cPanel API Request (POST):", url, "with data:", params);
     }
 
     const response = await axios(url, requestConfig);
 
-    console.log('cPanel API Response:', response.data);
+    console.log("cPanel API Response:", response.data);
     return response.data;
   } catch (error) {
-    console.error('cPanel API Error:', error.response?.data || error.message);
+    console.error("cPanel API Error:", error.response?.data || error.message);
     throw error;
   }
 }
@@ -103,28 +113,28 @@ async function cpanelRequest(endpoint, params = {}, method = 'GET') {
 async function whmRequest(functionName, params = {}) {
   try {
     const queryString = new URLSearchParams({
-      'api.version': '1',
-      ...params
+      "api.version": "1",
+      ...params,
     }).toString();
 
     const url = `https://${WHM_HOST}:2087/json-api/${functionName}?${queryString}`;
 
-    console.log('WHM API Request:', url);
+    console.log("WHM API Request:", url);
 
     const response = await axios.get(url, {
       httpsAgent: agent,
       headers: {
-        'Authorization': `WHM ${MASTER_USER}:${WHM_TOKEN || CPANEL_TOKEN}`,
-        'Accept': 'application/json',
-        'Content-Type': 'application/json'
+        Authorization: `WHM ${MASTER_USER}:${WHM_TOKEN || CPANEL_TOKEN}`,
+        Accept: "application/json",
+        "Content-Type": "application/json",
       },
-      timeout: 30000
+      timeout: 30000,
     });
 
-    console.log('WHM API Response:', response.data);
+    console.log("WHM API Response:", response.data);
     return response.data;
   } catch (error) {
-    console.error('WHM API Error:', error.response?.data || error.message);
+    console.error("WHM API Error:", error.response?.data || error.message);
     throw error;
   }
 }
@@ -132,7 +142,7 @@ async function whmRequest(functionName, params = {}) {
 // Check if domain exists as addon domain
 async function checkAddonDomainExists(domain) {
   try {
-    const result = await cpanelRequest('DomainInfo/list_domains');
+    const result = await cpanelRequest("DomainInfo/list_domains");
     if (result.data) {
       // Check if it's the main domain
       if (result.data.main_domain === domain) {
@@ -141,15 +151,17 @@ async function checkAddonDomainExists(domain) {
       }
 
       // Check if it's already an addon domain
-      if (result.data.addon_domains &&
-        result.data.addon_domains.some(d => d.domain === domain)) {
+      if (
+        result.data.addon_domains &&
+        result.data.addon_domains.some((d) => d.domain === domain)
+      ) {
         console.log(`Domain ${domain} is already an addon domain`);
         return true;
       }
     }
     return false;
   } catch (error) {
-    console.error('Error checking addon domain:', error);
+    console.error("Error checking addon domain:", error);
     return false;
   }
 }
@@ -157,8 +169,8 @@ async function checkAddonDomainExists(domain) {
 // Check domain ownership using WHM
 async function checkDomainOwnership(domain) {
   try {
-    const result = await whmRequest('get_domain_info', {
-      domain: domain.toLowerCase()
+    const result = await whmRequest("get_domain_info", {
+      domain: domain.toLowerCase(),
     });
 
     if (result.status === 1 && result.data) {
@@ -167,7 +179,7 @@ async function checkDomainOwnership(domain) {
         exists: true,
         owner: result.data.owner,
         type: result.data.type,
-        status: result.data.status
+        status: result.data.status,
       };
     }
     return { exists: false };
@@ -181,30 +193,39 @@ async function checkDomainOwnership(domain) {
 async function addAddonDomain(domain) {
   try {
     // First check if this is the main domain
-    const domainInfo = await cpanelRequest('DomainInfo/list_domains');
+    const domainInfo = await cpanelRequest("DomainInfo/list_domains");
     if (domainInfo.data && domainInfo.data.main_domain === domain) {
-      console.log(`Domain ${domain} is the main domain, no need to add as addon domain`);
-      return { status: 1, data: 'Main domain detected' };
+      console.log(
+        `Domain ${domain} is the main domain, no need to add as addon domain`,
+      );
+      return { status: 1, data: "Main domain detected" };
     }
 
-    const subdomain = `${domain.replace(/[^a-zA-Z0-9]/g, '_')}_addon`;
+    const subdomain = `${domain.replace(/[^a-zA-Z0-9]/g, "_")}_addon`;
     const dir = `public_html/${domain}`;
 
-    const result = await cpanelRequest('AddonDomain/addaddondomain', {
+    const result = await cpanelRequest("AddonDomain/addaddondomain", {
       newdomain: domain,
       subdomain: subdomain,
-      dir: dir
+      dir: dir,
     });
 
-    console.log('Addon domain added:', result);
+    console.log("Addon domain added:", result);
     return result;
   } catch (error) {
-    console.error('Error adding addon domain:', error);
+    console.error("Error adding addon domain:", error);
     // If AddonDomain module is not available, we'll continue without it
-    if (error.response?.data?.errors &&
-      error.response.data.errors.some(err => err.includes('AddonDomain'))) {
-      console.log('AddonDomain module not available, continuing without addon domain setup');
-      return { status: 1, data: 'AddonDomain module not available, continuing' };
+    if (
+      error.response?.data?.errors &&
+      error.response.data.errors.some((err) => err.includes("AddonDomain"))
+    ) {
+      console.log(
+        "AddonDomain module not available, continuing without addon domain setup",
+      );
+      return {
+        status: 1,
+        data: "AddonDomain module not available, continuing",
+      };
     }
     throw error;
   }
@@ -214,7 +235,7 @@ async function addAddonDomain(domain) {
  * Adds a domain as addon if not already added
  * This function uses browser-style cPanel form requests to ensure compatibility
  * with various cPanel configurations and hosting providers.
- * 
+ *
  * @param {string} domain - The domain to add
  * @returns {Promise<{status: number, message?: string, error?: string}>}
  *   - status: 1 for success, 0 for failure
@@ -231,7 +252,7 @@ async function addDomainIfNotExists(domain) {
           Authorization: `cpanel ${MASTER_USER}:${CPANEL_TOKEN}`,
         },
         httpsAgent: new (require("https").Agent)({ rejectUnauthorized: false }),
-      }
+      },
     );
 
     const domainsList = checkRes.data?.data?.main_domain
@@ -268,7 +289,7 @@ async function addDomainIfNotExists(domain) {
         httpsAgent: new (require("https").Agent)({
           rejectUnauthorized: false,
         }),
-      }
+      },
     );
 
     const result = response.data;
@@ -282,7 +303,9 @@ async function addDomainIfNotExists(domain) {
     } else {
       return {
         status: 0,
-        error: result.cpanelresult?.data?.[0]?.reason || "Addon domain creation failed",
+        error:
+          result.cpanelresult?.data?.[0]?.reason ||
+          "Addon domain creation failed",
       };
     }
   } catch (err) {
@@ -298,12 +321,12 @@ async function userOwnsDomain(userId, domain) {
   try {
     const domainRecord = await NamecheapDomain.findOne({
       userId: userId,
-      domain: domain.toLowerCase()
+      domain: domain.toLowerCase(),
     });
 
     return !!domainRecord && domainRecord.domainStatus.isActive;
   } catch (error) {
-    console.error('Error checking domain ownership:', error);
+    console.error("Error checking domain ownership:", error);
     return false;
   }
 }
@@ -312,48 +335,55 @@ async function userOwnsDomain(userId, domain) {
 async function listAvailableEmailFunctions() {
   try {
     // Try to get available functions for Email module
-    const result = await cpanelRequest('Email/list_functions');
+    const result = await cpanelRequest("Email/list_functions");
     return result;
   } catch (error) {
-    console.error('Error listing email functions:', error);
+    console.error("Error listing email functions:", error);
     return null;
   }
 }
 
 // Test route to check domain information
-router.get('/cpanel/test-domain-info', async (req, res) => {
+router.get("/cpanel/test-domain-info", async (req, res) => {
   try {
-    const domainInfo = await cpanelRequest('DomainInfo/list_domains');
+    const domainInfo = await cpanelRequest("DomainInfo/list_domains");
     res.json({
       success: true,
       domainInfo: domainInfo,
-      message: 'Domain information retrieved successfully'
+      message: "Domain information retrieved successfully",
     });
   } catch (err) {
-    console.error('Failed to get domain info:', err.message);
+    console.error("Failed to get domain info:", err.message);
     res.status(500).json({
       success: false,
-      error: err.message
+      error: err.message,
     });
   }
 });
 
-router.post('/cpanel/add-domain', async (req, res) => {
+router.post("/cpanel/add-domain", async (req, res) => {
   const { userId, domain, subdomain = null, directory = null } = req.body;
 
   if (!userId || !domain) {
-    return res.status(400).json({ success: false, error: 'userId and domain are required.' });
+    return res
+      .status(400)
+      .json({ success: false, error: "userId and domain are required." });
   }
 
   if (!isValidDomain(domain)) {
-    return res.status(400).json({ success: false, error: 'Invalid domain format.' });
+    return res
+      .status(400)
+      .json({ success: false, error: "Invalid domain format." });
   }
 
   try {
     // (Optional) Step: Verify user owns domain
     const domainOwnership = await userOwnsDomain(userId, domain);
     if (!domainOwnership) {
-      return res.status(403).json({ success: false, error: 'Domain not registered to user or not active.' });
+      return res.status(403).json({
+        success: false,
+        error: "Domain not registered to user or not active.",
+      });
     }
 
     // (Optional) Step: Check if domain already exists
@@ -361,25 +391,28 @@ router.post('/cpanel/add-domain', async (req, res) => {
     if (domainExists) {
       return res.status(409).json({
         success: false,
-        error: 'Domain already exists in cPanel.',
-        domain: domain.toLowerCase()
+        error: "Domain already exists in cPanel.",
+        domain: domain.toLowerCase(),
       });
     }
 
     const safeDomain = domain.toLowerCase();
-    const autoSubdomain = subdomain || `${safeDomain.replace(/[^a-zA-Z0-9]/g, '_')}_addon`;
+    const autoSubdomain =
+      subdomain || `${safeDomain.replace(/[^a-zA-Z0-9]/g, "_")}_addon`;
     const autoDirectory = directory || `public_html/${safeDomain}`;
 
     // ✅ Add domain using WHM API
-    const whmResult = await whmRequest('createaddondomain', {
+    const whmResult = await whmRequest("createaddondomain", {
       user: MASTER_USER,
       domain: safeDomain,
       dir: autoDirectory,
-      subdomain: autoSubdomain
+      subdomain: autoSubdomain,
     });
 
     if (!whmResult || whmResult.metadata?.result !== 1) {
-      throw new Error(whmResult.metadata?.reason || 'WHM API failed without clear reason');
+      throw new Error(
+        whmResult.metadata?.reason || "WHM API failed without clear reason",
+      );
     }
 
     // (Optional) Save domain config to DB
@@ -387,82 +420,82 @@ router.post('/cpanel/add-domain', async (req, res) => {
       { userId, domain: safeDomain },
       {
         $set: {
-          'cpanelConfiguration.domainAdded': true,
-          'cpanelConfiguration.domainAddedAt': new Date(),
-          'cpanelConfiguration.subdomain': autoSubdomain,
-          'cpanelConfiguration.directory': autoDirectory,
-          updatedAt: new Date()
-        }
+          "cpanelConfiguration.domainAdded": true,
+          "cpanelConfiguration.domainAddedAt": new Date(),
+          "cpanelConfiguration.subdomain": autoSubdomain,
+          "cpanelConfiguration.directory": autoDirectory,
+          updatedAt: new Date(),
+        },
       },
-      { new: true }
+      { new: true },
     );
 
     return res.json({
       success: true,
-      message: 'Domain added successfully via WHM API',
+      message: "Domain added successfully via WHM API",
       domain: safeDomain,
       subdomain: autoSubdomain,
       directory: autoDirectory,
       data: whmResult.data,
       databaseRecord: {
         updated: !!updatedDomain,
-        domainId: updatedDomain?._id
-      }
+        domainId: updatedDomain?._id,
+      },
     });
-
   } catch (error) {
-    console.error('WHM API error:', error.message);
+    console.error("WHM API error:", error.message);
     return res.status(500).json({
       success: false,
-      error: 'Failed to add domain via WHM API',
-      details: error.response?.data || error.message
+      error: "Failed to add domain via WHM API",
+      details: error.response?.data || error.message,
     });
   }
 });
 // Route: Create Email Account with Addon Domain Support
-router.post('/cpanel/create-email', emailCreationLimiter, async (req, res) => {
+router.post("/cpanel/create-email", emailCreationLimiter, async (req, res) => {
   const { userId, domain, username, password, storage = 512 } = req.body;
 
   // Input validation
   if (!userId || !domain || !username || !password) {
     return res.status(400).json({
       success: false,
-      error: 'userId, domain, username, and password are required.'
+      error: "userId, domain, username, and password are required.",
     });
   }
 
   if (!isValidDomain(domain)) {
     return res.status(400).json({
       success: false,
-      error: 'Invalid domain format.'
+      error: "Invalid domain format.",
     });
   }
 
   if (!isValidEmailUser(username)) {
     return res.status(400).json({
       success: false,
-      error: 'Invalid username format. Username must be 3-64 characters and contain only letters, numbers, and common symbols.'
+      error:
+        "Invalid username format. Username must be 3-64 characters and contain only letters, numbers, and common symbols.",
     });
   }
 
-  if (username.toLowerCase() === 'cpanel') {
+  if (username.toLowerCase() === "cpanel") {
     return res.status(400).json({
       success: false,
-      error: 'You cannot use "cpanel" as an email account username.'
+      error: 'You cannot use "cpanel" as an email account username.',
     });
   }
 
   if (!isValidPassword(password)) {
     return res.status(400).json({
       success: false,
-      error: 'Password must be between 8 and 128 characters long.'
+      error: "Password must be between 8 and 128 characters long.",
     });
   }
 
-  if (typeof storage !== 'number' || storage < 10 || storage > 10240) {
+  if (typeof storage !== "number" || storage < 10 || storage > 10240) {
     return res.status(400).json({
       success: false,
-      error: 'Storage must be between 10 and 10240 MB.'
+      error: "Storage must be between 10 and 10240 MB.",
     });
   }
 
@@ -472,23 +505,28 @@ router.post('/cpanel/create-email', emailCreationLimiter, async (req, res) => {
     if (!domainOwnership) {
       return res.status(403).json({
         success: false,
-        error: 'Domain not registered to user or domain is not active.'
+        error: "Domain not registered to user or domain is not active.",
       });
     }
 
     // Step 2: Try to create email account FIRST (before parking domain)
-    console.log(`🔍 STEP 1: Attempting to create email account for domain ${domain} FIRST...`);
+    console.log(
+      `🔍 STEP 1: Attempting to create email account for domain ${domain} FIRST...`,
+    );
 
     const emailParams = {
       email: username.toLowerCase(),
       password: password,
       domain: domain.toLowerCase(),
       quota: storage,
-      send_welcome_email: '1',
-      skip_update_db: '0'
+      send_welcome_email: "1",
+      skip_update_db: "0",
     };
 
-    console.log('Creating email with params:', { ...emailParams, password: '[HIDDEN]' });
+    console.log("Creating email with params:", {
+      ...emailParams,
+      password: "[HIDDEN]",
+    });
 
     // Try WHM API first, then fall back to cPanel API
     let emailResult;
@@ -496,28 +534,31 @@ router.post('/cpanel/create-email', emailCreationLimiter, async (req, res) => {
     let domainWasAdded = false;
 
     try {
-      console.log(' Trying WHM API for email creation...');
-      emailResult = await whmRequest('add_pop', {
+      console.log(" Trying WHM API for email creation...");
+      emailResult = await whmRequest("add_pop", {
         email: `${username.toLowerCase()}@${domain.toLowerCase()}`,
         password: password,
-        quota: storage
+        quota: storage,
       });
       // WHM API returns different format, normalize it
       if (emailResult.status === 1) {
         emailResult = { status: 1, data: emailResult.data };
       } else {
-        throw new Error(emailResult.error || 'WHM API email creation failed');
+        throw new Error(emailResult.error || "WHM API email creation failed");
       }
     } catch (whmError) {
-      console.log('WHM API failed, trying cPanel API...', whmError.message);
-      emailResult = await cpanelRequest('Email/add_pop', emailParams, 'POST');
+      console.log("WHM API failed, trying cPanel API...", whmError.message);
+      emailResult = await cpanelRequest("Email/add_pop", emailParams, "POST");
     }
 
-    console.log('📊 FIRST EMAIL CREATION RESULT:', JSON.stringify(emailResult, null, 2));
+    console.log(
+      "📊 FIRST EMAIL CREATION RESULT:",
+      JSON.stringify(emailResult, null, 2),
+    );
 
     // If email creation failed, THEN try to add domain and retry
     if (emailResult.status !== 1) {
-      console.log(' Email creation failed, NOW attempting to add domain...');
+      console.log(" Email creation failed, NOW attempting to add domain...");
 
       // Try to add domain as addon domain
       domainCheck = await addDomainIfNotExists(domain);
@@ -531,54 +572,65 @@ router.post('/cpanel/create-email', emailCreationLimiter, async (req, res) => {
       console.log(`✅Domain verified/added: ${domainCheck.message}`);
 
       // Update domain record in database if domain was added
-      if (domainCheck.message && domainCheck.message !== "Domain already exists in cPanel") {
+      if (
+        domainCheck.message &&
+        domainCheck.message !== "Domain already exists in cPanel"
+      ) {
         domainWasAdded = true;
         await NamecheapDomain.findOneAndUpdate(
           { userId, domain: domain.toLowerCase() },
           {
             $set: {
-              'cpanelConfiguration.domainAdded': true,
-              'cpanelConfiguration.domainAddedAt': new Date(),
-              'cpanelConfiguration.subdomain': domain,
-              'cpanelConfiguration.directory': `public_html/${domain}`,
-              updatedAt: new Date()
-            }
+              "cpanelConfiguration.domainAdded": true,
+              "cpanelConfiguration.domainAddedAt": new Date(),
+              "cpanelConfiguration.subdomain": domain,
+              "cpanelConfiguration.directory": `public_html/${domain}`,
+              updatedAt: new Date(),
+            },
           },
-          { new: true }
+          { new: true },
         );
       }
 
       // Retry email creation after domain is added
-      console.log('Retrying email creation after domain addition...');
+      console.log("Retrying email creation after domain addition...");
       try {
-        console.log('Trying WHM API for email creation (retry)...');
-        emailResult = await whmRequest('add_pop', {
+        console.log("Trying WHM API for email creation (retry)...");
+        emailResult = await whmRequest("add_pop", {
           email: `${username.toLowerCase()}@${domain.toLowerCase()}`,
           password: password,
-          quota: storage
+          quota: storage,
         });
         // WHM API returns different format, normalize it
         if (emailResult.status === 1) {
           emailResult = { status: 1, data: emailResult.data };
         } else {
-          throw new Error(emailResult.error || 'WHM API email creation failed');
+          throw new Error(emailResult.error || "WHM API email creation failed");
         }
       } catch (whmError) {
-        console.log(' WHM API failed, trying cPanel API (retry)...', whmError.message);
-        emailResult = await cpanelRequest('Email/add_pop', emailParams, 'POST');
+        console.log(
+          " WHM API failed, trying cPanel API (retry)...",
+          whmError.message,
+        );
+        emailResult = await cpanelRequest("Email/add_pop", emailParams, "POST");
       }
 
-      console.log(' RETRY EMAIL CREATION RESULT:', JSON.stringify(emailResult, null, 2));
+      console.log(
+        " RETRY EMAIL CREATION RESULT:",
+        JSON.stringify(emailResult, null, 2),
+      );
     } else {
       // Email creation succeeded on first try, set default domain status
-      console.log('✅ Email creation succeeded on FIRST attempt!');
+      console.log("✅ Email creation succeeded on FIRST attempt!");
       domainCheck = { message: "Domain already exists in cPanel" };
     }
 
     // Step 3: Handle email creation result
 
     if (emailResult.status !== 1) {
-      const errorMsg = (emailResult.errors && emailResult.errors[0]) || 'Unknown error from cPanel';
+      const errorMsg =
+        (emailResult.errors && emailResult.errors[0]) ||
+        "Unknown error from cPanel";
 
       // Return the actual API response for better debugging
       res.status(500).json({
@@ -589,8 +641,8 @@ router.post('/cpanel/create-email', emailCreationLimiter, async (req, res) => {
         attemptedMethods: {
           whmApi: true,
           cpanelApi: true,
-          domainCheck: domainCheck.message
-        }
+          domainCheck: domainCheck.message,
+        },
       });
       return;
     }
@@ -602,7 +654,7 @@ router.post('/cpanel/create-email', emailCreationLimiter, async (req, res) => {
       email: emailAddress,
       quota: storage,
       createdAt: new Date(),
-      suspended: false
+      suspended: false,
     };
 
     // Update domain in database with new email account
@@ -611,16 +663,21 @@ router.post('/cpanel/create-email', emailCreationLimiter, async (req, res) => {
       {
         $push: { emailAccounts: emailAccountData },
         $set: {
-          'dnsConfiguration.emailDNSConfigured': true,
-          'dnsConfiguration.emailDNSConfiguredAt': new Date(),
-          updatedAt: new Date()
-        }
+          "dnsConfiguration.emailDNSConfigured": true,
+          "dnsConfiguration.emailDNSConfiguredAt": new Date(),
+          updatedAt: new Date(),
+        },
       },
-      { new: true, upsert: false }
+      { new: true, upsert: false },
     );
 
     if (!updatedDomain) {
-      console.warn('Domain not found in database for user:', userId, 'domain:', domain);
+      console.warn(
+        "Domain not found in database for user:",
+        userId,
+        "domain:",
+        domain,
+      );
       // Still return success since email was created in cPanel
     }
 
@@ -636,22 +693,22 @@ router.post('/cpanel/create-email', emailCreationLimiter, async (req, res) => {
         quota: storage,
         storageUsed: 0,
         suspended: false,
-        status: 'completed',
+        status: "completed",
         ipAddress: req.ip,
-        userAgent: req.get('User-Agent'),
-        apiEndpoint: '/cpanel/create-email',
-        requestMethod: 'POST',
+        userAgent: req.get("User-Agent"),
+        apiEndpoint: "/cpanel/create-email",
+        requestMethod: "POST",
         metadata: {
           domainId: updatedDomain?._id,
           emailAccountsCount: updatedDomain?.emailAccounts?.length || 0,
-          cpanelResponse: emailResult.data
-        }
+          cpanelResponse: emailResult.data,
+        },
       });
 
       // Log to Slack via webhook (new functionality)
       await slackLogger.logEmailCreation({
         id: Date.now().toString(),
-        status: 'completed',
+        status: "completed",
         emailAddress: emailAddress,
         username: username.toLowerCase(),
         domain: domain.toLowerCase(),
@@ -661,25 +718,25 @@ router.post('/cpanel/create-email', emailCreationLimiter, async (req, res) => {
         userId: userId,
         userEmail: `${username.toLowerCase()}@${domain.toLowerCase()}`,
         ipAddress: req.ip,
-        endpoint: '/cpanel/create-email',
-        method: 'POST',
+        endpoint: "/cpanel/create-email",
+        method: "POST",
         metadata: {
           domainId: updatedDomain?._id,
           emailAccountsCount: updatedDomain?.emailAccounts?.length || 0,
           cpanelResponse: emailResult.data,
-          provider: 'cPanel',
-          operation: 'email_creation'
-        }
+          provider: "cPanel",
+          operation: "email_creation",
+        },
       });
     } catch (logError) {
-      console.error('Error logging email creation:', logError);
+      console.error("Error logging email creation:", logError);
       // Don't fail the request if logging fails
     }
 
     // Step 6: Return success response with additional info
     res.json({
       success: true,
-      message: 'Email account created successfully',
+      message: "Email account created successfully",
       email: emailAddress,
       quota: storage,
       webmailUrl: `https://${domain.toLowerCase()}/webmail`,
@@ -698,19 +755,20 @@ router.post('/cpanel/create-email', emailCreationLimiter, async (req, res) => {
         domainStatus: domainCheck.message,
         subdomain: domain,
         directory: `public_html/${domain}`,
-        note: domainCheck.message === "Domain already exists in cPanel" ?
-          'Domain was already available in cPanel' :
-          'Domain successfully added to cPanel'
+        note:
+          domainCheck.message === "Domain already exists in cPanel"
+            ? "Domain was already available in cPanel"
+            : "Domain successfully added to cPanel",
       },
       data: emailResult.data,
       databaseRecord: {
         saved: !!updatedDomain,
         domainId: updatedDomain?._id,
-        emailAccountsCount: updatedDomain?.emailAccounts?.length || 0
+        emailAccountsCount: updatedDomain?.emailAccounts?.length || 0,
       },
     });
   } catch (err) {
-    console.error('Email creation failed:', err.message);
+    console.error("Email creation failed:", err.message);
 
     // Log failed email creation
     try {
@@ -724,27 +782,27 @@ router.post('/cpanel/create-email', emailCreationLimiter, async (req, res) => {
         quota: storage,
         storageUsed: 0,
         suspended: false,
-        status: 'failed',
+        status: "failed",
         ipAddress: req.ip,
-        userAgent: req.get('User-Agent'),
-        apiEndpoint: '/cpanel/create-email',
-        requestMethod: 'POST',
+        userAgent: req.get("User-Agent"),
+        apiEndpoint: "/cpanel/create-email",
+        requestMethod: "POST",
         errorDetails: {
           errorMessage: err.message,
-          errorCode: err.response?.status || 'EMAIL_CREATION_FAILED',
-          errorStack: err.stack
+          errorCode: err.response?.status || "EMAIL_CREATION_FAILED",
+          errorStack: err.stack,
         },
         metadata: {
           domain: domain.toLowerCase(),
           username: username.toLowerCase(),
-          quota: storage
-        }
+          quota: storage,
+        },
       });
 
       // Log to Slack via webhook (new functionality)
       await slackLogger.logEmailCreation({
         id: Date.now().toString(),
-        status: 'failed',
+        status: "failed",
         emailAddress: `${username.toLowerCase()}@${domain.toLowerCase()}`,
         username: username.toLowerCase(),
         domain: domain.toLowerCase(),
@@ -754,39 +812,39 @@ router.post('/cpanel/create-email', emailCreationLimiter, async (req, res) => {
         userId: userId,
         userEmail: `${username.toLowerCase()}@${domain.toLowerCase()}`,
         ipAddress: req.ip,
-        endpoint: '/cpanel/create-email',
-        method: 'POST',
+        endpoint: "/cpanel/create-email",
+        method: "POST",
         metadata: {
           domain: domain.toLowerCase(),
           username: username.toLowerCase(),
           quota: storage,
-          provider: 'cPanel',
-          operation: 'email_creation',
+          provider: "cPanel",
+          operation: "email_creation",
           error: err.message,
-          errorCode: err.response?.status || 'EMAIL_CREATION_FAILED'
-        }
+          errorCode: err.response?.status || "EMAIL_CREATION_FAILED",
+        },
       });
     } catch (logError) {
-      console.error('Error logging failed email creation:', logError);
+      console.error("Error logging failed email creation:", logError);
     }
 
     res.status(500).json({
       success: false,
       error: err.message,
-      details: err.response?.data || null
+      details: err.response?.data || null,
     });
   }
 });
 
 // Route: List all email accounts for a domain (REAL-TIME from cPanel)
 // This API fetches live storage usage and email data directly from cPanel servers
-router.get('/cpanel/list-emails/:userId/:domain', async (req, res) => {
+router.get("/cpanel/list-emails/:userId/:domain", async (req, res) => {
   const { userId, domain } = req.params;
 
   if (!userId || !domain) {
     return res.status(400).json({
       success: false,
-      error: 'userId and domain are required.'
+      error: "userId and domain are required.",
     });
   }
 
@@ -798,60 +856,71 @@ router.get('/cpanel/list-emails/:userId/:domain', async (req, res) => {
     if (!domainOwnership) {
       return res.status(403).json({
         success: false,
-        error: 'Domain not registered to user or domain is not active.'
+        error: "Domain not registered to user or domain is not active.",
       });
     }
 
     // Get email accounts with disk info
-    const emailResult = await cpanelRequest('Email/list_pops_with_disk', {
-      domain: domain.toLowerCase()
+    const emailResult = await cpanelRequest("Email/list_pops_with_disk", {
+      domain: domain.toLowerCase(),
     });
 
     if (emailResult.status !== 1) {
-      throw new Error(emailResult.errors?.[0] || 'Failed to fetch email accounts');
+      throw new Error(
+        emailResult.errors?.[0] || "Failed to fetch email accounts",
+      );
     }
 
     // Debug: Log the raw email result for this domain
-    console.log(`Raw email result for domain ${domain}:`, JSON.stringify(emailResult.data, null, 2));
-
-    // Filter emails to only include those for the requested domain
-    const domainEmails = emailResult.data.filter(email =>
-      email.domain && email.domain.toLowerCase() === domain.toLowerCase()
+    console.log(
+      `Raw email result for domain ${domain}:`,
+      JSON.stringify(emailResult.data, null, 2),
     );
 
-    console.log(`Found ${domainEmails.length} email accounts for domain ${domain} out of ${emailResult.data.length} total accounts`);
+    // Filter emails to only include those for the requested domain
+    const domainEmails = emailResult.data.filter(
+      (email) =>
+        email.domain && email.domain.toLowerCase() === domain.toLowerCase(),
+    );
+
+    console.log(
+      `Found ${domainEmails.length} email accounts for domain ${domain} out of ${emailResult.data.length} total accounts`,
+    );
 
     // Get detailed email information including creation dates
     let emailDetails = {};
     try {
       // Try different approaches to get email details
-      const detailsResult = await cpanelRequest('Email/list_pops', {
-        domain: domain.toLowerCase()
+      const detailsResult = await cpanelRequest("Email/list_pops", {
+        domain: domain.toLowerCase(),
       });
 
       console.log(`Detailed email info for ${domain}:`, detailsResult);
 
       if (detailsResult.status === 1 && detailsResult.data) {
-        detailsResult.data.forEach(email => {
+        detailsResult.data.forEach((email) => {
           emailDetails[email.email] = {
             created: email.created,
             last_login: email.last_login,
             message_count: email.message_count,
             // Include all available fields for debugging
-            all_fields: email
+            all_fields: email,
           };
         });
       }
     } catch (detailsError) {
-      console.log(`Could not get detailed email info for domain ${domain}:`, detailsError.message);
+      console.log(
+        `Could not get detailed email info for domain ${domain}:`,
+        detailsError.message,
+      );
 
       // Try alternative approach - get individual email details
       try {
         console.log(`Trying individual email details for ${domain}...`);
         for (const email of domainEmails) {
-          const individualResult = await cpanelRequest('Email/get_pop_quota', {
+          const individualResult = await cpanelRequest("Email/get_pop_quota", {
             user: email.user,
-            domain: email.domain
+            domain: email.domain,
           });
 
           if (individualResult.status === 1) {
@@ -860,12 +929,15 @@ router.get('/cpanel/list-emails/:userId/:domain', async (req, res) => {
               // Try to extract creation info from quota data
               created: individualResult.data?.created || null,
               last_login: individualResult.data?.last_login || null,
-              message_count: individualResult.data?.message_count || 0
+              message_count: individualResult.data?.message_count || 0,
             };
           }
         }
       } catch (individualError) {
-        console.log(`Could not get individual email details for ${domain}:`, individualError.message);
+        console.log(
+          `Could not get individual email details for ${domain}:`,
+          individualError.message,
+        );
       }
     }
 
@@ -892,7 +964,10 @@ router.get('/cpanel/list-emails/:userId/:domain', async (req, res) => {
             creationDate = new Date(details.created).toISOString();
             createdField = details.created;
           } catch (e) {
-            console.log(`Could not parse created date for ${email.email}:`, details.created);
+            console.log(
+              `Could not parse created date for ${email.email}:`,
+              details.created,
+            );
           }
         }
         lastLogin = details.last_login;
@@ -912,42 +987,46 @@ router.get('/cpanel/list-emails/:userId/:domain', async (req, res) => {
       // If still no creation date, use current time as fallback
       if (!creationDate) {
         creationDate = new Date().toISOString();
-        createdField = 'Unknown (using current time)';
+        createdField = "Unknown (using current time)";
       }
 
       const emailData = {
         username: email.user,
         email: email.email,
         domain: email.domain,
-        suspended: email.suspended === '1',
+        suspended: email.suspended === "1",
         created: createdField, // Raw creation date field
         creationDate: creationDate, // Parsed creation date
         lastLogin: lastLogin,
         messageCount: messageCount,
         quota: {
-          limit: email.diskquota === 'unlimited' ? -1 : parseInt(email.diskquota),
-          formatted: email.diskquota === 'unlimited' ? 'Unlimited' : `${parseInt(email.diskquota)} MB`,
-          isUnlimited: email.diskquota === 'unlimited',
-          bytes: diskQuotaBytes
+          limit:
+            email.diskquota === "unlimited" ? -1 : parseInt(email.diskquota),
+          formatted:
+            email.diskquota === "unlimited"
+              ? "Unlimited"
+              : `${parseInt(email.diskquota)} MB`,
+          isUnlimited: email.diskquota === "unlimited",
+          bytes: diskQuotaBytes,
         },
         usage: {
           bytes: diskUsedBytes,
           percentage: diskUsedPercent * 100, // Convert to percentage
-          formatted: email.humandiskused || '0 MB',
+          formatted: email.humandiskused || "0 MB",
           raw: {
             diskused: email.diskused,
             diskusedpercent: email.diskusedpercent,
             diskusedpercent_float: email.diskusedpercent_float,
             _diskused: email._diskused,
-            _diskquota: email._diskquota
-          }
+            _diskquota: email._diskquota,
+          },
         },
         lastUpdated: new Date().toISOString(), // Timestamp when this data was fetched
         mtime: email.mtime ? new Date(email.mtime * 1000).toISOString() : null, // Convert Unix timestamp
         // Additional info from cPanel response
         login: email.login,
-        suspended_incoming: email.suspended_incoming === '1',
-        suspended_login: email.suspended_login === '1'
+        suspended_incoming: email.suspended_incoming === "1",
+        suspended_login: email.suspended_login === "1",
       };
 
       // Debug: Log storage data for this email
@@ -962,7 +1041,7 @@ router.get('/cpanel/list-emails/:userId/:domain', async (req, res) => {
         lastLogin: emailData.lastLogin,
         messageCount: emailData.messageCount,
         mtime: email.mtime,
-        emailDetails: emailDetails[email.email] ? 'Available' : 'Not available'
+        emailDetails: emailDetails[email.email] ? "Available" : "Not available",
       });
 
       return emailData;
@@ -971,9 +1050,15 @@ router.get('/cpanel/list-emails/:userId/:domain', async (req, res) => {
     // Calculate domain-wide statistics
     const domainStats = {
       totalAccounts: emailsWithDetails.length,
-      totalUsed: emailsWithDetails.reduce((sum, email) => sum + email.usage.bytes, 0),
-      totalQuota: emailsWithDetails.reduce((sum, email) =>
-        email.quota.isUnlimited ? -1 : sum + email.quota.limit, 0)
+      totalUsed: emailsWithDetails.reduce(
+        (sum, email) => sum + email.usage.bytes,
+        0,
+      ),
+      totalQuota: emailsWithDetails.reduce(
+        (sum, email) =>
+          email.quota.isUnlimited ? -1 : sum + email.quota.limit,
+        0,
+      ),
     };
 
     const fetchEndTime = new Date();
@@ -987,31 +1072,36 @@ router.get('/cpanel/list-emails/:userId/:domain', async (req, res) => {
       count: emailsWithDetails.length,
       stats: {
         ...domainStats,
-        usagePercentage: domainStats.totalQuota === -1 ? 0 :
-          Math.round((domainStats.totalUsed / domainStats.totalQuota) * 100),
+        usagePercentage:
+          domainStats.totalQuota === -1
+            ? 0
+            : Math.round(
+                (domainStats.totalUsed / domainStats.totalQuota) * 100,
+              ),
         formattedUsage: formatStorage(domainStats.totalUsed),
-        formattedQuota: domainStats.totalQuota === -1 ? 'Unlimited' :
-          formatStorage(domainStats.totalQuota)
+        formattedQuota:
+          domainStats.totalQuota === -1
+            ? "Unlimited"
+            : formatStorage(domainStats.totalQuota),
       },
       metadata: {
-        dataSource: 'cPanel Real-time API',
+        dataSource: "cPanel Real-time API",
         fetchTimestamp: fetchEndTime.toISOString(),
         fetchDurationMs: fetchDuration,
         totalApiCalls: 2, // list_pops_with_disk + list_pops
         realTimeData: true,
-        storageDataFrom: 'list_pops_with_disk (included in response)',
-        creationDataFrom: 'list_pops (detailed email info) + mtime fallback',
-        performance: 'Optimized (no additional API calls per email)',
-        note: 'Creation date uses mtime (last modified) as cPanel API may not provide exact creation date'
-      }
+        storageDataFrom: "list_pops_with_disk (included in response)",
+        creationDataFrom: "list_pops (detailed email info) + mtime fallback",
+        performance: "Optimized (no additional API calls per email)",
+        note: "Creation date uses mtime (last modified) as cPanel API may not provide exact creation date",
+      },
     });
-
   } catch (err) {
-    console.error('Full error stack:', err.stack);
-    console.error('Failed to list emails:', err.message);
+    console.error("Full error stack:", err.stack);
+    console.error("Failed to list emails:", err.message);
     res.status(500).json({
       success: false,
-      error: err.message
+      error: err.message,
     });
   }
 });
@@ -1020,18 +1110,19 @@ router.get('/cpanel/list-emails/:userId/:domain', async (req, res) => {
 function formatStorage(bytes) {
   if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`;
-  if (bytes < 1024 * 1024 * 1024) return `${Math.round(bytes / (1024 * 1024))} MB`;
+  if (bytes < 1024 * 1024 * 1024)
+    return `${Math.round(bytes / (1024 * 1024))} MB`;
   return `${Math.round(bytes / (1024 * 1024 * 1024))} GB`;
 }
 
 // Route: Get domain email statistics
-router.get('/cpanel/email-stats/:userId/:domain', async (req, res) => {
+router.get("/cpanel/email-stats/:userId/:domain", async (req, res) => {
   const { userId, domain } = req.params;
 
   if (!userId || !domain) {
     return res.status(400).json({
       success: false,
-      error: 'userId and domain are required.'
+      error: "userId and domain are required.",
     });
   }
 
@@ -1041,26 +1132,33 @@ router.get('/cpanel/email-stats/:userId/:domain', async (req, res) => {
     if (!domainOwnership) {
       return res.status(403).json({
         success: false,
-        error: 'Domain not registered to user or domain is not active.'
+        error: "Domain not registered to user or domain is not active.",
       });
     }
 
     // Get domain info from database
     const domainRecord = await NamecheapDomain.findOne({
       userId,
-      domain: domain.toLowerCase()
+      domain: domain.toLowerCase(),
     });
 
     // Get email accounts from cPanel
-    const emailResult = await cpanelRequest('Email/list_pops', {
-      domain: domain.toLowerCase()
+    const emailResult = await cpanelRequest("Email/list_pops", {
+      domain: domain.toLowerCase(),
     });
 
-    const emailAccounts = emailResult.status === 1 ? emailResult.data || [] : [];
+    const emailAccounts =
+      emailResult.status === 1 ? emailResult.data || [] : [];
 
     // Calculate statistics
-    const totalQuota = emailAccounts.reduce((sum, email) => sum + (parseInt(email.quota) || 0), 0);
-    const usedQuota = emailAccounts.reduce((sum, email) => sum + (parseInt(email.usage) || 0), 0);
+    const totalQuota = emailAccounts.reduce(
+      (sum, email) => sum + (parseInt(email.quota) || 0),
+      0,
+    );
+    const usedQuota = emailAccounts.reduce(
+      (sum, email) => sum + (parseInt(email.usage) || 0),
+      0,
+    );
 
     res.json({
       success: true,
@@ -1070,136 +1168,158 @@ router.get('/cpanel/email-stats/:userId/:domain', async (req, res) => {
         totalQuotaMB: totalQuota,
         usedQuotaMB: usedQuota,
         availableQuotaMB: totalQuota - usedQuota,
-        usagePercentage: totalQuota > 0 ? Math.round((usedQuota / totalQuota) * 100) : 0
+        usagePercentage:
+          totalQuota > 0 ? Math.round((usedQuota / totalQuota) * 100) : 0,
       },
-      emailAccounts: emailAccounts.map(email => ({
+      emailAccounts: emailAccounts.map((email) => ({
         username: email.user,
         email: email.email,
         quota: parseInt(email.quota) || 0,
         usage: parseInt(email.usage) || 0,
-        suspended: email.suspended === '1'
-      }))
+        suspended: email.suspended === "1",
+      })),
     });
   } catch (err) {
-    console.error('Failed to get email statistics:', err.message);
+    console.error("Failed to get email statistics:", err.message);
     res.status(500).json({
       success: false,
-      error: err.message
+      error: err.message,
     });
   }
 });
 
 // Test route to check if email account exists
-router.get('/cpanel/check-email/:userId/:domain/:username', async (req, res) => {
-  const { userId, domain, username } = req.params;
+router.get(
+  "/cpanel/check-email/:userId/:domain/:username",
+  async (req, res) => {
+    const { userId, domain, username } = req.params;
 
-  if (!userId || !domain || !username) {
-    return res.status(400).json({
-      success: false,
-      error: 'userId, domain, and username are required.'
-    });
-  }
-
-  try {
-    // Verify user owns domain
-    const domainOwnership = await userOwnsDomain(userId, domain);
-    if (!domainOwnership) {
-      return res.status(403).json({
+    if (!userId || !domain || !username) {
+      return res.status(400).json({
         success: false,
-        error: 'Domain not registered to user or domain is not active.'
+        error: "userId, domain, and username are required.",
       });
     }
 
-    // Get email accounts with disk info
-    const emailResult = await cpanelRequest('Email/list_pops_with_disk', {
-      domain: domain.toLowerCase()
-    });
-
-    if (emailResult.status !== 1) {
-      throw new Error(emailResult.errors?.[0] || 'Failed to fetch email accounts');
-    }
-
-    // Filter emails to only include those for the requested domain
-    const domainEmails = emailResult.data.filter(email =>
-      email.domain && email.domain.toLowerCase() === domain.toLowerCase()
-    );
-
-    console.log(`Found ${domainEmails.length} email accounts for domain ${domain} out of ${emailResult.data.length} total accounts`);
-
-    // Get disk usage for filtered emails only
-    const allEmailsWithUsage = await Promise.all(
-      domainEmails.map(async email => {
-        const usageResult = await cpanelRequest('Email/get_disk_usage', {
-          email: email.email
+    try {
+      // Verify user owns domain
+      const domainOwnership = await userOwnsDomain(userId, domain);
+      if (!domainOwnership) {
+        return res.status(403).json({
+          success: false,
+          error: "Domain not registered to user or domain is not active.",
         });
-
-        return {
-          username: email.user,
-          email: email.email,
-          quota: email.diskquota,
-          quotaBytes: email.diskquota === 'unlimited' ? -1 : parseInt(email.diskquota),
-          usedBytes: usageResult.status === 1 ? usageResult.data.used_bytes : 0,
-          usedPercentage: usageResult.status === 1 ? usageResult.data.usage_percentage : 0,
-          formattedUsage: usageResult.status === 1 ? usageResult.data.human_readable : '0 MB',
-          suspended: email.suspended === '1',
-          created: email.created
-        };
-      })
-    );
-
-    // Find the specific email account
-    const targetEmail = `${username.toLowerCase()}@${domain.toLowerCase()}`;
-    const emailDetails = allEmailsWithUsage.find(email =>
-      email.email === targetEmail || email.username === username.toLowerCase()
-    );
-
-    res.json({
-      success: true,
-      emailExists: !!emailDetails,
-      email: targetEmail,
-      details: emailDetails || null,
-      allEmails: allEmailsWithUsage,
-      message: emailDetails ? 'Email account found' : 'Email account not found',
-      domainInfo: {
-        totalAccounts: allEmailsWithUsage.length,
-        totalUsed: allEmailsWithUsage.reduce((sum, email) => sum + email.usedBytes, 0),
-        domain: domain.toLowerCase(),
-        requestedDomain: domain.toLowerCase(),
-        filteredFromTotal: emailResult.data.length
       }
-    });
-  } catch (err) {
-    console.error('Failed to check email:', err.message);
-    res.status(500).json({
-      success: false,
-      error: err.message
-    });
-  }
-});
+
+      // Get email accounts with disk info
+      const emailResult = await cpanelRequest("Email/list_pops_with_disk", {
+        domain: domain.toLowerCase(),
+      });
+
+      if (emailResult.status !== 1) {
+        throw new Error(
+          emailResult.errors?.[0] || "Failed to fetch email accounts",
+        );
+      }
+
+      // Filter emails to only include those for the requested domain
+      const domainEmails = emailResult.data.filter(
+        (email) =>
+          email.domain && email.domain.toLowerCase() === domain.toLowerCase(),
+      );
+
+      console.log(
+        `Found ${domainEmails.length} email accounts for domain ${domain} out of ${emailResult.data.length} total accounts`,
+      );
+
+      // Get disk usage for filtered emails only
+      const allEmailsWithUsage = await Promise.all(
+        domainEmails.map(async (email) => {
+          const usageResult = await cpanelRequest("Email/get_disk_usage", {
+            email: email.email,
+          });
+
+          return {
+            username: email.user,
+            email: email.email,
+            quota: email.diskquota,
+            quotaBytes:
+              email.diskquota === "unlimited" ? -1 : parseInt(email.diskquota),
+            usedBytes:
+              usageResult.status === 1 ? usageResult.data.used_bytes : 0,
+            usedPercentage:
+              usageResult.status === 1 ? usageResult.data.usage_percentage : 0,
+            formattedUsage:
+              usageResult.status === 1
+                ? usageResult.data.human_readable
+                : "0 MB",
+            suspended: email.suspended === "1",
+            created: email.created,
+          };
+        }),
+      );
+
+      // Find the specific email account
+      const targetEmail = `${username.toLowerCase()}@${domain.toLowerCase()}`;
+      const emailDetails = allEmailsWithUsage.find(
+        (email) =>
+          email.email === targetEmail ||
+          email.username === username.toLowerCase(),
+      );
+
+      res.json({
+        success: true,
+        emailExists: !!emailDetails,
+        email: targetEmail,
+        details: emailDetails || null,
+        allEmails: allEmailsWithUsage,
+        message: emailDetails
+          ? "Email account found"
+          : "Email account not found",
+        domainInfo: {
+          totalAccounts: allEmailsWithUsage.length,
+          totalUsed: allEmailsWithUsage.reduce(
+            (sum, email) => sum + email.usedBytes,
+            0,
+          ),
+          domain: domain.toLowerCase(),
+          requestedDomain: domain.toLowerCase(),
+          filteredFromTotal: emailResult.data.length,
+        },
+      });
+    } catch (err) {
+      console.error("Failed to check email:", err.message);
+      res.status(500).json({
+        success: false,
+        error: err.message,
+      });
+    }
+  },
+);
 
 //_______________Email Delete api______________
 
 // Route: Delete Email Account
-router.delete('/cpanel/delete-email', async (req, res) => {
+router.delete("/cpanel/delete-email", async (req, res) => {
   const { userId, email, domain, flags, skip_quota = 0 } = req.body;
 
   // Input validation
   if (!userId || !email) {
     return res.status(400).json({
       success: false,
-      error: 'userId and email are required.'
+      error: "userId and email are required.",
     });
   }
 
   // Validate email format
   let emailUsername, emailDomain;
-  if (email.includes('@')) {
+  if (email.includes("@")) {
     // Full email address provided
-    const emailParts = email.split('@');
+    const emailParts = email.split("@");
     if (emailParts.length !== 2) {
       return res.status(400).json({
         success: false,
-        error: 'Invalid email format.'
+        error: "Invalid email format.",
       });
     }
     emailUsername = emailParts[0];
@@ -1209,7 +1329,7 @@ router.delete('/cpanel/delete-email', async (req, res) => {
     if (!domain) {
       return res.status(400).json({
         success: false,
-        error: 'Domain is required when providing only email username.'
+        error: "Domain is required when providing only email username.",
       });
     }
     emailUsername = email;
@@ -1220,7 +1340,7 @@ router.delete('/cpanel/delete-email', async (req, res) => {
   if (domain && !isValidDomain(domain)) {
     return res.status(400).json({
       success: false,
-      error: 'Invalid domain format.'
+      error: "Invalid domain format.",
     });
   }
 
@@ -1228,7 +1348,7 @@ router.delete('/cpanel/delete-email', async (req, res) => {
   if (!isValidEmailUser(emailUsername)) {
     return res.status(400).json({
       success: false,
-      error: 'Invalid email username format.'
+      error: "Invalid email username format.",
     });
   }
 
@@ -1236,7 +1356,7 @@ router.delete('/cpanel/delete-email', async (req, res) => {
   if (skip_quota !== 0 && skip_quota !== 1) {
     return res.status(400).json({
       success: false,
-      error: 'skip_quota must be 0 or 1.'
+      error: "skip_quota must be 0 or 1.",
     });
   }
 
@@ -1246,35 +1366,39 @@ router.delete('/cpanel/delete-email', async (req, res) => {
     if (!domainOwnership) {
       return res.status(403).json({
         success: false,
-        error: 'Domain not registered to user or domain is not active.'
+        error: "Domain not registered to user or domain is not active.",
       });
     }
 
     // Step 2: Check if email account exists
     const emailAddress = `${emailUsername.toLowerCase()}@${emailDomain.toLowerCase()}`;
-    const checkResult = await cpanelRequest('Email/list_pops', {
-      domain: emailDomain.toLowerCase()
+    const checkResult = await cpanelRequest("Email/list_pops", {
+      domain: emailDomain.toLowerCase(),
     });
 
     if (checkResult.status !== 1) {
-      throw new Error(checkResult.errors?.[0] || 'Failed to fetch email accounts');
+      throw new Error(
+        checkResult.errors?.[0] || "Failed to fetch email accounts",
+      );
     }
 
-    const emailExists = checkResult.data?.some(account =>
-      account.email === emailAddress || account.user === emailUsername.toLowerCase()
+    const emailExists = checkResult.data?.some(
+      (account) =>
+        account.email === emailAddress ||
+        account.user === emailUsername.toLowerCase(),
     );
 
     if (!emailExists) {
       return res.status(404).json({
         success: false,
-        error: 'Email account not found.'
+        error: "Email account not found.",
       });
     }
 
     // Step 3: Delete email account
     const deleteParams = {
       email: emailAddress,
-      skip_quota: skip_quota
+      skip_quota: skip_quota,
     };
 
     // Add flags parameter if provided
@@ -1282,14 +1406,23 @@ router.delete('/cpanel/delete-email', async (req, res) => {
       deleteParams.flags = flags;
     }
 
-    console.log('Deleting email with params:', { ...deleteParams, email: emailAddress });
+    console.log("Deleting email with params:", {
+      ...deleteParams,
+      email: emailAddress,
+    });
 
-    const deleteResult = await cpanelRequest('Email/delete_pop', deleteParams, 'POST');
+    const deleteResult = await cpanelRequest(
+      "Email/delete_pop",
+      deleteParams,
+      "POST",
+    );
 
-    console.log('Email deletion result:', deleteResult);
+    console.log("Email deletion result:", deleteResult);
 
     if (deleteResult.status !== 1) {
-      const errorMsg = (deleteResult.errors && deleteResult.errors[0]) || 'Unknown error from cPanel';
+      const errorMsg =
+        (deleteResult.errors && deleteResult.errors[0]) ||
+        "Unknown error from cPanel";
       throw new Error(errorMsg);
     }
 
@@ -1298,106 +1431,111 @@ router.delete('/cpanel/delete-email', async (req, res) => {
       {
         userId,
         domain: emailDomain.toLowerCase(),
-        'emailAccounts.email': emailAddress
+        "emailAccounts.email": emailAddress,
       },
       {
         $pull: {
-          emailAccounts: { email: emailAddress }
+          emailAccounts: { email: emailAddress },
         },
         $set: {
-          updatedAt: new Date()
-        }
+          updatedAt: new Date(),
+        },
       },
-      { new: true }
+      { new: true },
     );
 
     // Step 5: Log email deletion to Slack
     try {
-      await slackLogger.log({
-        id: Date.now().toString(),
-        operation: 'email_deletion',
-        emailAddress: emailAddress,
-        domain: emailDomain.toLowerCase(),
-        status: 'completed',
-        userId: userId,
-        userEmail: emailAddress,
-        ipAddress: req.ip,
-        endpoint: '/cpanel/delete-email',
-        method: 'DELETE',
-        metadata: {
-          domainId: updatedDomain?._id,
-          remainingEmailAccounts: updatedDomain?.emailAccounts?.length || 0,
-          preserveDirectory: flags === 'passwd',
-          skipQuotaModification: skip_quota === 1,
-          provider: 'cPanel',
-          cpanelResponse: deleteResult.data
-        }
-      }, {
-        service: 'domain',
-        customTitle: `🗑️ Email Deleted: ${emailAddress}`,
-        customIcon: ':wastebasket:'
-      });
+      await slackLogger.log(
+        {
+          id: Date.now().toString(),
+          operation: "email_deletion",
+          emailAddress: emailAddress,
+          domain: emailDomain.toLowerCase(),
+          status: "completed",
+          userId: userId,
+          userEmail: emailAddress,
+          ipAddress: req.ip,
+          endpoint: "/cpanel/delete-email",
+          method: "DELETE",
+          metadata: {
+            domainId: updatedDomain?._id,
+            remainingEmailAccounts: updatedDomain?.emailAccounts?.length || 0,
+            preserveDirectory: flags === "passwd",
+            skipQuotaModification: skip_quota === 1,
+            provider: "cPanel",
+            cpanelResponse: deleteResult.data,
+          },
+        },
+        {
+          service: "domain",
+          customTitle: `🗑️ Email Deleted: ${emailAddress}`,
+          customIcon: ":wastebasket:",
+        },
+      );
     } catch (logError) {
-      console.error('Error logging email deletion to Slack:', logError);
+      console.error("Error logging email deletion to Slack:", logError);
       // Don't fail the request if Slack logging fails
     }
 
     // Step 6: Return success response
     res.json({
       success: true,
-      message: 'Email account deleted successfully',
+      message: "Email account deleted successfully",
       deletedEmail: emailAddress,
       domain: emailDomain.toLowerCase(),
       data: deleteResult.data,
       databaseRecord: {
         removed: !!updatedDomain,
         domainId: updatedDomain?._id,
-        remainingEmailAccounts: updatedDomain?.emailAccounts?.length || 0
+        remainingEmailAccounts: updatedDomain?.emailAccounts?.length || 0,
       },
       deletionDetails: {
-        preserveDirectory: flags === 'passwd',
+        preserveDirectory: flags === "passwd",
         skipQuotaModification: skip_quota === 1,
-        timestamp: new Date().toISOString()
-      }
+        timestamp: new Date().toISOString(),
+      },
     });
-
   } catch (err) {
-    console.error('Email deletion failed:', err.message);
+    console.error("Email deletion failed:", err.message);
 
     // Log email deletion failure to Slack
     try {
-      await slackLogger.log({
-        id: Date.now().toString(),
-        operation: 'email_deletion',
-        emailAddress: emailAddress || 'unknown',
-        domain: emailDomain?.toLowerCase() || 'unknown',
-        status: 'failed',
-        userId: userId,
-        userEmail: emailAddress || 'unknown',
-        ipAddress: req.ip,
-        endpoint: '/cpanel/delete-email',
-        method: 'DELETE',
-        metadata: {
-          error: err.message,
-          errorCode: err.response?.status || 'EMAIL_DELETION_FAILED',
-          provider: 'cPanel',
-          preserveDirectory: flags === 'passwd',
-          skipQuotaModification: skip_quota === 1
-        }
-      }, {
-        service: 'domain',
-        customTitle: `❌ Email Deletion Failed: ${emailAddress || 'unknown'}`,
-        customIcon: ':x:'
-      });
+      await slackLogger.log(
+        {
+          id: Date.now().toString(),
+          operation: "email_deletion",
+          emailAddress: emailAddress || "unknown",
+          domain: emailDomain?.toLowerCase() || "unknown",
+          status: "failed",
+          userId: userId,
+          userEmail: emailAddress || "unknown",
+          ipAddress: req.ip,
+          endpoint: "/cpanel/delete-email",
+          method: "DELETE",
+          metadata: {
+            error: err.message,
+            errorCode: err.response?.status || "EMAIL_DELETION_FAILED",
+            provider: "cPanel",
+            preserveDirectory: flags === "passwd",
+            skipQuotaModification: skip_quota === 1,
+          },
+        },
+        {
+          service: "domain",
+          customTitle: `❌ Email Deletion Failed: ${emailAddress || "unknown"}`,
+          customIcon: ":x:",
+        },
+      );
     } catch (logError) {
-      console.error('Error logging email deletion failure to Slack:', logError);
+      console.error("Error logging email deletion failure to Slack:", logError);
       // Don't fail the request if Slack logging fails
     }
 
     res.status(500).json({
       success: false,
       error: err.message,
-      details: err.response?.data || null
+      details: err.response?.data || null,
     });
   }
 });
@@ -1406,13 +1544,13 @@ router.delete('/cpanel/delete-email', async (req, res) => {
 
 // Route: Fetch all email accounts for a specific userID (REAL-TIME from cPanel)
 // This API fetches live storage usage and email data directly from cPanel servers
-router.get('/cpanel/user-all-emails/:userId', async (req, res) => {
+router.get("/cpanel/user-all-emails/:userId", async (req, res) => {
   const { userId } = req.params;
 
   if (!userId) {
     return res.status(400).json({
       success: false,
-      error: 'userId is required.'
+      error: "userId is required.",
     });
   }
 
@@ -1420,7 +1558,7 @@ router.get('/cpanel/user-all-emails/:userId', async (req, res) => {
     // Step 1: Get all domains owned by this user
     const userDomains = await NamecheapDomain.find({
       userId: userId,
-      'domainStatus.isActive': true
+      "domainStatus.isActive": true,
     });
 
     if (!userDomains || userDomains.length === 0) {
@@ -1435,10 +1573,10 @@ router.get('/cpanel/user-all-emails/:userId', async (req, res) => {
           totalUsed: 0,
           totalQuota: 0,
           usagePercentage: 0,
-          formattedUsage: '0 B',
-          formattedQuota: '0 B'
+          formattedUsage: "0 B",
+          formattedQuota: "0 B",
         },
-        message: 'No active domains found for this user'
+        message: "No active domains found for this user",
       });
     }
 
@@ -1456,165 +1594,207 @@ router.get('/cpanel/user-all-emails/:userId', async (req, res) => {
 
         try {
           // Get email accounts for this domain
-          const emailResult = await cpanelRequest('Email/list_pops_with_disk', {
-            domain: domain.toLowerCase()
+          const emailResult = await cpanelRequest("Email/list_pops_with_disk", {
+            domain: domain.toLowerCase(),
           });
 
-          console.log(`Raw cPanel response for ${domain}:`, JSON.stringify(emailResult, null, 2));
+          console.log(
+            `Raw cPanel response for ${domain}:`,
+            JSON.stringify(emailResult, null, 2),
+          );
 
           if (emailResult.status === 1 && emailResult.data) {
             // Filter emails to only include those for this specific domain
-            const domainEmails = emailResult.data.filter(email =>
-              email.domain && email.domain.toLowerCase() === domain.toLowerCase()
+            const domainEmails = emailResult.data.filter(
+              (email) =>
+                email.domain &&
+                email.domain.toLowerCase() === domain.toLowerCase(),
             );
 
-            console.log(`Found ${domainEmails.length} email accounts for domain ${domain} out of ${emailResult.data.length} total emails returned`);
+            console.log(
+              `Found ${domainEmails.length} email accounts for domain ${domain} out of ${emailResult.data.length} total emails returned`,
+            );
 
             // Debug: Log all emails returned by cPanel for this domain
             if (emailResult.data.length > 0) {
-              console.log(`All emails returned by cPanel for domain ${domain}:`,
-                emailResult.data.map(e => ({ email: e.email, domain: e.domain })));
+              console.log(
+                `All emails returned by cPanel for domain ${domain}:`,
+                emailResult.data.map((e) => ({
+                  email: e.email,
+                  domain: e.domain,
+                })),
+              );
             }
 
             // Get detailed email information including creation dates using our improved helper
             let emailDetails = {};
             try {
               // Get detailed email info for last login and message count
-              const detailsResult = await cpanelRequest('Email/list_pops', {
-                domain: domain.toLowerCase()
+              const detailsResult = await cpanelRequest("Email/list_pops", {
+                domain: domain.toLowerCase(),
               });
 
               console.log(`Detailed email info for ${domain}:`, detailsResult);
 
               if (detailsResult.status === 1 && detailsResult.data) {
-                detailsResult.data.forEach(email => {
+                detailsResult.data.forEach((email) => {
                   emailDetails[email.email] = {
                     last_login: email.last_login,
                     message_count: email.message_count,
                     // Include all available fields for debugging
-                    all_fields: email
+                    all_fields: email,
                   };
                 });
               }
             } catch (detailsError) {
-              console.log(`Could not get detailed email info for domain ${domain}:`, detailsError.message);
+              console.log(
+                `Could not get detailed email info for domain ${domain}:`,
+                detailsError.message,
+              );
             }
 
             // Get disk usage for each email - Use data from list_pops_with_disk which already has storage info
             // This is more efficient as it avoids additional API calls and uses real-time data from cPanel
-            const emailsWithDetails = await Promise.all(domainEmails.map(async (email) => {
-              // The list_pops_with_disk already provides disk usage data
-              // Use the data directly from the email object instead of making additional API calls
-              const diskUsedBytes = parseInt(email._diskused) || 0;
-              const diskQuotaBytes = parseInt(email._diskquota) || 0;
-              const diskUsedPercent = parseFloat(email.diskusedpercent_float) || 0;
+            const emailsWithDetails = await Promise.all(
+              domainEmails.map(async (email) => {
+                // The list_pops_with_disk already provides disk usage data
+                // Use the data directly from the email object instead of making additional API calls
+                const diskUsedBytes = parseInt(email._diskused) || 0;
+                const diskQuotaBytes = parseInt(email._diskquota) || 0;
+                const diskUsedPercent =
+                  parseFloat(email.diskusedpercent_float) || 0;
 
-              // Get accurate creation date using our improved helper function
-              const creationInfo = await getEmailCreationDate(email.email, domain, userId);
+                // Get accurate creation date using our improved helper function
+                const creationInfo = await getEmailCreationDate(
+                  email.email,
+                  domain,
+                  userId,
+                );
 
-              // Get last login and message count from detailed email info
-              let lastLogin = null;
-              let messageCount = 0;
+                // Get last login and message count from detailed email info
+                let lastLogin = null;
+                let messageCount = 0;
 
-              if (emailDetails[email.email]) {
-                const details = emailDetails[email.email];
-                lastLogin = details.last_login;
-                messageCount = details.message_count || 0;
-              }
+                if (emailDetails[email.email]) {
+                  const details = emailDetails[email.email];
+                  lastLogin = details.last_login;
+                  messageCount = details.message_count || 0;
+                }
 
-              const emailData = {
-                username: email.user,
-                email: email.email,
-                domain: email.domain,
-                suspended: email.suspended === '1',
-                created: creationInfo.rawValue || creationInfo.creationDate, // Raw creation date field
-                creationDate: creationInfo.creationDate, // Parsed creation date
-                creationInfo: {
-                  source: creationInfo.source,
-                  accuracy: creationInfo.accuracy,
-                  note: creationInfo.note || null,
-                  error: creationInfo.error || null
-                },
-                lastLogin: lastLogin,
-                messageCount: messageCount,
-                quota: {
-                  limit: email.diskquota === 'unlimited' ? -1 : parseInt(email.diskquota),
-                  formatted: email.diskquota === 'unlimited' ? 'Unlimited' : `${parseInt(email.diskquota)} MB`,
-                  isUnlimited: email.diskquota === 'unlimited',
-                  bytes: diskQuotaBytes
-                },
-                usage: {
-                  bytes: diskUsedBytes,
-                  percentage: diskUsedPercent * 100, // Convert to percentage
-                  formatted: email.humandiskused || '0 MB',
-                  raw: {
-                    diskused: email.diskused,
-                    diskusedpercent: email.diskusedpercent,
-                    diskusedpercent_float: email.diskusedpercent_float,
-                    _diskused: email._diskused,
-                    _diskquota: email._diskquota
-                  }
-                },
-                lastUpdated: new Date().toISOString(), // Timestamp when this data was fetched
-                mtime: email.mtime ? new Date(email.mtime * 1000).toISOString() : null, // Convert Unix timestamp
-                // Additional info from cPanel response
-                login: email.login,
-                suspended_incoming: email.suspended_incoming === '1',
-                suspended_login: email.suspended_login === '1'
-              };
+                const emailData = {
+                  username: email.user,
+                  email: email.email,
+                  domain: email.domain,
+                  suspended: email.suspended === "1",
+                  created: creationInfo.rawValue || creationInfo.creationDate, // Raw creation date field
+                  creationDate: creationInfo.creationDate, // Parsed creation date
+                  creationInfo: {
+                    source: creationInfo.source,
+                    accuracy: creationInfo.accuracy,
+                    note: creationInfo.note || null,
+                    error: creationInfo.error || null,
+                  },
+                  lastLogin: lastLogin,
+                  messageCount: messageCount,
+                  quota: {
+                    limit:
+                      email.diskquota === "unlimited"
+                        ? -1
+                        : parseInt(email.diskquota),
+                    formatted:
+                      email.diskquota === "unlimited"
+                        ? "Unlimited"
+                        : `${parseInt(email.diskquota)} MB`,
+                    isUnlimited: email.diskquota === "unlimited",
+                    bytes: diskQuotaBytes,
+                  },
+                  usage: {
+                    bytes: diskUsedBytes,
+                    percentage: diskUsedPercent * 100, // Convert to percentage
+                    formatted: email.humandiskused || "0 MB",
+                    raw: {
+                      diskused: email.diskused,
+                      diskusedpercent: email.diskusedpercent,
+                      diskusedpercent_float: email.diskusedpercent_float,
+                      _diskused: email._diskused,
+                      _diskquota: email._diskquota,
+                    },
+                  },
+                  lastUpdated: new Date().toISOString(), // Timestamp when this data was fetched
+                  mtime: email.mtime
+                    ? new Date(email.mtime * 1000).toISOString()
+                    : null, // Convert Unix timestamp
+                  // Additional info from cPanel response
+                  login: email.login,
+                  suspended_incoming: email.suspended_incoming === "1",
+                  suspended_login: email.suspended_login === "1",
+                };
 
-              // Debug: Log storage data for this email
-              console.log(`Email data for ${email.email}:`, {
-                diskUsedBytes,
-                diskQuotaBytes,
-                diskUsedPercent,
-                humanReadable: email.humandiskused,
-                formatted: emailData.usage.formatted,
-                created: emailData.created,
-                creationDate: emailData.creationDate,
-                creationSource: creationInfo.source,
-                creationAccuracy: creationInfo.accuracy,
-                lastLogin: emailData.lastLogin,
-                messageCount: emailData.messageCount,
-                mtime: email.mtime,
-                emailDetails: emailDetails[email.email] ? 'Available' : 'Not available'
-              });
+                // Debug: Log storage data for this email
+                console.log(`Email data for ${email.email}:`, {
+                  diskUsedBytes,
+                  diskQuotaBytes,
+                  diskUsedPercent,
+                  humanReadable: email.humandiskused,
+                  formatted: emailData.usage.formatted,
+                  created: emailData.created,
+                  creationDate: emailData.creationDate,
+                  creationSource: creationInfo.source,
+                  creationAccuracy: creationInfo.accuracy,
+                  lastLogin: emailData.lastLogin,
+                  messageCount: emailData.messageCount,
+                  mtime: email.mtime,
+                  emailDetails: emailDetails[email.email]
+                    ? "Available"
+                    : "Not available",
+                });
 
-              return emailData;
-            }));
+                return emailData;
+              }),
+            );
 
             // Calculate domain statistics
-            const domainTotalUsed = emailsWithDetails.reduce((sum, email) => sum + email.usage.bytes, 0);
-            const domainTotalQuota = emailsWithDetails.reduce((sum, email) =>
-              email.quota.isUnlimited ? -1 : sum + email.quota.limit, 0);
+            const domainTotalUsed = emailsWithDetails.reduce(
+              (sum, email) => sum + email.usage.bytes,
+              0,
+            );
+            const domainTotalQuota = emailsWithDetails.reduce(
+              (sum, email) =>
+                email.quota.isUnlimited ? -1 : sum + email.quota.limit,
+              0,
+            );
 
             const domainStat = {
               domain: domain,
               emailCount: emailsWithDetails.length,
               totalUsed: domainTotalUsed,
               totalQuota: domainTotalQuota,
-              usagePercentage: domainTotalQuota === -1 ? 0 :
-                Math.round((domainTotalUsed / domainTotalQuota) * 100),
+              usagePercentage:
+                domainTotalQuota === -1
+                  ? 0
+                  : Math.round((domainTotalUsed / domainTotalQuota) * 100),
               formattedUsage: formatStorage(domainTotalUsed),
-              formattedQuota: domainTotalQuota === -1 ? 'Unlimited' :
-                formatStorage(domainTotalQuota)
+              formattedQuota:
+                domainTotalQuota === -1
+                  ? "Unlimited"
+                  : formatStorage(domainTotalQuota),
             };
 
             // Add domain info to each email
-            const emailsWithDomainInfo = emailsWithDetails.map(email => ({
+            const emailsWithDomainInfo = emailsWithDetails.map((email) => ({
               ...email,
               domainInfo: {
                 domainId: domainRecord._id,
                 domainStatus: domainRecord.domainStatus,
                 registrationDate: domainRecord.registrationDate,
-                expiryDate: domainRecord.expiryDate
-              }
+                expiryDate: domainRecord.expiryDate,
+              },
             }));
 
             return {
               success: true,
               domainStat,
-              emails: emailsWithDomainInfo
+              emails: emailsWithDomainInfo,
             };
           } else {
             return {
@@ -1622,18 +1802,21 @@ router.get('/cpanel/user-all-emails/:userId', async (req, res) => {
               domainStat: {
                 domain: domain,
                 emailCount: 0,
-                error: 'No email data returned from cPanel',
+                error: "No email data returned from cPanel",
                 totalUsed: 0,
                 totalQuota: 0,
                 usagePercentage: 0,
-                formattedUsage: '0 B',
-                formattedQuota: '0 B'
+                formattedUsage: "0 B",
+                formattedQuota: "0 B",
               },
-              emails: []
+              emails: [],
             };
           }
         } catch (domainError) {
-          console.error(`Error fetching emails for domain ${domain}:`, domainError.message);
+          console.error(
+            `Error fetching emails for domain ${domain}:`,
+            domainError.message,
+          );
           return {
             success: false,
             domainStat: {
@@ -1643,34 +1826,34 @@ router.get('/cpanel/user-all-emails/:userId', async (req, res) => {
               totalUsed: 0,
               totalQuota: 0,
               usagePercentage: 0,
-              formattedUsage: '0 B',
-              formattedQuota: '0 B'
+              formattedUsage: "0 B",
+              formattedQuota: "0 B",
             },
-            emails: []
+            emails: [],
           };
         }
-      })
+      }),
     );
 
     // Process results
     domainResults.forEach((result, index) => {
-      if (result.status === 'fulfilled') {
+      if (result.status === "fulfilled") {
         const { domainStat, emails } = result.value;
         domainStats.push(domainStat);
         allEmails.push(...emails);
       } else {
         // Handle rejected promises
-        const domain = userDomains[index]?.domain || 'unknown';
+        const domain = userDomains[index]?.domain || "unknown";
         console.error(`Domain ${domain} failed:`, result.reason);
         domainStats.push({
           domain: domain,
           emailCount: 0,
-          error: result.reason?.message || 'Unknown error',
+          error: result.reason?.message || "Unknown error",
           totalUsed: 0,
           totalQuota: 0,
           usagePercentage: 0,
-          formattedUsage: '0 B',
-          formattedQuota: '0 B'
+          formattedUsage: "0 B",
+          formattedQuota: "0 B",
         });
       }
     });
@@ -1679,14 +1862,17 @@ router.get('/cpanel/user-all-emails/:userId', async (req, res) => {
     const overallStats = {
       totalAccounts: allEmails.length,
       totalUsed: allEmails.reduce((sum, email) => sum + email.usage.bytes, 0),
-      totalQuota: allEmails.reduce((sum, email) =>
-        email.quota.isUnlimited ? -1 : sum + email.quota.limit, 0)
+      totalQuota: allEmails.reduce(
+        (sum, email) =>
+          email.quota.isUnlimited ? -1 : sum + email.quota.limit,
+        0,
+      ),
     };
 
     // Step 4: Group emails by domain
     const emailsByDomain = {};
 
-    allEmails.forEach(email => {
+    allEmails.forEach((email) => {
       const domain = email.domain;
       if (!emailsByDomain[domain]) {
         emailsByDomain[domain] = {
@@ -1698,9 +1884,9 @@ router.get('/cpanel/user-all-emails/:userId', async (req, res) => {
             totalUsed: 0,
             totalQuota: 0,
             usagePercentage: 0,
-            formattedUsage: '0 B',
-            formattedQuota: '0 B'
-          }
+            formattedUsage: "0 B",
+            formattedQuota: "0 B",
+          },
         };
       }
 
@@ -1712,33 +1898,42 @@ router.get('/cpanel/user-all-emails/:userId', async (req, res) => {
         quota: email.quota,
         usage: email.usage,
         servers: email.servers,
-        domainInfo: email.domainInfo
+        domainInfo: email.domainInfo,
       });
     });
 
     // Calculate stats for each domain
-    Object.keys(emailsByDomain).forEach(domain => {
+    Object.keys(emailsByDomain).forEach((domain) => {
       const domainEmails = emailsByDomain[domain].emails;
-      const totalUsed = domainEmails.reduce((sum, email) => sum + email.usage.bytes, 0);
-      const totalQuota = domainEmails.reduce((sum, email) =>
-        email.quota.isUnlimited ? -1 : sum + email.quota.limit, 0);
+      const totalUsed = domainEmails.reduce(
+        (sum, email) => sum + email.usage.bytes,
+        0,
+      );
+      const totalQuota = domainEmails.reduce(
+        (sum, email) =>
+          email.quota.isUnlimited ? -1 : sum + email.quota.limit,
+        0,
+      );
 
       emailsByDomain[domain].stats = {
         totalAccounts: domainEmails.length,
         totalUsed: totalUsed,
         totalQuota: totalQuota,
-        usagePercentage: totalQuota === -1 ? 0 :
-          Math.round((totalUsed / totalQuota) * 100),
+        usagePercentage:
+          totalQuota === -1 ? 0 : Math.round((totalUsed / totalQuota) * 100),
         formattedUsage: formatStorage(totalUsed),
-        formattedQuota: totalQuota === -1 ? 'Unlimited' :
-          formatStorage(totalQuota)
+        formattedQuota:
+          totalQuota === -1 ? "Unlimited" : formatStorage(totalQuota),
       };
     });
 
     // Step 5: Create domains list with all user domains
-    const allDomainsList = userDomains.map(domainRecord => {
-      const hasEmails = Object.keys(emailsByDomain).includes(domainRecord.domain);
-      const emailCount = emailsByDomain[domainRecord.domain]?.emails?.length || 0;
+    const allDomainsList = userDomains.map((domainRecord) => {
+      const hasEmails = Object.keys(emailsByDomain).includes(
+        domainRecord.domain,
+      );
+      const emailCount =
+        emailsByDomain[domainRecord.domain]?.emails?.length || 0;
 
       const domainObj = {
         domain: domainRecord.domain,
@@ -1748,8 +1943,8 @@ router.get('/cpanel/user-all-emails/:userId', async (req, res) => {
           domainId: domainRecord._id,
           domainStatus: domainRecord.domainStatus,
           registrationDate: domainRecord.registrationDate,
-          expiryDate: domainRecord.expiryDate
-        }
+          expiryDate: domainRecord.expiryDate,
+        },
       };
 
       // Only add webmailUrl if domain has emails
@@ -1773,41 +1968,47 @@ router.get('/cpanel/user-all-emails/:userId', async (req, res) => {
       domainsWithEmails: emailsByDomain,
       overallStats: {
         ...overallStats,
-        usagePercentage: overallStats.totalQuota === -1 ? 0 :
-          Math.round((overallStats.totalUsed / overallStats.totalQuota) * 100),
+        usagePercentage:
+          overallStats.totalQuota === -1
+            ? 0
+            : Math.round(
+                (overallStats.totalUsed / overallStats.totalQuota) * 100,
+              ),
         formattedUsage: formatStorage(overallStats.totalUsed),
-        formattedQuota: overallStats.totalQuota === -1 ? 'Unlimited' :
-          formatStorage(overallStats.totalQuota)
+        formattedQuota:
+          overallStats.totalQuota === -1
+            ? "Unlimited"
+            : formatStorage(overallStats.totalQuota),
       },
       summary: {
         totalDomains: userDomains.length,
         domainsWithEmails: Object.keys(emailsByDomain).length,
-        domainsWithErrors: domainStats.filter(d => d.error).length,
-        suspendedEmails: allEmails.filter(email => email.suspended).length,
-        activeEmails: allEmails.filter(email => !email.suspended).length
+        domainsWithErrors: domainStats.filter((d) => d.error).length,
+        suspendedEmails: allEmails.filter((email) => email.suspended).length,
+        activeEmails: allEmails.filter((email) => !email.suspended).length,
       },
       metadata: {
-        dataSource: 'cPanel Real-time API + Database',
+        dataSource: "cPanel Real-time API + Database",
         fetchTimestamp: fetchEndTime.toISOString(),
         fetchDurationMs: fetchDuration,
         domainsProcessed: userDomains.length,
         totalApiCalls: userDomains.length * 2, // list_pops_with_disk + list_pops per domain
         realTimeData: true,
-        storageDataFrom: 'list_pops_with_disk (included in response)',
-        creationDataFrom: 'Multi-source: Database (high accuracy) > cPanel API > WHM API > Fallback',
-        performance: 'Parallel processing enabled',
-        optimization: 'Minimal API calls (2 per domain for complete data)',
-        creationDateAccuracy: 'Improved with multi-source approach',
-        note: 'Creation dates now use database records for emails we created, with fallbacks to cPanel/WHM APIs'
-      }
+        storageDataFrom: "list_pops_with_disk (included in response)",
+        creationDataFrom:
+          "Multi-source: Database (high accuracy) > cPanel API > WHM API > Fallback",
+        performance: "Parallel processing enabled",
+        optimization: "Minimal API calls (2 per domain for complete data)",
+        creationDateAccuracy: "Improved with multi-source approach",
+        note: "Creation dates now use database records for emails we created, with fallbacks to cPanel/WHM APIs",
+      },
     });
-
   } catch (err) {
-    console.error('Failed to fetch user emails:', err.message);
-    console.error('Full error stack:', err.stack);
+    console.error("Failed to fetch user emails:", err.message);
+    console.error("Full error stack:", err.stack);
     res.status(500).json({
       success: false,
-      error: err.message
+      error: err.message,
     });
   }
 });
@@ -1815,7 +2016,7 @@ router.get('/cpanel/user-all-emails/:userId', async (req, res) => {
 //_____________send email API______________
 
 // Route: Send Email using cPanel UAPI
-router.post('/cpanel/send-email', async (req, res) => {
+router.post("/cpanel/send-email", async (req, res) => {
   const {
     userId,
     domain,
@@ -1827,21 +2028,22 @@ router.post('/cpanel/send-email', async (req, res) => {
     replyTo = null,
     cc = null,
     bcc = null,
-    attachments = null
+    attachments = null,
   } = req.body;
 
   // Input validation
   if (!userId || !domain || !fromEmail || !toEmail || !subject || !message) {
     return res.status(400).json({
       success: false,
-      error: 'userId, domain, fromEmail, toEmail, subject, and message are required.'
+      error:
+        "userId, domain, fromEmail, toEmail, subject, and message are required.",
     });
   }
 
   if (!isValidDomain(domain)) {
     return res.status(400).json({
       success: false,
-      error: 'Invalid domain format.'
+      error: "Invalid domain format.",
     });
   }
 
@@ -1850,16 +2052,16 @@ router.post('/cpanel/send-email', async (req, res) => {
   if (!emailRegex.test(fromEmail) || !emailRegex.test(toEmail)) {
     return res.status(400).json({
       success: false,
-      error: 'Invalid email format for fromEmail or toEmail.'
+      error: "Invalid email format for fromEmail or toEmail.",
     });
   }
 
   // Validate that fromEmail belongs to the specified domain
-  const fromDomain = fromEmail.split('@')[1];
+  const fromDomain = fromEmail.split("@")[1];
   if (fromDomain.toLowerCase() !== domain.toLowerCase()) {
     return res.status(400).json({
       success: false,
-      error: 'fromEmail must belong to the specified domain.'
+      error: "fromEmail must belong to the specified domain.",
     });
   }
 
@@ -1867,15 +2069,16 @@ router.post('/cpanel/send-email', async (req, res) => {
   if (subject.length > 998) {
     return res.status(400).json({
       success: false,
-      error: 'Subject line is too long. Maximum length is 998 characters.'
+      error: "Subject line is too long. Maximum length is 998 characters.",
     });
   }
 
   // Validate message length
-  if (message.length > 26214400) { // 25MB limit
+  if (message.length > 26214400) {
+    // 25MB limit
     return res.status(400).json({
       success: false,
-      error: 'Message is too long. Maximum size is 25MB.'
+      error: "Message is too long. Maximum size is 25MB.",
     });
   }
 
@@ -1883,14 +2086,14 @@ router.post('/cpanel/send-email', async (req, res) => {
   if (cc && !Array.isArray(cc)) {
     return res.status(400).json({
       success: false,
-      error: 'cc must be an array of email addresses.'
+      error: "cc must be an array of email addresses.",
     });
   }
 
   if (bcc && !Array.isArray(bcc)) {
     return res.status(400).json({
       success: false,
-      error: 'bcc must be an array of email addresses.'
+      error: "bcc must be an array of email addresses.",
     });
   }
 
@@ -1900,7 +2103,7 @@ router.post('/cpanel/send-email', async (req, res) => {
       if (!emailRegex.test(email)) {
         return res.status(400).json({
           success: false,
-          error: `Invalid email format in cc: ${email}`
+          error: `Invalid email format in cc: ${email}`,
         });
       }
     }
@@ -1911,7 +2114,7 @@ router.post('/cpanel/send-email', async (req, res) => {
       if (!emailRegex.test(email)) {
         return res.status(400).json({
           success: false,
-          error: `Invalid email format in bcc: ${email}`
+          error: `Invalid email format in bcc: ${email}`,
         });
       }
     }
@@ -1923,27 +2126,29 @@ router.post('/cpanel/send-email', async (req, res) => {
     if (!domainOwnership) {
       return res.status(403).json({
         success: false,
-        error: 'Domain not registered to user or domain is not active.'
+        error: "Domain not registered to user or domain is not active.",
       });
     }
 
     // Step 2: Verify that the fromEmail exists as an email account
-    const emailCheckResult = await cpanelRequest('Email/list_pops', {
-      domain: domain.toLowerCase()
+    const emailCheckResult = await cpanelRequest("Email/list_pops", {
+      domain: domain.toLowerCase(),
     });
 
     if (emailCheckResult.status !== 1) {
-      throw new Error(emailCheckResult.errors?.[0] || 'Failed to fetch email accounts');
+      throw new Error(
+        emailCheckResult.errors?.[0] || "Failed to fetch email accounts",
+      );
     }
 
-    const emailExists = emailCheckResult.data?.some(account =>
-      account.email === fromEmail.toLowerCase()
+    const emailExists = emailCheckResult.data?.some(
+      (account) => account.email === fromEmail.toLowerCase(),
     );
 
     if (!emailExists) {
       return res.status(404).json({
         success: false,
-        error: 'From email account does not exist on this domain.'
+        error: "From email account does not exist on this domain.",
       });
     }
 
@@ -1953,7 +2158,7 @@ router.post('/cpanel/send-email', async (req, res) => {
       to: toEmail.toLowerCase(),
       subject: subject,
       message: message,
-      html: isHtml ? '1' : '0'
+      html: isHtml ? "1" : "0",
     };
 
     // Add optional parameters
@@ -1962,32 +2167,39 @@ router.post('/cpanel/send-email', async (req, res) => {
     }
 
     if (cc && cc.length > 0) {
-      emailParams.cc = cc.join(',').toLowerCase();
+      emailParams.cc = cc.join(",").toLowerCase();
     }
 
     if (bcc && bcc.length > 0) {
-      emailParams.bcc = bcc.join(',').toLowerCase();
+      emailParams.bcc = bcc.join(",").toLowerCase();
     }
 
     // Step 4: Send email using cPanel UAPI
-    console.log('Sending email with params:', {
+    console.log("Sending email with params:", {
       ...emailParams,
-      message: message.length > 100 ? `${message.substring(0, 100)}...` : message
+      message:
+        message.length > 100 ? `${message.substring(0, 100)}...` : message,
     });
 
-    const sendResult = await cpanelRequest('Email/send_email', emailParams, 'POST');
+    const sendResult = await cpanelRequest(
+      "Email/send_email",
+      emailParams,
+      "POST",
+    );
 
-    console.log('Email send result:', sendResult);
+    console.log("Email send result:", sendResult);
 
     if (sendResult.status !== 1) {
-      const errorMsg = (sendResult.errors && sendResult.errors[0]) || 'Unknown error from cPanel';
+      const errorMsg =
+        (sendResult.errors && sendResult.errors[0]) ||
+        "Unknown error from cPanel";
       throw new Error(errorMsg);
     }
 
     // Step 5: Return success response
     res.json({
       success: true,
-      message: 'Email sent successfully',
+      message: "Email sent successfully",
       emailDetails: {
         from: fromEmail.toLowerCase(),
         to: toEmail.toLowerCase(),
@@ -1997,30 +2209,29 @@ router.post('/cpanel/send-email', async (req, res) => {
         replyTo: replyTo,
         cc: cc,
         bcc: bcc,
-        timestamp: new Date().toISOString()
+        timestamp: new Date().toISOString(),
       },
       cpanelResponse: sendResult.data,
-      domain: domain.toLowerCase()
+      domain: domain.toLowerCase(),
     });
-
   } catch (err) {
-    console.error('Email sending failed:', err.message);
+    console.error("Email sending failed:", err.message);
     res.status(500).json({
       success: false,
       error: err.message,
-      details: err.response?.data || null
+      details: err.response?.data || null,
     });
   }
 });
 
 // Route: Get Email Sending Statistics
-router.get('/cpanel/email-sending-stats/:userId/:domain', async (req, res) => {
+router.get("/cpanel/email-sending-stats/:userId/:domain", async (req, res) => {
   const { userId, domain } = req.params;
 
   if (!userId || !domain) {
     return res.status(400).json({
       success: false,
-      error: 'userId and domain are required.'
+      error: "userId and domain are required.",
     });
   }
 
@@ -2030,17 +2241,19 @@ router.get('/cpanel/email-sending-stats/:userId/:domain', async (req, res) => {
     if (!domainOwnership) {
       return res.status(403).json({
         success: false,
-        error: 'Domain not registered to user or domain is not active.'
+        error: "Domain not registered to user or domain is not active.",
       });
     }
 
     // Get email accounts for the domain
-    const emailResult = await cpanelRequest('Email/list_pops', {
-      domain: domain.toLowerCase()
+    const emailResult = await cpanelRequest("Email/list_pops", {
+      domain: domain.toLowerCase(),
     });
 
     if (emailResult.status !== 1) {
-      throw new Error(emailResult.errors?.[0] || 'Failed to fetch email accounts');
+      throw new Error(
+        emailResult.errors?.[0] || "Failed to fetch email accounts",
+      );
     }
 
     const emailAccounts = emailResult.data || [];
@@ -2048,52 +2261,57 @@ router.get('/cpanel/email-sending-stats/:userId/:domain', async (req, res) => {
     // Get mail queue information (if available)
     let mailQueueInfo = null;
     try {
-      const queueResult = await cpanelRequest('Email/get_mail_queue');
+      const queueResult = await cpanelRequest("Email/get_mail_queue");
       if (queueResult.status === 1) {
         mailQueueInfo = {
           queueSize: queueResult.data?.length || 0,
-          queuedEmails: queueResult.data || []
+          queuedEmails: queueResult.data || [],
         };
       }
     } catch (queueError) {
-      console.log('Mail queue information not available:', queueError.message);
+      console.log("Mail queue information not available:", queueError.message);
     }
 
     // Get email sending limits (if available)
     let sendingLimits = null;
     try {
-      const limitsResult = await cpanelRequest('Email/get_sending_limits');
+      const limitsResult = await cpanelRequest("Email/get_sending_limits");
       if (limitsResult.status === 1) {
         sendingLimits = limitsResult.data;
       }
     } catch (limitsError) {
-      console.log('Sending limits information not available:', limitsError.message);
+      console.log(
+        "Sending limits information not available:",
+        limitsError.message,
+      );
     }
 
     res.json({
       success: true,
       domain: domain.toLowerCase(),
-      emailAccounts: emailAccounts.map(email => ({
+      emailAccounts: emailAccounts.map((email) => ({
         username: email.user,
         email: email.email,
-        suspended: email.suspended === '1'
+        suspended: email.suspended === "1",
       })),
       statistics: {
         totalEmailAccounts: emailAccounts.length,
-        activeAccounts: emailAccounts.filter(email => email.suspended !== '1').length,
-        suspendedAccounts: emailAccounts.filter(email => email.suspended === '1').length
+        activeAccounts: emailAccounts.filter((email) => email.suspended !== "1")
+          .length,
+        suspendedAccounts: emailAccounts.filter(
+          (email) => email.suspended === "1",
+        ).length,
       },
       mailQueue: mailQueueInfo,
       sendingLimits: sendingLimits,
       webmailUrl: `https://${domain.toLowerCase()}:2096/`,
-      timestamp: new Date().toISOString()
+      timestamp: new Date().toISOString(),
     });
-
   } catch (err) {
-    console.error('Failed to get email sending statistics:', err.message);
+    console.error("Failed to get email sending statistics:", err.message);
     res.status(500).json({
       success: false,
-      error: err.message
+      error: err.message,
     });
   }
 });
@@ -2105,32 +2323,37 @@ async function getEmailCreationDate(email, domain, userId) {
     const domainRecord = await NamecheapDomain.findOne({
       userId: userId,
       domain: domain.toLowerCase(),
-      'emailAccounts.email': email.toLowerCase()
+      "emailAccounts.email": email.toLowerCase(),
     });
 
     if (domainRecord) {
       const emailAccount = domainRecord.emailAccounts.find(
-        acc => acc.email.toLowerCase() === email.toLowerCase()
+        (acc) => acc.email.toLowerCase() === email.toLowerCase(),
       );
       if (emailAccount && emailAccount.createdAt) {
         return {
           creationDate: emailAccount.createdAt.toISOString(),
-          source: 'database',
-          accuracy: 'high'
+          source: "database",
+          accuracy: "high",
         };
       }
     }
 
     // Method 2: Try cPanel Email/get_pop_quota (sometimes has creation info)
     try {
-      const quotaResult = await cpanelRequest('Email/get_pop_quota', {
-        user: email.split('@')[0],
-        domain: domain.toLowerCase()
+      const quotaResult = await cpanelRequest("Email/get_pop_quota", {
+        user: email.split("@")[0],
+        domain: domain.toLowerCase(),
       });
 
       if (quotaResult.status === 1 && quotaResult.data) {
         // Check for various possible creation date fields
-        const possibleDateFields = ['created', 'creation_date', 'date_created', 'created_date'];
+        const possibleDateFields = [
+          "created",
+          "creation_date",
+          "date_created",
+          "created_date",
+        ];
         for (const field of possibleDateFields) {
           if (quotaResult.data[field]) {
             try {
@@ -2139,8 +2362,8 @@ async function getEmailCreationDate(email, domain, userId) {
                 return {
                   creationDate: parsedDate.toISOString(),
                   source: `cpanel_quota_${field}`,
-                  accuracy: 'medium',
-                  rawValue: quotaResult.data[field]
+                  accuracy: "medium",
+                  rawValue: quotaResult.data[field],
                 };
               }
             } catch (e) {
@@ -2155,13 +2378,13 @@ async function getEmailCreationDate(email, domain, userId) {
 
     // Method 3: Try cPanel Email/list_pops with detailed info
     try {
-      const listResult = await cpanelRequest('Email/list_pops', {
-        domain: domain.toLowerCase()
+      const listResult = await cpanelRequest("Email/list_pops", {
+        domain: domain.toLowerCase(),
       });
 
       if (listResult.status === 1 && listResult.data) {
         const emailInfo = listResult.data.find(
-          acc => acc.email.toLowerCase() === email.toLowerCase()
+          (acc) => acc.email.toLowerCase() === email.toLowerCase(),
         );
 
         if (emailInfo && emailInfo.created) {
@@ -2170,29 +2393,35 @@ async function getEmailCreationDate(email, domain, userId) {
             if (!isNaN(parsedDate.getTime())) {
               return {
                 creationDate: parsedDate.toISOString(),
-                source: 'cpanel_list_pops',
-                accuracy: 'medium',
-                rawValue: emailInfo.created
+                source: "cpanel_list_pops",
+                accuracy: "medium",
+                rawValue: emailInfo.created,
               };
             }
           } catch (e) {
-            console.log(`Could not parse created date for ${email}:`, emailInfo.created);
+            console.log(
+              `Could not parse created date for ${email}:`,
+              emailInfo.created,
+            );
           }
         }
       }
     } catch (listError) {
-      console.log(`Could not get list_pops info for ${email}:`, listError.message);
+      console.log(
+        `Could not get list_pops info for ${email}:`,
+        listError.message,
+      );
     }
 
     // Method 4: Try WHM API for email details
     try {
-      const whmResult = await whmRequest('list_pops', {
-        domain: domain.toLowerCase()
+      const whmResult = await whmRequest("list_pops", {
+        domain: domain.toLowerCase(),
       });
 
       if (whmResult.status === 1 && whmResult.data) {
         const emailInfo = whmResult.data.find(
-          acc => acc.email.toLowerCase() === email.toLowerCase()
+          (acc) => acc.email.toLowerCase() === email.toLowerCase(),
         );
 
         if (emailInfo && emailInfo.created) {
@@ -2201,13 +2430,16 @@ async function getEmailCreationDate(email, domain, userId) {
             if (!isNaN(parsedDate.getTime())) {
               return {
                 creationDate: parsedDate.toISOString(),
-                source: 'whm_api',
-                accuracy: 'medium',
-                rawValue: emailInfo.created
+                source: "whm_api",
+                accuracy: "medium",
+                rawValue: emailInfo.created,
               };
             }
           } catch (e) {
-            console.log(`Could not parse WHM created date for ${email}:`, emailInfo.created);
+            console.log(
+              `Could not parse WHM created date for ${email}:`,
+              emailInfo.created,
+            );
           }
         }
       }
@@ -2217,18 +2449,18 @@ async function getEmailCreationDate(email, domain, userId) {
 
     // Method 5: Check file system creation time (if available)
     try {
-      const fsResult = await cpanelRequest('Fileman/get_file_info', {
+      const fsResult = await cpanelRequest("Fileman/get_file_info", {
         file: `/home/${MASTER_USER}/etc/valiases/${domain.toLowerCase()}`,
-        dir: '/'
+        dir: "/",
       });
 
       if (fsResult.status === 1 && fsResult.data) {
         // This is a fallback - not very accurate but better than nothing
         return {
           creationDate: new Date().toISOString(),
-          source: 'fallback_current_time',
-          accuracy: 'low',
-          note: 'No creation date found, using current time as fallback'
+          source: "fallback_current_time",
+          accuracy: "low",
+          note: "No creation date found, using current time as fallback",
         };
       }
     } catch (fsError) {
@@ -2238,22 +2470,20 @@ async function getEmailCreationDate(email, domain, userId) {
     // Final fallback
     return {
       creationDate: new Date().toISOString(),
-      source: 'fallback_current_time',
-      accuracy: 'low',
-      note: 'No creation date information available from any source'
+      source: "fallback_current_time",
+      accuracy: "low",
+      note: "No creation date information available from any source",
     };
-
   } catch (error) {
     console.error(`Error getting creation date for ${email}:`, error.message);
     return {
       creationDate: new Date().toISOString(),
-      source: 'error_fallback',
-      accuracy: 'low',
-      error: error.message
+      source: "error_fallback",
+      accuracy: "low",
+      error: error.message,
     };
   }
 }
-
 
 //__________________Validate DMARC records___________
 
@@ -2262,7 +2492,7 @@ async function getEmailCreationDate(email, domain, userId) {
  * This endpoint applies DMARC records to specified domains using cPanel's apply_dmarc API
  * Based on the official cPanel API documentation
  */
-router.get('/cpanel/apply-dmarc', async (req, res) => {
+router.get("/cpanel/apply-dmarc", async (req, res) => {
   try {
     const { policy, domain } = req.query;
 
@@ -2270,14 +2500,14 @@ router.get('/cpanel/apply-dmarc', async (req, res) => {
     if (!policy) {
       return res.status(400).json({
         success: false,
-        error: 'Policy parameter is required'
+        error: "Policy parameter is required",
       });
     }
 
     if (!domain) {
       return res.status(400).json({
         success: false,
-        error: 'Domain parameter is required.'
+        error: "Domain parameter is required.",
       });
     }
 
@@ -2287,10 +2517,10 @@ router.get('/cpanel/apply-dmarc', async (req, res) => {
 
     // Validate all policies have correct DMARC format
     for (const pol of policies) {
-      if (!pol.includes('v=DMARC1')) {
+      if (!pol.includes("v=DMARC1")) {
         return res.status(400).json({
           success: false,
-          error: `Invalid DMARC policy format: "${pol}". Must include v=DMARC1`
+          error: `Invalid DMARC policy format: "${pol}". Must include v=DMARC1`,
         });
       }
     }
@@ -2299,13 +2529,14 @@ router.get('/cpanel/apply-dmarc', async (req, res) => {
     if (policies.length > 1 && policies.length !== domains.length) {
       return res.status(400).json({
         success: false,
-        error: 'When using multiple policies, each policy must have a matching domain'
+        error:
+          "When using multiple policies, each policy must have a matching domain",
       });
     }
 
     // Prepare parameters for WHM API (not cPanel user API)
     const params = {
-      'api.version': '1'
+      "api.version": "1",
     };
 
     // Build parameters based on the API documentation
@@ -2317,16 +2548,16 @@ router.get('/cpanel/apply-dmarc', async (req, res) => {
       });
     } else {
       // Single policy
-      params['policy'] = policies[0];
-      params['domain'] = domains[0];
+      params["policy"] = policies[0];
+      params["domain"] = domains[0];
     }
 
     // Log the request
-    console.log('Applying DMARC record with params:', params);
+    console.log("Applying DMARC record with params:", params);
 
     // Use cPanel UAPI (same as email creation APIs) instead of WHM API
     // This approach works because it uses the master user credentials
-    const result = await cpanelRequest('EmailAuth/apply_dmarc', params, 'POST');
+    const result = await cpanelRequest("EmailAuth/apply_dmarc", params, "POST");
 
     // Alternative: If you need to use WHM API, use the working whmRequest function
     // const result = await whmRequest('apply_dmarc', params);
@@ -2336,93 +2567,94 @@ router.get('/cpanel/apply-dmarc', async (req, res) => {
       // Format successful response
       const response = {
         success: true,
-        message: 'DMARC record applied successfully',
+        message: "DMARC record applied successfully",
         data: result.data || {
           payload: domains.map((dom, index) => ({
             domain: dom,
             msg: `DMARC record applied: ${policies[index] || policies[0]}`,
-            status: 1
-          }))
+            status: 1,
+          })),
         },
-        metadata: result.metadata
+        metadata: result.metadata,
       };
 
-      console.log('DMARC record applied successfully:', response);
+      console.log("DMARC record applied successfully:", response);
       return res.status(200).json(response);
-
     } else {
       // Handle failure
-      const errorMsg = result.metadata?.reason || result.errors?.[0] || 'Unknown error';
+      const errorMsg =
+        result.metadata?.reason || result.errors?.[0] || "Unknown error";
 
       const errorResponse = {
         success: false,
-        error: 'Failed to apply DMARC record',
+        error: "Failed to apply DMARC record",
         data: result.data || {
-          payload: domains.map(dom => ({
+          payload: domains.map((dom) => ({
             domain: dom,
             msg: `Failed to apply DMARC record: ${errorMsg}`,
-            status: 0
-          }))
+            status: 0,
+          })),
         },
         metadata: result.metadata || {
-          command: 'apply_dmarc',
+          command: "apply_dmarc",
           reason: errorMsg,
           result: 0,
-          version: 1
-        }
+          version: 1,
+        },
       };
 
-      console.error('Failed to apply DMARC record:', errorResponse);
+      console.error("Failed to apply DMARC record:", errorResponse);
       return res.status(500).json(errorResponse);
     }
-
   } catch (error) {
     // console.error('Error applying DMARC record:', error);
 
     return res.status(500).json({
       success: false,
-      error: 'Internal server error while applying DMARC record',
+      error: "Internal server error while applying DMARC record",
       details: error.message,
       metadata: {
-        command: 'apply_dmarc',
+        command: "apply_dmarc",
         reason: error.message,
         result: 0,
-        version: 1
-      }
+        version: 1,
+      },
     });
   }
 });
 
-
 async function validateDMARCRecords(domain) {
   try {
     // Use WHM API to validate DMARC records
-    const dmarcRecord = await whmRequest('validate_current_dmarcs', {
-      domain: `domain=${domain}` // Note the format change
+    const dmarcRecord = await whmRequest("validate_current_dmarcs", {
+      domain: `domain=${domain}`, // Note the format change
     });
 
     // Check response structure
     if (dmarcRecord.success && dmarcRecord.data) {
       // Find the DMARC record for this specific domain in the payload array
-      const domainRecord = dmarcRecord.data.payload.find(record =>
-        record.domain === domain
+      const domainRecord = dmarcRecord.data.payload.find(
+        (record) => record.domain === domain,
       );
 
       if (domainRecord) {
         // Check record state
-        if (domainRecord.state === "VALID" && domainRecord.record.includes('v=DMARC1')) {
+        if (
+          domainRecord.state === "VALID" &&
+          domainRecord.record.includes("v=DMARC1")
+        ) {
           return {
             isValid: true,
             record: domainRecord.record,
             domain: domain,
-            message: 'Valid DMARC record found'
+            message: "Valid DMARC record found",
           };
         } else {
           return {
             isValid: false,
             record: domainRecord.record || null,
             domain: domain,
-            message: domainRecord.error || 'DMARC record is invalid'
+            message: domainRecord.error || "DMARC record is invalid",
           };
         }
       } else {
@@ -2430,7 +2662,7 @@ async function validateDMARCRecords(domain) {
           isValid: false,
           record: null,
           domain: domain,
-          message: 'Domain not found in WHM response'
+          message: "Domain not found in WHM response",
         };
       }
     } else {
@@ -2438,7 +2670,8 @@ async function validateDMARCRecords(domain) {
         isValid: false,
         record: null,
         domain: domain,
-        message: dmarcRecord.metadata?.reason || 'WHM API returned error or no data'
+        message:
+          dmarcRecord.metadata?.reason || "WHM API returned error or no data",
       };
     }
   } catch (error) {
@@ -2446,17 +2679,17 @@ async function validateDMARCRecords(domain) {
 
     // Handle specific error types
     let errorMessage = `Error validating DMARC record: ${error.message}`;
-    let errorType = 'UNKNOWN_ERROR';
+    let errorType = "UNKNOWN_ERROR";
 
     if (error.response?.status === 404) {
-      errorMessage = 'WHM API endpoint not found';
-      errorType = 'ENDPOINT_NOT_FOUND';
-    } else if (error.code === 'ETIMEDOUT') {
-      errorMessage = 'Connection timeout to WHM server';
-      errorType = 'CONNECTION_TIMEOUT';
-    } else if (error.code === 'ECONNREFUSED') {
-      errorMessage = 'Connection refused by WHM server';
-      errorType = 'CONNECTION_REFUSED';
+      errorMessage = "WHM API endpoint not found";
+      errorType = "ENDPOINT_NOT_FOUND";
+    } else if (error.code === "ETIMEDOUT") {
+      errorMessage = "Connection timeout to WHM server";
+      errorType = "CONNECTION_TIMEOUT";
+    } else if (error.code === "ECONNREFUSED") {
+      errorMessage = "Connection refused by WHM server";
+      errorType = "CONNECTION_REFUSED";
     }
 
     return {
@@ -2465,7 +2698,7 @@ async function validateDMARCRecords(domain) {
       domain: domain,
       message: errorMessage,
       error: error.message,
-      errorType: errorType
+      errorType: errorType,
     };
   }
 }
@@ -2475,7 +2708,7 @@ async function validateDMARCRecords(domain) {
  * This endpoint validates DMARC records for specified domains using WHM's validate_current_dmarcs API
  * Based on the official WHM API documentation
  */
-router.get('/cpanel/validate-dmarc', async (req, res) => {
+router.get("/cpanel/validate-dmarc", async (req, res) => {
   try {
     const { domain } = req.query;
 
@@ -2483,7 +2716,7 @@ router.get('/cpanel/validate-dmarc', async (req, res) => {
     if (!domain) {
       return res.status(400).json({
         success: false,
-        error: 'Domain parameter is required'
+        error: "Domain parameter is required",
       });
     }
 
@@ -2491,25 +2724,25 @@ router.get('/cpanel/validate-dmarc', async (req, res) => {
     if (!isValidDomain(domain)) {
       return res.status(400).json({
         success: false,
-        error: 'Invalid domain format'
+        error: "Invalid domain format",
       });
     }
 
     const dmarcInfo = await validateDMARCRecords(domain);
 
     // Handle 404 specifically
-    if (dmarcInfo.errorType === 'ENDPOINT_NOT_FOUND') {
+    if (dmarcInfo.errorType === "ENDPOINT_NOT_FOUND") {
       return res.status(404).json({
         success: false,
-        error: 'WHM API endpoint not found',
-        details: dmarcInfo.message
+        error: "WHM API endpoint not found",
+        details: dmarcInfo.message,
       });
     }
 
     // Format response to match the API documentation structure
     const response = {
       success: true,
-      message: 'DMARC validation completed',
+      message: "DMARC validation completed",
       data: {
         payload: [
           {
@@ -2518,73 +2751,71 @@ router.get('/cpanel/validate-dmarc', async (req, res) => {
             record: dmarcInfo.record || "",
             state: dmarcInfo.isValid ? "VALID" : "INVALID",
             subdomain: `_dmarc.${domain}`,
-            suggested: dmarcInfo.isValid ? dmarcInfo.record : "v=DMARC1; p=none;"
-          }
-        ]
+            suggested: dmarcInfo.isValid
+              ? dmarcInfo.record
+              : "v=DMARC1; p=none;",
+          },
+        ],
       },
       metadata: {
         command: "validate_current_dmarcs",
-        reason: dmarcInfo.isValid ? "OK" : dmarcInfo.message || "Validation failed",
+        reason: dmarcInfo.isValid
+          ? "OK"
+          : dmarcInfo.message || "Validation failed",
         result: dmarcInfo.isValid ? 1 : 0,
-        version: 1
-      }
+        version: 1,
+      },
     };
 
     // Log success
-    console.log('DMARC validation completed:', {
+    console.log("DMARC validation completed:", {
       domain: domain,
       isValid: dmarcInfo.isValid,
       record: dmarcInfo.record,
-      result: response
+      result: response,
     });
 
     return res.status(200).json(response);
-
   } catch (error) {
-    console.error('Error validating DMARC record:', error);
+    console.error("Error validating DMARC record:", error);
 
     // Log error
-    console.log('Error validating DMARC record:', {
+    console.log("Error validating DMARC record:", {
       domain: req.query.domain,
       error: error.message,
       stack: error.stack,
-      timestamp: new Date().toISOString()
+      timestamp: new Date().toISOString(),
     });
-
-
 
     return res.status(500).json({
       success: false,
-      error: 'Internal server error while validating DMARC record',
-      details: error.message
+      error: "Internal server error while validating DMARC record",
+      details: error.message,
     });
   }
 });
 
-
 //Update DNS zone record API
-
-
 
 /**
  * Get DNS Zone Records (dumpzone)
  * This endpoint retrieves DNS zone records for a domain
  * Useful to get line numbers for editing records
  */
-router.get('/cpanel/dns-zone/:userId/:domain', async (req, res) => {
+router.get("/cpanel/dns-zone/:userId/:domain", async (req, res) => {
   const { userId, domain } = req.params;
 
   if (!userId || !domain) {
     return res.status(400).json({
       success: false,
-      error: 'userId and domain are required.'
+      error: "userId and domain are required.",
     });
   }
 
   if (!isValidDomain(domain)) {
     return res.status(400).json({
       success: false,
-      error: 'Invalid domain format.'
+      error: "Invalid domain format.",
     });
   }
 
@@ -2594,39 +2825,38 @@ router.get('/cpanel/dns-zone/:userId/:domain', async (req, res) => {
     if (!domainOwnership) {
       return res.status(403).json({
         success: false,
-        error: 'Domain not registered to user or domain is not active.'
+        error: "Domain not registered to user or domain is not active.",
       });
     }
 
     // Get DNS zone records using dumpzone
-    const result = await whmRequest('dumpzone', {
-      domain: domain.toLowerCase()
+    const result = await whmRequest("dumpzone", {
+      domain: domain.toLowerCase(),
     });
 
     if (result.metadata && result.metadata.result === 1) {
       return res.json({
         success: true,
-        message: 'DNS zone records retrieved successfully',
+        message: "DNS zone records retrieved successfully",
         domain: domain.toLowerCase(),
         records: result.data,
-        metadata: result.metadata
+        metadata: result.metadata,
       });
     } else {
-      const errorMsg = result.metadata?.reason || 'Unknown error from WHM API';
-      
+      const errorMsg = result.metadata?.reason || "Unknown error from WHM API";
+
       return res.status(500).json({
         success: false,
-        error: 'Failed to retrieve DNS zone records',
-        details: errorMsg
+        error: "Failed to retrieve DNS zone records",
+        details: errorMsg,
       });
     }
-
   } catch (err) {
-    console.error('Failed to retrieve DNS zone:', err.message);
+    console.error("Failed to retrieve DNS zone:", err.message);
     res.status(500).json({
       success: false,
       error: err.message,
-      details: err.response?.data || null
+      details: err.response?.data || null,
     });
   }
 });
@@ -2638,40 +2868,40 @@ router.get('/cpanel/dns-zone/:userId/:domain', async (req, res) => {
  * - Adds new if not found
  * Users don't need to know line numbers
  */
-router.post('/cpanel/upsert-dns-record', async (req, res) => {
-  const { 
-    userId, 
-    domain, 
-    name, 
-    ttl = 14400, 
-    type = 'A',
+router.post("/cpanel/upsert-dns-record", async (req, res) => {
+  const {
+    userId,
+    domain,
+    name,
+    ttl = 14400,
+    type = "A",
     address, // For A records
-    cname,   // For CNAME records
+    cname, // For CNAME records
     exchange, // For MX records
     priority, // For MX records
-    txtdata,  // For TXT records
-    target    // For A6 records
+    txtdata, // For TXT records
+    target, // For A6 records
   } = req.body;
 
   // Input validation
   if (!userId || !domain || !name) {
     return res.status(400).json({
       success: false,
-      error: 'userId, domain, and name are required.'
+      error: "userId, domain, and name are required.",
     });
   }
 
   if (!isValidDomain(domain)) {
     return res.status(400).json({
       success: false,
-      error: 'Invalid domain format.'
+      error: "Invalid domain format.",
     });
   }
 
   if (!Number.isInteger(ttl) || ttl < 1) {
     return res.status(400).json({
       success: false,
-      error: 'TTL must be a positive integer (>= 1).'
+      error: "TTL must be a positive integer (>= 1).",
     });
   }
 
@@ -2681,80 +2911,81 @@ router.post('/cpanel/upsert-dns-record', async (req, res) => {
     if (!domainOwnership) {
       return res.status(403).json({
         success: false,
-        error: 'Domain not registered to user or domain is not active.'
+        error: "Domain not registered to user or domain is not active.",
       });
     }
 
     // Step 2: Get existing zone records using dumpzone
-    const zone = await whmRequest('dumpzone', {
-      domain: domain.toLowerCase()
+    const zone = await whmRequest("dumpzone", {
+      domain: domain.toLowerCase(),
     });
 
     if (!zone.metadata || zone.metadata.result !== 1) {
-      throw new Error('Failed to retrieve DNS zone records');
+      throw new Error("Failed to retrieve DNS zone records");
     }
 
     const records = zone.data || [];
 
     // Normalize record names (remove trailing dots for comparison)
-    const normalizeName = (n) => n ? n.replace(/\.$/, '').toLowerCase() : '';
+    const normalizeName = (n) => (n ? n.replace(/\.$/, "").toLowerCase() : "");
 
     // Step 3: Try to find existing record (by name + type)
-    const existing = records.find(
-      (r) => {
-        const recordName = normalizeName(r.name);
-        const recordType = r.type ? r.type.toUpperCase() : '';
-        const searchName = normalizeName(name);
-        const searchType = type.toUpperCase();
-        
-        return recordName === searchName && recordType === searchType;
-      }
-    );
+    const existing = records.find((r) => {
+      const recordName = normalizeName(r.name);
+      const recordType = r.type ? r.type.toUpperCase() : "";
+      const searchName = normalizeName(name);
+      const searchType = type.toUpperCase();
 
-    console.log(`Found existing record:`, existing ? `Line ${existing.line}` : 'None');
+      return recordName === searchName && recordType === searchType;
+    });
+
+    console.log(
+      `Found existing record:`,
+      existing ? `Line ${existing.line}` : "None",
+    );
 
     // Step 4: Build common params
     const params = {
       domain: domain.toLowerCase(),
-      name: name.endsWith('.') ? name : name + '.',
+      name: name.endsWith(".") ? name : name + ".",
       ttl: ttl,
-      type: type.toUpperCase()
+      type: type.toUpperCase(),
     };
 
     // Add type-specific values
     switch (type.toUpperCase()) {
-      case 'A':
+      case "A":
         if (!address) {
           return res.status(400).json({
             success: false,
-            error: 'address is required for A records.'
+            error: "address is required for A records.",
           });
         }
         params.address = address;
         break;
-      case 'AAAA':
+      case "AAAA":
         if (!address) {
           return res.status(400).json({
             success: false,
-            error: 'address is required for AAAA records.'
+            error: "address is required for AAAA records.",
           });
         }
         params.address = address;
         break;
-      case 'CNAME':
+      case "CNAME":
         if (!cname) {
           return res.status(400).json({
             success: false,
-            error: 'cname is required for CNAME records.'
+            error: "cname is required for CNAME records.",
           });
         }
         params.cname = cname;
         break;
-      case 'MX':
+      case "MX":
         if (!exchange) {
           return res.status(400).json({
             success: false,
-            error: 'exchange is required for MX records.'
+            error: "exchange is required for MX records.",
           });
         }
         params.exchange = exchange;
@@ -2762,29 +2993,29 @@ router.post('/cpanel/upsert-dns-record', async (req, res) => {
           params.priority = priority;
         }
         break;
-      case 'PTR':
+      case "PTR":
         if (!target) {
           return res.status(400).json({
             success: false,
-            error: 'target (ptrdname) is required for PTR records.'
+            error: "target (ptrdname) is required for PTR records.",
           });
         }
         params.ptrdname = target;
         break;
-      case 'TXT':
+      case "TXT":
         if (!txtdata) {
           return res.status(400).json({
             success: false,
-            error: 'txtdata is required for TXT records.'
+            error: "txtdata is required for TXT records.",
           });
         }
         params.txtdata = txtdata;
         break;
-      case 'A6':
+      case "A6":
         if (!target) {
           return res.status(400).json({
             success: false,
-            error: 'target is required for A6 records.'
+            error: "target is required for A6 records.",
           });
         }
         params.target = target;
@@ -2792,7 +3023,7 @@ router.post('/cpanel/upsert-dns-record', async (req, res) => {
       default:
         return res.status(400).json({
           success: false,
-          error: `Unsupported DNS record type: ${type}`
+          error: `Unsupported DNS record type: ${type}`,
         });
     }
 
@@ -2802,13 +3033,16 @@ router.post('/cpanel/upsert-dns-record', async (req, res) => {
     if (existing) {
       // Step 5A: Update existing record
       params.line = existing.line;
-      console.log(`Updating ${type} record for ${name} (line ${existing.line}) with params:`, params);
-      result = await whmRequest('editzonerecord', params);
+      console.log(
+        `Updating ${type} record for ${name} (line ${existing.line}) with params:`,
+        params,
+      );
+      result = await whmRequest("editzonerecord", params);
       isUpdate = true;
     } else {
       // Step 5B: Add new record if none found
       console.log(`Adding new ${type} record for ${name} with params:`, params);
-      result = await whmRequest('addzonerecord', params);
+      result = await whmRequest("addzonerecord", params);
       isUpdate = false;
     }
 
@@ -2816,8 +3050,10 @@ router.post('/cpanel/upsert-dns-record', async (req, res) => {
     if (result.metadata && result.metadata.result === 1) {
       return res.json({
         success: true,
-        message: isUpdate ? 'DNS record updated successfully' : 'DNS record added successfully',
-        action: isUpdate ? 'updated' : 'added',
+        message: isUpdate
+          ? "DNS record updated successfully"
+          : "DNS record added successfully",
+        action: isUpdate ? "updated" : "added",
         data: result.data,
         metadata: result.metadata,
         record: {
@@ -2825,34 +3061,37 @@ router.post('/cpanel/upsert-dns-record', async (req, res) => {
           name: params.name,
           type: type.toUpperCase(),
           ttl: ttl,
-          line: existing ? existing.line : 'new',
-          timestamp: new Date().toISOString()
-        }
+          line: existing ? existing.line : "new",
+          timestamp: new Date().toISOString(),
+        },
       });
     } else {
-      const errorMsg = result.metadata?.reason || result.errors?.[0] || 'Unknown error from WHM API';
-      
+      const errorMsg =
+        result.metadata?.reason ||
+        result.errors?.[0] ||
+        "Unknown error from WHM API";
+
       return res.status(500).json({
         success: false,
-        error: isUpdate ? 'Failed to update DNS record' : 'Failed to add DNS record',
+        error: isUpdate
+          ? "Failed to update DNS record"
+          : "Failed to add DNS record",
         details: errorMsg,
-        metadata: result.metadata
+        metadata: result.metadata,
       });
     }
-
   } catch (err) {
-    console.error('DNS upsert failed:', err.message);
+    console.error("DNS upsert failed:", err.message);
     res.status(500).json({
       success: false,
       error: err.message,
-      details: err.response?.data || null
+      details: err.response?.data || null,
     });
   }
 });
 
-
 module.exports = {
   router,
   cpanelRequest,
-  validateDMARCRecords
+  validateDMARCRecords,
 };

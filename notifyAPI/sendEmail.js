@@ -57,6 +57,20 @@ function decrypt(encryptedText) {
   }
 }
 
+// Helper to determine accurate IMAP host from SMTP host
+function getImapHost(smtpHost) {
+  if (!smtpHost) return "";
+  const host = smtpHost.toLowerCase();
+  
+  // Microsoft/Office365 requires outlook.office365.com for IMAP
+  if (host.includes("office365.com") || host.includes("live.com") || host.includes("hotmail.com")) {
+    return "outlook.office365.com";
+  }
+  
+  // Generic fallback if not explicitly matched
+  return host.replace("smtp.", "imap.");
+}
+
 // MongoDB Models
 const smtpAuthSchema = new mongoose.Schema(
   {
@@ -533,7 +547,7 @@ router.post("/api/email/healthcheck", async (req, res) => {
   }
 
   // Test IMAP
-  const imapHost = smtp.host.replace("smtp.", "imap.");
+  const imapHost = getImapHost(smtp.host);
   try {
     const client = new ImapFlow({
       host: imapHost,
@@ -1361,7 +1375,7 @@ router.post("/api/fetchinbox", async (req, res) => {
     }
 
     const client = new ImapFlow({
-      host: smtp.host.replace("smtp.", "imap."),
+      host: getImapHost(smtp.host),
       port: 993,
       secure: true,
       auth: { user: email, pass: decryptedPass },
@@ -1590,7 +1604,7 @@ router.get("/api/email/attachment", async (req, res) => {
     const decryptedPass = decrypt(smtp.pass);
 
     const client = new ImapFlow({
-      host: smtp.host.replace("smtp.", "imap."),
+      host: getImapHost(smtp.host),
       port: 993,
       secure: true,
       auth: { user: email, pass: decryptedPass },
@@ -1807,7 +1821,7 @@ router.post("/api/fetchsingleemail", async (req, res) => {
     console.log(`🔌 [FetchSingle] Using SMTP Host for IMAP: ${smtp.host}`);
 
     client = new ImapFlow({
-      host: smtp.host.replace("smtp.", "imap."),
+      host: getImapHost(smtp.host),
       port: 993,
       secure: true,
       auth: {
