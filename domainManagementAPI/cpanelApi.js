@@ -106,7 +106,7 @@ async function whmRequest(functionName, params = {}) {
       ...params
     }).toString();
 
-    const url = `https://${WHM_HOST}/json-api/${functionName}?${queryString}`;
+    const url = `https://${WHM_HOST}:2087/json-api/${functionName}?${queryString}`;
 
     console.log('WHM API Request:', url);
 
