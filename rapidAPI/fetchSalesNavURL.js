@@ -5,6 +5,8 @@ const router = express.Router();
 const RAPID_API_HOST = "fresh-linkedin-profile-data.p.rapidapi.com";
 const RAPID_API_KEY = "9844a765dbmsh2921a4931f5e3acp19930bjsneb132c95f806";
 
+const salesNavLogger = require("../loggingSystem/salesNavLogger");
+
 // async function fetchSalesNavURL(salesNavUrl, limit = 25) {
 //     console.log('Starting LinkedIn Sales Navigator search with URL:', salesNavUrl, 'Limit:', limit);
 
@@ -101,7 +103,6 @@ async function fetchSalesNavURL(salesNavUrl, limit = 25) {
 
   try {
     const payload = { url: salesNavUrl, limit: limit };
-
     // --- Step 1: Initiate ---
     const initialResponse = await axios.post(
       `https://${RAPID_API_HOST}/search-employees-by-sales-nav-url`,
@@ -121,7 +122,13 @@ async function fetchSalesNavURL(salesNavUrl, limit = 25) {
     );
 
     const requestId = initialResponse.data.request_id;
-    if (!requestId) throw new Error("No request ID generated.");
+    if (!requestId) {
+      salesNavLogger.logError(null, "No request ID generated.", { url: salesNavUrl });
+      throw new Error("No request ID generated.");
+    }
+
+    // Log initiation
+    salesNavLogger.logInitiation(requestId, salesNavUrl, limit);
 
     // --- Step 2: Polling ---
     let retries = 0;
@@ -146,6 +153,13 @@ async function fetchSalesNavURL(salesNavUrl, limit = 25) {
 
       console.log(
         `[Status Check] Status: ${status} | Requests Left: ${lastStatusHeaders["x-ratelimit-requests-remaining"]}`,
+      );
+
+      // Log polling
+      salesNavLogger.logPolling(
+        requestId,
+        status,
+        lastStatusHeaders["x-ratelimit-requests-remaining"],
       );
 
       if (status === "done") break;
@@ -175,6 +189,12 @@ async function fetchSalesNavURL(salesNavUrl, limit = 25) {
     console.log(`Credits Left: ${finalCredits}`);
     console.log(`Requests Left: ${finalRequests}`);
 
+    // Log completion
+    salesNavLogger.logCompletion(requestId, "completed", {
+      creditsRemaining: finalCredits,
+      requestsRemaining: finalRequests,
+    });
+
     // Return the data PLUS the usage info and requestId
     return {
       requestId: requestId,
@@ -186,6 +206,9 @@ async function fetchSalesNavURL(salesNavUrl, limit = 25) {
     };
   } catch (error) {
     console.error("Error in fetchSalesNavURL:", error.message);
+    salesNavLogger.logError(null, error.message, {
+      apiResponse: error.response?.data || null,
+    });
     throw error;
   }
 }
@@ -223,6 +246,9 @@ async function getSearchResults(requestId) {
   } catch (error) {
     console.error("Error in getSearchResults:", {
       message: error.message,
+      apiResponse: error.response?.data || "No API response available",
+    });
+    salesNavLogger.logError(requestId, error.message, {
       apiResponse: error.response?.data || "No API response available",
     });
     throw error;
@@ -268,6 +294,9 @@ router.post("/find-employees", async (req, res) => {
     console.error("Error in /find-employees route:", {
       message: error.message,
       apiResponse: error.response?.data || "No API response available",
+    });
+    salesNavLogger.logError(null, error.message, {
+      apiResponse: error.response?.data || null,
     });
 
     res.status(503).json({
