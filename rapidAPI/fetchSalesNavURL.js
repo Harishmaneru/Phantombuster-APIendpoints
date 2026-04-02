@@ -175,8 +175,9 @@ async function fetchSalesNavURL(salesNavUrl, limit = 25) {
     console.log(`Credits Left: ${finalCredits}`);
     console.log(`Requests Left: ${finalRequests}`);
 
-    // Return the data PLUS the usage info
+    // Return the data PLUS the usage info and requestId
     return {
+      requestId: requestId,
       data: resultResponse.data,
       usage: {
         creditsRemaining: finalCredits,
@@ -202,6 +203,7 @@ async function getSearchResults(requestId) {
 
     if (statusResponse.data.status !== "done") {
       return {
+        requestId,
         status: statusResponse.data.status,
         message: statusResponse.data.message || "Search still in progress",
       };
@@ -217,7 +219,7 @@ async function getSearchResults(requestId) {
       },
     );
 
-    return { status: "completed", data: resultsResponse.data };
+    return { status: "completed", requestId, data: resultsResponse.data };
   } catch (error) {
     console.error("Error in getSearchResults:", {
       message: error.message,
@@ -299,6 +301,7 @@ router.get("/search-results/:requestId", async (req, res) => {
       return res.status(202).json({
         status: 0,
         salesNavigatorQueueMessage: {
+          requestId: result.requestId,
           message: result.message,
           search_status: result.status,
         },
@@ -307,7 +310,10 @@ router.get("/search-results/:requestId", async (req, res) => {
 
     res.status(200).json({
       status: 1,
-      salesNavigatorData: result.data,
+      salesNavigatorData: {
+        requestId: result.requestId,
+        data: result.data,
+      },
     });
   } catch (error) {
     console.error("Error in /search-results route:", {
