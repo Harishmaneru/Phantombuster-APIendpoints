@@ -57,25 +57,93 @@ function decrypt(encryptedText) {
   }
 }
 
-// Helper to determine accurate IMAP host from SMTP host
-function getImapHost(smtpHost) {
-  if (!smtpHost) return "";
-  const host = smtpHost.toLowerCase();
-  
-  // Microsoft/Office365 requires outlook.office365.com for IMAP
-  if (host.includes("office365.com") || host.includes("outlook.com") || host.includes("live.com") || host.includes("hotmail.com")) {
-    return "outlook.office365.com";
-  }
-  
-  // Generic fallback if not explicitly matched
-  return host.replace("smtp.", "imap.");
-}
-
-// Microsoft domain detection
 const MICROSOFT_DOMAINS = [
   "outlook.com", "hotmail.com", "live.com", "msn.com",
   "office365.com", "microsoft.com"
 ];
+
+function getBaseUrl() {
+  return (process.env.BASE_URL || "https://videoresponse.onepgr.com:3001").replace(
+    /\/api\/?$/,
+    ""
+  );
+}
+
+function getMicrosoftOAuthUrl(email) {
+  return `${getBaseUrl()}/api/auth/microsoft/authorize?email=${encodeURIComponent(
+    email
+  )}`;
+}
+
+function isMicrosoftAddress(email = "") {
+  const domain = email.split("@")[1]?.toLowerCase() || "";
+  return MICROSOFT_DOMAINS.some((item) => domain.includes(item));
+}
+
+function isMicrosoftHost(host = "") {
+  const normalizedHost = host.toLowerCase();
+  return (
+    normalizedHost.includes("office365.com") ||
+    normalizedHost.includes("outlook.com") ||
+    normalizedHost.includes("live.com") ||
+    normalizedHost.includes("hotmail.com")
+  );
+}
+
+function isMicrosoftMailbox(smtpRecord, email) {
+  return Boolean(
+    (smtpRecord?.oauth2?.provider || "").toLowerCase() === "microsoft" ||
+      isMicrosoftHost(smtpRecord?.host || "") ||
+      isMicrosoftAddress(email)
+  );
+}
+
+// Helper to determine accurate IMAP host from SMTP host
+function getImapHost(smtpHost, email, providerHint) {
+  const normalizedHost = smtpHost ? smtpHost.toLowerCase() : "";
+  const normalizedProvider = (providerHint || "").toLowerCase();
+
+  if (
+    normalizedProvider === "microsoft" ||
+    isMicrosoftHost(normalizedHost) ||
+    isMicrosoftAddress(email)
+  ) {
+    return "outlook.office365.com";
+  }
+
+  if (!normalizedHost) return "";
+
+  // Generic fallback if not explicitly matched
+  return normalizedHost.replace("smtp.", "imap.");
+}
+
+function isAuthenticationFailure(error) {
+  return Boolean(
+    error?.authenticationFailed ||
+      error?.serverResponseCode === "AUTHENTICATIONFAILED" ||
+      /auth/i.test(error?.message || "") ||
+      /AUTHENTICATE|LOGIN/i.test(error?.executedCommand || "")
+  );
+}
+
+function buildMicrosoftOAuthRequiredResponse(
+  email,
+  error,
+  operation = "access this mailbox"
+) {
+  return {
+    success: false,
+    provider: "microsoft",
+    requiresOAuth: true,
+    recommendedAuthMethod: "oauth2",
+    oauthUrl: getMicrosoftOAuthUrl(email),
+    error: "Microsoft rejected the mailbox login.",
+    details: `Reconnect this Outlook/Microsoft 365 mailbox with OAuth2 to ${operation}. Password-based IMAP logins are commonly blocked by Microsoft unless the account supports app passwords and IMAP is enabled.`,
+    imapError: error?.message || null,
+    serverResponseCode: error?.serverResponseCode || null,
+    executedCommand: error?.executedCommand || null,
+  };
+}
 
 async function detectProvider(email) {
   const domain = email.split("@")[1].toLowerCase();
@@ -588,14 +656,14 @@ router.post("/api/senderemail/smtpauth", async (req, res) => {
 
     // Detect if this is a Microsoft account that needs OAuth
     const provider = await detectProvider(email);
-    const baseUrl = (process.env.BASE_URL || "https://videoresponse.onepgr.com:3001").replace(/\/api\/?$/, "");
+    const oauthUrl = getMicrosoftOAuthUrl(email);
 
     if (provider === "microsoft" && !pass) {
       return res.json({
         success: false,
         requiresOAuth: true,
         provider: "microsoft",
-        oauthUrl: `${baseUrl}/api/auth/microsoft/authorize?email=${encodeURIComponent(email)}`,
+        oauthUrl,
         message: "Microsoft accounts require OAuth authentication. Redirect the user to the oauthUrl to complete setup.",
       });
     }
@@ -656,6 +724,13 @@ router.post("/api/senderemail/smtpauth", async (req, res) => {
       token,
       smtpSettings,
       detectionMethod,
+      provider,
+      recommendedAuthMethod: provider === "microsoft" ? "oauth2" : "password",
+      oauthUrl: provider === "microsoft" ? oauthUrl : null,
+      warning:
+        provider === "microsoft"
+          ? "Microsoft accounts usually need OAuth2/Modern Auth. If inbox fetch fails with AUTHENTICATIONFAILED, reconnect this mailbox using the oauthUrl."
+          : null,
       message: `New SMTP auth created for ${email} (${detectionMethod}). Use token: ${token} to send and retrieve emails`,
     });
   } catch (error) {
@@ -713,7 +788,7 @@ router.post("/api/email/healthcheck", async (req, res) => {
   }
 
   // Test IMAP
-  const imapHost = getImapHost(smtp.host);
+  const imapHost = getImapHost(smtp.host, email, smtp.oauth2?.provider);
   try {
     const imapAuth = await getAuthForIMAP(smtp, email);
     const client = new ImapFlow({
@@ -734,6 +809,21 @@ router.post("/api/email/healthcheck", async (req, res) => {
       port: 993,
       error: err.message,
     };
+
+    if (
+      smtp.authType !== "oauth2" &&
+      isMicrosoftMailbox(smtp, email) &&
+      isAuthenticationFailure(err)
+    ) {
+      Object.assign(results.imap, {
+        provider: "microsoft",
+        requiresOAuth: true,
+        recommendedAuthMethod: "oauth2",
+        oauthUrl: getMicrosoftOAuthUrl(email),
+        details:
+          "Microsoft rejected password-based IMAP authentication. Reconnect this mailbox with OAuth2/Modern Auth.",
+      });
+    }
   }
 
   const allHealthy = results.smtp.success && results.imap.success;
@@ -1137,7 +1227,7 @@ router.post("/api/emailforward", async (req, res) => {
     console.log("🔌 Connecting to IMAP to fetch original email...");
 
     imapClient = new ImapFlow({
-      host: getImapHost(smtp.host),
+      host: getImapHost(smtp.host, from, smtp.oauth2?.provider),
       port: 993,
       secure: true,
       auth: imapAuth,
@@ -1517,15 +1607,17 @@ ${original.text || "No text content"}
 
 // 3️⃣ Inbox Fetch with Read/Unread
 router.post("/api/fetchinbox", async (req, res) => {
+  const { token, email, page = 1, limit = 20 } = req.body;
+  let smtp;
+  let client;
   try {
-    const { token, email, page = 1, limit = 20 } = req.body;
     if (!token || !email) {
       return res
         .status(400)
         .json({ success: false, error: "Missing token or email" });
     }
 
-    const smtp = await SMTPAuth.findOne({ email, token });
+    smtp = await SMTPAuth.findOne({ email, token });
     if (!smtp) {
       return res
         .status(403)
@@ -1534,8 +1626,8 @@ router.post("/api/fetchinbox", async (req, res) => {
 
     const imapAuth = await getAuthForIMAP(smtp, email);
 
-    const client = new ImapFlow({
-      host: getImapHost(smtp.host),
+    client = new ImapFlow({
+      host: getImapHost(smtp.host, email, smtp.oauth2?.provider),
       port: 993,
       secure: true,
       auth: imapAuth,
@@ -1697,6 +1789,22 @@ router.post("/api/fetchinbox", async (req, res) => {
     });
   } catch (err) {
     console.error("Inbox Fetch Error:", err);
+
+    if (client) {
+      await client.logout().catch(() => {});
+    }
+
+    if (
+      smtp &&
+      smtp.authType !== "oauth2" &&
+      isMicrosoftMailbox(smtp, email) &&
+      isAuthenticationFailure(err)
+    ) {
+      return res
+        .status(401)
+        .json(buildMicrosoftOAuthRequiredResponse(email, err, "fetch inbox mail"));
+    }
+
     return res.status(500).json({ success: false, error: err.message });
   }
 });
@@ -1763,7 +1871,7 @@ router.get("/api/email/attachment", async (req, res) => {
     const imapAuth = await getAuthForIMAP(smtp, email);
 
     const client = new ImapFlow({
-      host: getImapHost(smtp.host),
+      host: getImapHost(smtp.host, email, smtp.oauth2?.provider),
       port: 993,
       secure: true,
       auth: imapAuth,
@@ -1970,7 +2078,7 @@ router.post("/api/fetchsingleemail", async (req, res) => {
     console.log(`🔌 [FetchSingle] Using SMTP Host for IMAP: ${smtp.host}`);
 
     client = new ImapFlow({
-      host: getImapHost(smtp.host),
+      host: getImapHost(smtp.host, email, smtp.oauth2?.provider),
       port: 993,
       secure: true,
       auth: imapAuth,
@@ -2501,7 +2609,7 @@ async function checkForReplies() {
       try {
         const imapAuth = await getAuthForIMAP(smtp, tracking.fromEmail);
         client = new ImapFlow({
-          host: getImapHost(smtp.host),
+          host: getImapHost(smtp.host, tracking.fromEmail, smtp.oauth2?.provider),
           port: 993,
           secure: true,
           auth: imapAuth,
@@ -2785,7 +2893,7 @@ router.post("/api/check-replies", async (req, res) => {
     const imapAuth = await getAuthForIMAP(smtp, email);
 
     const client = new ImapFlow({
-      host: getImapHost(smtp.host),
+      host: getImapHost(smtp.host, email, smtp.oauth2?.provider),
       port: 993,
       secure: true,
       auth: imapAuth,
@@ -2954,7 +3062,7 @@ router.get("/api/track/:trackingId", async (req, res) => {
         if (smtp) {
           const imapAuth = await getAuthForIMAP(smtp, tracking.fromEmail);
           const client = new ImapFlow({
-            host: getImapHost(smtp.host),
+            host: getImapHost(smtp.host, tracking.fromEmail, smtp.oauth2?.provider),
             port: 993,
             secure: true,
             auth: imapAuth,
@@ -3895,7 +4003,7 @@ router.post("/api/fetchcalendar", async (req, res) => {
       try {
         const imapAuth = await getAuthForIMAP(smtp, email);
         const client = new ImapFlow({
-          host: getImapHost(smtp.host),
+          host: getImapHost(smtp.host, email, smtp.oauth2?.provider),
           port: 993,
           secure: true,
           auth: imapAuth,
@@ -3976,7 +4084,7 @@ router.post("/api/fetchsent", async (req, res) => {
     const imapAuth = await getAuthForIMAP(smtp, email);
 
     client = new ImapFlow({
-      host: getImapHost(smtp.host), // Use IMAP host, not SMTP
+      host: getImapHost(smtp.host, email, smtp.oauth2?.provider), // Use IMAP host, not SMTP
       port: 993,
       secure: true,
       auth: imapAuth,
@@ -4264,7 +4372,7 @@ router.post("/api/fetch-conversation", async (req, res) => {
 
     // 4. Initialize IMAP Client
     client = new ImapFlow({
-      host: getImapHost(smtp.host),
+      host: getImapHost(smtp.host, email, smtp.oauth2?.provider),
       port: 993,
       secure: true,
       auth: imapAuth,
@@ -4423,7 +4531,7 @@ router.post("/api/fetch-email-thread", async (req, res) => {
 
     // 4. Initialize IMAP Client
     client = new ImapFlow({
-      host: getImapHost(smtp.host),
+      host: getImapHost(smtp.host, email, smtp.oauth2?.provider),
       port: 993,
       secure: true,
       auth: imapAuth,
@@ -4780,7 +4888,7 @@ router.get("/api/auth/detect-provider", async (req, res) => {
 
 // Microsoft OAuth2 authorization redirect
 router.get("/api/auth/microsoft/authorize", (req, res) => {
-  const { email } = req.query;
+  const { email, frontend } = req.query;
 
   if (!email) {
     return res.status(400).json({
@@ -4801,7 +4909,12 @@ router.get("/api/auth/microsoft/authorize", (req, res) => {
     process.env.MICROSOFT_REDIRECT_URI ||
     `${(process.env.BASE_URL || "https://videoresponse.onepgr.com:3001").replace(/\/api\/?$/, "")}/api/auth/microsoft/callback`;
 
-  const state = Buffer.from(JSON.stringify({ email })).toString("base64");
+  // Include frontend URL in state for callback
+  const stateData = { 
+    email, 
+    frontend: frontend || process.env.FRONTEND_URL || "https://liame.onepgr.com" 
+  };
+  const state = Buffer.from(JSON.stringify(stateData)).toString("base64");
 
   const scopes = [
     "offline_access",
@@ -4820,7 +4933,7 @@ router.get("/api/auth/microsoft/authorize", (req, res) => {
     `login_hint=${encodeURIComponent(email)}&` +
     `prompt=consent`;
 
-  console.log(`🔐 Redirecting ${email} to Microsoft OAuth consent screen`);
+  console.log(`🔐 Redirecting ${email} to Microsoft OAuth consent screen (frontend: ${stateData.frontend})`);
   res.redirect(authUrl);
 });
 
@@ -4828,29 +4941,30 @@ router.get("/api/auth/microsoft/authorize", (req, res) => {
 router.get("/api/auth/microsoft/callback", async (req, res) => {
   try {
     const { code, state, error: oauthError, error_description } = req.query;
-    const frontendUrl = process.env.FRONTEND_URL || "https://meet.onepgr.com";
+    const defaultFrontend = process.env.FRONTEND_URL || "https://liame.onepgr.com";
 
     if (oauthError) {
       console.error("Microsoft OAuth error:", oauthError, error_description);
       return res.redirect(
-        `${frontendUrl}/email-settings?error=${encodeURIComponent(error_description || oauthError)}`
+        `${defaultFrontend}/email-settings?error=${encodeURIComponent(error_description || oauthError)}`
       );
     }
 
     if (!code || !state) {
       return res.redirect(
-        `${frontendUrl}/email-settings?error=${encodeURIComponent("Missing authorization code or state")}`
+        `${defaultFrontend}/email-settings?error=${encodeURIComponent("Missing authorization code or state")}`
       );
     }
 
-    // Decode state to get email
-    let email;
+    // Decode state to get email AND frontend
+    let email, frontendUrl;
     try {
       const stateData = JSON.parse(Buffer.from(state, "base64").toString());
       email = stateData.email;
+      frontendUrl = stateData.frontend || defaultFrontend;
     } catch (e) {
       return res.redirect(
-        `${frontendUrl}/email-settings?error=${encodeURIComponent("Invalid state parameter")}`
+        `${defaultFrontend}/email-settings?error=${encodeURIComponent("Invalid state parameter")}`
       );
     }
 
@@ -4895,6 +5009,8 @@ router.get("/api/auth/microsoft/callback", async (req, res) => {
         { email },
         {
           authType: "oauth2",
+          host: "smtp-mail.outlook.com",
+          port: 587,
           token: apiToken,
           "oauth2.provider": "microsoft",
           "oauth2.accessToken": encrypt(tokens.access_token),
@@ -4910,6 +5026,8 @@ router.get("/api/auth/microsoft/callback", async (req, res) => {
       await SMTPAuth.create({
         email,
         authType: "oauth2",
+        host: "smtp-mail.outlook.com",
+        port: 587,
         token: apiToken,
         oauth2: {
           provider: "microsoft",
@@ -4922,13 +5040,13 @@ router.get("/api/auth/microsoft/callback", async (req, res) => {
       console.log(`✅ Created OAuth2 record for ${email}`);
     }
 
-    // Redirect to frontend with success
+    // Redirect to the correct frontend with success
     res.redirect(
-      `${frontendUrl}/email-settings?success=true&email=${encodeURIComponent(email)}&token=${apiToken}`
+      `${frontendUrl}/email-settings?success=true&email=${encodeURIComponent(email)}&token=${apiToken}&provider=microsoft`
     );
   } catch (error) {
     console.error("OAuth callback error:", error);
-    const frontendUrl = process.env.FRONTEND_URL || "https://meet.onepgr.com";
+    const frontendUrl = process.env.FRONTEND_URL || "https://liame.onepgr.com";
     res.redirect(
       `${frontendUrl}/email-settings?error=${encodeURIComponent("OAuth setup failed: " + error.message)}`
     );
