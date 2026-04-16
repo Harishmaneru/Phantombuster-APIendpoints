@@ -31,3 +31,4 @@ coverage/
 *.bak
 *.tmp
 *.backup
+API_PAYLOAD_ANALYSIS.md

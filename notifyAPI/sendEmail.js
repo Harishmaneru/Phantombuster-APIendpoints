@@ -63,12 +63,156 @@ function getImapHost(smtpHost) {
   const host = smtpHost.toLowerCase();
   
   // Microsoft/Office365 requires outlook.office365.com for IMAP
-  if (host.includes("office365.com") || host.includes("live.com") || host.includes("hotmail.com")) {
+  if (host.includes("office365.com") || host.includes("outlook.com") || host.includes("live.com") || host.includes("hotmail.com")) {
     return "outlook.office365.com";
   }
   
   // Generic fallback if not explicitly matched
   return host.replace("smtp.", "imap.");
+}
+
+// Microsoft domain detection
+const MICROSOFT_DOMAINS = [
+  "outlook.com", "hotmail.com", "live.com", "msn.com",
+  "office365.com", "microsoft.com"
+];
+
+async function detectProvider(email) {
+  const domain = email.split("@")[1].toLowerCase();
+
+  if (MICROSOFT_DOMAINS.some((d) => domain.includes(d))) {
+    return "microsoft";
+  }
+  if (domain.includes("gmail.com") || domain.includes("googlemail.com")) {
+    return "google";
+  }
+
+  // Check MX for custom domains on Microsoft 365
+  try {
+    const mxRecords = await cachedMxLookup(domain);
+    if (
+      mxRecords.some(
+        (mx) =>
+          mx.exchange.includes("outlook") ||
+          mx.exchange.includes("protection.outlook.com") ||
+          mx.exchange.includes("microsoft")
+      )
+    ) {
+      return "microsoft";
+    }
+    if (
+      mxRecords.some(
+        (mx) =>
+          mx.exchange.includes("google") ||
+          mx.exchange.includes("aspmx.l.google.com")
+      )
+    ) {
+      return "google";
+    }
+  } catch (e) {
+    console.log(`MX lookup failed for provider detection of ${domain}:`, e.message);
+  }
+
+  return "other";
+}
+
+// Microsoft OAuth2 token refresh
+async function refreshMicrosoftToken(smtpRecord) {
+  const refreshToken = decrypt(smtpRecord.oauth2.refreshToken);
+
+  const response = await fetch(
+    "https://login.microsoftonline.com/common/oauth2/v2.0/token",
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({
+        client_id: process.env.MICROSOFT_CLIENT_ID,
+        client_secret: process.env.MICROSOFT_CLIENT_SECRET,
+        refresh_token: refreshToken,
+        grant_type: "refresh_token",
+      }),
+    }
+  );
+
+  const data = await response.json();
+
+  if (data.error) {
+    console.error(`Microsoft token refresh failed for ${smtpRecord.email}:`, data.error_description);
+    throw new Error(`Token refresh failed: ${data.error_description}`);
+  }
+
+  // Update DB with new tokens
+  await SMTPAuth.updateOne(
+    { email: smtpRecord.email },
+    {
+      "oauth2.accessToken": encrypt(data.access_token),
+      "oauth2.refreshToken": encrypt(data.refresh_token || refreshToken),
+      "oauth2.expiresAt": new Date(Date.now() + data.expires_in * 1000),
+      "oauth2.scope": data.scope,
+    }
+  );
+
+  console.log(`✅ Microsoft token refreshed for ${smtpRecord.email}`);
+  return data.access_token;
+}
+
+// In-memory lock to prevent concurrent token refreshes for same email
+const _refreshLocks = new Map();
+
+async function getValidAccessToken(smtpRecord) {
+  if (!smtpRecord.oauth2 || !smtpRecord.oauth2.accessToken) {
+    throw new Error("No OAuth2 tokens found for this account");
+  }
+
+  const now = new Date();
+  const expiresAt = smtpRecord.oauth2.expiresAt
+    ? new Date(smtpRecord.oauth2.expiresAt)
+    : new Date(0);
+
+  // Refresh if expired or expiring within 5 minutes
+  if (now >= new Date(expiresAt.getTime() - 5 * 60 * 1000)) {
+    // Prevent concurrent refreshes
+    if (_refreshLocks.has(smtpRecord.email)) {
+      return _refreshLocks.get(smtpRecord.email);
+    }
+
+    const refreshPromise = refreshMicrosoftToken(smtpRecord).finally(() => {
+      _refreshLocks.delete(smtpRecord.email);
+    });
+    _refreshLocks.set(smtpRecord.email, refreshPromise);
+    return refreshPromise;
+  }
+
+  return decrypt(smtpRecord.oauth2.accessToken);
+}
+
+// Auth helpers for SMTP and IMAP
+async function getAuthForSMTP(smtpRecord, email) {
+  if (smtpRecord.authType === "oauth2") {
+    const accessToken = await getValidAccessToken(smtpRecord);
+    return { type: "OAuth2", user: email, accessToken };
+  }
+  return { user: email, pass: decrypt(smtpRecord.pass) };
+}
+
+async function getAuthForIMAP(smtpRecord, email) {
+  if (smtpRecord.authType === "oauth2") {
+    const accessToken = await getValidAccessToken(smtpRecord);
+    return { user: email, accessToken };
+  }
+  return { user: email, pass: decrypt(smtpRecord.pass) };
+}
+
+// SMTP host/port for provider
+function getSMTPHostForProvider(smtpRecord) {
+  if (smtpRecord.authType === "oauth2") {
+    return { host: "smtp.office365.com", port: 587, secure: false };
+  }
+  return {
+    host: smtpRecord.host,
+    port: smtpRecord.port,
+    secure: smtpRecord.port === 465,
+  };
 }
 
 // MongoDB Models
@@ -79,6 +223,14 @@ const smtpAuthSchema = new mongoose.Schema(
     port: Number,
     pass: String,
     token: String,
+    authType: { type: String, enum: ["password", "oauth2"], default: "password" },
+    oauth2: {
+      provider: String,
+      accessToken: String,
+      refreshToken: String,
+      expiresAt: Date,
+      scope: String,
+    },
     createdAt: { type: Date, default: Date.now },
   },
   { collection: "email_smtp_auth" }
@@ -427,7 +579,29 @@ async function logEmailEvent(eventType, trackingData) {
 router.post("/api/senderemail/smtpauth", async (req, res) => {
   try {
     const { host, port, email, pass } = req.body;
-    if (!email || !pass) {
+    if (!email) {
+      return res.status(400).json({
+        success: false,
+        error: "Missing required field: email",
+      });
+    }
+
+    // Detect if this is a Microsoft account that needs OAuth
+    const provider = await detectProvider(email);
+    const baseUrl = (process.env.BASE_URL || "https://videoresponse.onepgr.com:3001").replace(/\/api\/?$/, "");
+
+    if (provider === "microsoft" && !pass) {
+      return res.json({
+        success: false,
+        requiresOAuth: true,
+        provider: "microsoft",
+        oauthUrl: `${baseUrl}/api/auth/microsoft/authorize?email=${encodeURIComponent(email)}`,
+        message: "Microsoft accounts require OAuth authentication. Redirect the user to the oauthUrl to complete setup.",
+      });
+    }
+
+    // For non-Microsoft or Microsoft with password (app password), require pass
+    if (!pass) {
       return res.status(400).json({
         success: false,
         error: "Missing required fields: email, pass",
@@ -513,30 +687,22 @@ router.post("/api/email/healthcheck", async (req, res) => {
       .json({ success: false, error: "Invalid token or email" });
   }
 
-  let decryptedPass;
-  try {
-    decryptedPass = decrypt(smtp.pass);
-  } catch (err) {
-    return res.status(500).json({
-      success: false,
-      error: "Failed to decrypt stored credentials",
-    });
-  }
-
   const results = { smtp: null, imap: null };
 
   // Test SMTP
   try {
+    const smtpAuth = await getAuthForSMTP(smtp, email);
+    const smtpHost = getSMTPHostForProvider(smtp);
     const transporter = nodemailer.createTransport({
-      host: smtp.host,
-      port: smtp.port,
-      secure: smtp.port === 465,
-      auth: { user: email, pass: decryptedPass },
+      host: smtpHost.host,
+      port: smtpHost.port,
+      secure: smtpHost.secure,
+      auth: smtpAuth,
       tls: { rejectUnauthorized: false },
       connectionTimeout: 10000,
     });
     await transporter.verify();
-    results.smtp = { success: true, host: smtp.host, port: smtp.port };
+    results.smtp = { success: true, host: smtpHost.host, port: smtpHost.port };
   } catch (err) {
     results.smtp = {
       success: false,
@@ -549,11 +715,12 @@ router.post("/api/email/healthcheck", async (req, res) => {
   // Test IMAP
   const imapHost = getImapHost(smtp.host);
   try {
+    const imapAuth = await getAuthForIMAP(smtp, email);
     const client = new ImapFlow({
       host: imapHost,
       port: 993,
       secure: true,
-      auth: { user: email, pass: decryptedPass },
+      auth: imapAuth,
       logger: false,
       timeout: 10000,
     });
@@ -776,12 +943,13 @@ router.post("/api/emailsend", async (req, res) => {
         .json({ success: false, error: "Invalid token or sender email" });
     }
 
-    const decryptedPass = decrypt(smtp.pass);
+    const smtpAuth = await getAuthForSMTP(smtp, from);
+    const smtpHost = getSMTPHostForProvider(smtp);
     const transporter = nodemailer.createTransport({
-      host: smtp.host,
-      port: smtp.port,
-      secure: smtp.port === 465,
-      auth: { user: from, pass: decryptedPass },
+      host: smtpHost.host,
+      port: smtpHost.port,
+      secure: smtpHost.secure,
+      auth: smtpAuth,
       tls: { rejectUnauthorized: false },
     });
 
@@ -963,16 +1131,16 @@ router.post("/api/emailforward", async (req, res) => {
       });
     }
 
-    const decryptedPass = decrypt(smtp.pass);
+    const imapAuth = await getAuthForIMAP(smtp, from);
 
     // Step 1: Connect to IMAP and fetch the original email
     console.log("🔌 Connecting to IMAP to fetch original email...");
 
     imapClient = new ImapFlow({
-      host: smtp.host.replace("smtp.", "imap."),
+      host: getImapHost(smtp.host),
       port: 993,
       secure: true,
-      auth: { user: from, pass: decryptedPass },
+      auth: imapAuth,
       logger: false,
       timeout: 60000, // 60 seconds for large emails
     });
@@ -1233,11 +1401,13 @@ ${original.text || "No text content"}
     // Step 4: Send the forwarded email via SMTP
     console.log("📤 Sending forwarded email via SMTP...");
 
+    const smtpAuth = await getAuthForSMTP(smtp, from);
+    const smtpHost = getSMTPHostForProvider(smtp);
     const transporter = nodemailer.createTransport({
-      host: smtp.host,
-      port: smtp.port,
-      secure: smtp.port === 465,
-      auth: { user: from, pass: decryptedPass },
+      host: smtpHost.host,
+      port: smtpHost.port,
+      secure: smtpHost.secure,
+      auth: smtpAuth,
       tls: { rejectUnauthorized: false },
     });
 
@@ -1362,23 +1532,13 @@ router.post("/api/fetchinbox", async (req, res) => {
         .json({ success: false, error: "Invalid token or sender email" });
     }
 
-    // Decrypt the password
-    let decryptedPass;
-    try {
-      decryptedPass = decrypt(smtp.pass);
-    } catch (decryptError) {
-      console.error("Password decryption failed:", decryptError);
-      return res.status(500).json({
-        success: false,
-        error: "Failed to decrypt stored credentials",
-      });
-    }
+    const imapAuth = await getAuthForIMAP(smtp, email);
 
     const client = new ImapFlow({
       host: getImapHost(smtp.host),
       port: 993,
       secure: true,
-      auth: { user: email, pass: decryptedPass },
+      auth: imapAuth,
       logger: false,
     });
 
@@ -1600,14 +1760,13 @@ router.get("/api/email/attachment", async (req, res) => {
         .json({ success: false, error: "Invalid token or email" });
     }
 
-    // Decrypt password
-    const decryptedPass = decrypt(smtp.pass);
+    const imapAuth = await getAuthForIMAP(smtp, email);
 
     const client = new ImapFlow({
       host: getImapHost(smtp.host),
       port: 993,
       secure: true,
-      auth: { user: email, pass: decryptedPass },
+      auth: imapAuth,
       logger: false,
     });
 
@@ -1806,17 +1965,7 @@ router.post("/api/fetchsingleemail", async (req, res) => {
         .json({ success: false, error: "Invalid token or sender email" });
     }
 
-    // Decrypt the password
-    let decryptedPass;
-    try {
-      decryptedPass = decrypt(smtp.pass);
-    } catch (decryptError) {
-      console.error("Password decryption failed:", decryptError);
-      return res.status(500).json({
-        success: false,
-        error: "Failed to decrypt stored credentials",
-      });
-    }
+    const imapAuth = await getAuthForIMAP(smtp, email);
 
     console.log(`🔌 [FetchSingle] Using SMTP Host for IMAP: ${smtp.host}`);
 
@@ -1824,10 +1973,7 @@ router.post("/api/fetchsingleemail", async (req, res) => {
       host: getImapHost(smtp.host),
       port: 993,
       secure: true,
-      auth: {
-        user: email,
-        pass: decryptedPass,
-      },
+      auth: imapAuth,
       logger: false,
       timeout: 45000, // Increased timeout
     });
@@ -2353,12 +2499,12 @@ async function checkForReplies() {
 
       let client;
       try {
-        const decryptedPass = decrypt(smtp.pass);
+        const imapAuth = await getAuthForIMAP(smtp, tracking.fromEmail);
         client = new ImapFlow({
-          host: smtp.host.replace("smtp.", "imap."),
+          host: getImapHost(smtp.host),
           port: 993,
           secure: true,
-          auth: { user: tracking.fromEmail, pass: decryptedPass },
+          auth: imapAuth,
           logger: false,
           timeout: 60000, // 60 second timeout (increased for safety)
           keepalive: true,
@@ -2636,22 +2782,13 @@ router.post("/api/check-replies", async (req, res) => {
     }
 
     // Decrypt the password
-    let decryptedPass;
-    try {
-      decryptedPass = decrypt(smtp.pass);
-    } catch (decryptError) {
-      console.error("Password decryption failed:", decryptError);
-      return res.status(500).json({
-        success: false,
-        error: "Failed to decrypt stored credentials",
-      });
-    }
+    const imapAuth = await getAuthForIMAP(smtp, email);
 
     const client = new ImapFlow({
-      host: smtp.host.replace("smtp.", "imap."),
+      host: getImapHost(smtp.host),
       port: 993,
       secure: true,
-      auth: { user: email, pass: decryptedPass },
+      auth: imapAuth,
       logger: false,
     });
 
@@ -2815,12 +2952,12 @@ router.get("/api/track/:trackingId", async (req, res) => {
       try {
         const smtp = await SMTPAuth.findOne({ email: tracking.fromEmail });
         if (smtp) {
-          const decryptedPass = decrypt(smtp.pass);
+          const imapAuth = await getAuthForIMAP(smtp, tracking.fromEmail);
           const client = new ImapFlow({
-            host: smtp.host.replace("smtp.", "imap."),
+            host: getImapHost(smtp.host),
             port: 993,
             secure: true,
-            auth: { user: tracking.fromEmail, pass: decryptedPass },
+            auth: imapAuth,
             logger: false,
           });
 
@@ -3648,7 +3785,6 @@ router.post("/api/fetchcalendar", async (req, res) => {
         .json({ success: false, error: "Invalid token or sender email" });
     }
 
-    const decryptedPass = decrypt(smtp.pass);
     const domain = email.split("@")[1].toLowerCase();
     const now = new Date();
     const start = rangeStart
@@ -3717,12 +3853,16 @@ router.post("/api/fetchcalendar", async (req, res) => {
         const outlookFeedUrl = `https://outlook.office365.com/owa/calendar/${encodeURIComponent(
           email
         )}/calendar.ics`;
+        let authHeader;
+        if (smtp.authType === "oauth2") {
+          const accessToken = await getValidAccessToken(smtp);
+          authHeader = `Bearer ${accessToken}`;
+        } else {
+          const decryptedPass = decrypt(smtp.pass);
+          authHeader = "Basic " + Buffer.from(`${email}:${decryptedPass}`).toString("base64");
+        }
         const response = await fetch(outlookFeedUrl, {
-          headers: {
-            Authorization:
-              "Basic " +
-              Buffer.from(`${email}:${decryptedPass}`).toString("base64"),
-          },
+          headers: { Authorization: authHeader },
         });
         const icsData = await response.text();
         const icalExpander = new IcalExpander({
@@ -3753,11 +3893,12 @@ router.post("/api/fetchcalendar", async (req, res) => {
     // 3️⃣ Self-hosted / cPanel Calendar via IMAP ICS attachment
     else {
       try {
+        const imapAuth = await getAuthForIMAP(smtp, email);
         const client = new ImapFlow({
-          host: smtp.host.replace("smtp.", "imap."),
+          host: getImapHost(smtp.host),
           port: 993,
           secure: true,
-          auth: { user: email, pass: decryptedPass },
+          auth: imapAuth,
           logger: false,
         });
         await client.connect();
@@ -3832,23 +3973,13 @@ router.post("/api/fetchsent", async (req, res) => {
         .json({ success: false, error: "Invalid token or sender email" });
     }
 
-    // Decrypt the password
-    let decryptedPass;
-    try {
-      decryptedPass = decrypt(smtp.pass);
-    } catch (decryptError) {
-      console.error("Password decryption failed:", decryptError);
-      return res.status(500).json({
-        success: false,
-        error: "Failed to decrypt stored credentials",
-      });
-    }
+    const imapAuth = await getAuthForIMAP(smtp, email);
 
     client = new ImapFlow({
-      host: smtp.host.replace("smtp.", "imap."), // Use IMAP host, not SMTP
+      host: getImapHost(smtp.host), // Use IMAP host, not SMTP
       port: 993,
       secure: true,
-      auth: { user: email, pass: decryptedPass },
+      auth: imapAuth,
       logger: false,
       timeout: 30000, // Add timeout to prevent hanging
     });
@@ -4128,23 +4259,15 @@ router.post("/api/fetch-conversation", async (req, res) => {
         .json({ success: false, error: "Invalid token or sender email" });
     }
 
-    // 3. Decrypt Password
-    let decryptedPass;
-    try {
-      decryptedPass = decrypt(smtp.pass);
-    } catch (decryptError) {
-      return res.status(500).json({
-        success: false,
-        error: "Failed to decrypt stored credentials",
-      });
-    }
+    // 3. Get auth credentials
+    const imapAuth = await getAuthForIMAP(smtp, email);
 
     // 4. Initialize IMAP Client
     client = new ImapFlow({
-      host: smtp.host.replace("smtp.", "imap."), // Assuming standard naming, or use stored IMAP host if available
+      host: getImapHost(smtp.host),
       port: 993,
       secure: true,
-      auth: { user: email, pass: decryptedPass },
+      auth: imapAuth,
       logger: false,
       timeout: 30000,
     });
@@ -4295,24 +4418,15 @@ router.post("/api/fetch-email-thread", async (req, res) => {
         .json({ success: false, error: "Invalid token or sender email" });
     }
 
-    // 3. Decrypt Password
-    let decryptedPass;
-    try {
-      decryptedPass = decrypt(smtp.pass);
-    } catch (decryptError) {
-      console.error("Password decryption failed:", decryptError);
-      return res.status(500).json({
-        success: false,
-        error: "Failed to decrypt stored credentials",
-      });
-    }
+    // 3. Get auth credentials
+    const imapAuth = await getAuthForIMAP(smtp, email);
 
     // 4. Initialize IMAP Client
     client = new ImapFlow({
-      host: smtp.host.replace("smtp.", "imap."),
+      host: getImapHost(smtp.host),
       port: 993,
       secure: true,
-      auth: { user: email, pass: decryptedPass },
+      auth: imapAuth,
       logger: false,
       timeout: 45000,
     });
@@ -4627,6 +4741,221 @@ router.post("/api/fetch-email-thread", async (req, res) => {
       details:
         "Failed to fetch email thread. Please check your credentials and try again.",
     });
+  }
+});
+
+// ─── Microsoft OAuth2 Endpoints ───────────────────────────────
+
+// Detect email provider
+router.get("/api/auth/detect-provider", async (req, res) => {
+  try {
+    const { email } = req.query;
+
+    if (!email || !email.includes("@")) {
+      return res.status(400).json({
+        success: false,
+        error: "Invalid or missing email parameter",
+      });
+    }
+
+    const provider = await detectProvider(email);
+    const requiresOAuth = provider === "microsoft";
+    const baseUrl = (process.env.BASE_URL || "https://videoresponse.onepgr.com:3001").replace(/\/api\/?$/, "");
+
+    return res.json({
+      success: true,
+      email,
+      provider,
+      requiresOAuth,
+      authMethod: requiresOAuth ? "oauth2" : "password",
+      oauthUrl: requiresOAuth
+        ? `${baseUrl}/api/auth/microsoft/authorize?email=${encodeURIComponent(email)}`
+        : null,
+    });
+  } catch (error) {
+    console.error("Provider detection error:", error);
+    return res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// Microsoft OAuth2 authorization redirect
+router.get("/api/auth/microsoft/authorize", (req, res) => {
+  const { email } = req.query;
+
+  if (!email) {
+    return res.status(400).json({
+      success: false,
+      error: "Missing email parameter",
+    });
+  }
+
+  const clientId = process.env.MICROSOFT_CLIENT_ID;
+  if (!clientId) {
+    return res.status(500).json({
+      success: false,
+      error: "Microsoft OAuth not configured (missing MICROSOFT_CLIENT_ID)",
+    });
+  }
+
+  const redirectUri =
+    process.env.MICROSOFT_REDIRECT_URI ||
+    `${(process.env.BASE_URL || "https://videoresponse.onepgr.com:3001").replace(/\/api\/?$/, "")}/api/auth/microsoft/callback`;
+
+  const state = Buffer.from(JSON.stringify({ email })).toString("base64");
+
+  const scopes = [
+    "offline_access",
+    "https://outlook.office365.com/IMAP.AccessAsUser.All",
+    "https://outlook.office365.com/SMTP.Send",
+  ].join(" ");
+
+  const authUrl =
+    `https://login.microsoftonline.com/common/oauth2/v2.0/authorize?` +
+    `client_id=${encodeURIComponent(clientId)}&` +
+    `response_type=code&` +
+    `redirect_uri=${encodeURIComponent(redirectUri)}&` +
+    `response_mode=query&` +
+    `scope=${encodeURIComponent(scopes)}&` +
+    `state=${encodeURIComponent(state)}&` +
+    `login_hint=${encodeURIComponent(email)}&` +
+    `prompt=consent`;
+
+  console.log(`🔐 Redirecting ${email} to Microsoft OAuth consent screen`);
+  res.redirect(authUrl);
+});
+
+// Microsoft OAuth2 callback
+router.get("/api/auth/microsoft/callback", async (req, res) => {
+  try {
+    const { code, state, error: oauthError, error_description } = req.query;
+    const frontendUrl = process.env.FRONTEND_URL || "https://meet.onepgr.com";
+
+    if (oauthError) {
+      console.error("Microsoft OAuth error:", oauthError, error_description);
+      return res.redirect(
+        `${frontendUrl}/email-settings?error=${encodeURIComponent(error_description || oauthError)}`
+      );
+    }
+
+    if (!code || !state) {
+      return res.redirect(
+        `${frontendUrl}/email-settings?error=${encodeURIComponent("Missing authorization code or state")}`
+      );
+    }
+
+    // Decode state to get email
+    let email;
+    try {
+      const stateData = JSON.parse(Buffer.from(state, "base64").toString());
+      email = stateData.email;
+    } catch (e) {
+      return res.redirect(
+        `${frontendUrl}/email-settings?error=${encodeURIComponent("Invalid state parameter")}`
+      );
+    }
+
+    const redirectUri =
+      process.env.MICROSOFT_REDIRECT_URI ||
+      `${(process.env.BASE_URL || "https://videoresponse.onepgr.com:3001").replace(/\/api\/?$/, "")}/api/auth/microsoft/callback`;
+
+    // Exchange code for tokens
+    const tokenResponse = await fetch(
+      "https://login.microsoftonline.com/common/oauth2/v2.0/token",
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body: new URLSearchParams({
+          client_id: process.env.MICROSOFT_CLIENT_ID,
+          client_secret: process.env.MICROSOFT_CLIENT_SECRET,
+          code,
+          redirect_uri: redirectUri,
+          grant_type: "authorization_code",
+        }),
+      }
+    );
+
+    const tokens = await tokenResponse.json();
+
+    if (tokens.error) {
+      console.error("Microsoft token exchange error:", tokens.error_description);
+      return res.redirect(
+        `${frontendUrl}/email-settings?error=${encodeURIComponent(tokens.error_description || "Token exchange failed")}`
+      );
+    }
+
+    // Generate API token (same format as password flow)
+    const apiToken = crypto.randomBytes(16).toString("hex");
+
+    // Check if record exists
+    const existing = await SMTPAuth.findOne({ email });
+
+    if (existing) {
+      // Update existing record to OAuth2
+      await SMTPAuth.updateOne(
+        { email },
+        {
+          authType: "oauth2",
+          token: apiToken,
+          "oauth2.provider": "microsoft",
+          "oauth2.accessToken": encrypt(tokens.access_token),
+          "oauth2.refreshToken": encrypt(tokens.refresh_token),
+          "oauth2.expiresAt": new Date(Date.now() + tokens.expires_in * 1000),
+          "oauth2.scope": tokens.scope,
+          pass: null,
+        }
+      );
+      console.log(`✅ Updated ${email} to OAuth2 authentication`);
+    } else {
+      // Create new record
+      await SMTPAuth.create({
+        email,
+        authType: "oauth2",
+        token: apiToken,
+        oauth2: {
+          provider: "microsoft",
+          accessToken: encrypt(tokens.access_token),
+          refreshToken: encrypt(tokens.refresh_token),
+          expiresAt: new Date(Date.now() + tokens.expires_in * 1000),
+          scope: tokens.scope,
+        },
+      });
+      console.log(`✅ Created OAuth2 record for ${email}`);
+    }
+
+    // Redirect to frontend with success
+    res.redirect(
+      `${frontendUrl}/email-settings?success=true&email=${encodeURIComponent(email)}&token=${apiToken}`
+    );
+  } catch (error) {
+    console.error("OAuth callback error:", error);
+    const frontendUrl = process.env.FRONTEND_URL || "https://meet.onepgr.com";
+    res.redirect(
+      `${frontendUrl}/email-settings?error=${encodeURIComponent("OAuth setup failed: " + error.message)}`
+    );
+  }
+});
+
+// Get SMTP auth info (check auth type)
+router.get("/api/smtp-auth/:email", async (req, res) => {
+  try {
+    const { email } = req.params;
+    const { token } = req.query;
+
+    const record = await SMTPAuth.findOne({ email, token });
+    if (!record) {
+      return res.status(403).json({ success: false, error: "Invalid token" });
+    }
+
+    res.json({
+      success: true,
+      email: record.email,
+      authType: record.authType || "password",
+      provider: record.oauth2?.provider || "standard",
+      hasOAuth: record.authType === "oauth2",
+      createdAt: record.createdAt,
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
   }
 });
 
