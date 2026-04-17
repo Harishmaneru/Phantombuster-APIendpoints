@@ -4984,13 +4984,13 @@ router.get("/api/auth/microsoft/callback", async (req, res) => {
     if (oauthError) {
       console.error("Microsoft OAuth error:", oauthError, error_description);
       return res.redirect(
-        `${defaultFrontend}/email-settings?error=${encodeURIComponent(error_description || oauthError)}`,
+        `${defaultFrontend}/account-setup/email-accounts?error=${encodeURIComponent(error_description || oauthError)}`,
       );
     }
 
     if (!code || !state) {
       return res.redirect(
-        `${defaultFrontend}/email-settings?error=${encodeURIComponent("Missing authorization code or state")}`,
+        `${defaultFrontend}/account-setup/email-accounts?error=${encodeURIComponent("Missing authorization code or state")}`,
       );
     }
 
@@ -5002,7 +5002,7 @@ router.get("/api/auth/microsoft/callback", async (req, res) => {
       frontendUrl = stateData.frontend || defaultFrontend;
     } catch (e) {
       return res.redirect(
-        `${defaultFrontend}/email-settings?error=${encodeURIComponent("Invalid state parameter")}`,
+        `${defaultFrontend}/account-setup/email-accounts?error=${encodeURIComponent("Invalid state parameter")}`,
       );
     }
 
@@ -5034,7 +5034,7 @@ router.get("/api/auth/microsoft/callback", async (req, res) => {
         tokens.error_description,
       );
       return res.redirect(
-        `${frontendUrl}/email-settings?error=${encodeURIComponent(tokens.error_description || "Token exchange failed")}`,
+        `${frontendUrl}/account-setup/email-accounts?error=${encodeURIComponent(tokens.error_description || "Token exchange failed")}`,
       );
     }
 
@@ -5083,13 +5083,13 @@ router.get("/api/auth/microsoft/callback", async (req, res) => {
 
     // Redirect to the correct frontend with success
     res.redirect(
-      `${frontendUrl}/email-settings?success=true&email=${encodeURIComponent(email)}&token=${apiToken}&provider=microsoft`,
+      `${frontendUrl}/account-setup/email-accounts?success=true&email=${encodeURIComponent(email)}&token=${apiToken}&provider=microsoft`,
     );
   } catch (error) {
     console.error("OAuth callback error:", error);
     const frontendUrl = process.env.FRONTEND_URL || "https://liame.onepgr.com";
     res.redirect(
-      `${frontendUrl}/email-settings?error=${encodeURIComponent("OAuth setup failed: " + error.message)}`,
+      `${frontendUrl}/account-setup/email-accounts?error=${encodeURIComponent("OAuth setup failed: " + error.message)}`,
     );
   }
 });
