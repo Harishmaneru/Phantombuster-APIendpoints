@@ -57,13 +57,18 @@ function decrypt(encryptedText) {
   }
 }
 
-const MICROSOFT_DOMAINS = [
+const MICROSOFT_PERSONAL_DOMAINS = [
   "outlook.com",
   "hotmail.com",
   "live.com",
   "msn.com",
-  "office365.com",
-  "microsoft.com",
+];
+
+const MICROSOFT_WORK_DOMAINS = ["office365.com", "microsoft.com"];
+
+const MICROSOFT_DOMAINS = [
+  ...MICROSOFT_PERSONAL_DOMAINS,
+  ...MICROSOFT_WORK_DOMAINS,
 ];
 
 function getBaseUrl() {
@@ -105,13 +110,23 @@ function isMicrosoftMailbox(smtpRecord, email) {
 function getImapHost(smtpHost, email, providerHint) {
   const normalizedHost = smtpHost ? smtpHost.toLowerCase() : "";
   const normalizedProvider = (providerHint || "").toLowerCase();
+  const domain = email.split("@")[1]?.toLowerCase() || "";
 
   if (
     normalizedProvider === "microsoft" ||
     isMicrosoftHost(normalizedHost) ||
     isMicrosoftAddress(email)
   ) {
-    return "outlook.office365.com";
+    // Check if personal Outlook/Hotmail account
+    const isPersonal = MICROSOFT_PERSONAL_DOMAINS.some((d) =>
+      domain.includes(d),
+    );
+
+    if (isPersonal) {
+      return "imap-mail.outlook.com"; // ✅ Personal Outlook/Hotmail
+    } else {
+      return "outlook.office365.com"; // ✅ Work/School Microsoft 365
+    }
   }
 
   if (!normalizedHost) return "";
@@ -283,7 +298,16 @@ async function getAuthForIMAP(smtpRecord, email) {
 // SMTP host/port for provider
 function getSMTPHostForProvider(smtpRecord) {
   if (smtpRecord.authType === "oauth2") {
-    return { host: "smtp.office365.com", port: 587, secure: false };
+    const domain = smtpRecord.email.split("@")[1]?.toLowerCase() || "";
+    const isPersonal = MICROSOFT_PERSONAL_DOMAINS.some((d) =>
+      domain.includes(d),
+    );
+
+    if (isPersonal) {
+      return { host: "smtp-mail.outlook.com", port: 587, secure: false };
+    } else {
+      return { host: "smtp.office365.com", port: 587, secure: false };
+    }
   }
   return {
     host: smtpRecord.host,
