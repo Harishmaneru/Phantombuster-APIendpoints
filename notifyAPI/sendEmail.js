@@ -18,7 +18,7 @@ const algorithm = "aes-256-cbc";
 const key = crypto.scryptSync(
   process.env.ENCRYPTION_SECRET || "default-secret-key-change-this",
   "salt",
-  32
+  32,
 );
 const ivLength = 16;
 
@@ -58,20 +58,23 @@ function decrypt(encryptedText) {
 }
 
 const MICROSOFT_DOMAINS = [
-  "outlook.com", "hotmail.com", "live.com", "msn.com",
-  "office365.com", "microsoft.com"
+  "outlook.com",
+  "hotmail.com",
+  "live.com",
+  "msn.com",
+  "office365.com",
+  "microsoft.com",
 ];
 
 function getBaseUrl() {
-  return (process.env.BASE_URL || "https://videoresponse.onepgr.com:3001").replace(
-    /\/api\/?$/,
-    ""
-  );
+  return (
+    process.env.BASE_URL || "https://videoresponse.onepgr.com:3001"
+  ).replace(/\/api\/?$/, "");
 }
 
 function getMicrosoftOAuthUrl(email) {
   return `${getBaseUrl()}/api/auth/microsoft/authorize?email=${encodeURIComponent(
-    email
+    email,
   )}`;
 }
 
@@ -93,8 +96,8 @@ function isMicrosoftHost(host = "") {
 function isMicrosoftMailbox(smtpRecord, email) {
   return Boolean(
     (smtpRecord?.oauth2?.provider || "").toLowerCase() === "microsoft" ||
-      isMicrosoftHost(smtpRecord?.host || "") ||
-      isMicrosoftAddress(email)
+    isMicrosoftHost(smtpRecord?.host || "") ||
+    isMicrosoftAddress(email),
   );
 }
 
@@ -120,16 +123,16 @@ function getImapHost(smtpHost, email, providerHint) {
 function isAuthenticationFailure(error) {
   return Boolean(
     error?.authenticationFailed ||
-      error?.serverResponseCode === "AUTHENTICATIONFAILED" ||
-      /auth/i.test(error?.message || "") ||
-      /AUTHENTICATE|LOGIN/i.test(error?.executedCommand || "")
+    error?.serverResponseCode === "AUTHENTICATIONFAILED" ||
+    /auth/i.test(error?.message || "") ||
+    /AUTHENTICATE|LOGIN/i.test(error?.executedCommand || ""),
   );
 }
 
 function buildMicrosoftOAuthRequiredResponse(
   email,
   error,
-  operation = "access this mailbox"
+  operation = "access this mailbox",
 ) {
   return {
     success: false,
@@ -163,7 +166,7 @@ async function detectProvider(email) {
         (mx) =>
           mx.exchange.includes("outlook") ||
           mx.exchange.includes("protection.outlook.com") ||
-          mx.exchange.includes("microsoft")
+          mx.exchange.includes("microsoft"),
       )
     ) {
       return "microsoft";
@@ -172,13 +175,16 @@ async function detectProvider(email) {
       mxRecords.some(
         (mx) =>
           mx.exchange.includes("google") ||
-          mx.exchange.includes("aspmx.l.google.com")
+          mx.exchange.includes("aspmx.l.google.com"),
       )
     ) {
       return "google";
     }
   } catch (e) {
-    console.log(`MX lookup failed for provider detection of ${domain}:`, e.message);
+    console.log(
+      `MX lookup failed for provider detection of ${domain}:`,
+      e.message,
+    );
   }
 
   return "other";
@@ -199,13 +205,16 @@ async function refreshMicrosoftToken(smtpRecord) {
         refresh_token: refreshToken,
         grant_type: "refresh_token",
       }),
-    }
+    },
   );
 
   const data = await response.json();
 
   if (data.error) {
-    console.error(`Microsoft token refresh failed for ${smtpRecord.email}:`, data.error_description);
+    console.error(
+      `Microsoft token refresh failed for ${smtpRecord.email}:`,
+      data.error_description,
+    );
     throw new Error(`Token refresh failed: ${data.error_description}`);
   }
 
@@ -217,7 +226,7 @@ async function refreshMicrosoftToken(smtpRecord) {
       "oauth2.refreshToken": encrypt(data.refresh_token || refreshToken),
       "oauth2.expiresAt": new Date(Date.now() + data.expires_in * 1000),
       "oauth2.scope": data.scope,
-    }
+    },
   );
 
   console.log(`✅ Microsoft token refreshed for ${smtpRecord.email}`);
@@ -291,7 +300,11 @@ const smtpAuthSchema = new mongoose.Schema(
     port: Number,
     pass: String,
     token: String,
-    authType: { type: String, enum: ["password", "oauth2"], default: "password" },
+    authType: {
+      type: String,
+      enum: ["password", "oauth2"],
+      default: "password",
+    },
     oauth2: {
       provider: String,
       accessToken: String,
@@ -301,7 +314,7 @@ const smtpAuthSchema = new mongoose.Schema(
     },
     createdAt: { type: Date, default: Date.now },
   },
-  { collection: "email_smtp_auth" }
+  { collection: "email_smtp_auth" },
 );
 
 const SMTPAuth = mongoose.model("SMTPAuth", smtpAuthSchema);
@@ -356,7 +369,7 @@ const emailTrackingSchema = new mongoose.Schema(
   {
     collection: "email_tracking_v2",
     timestamps: true,
-  }
+  },
 );
 
 const EmailTracking = mongoose.model("EmailTracking", emailTrackingSchema);
@@ -438,7 +451,7 @@ async function getSMTPSettings(email, customHost, customPort) {
       } else {
         console.log(
           `cPanel API response missing SMTP settings for ${email}:`,
-          smtpData
+          smtpData,
         );
       }
     } else {
@@ -459,7 +472,7 @@ async function getSMTPSettings(email, customHost, customPort) {
       (mx) =>
         mx.exchange.includes("google") ||
         mx.exchange.includes("aspmx.l.google.com") ||
-        mx.exchange.includes("googlemail.com")
+        mx.exchange.includes("googlemail.com"),
     );
     if (isGoogleWorkspace) return { host: "smtp.gmail.com", port: 587 };
 
@@ -468,7 +481,7 @@ async function getSMTPSettings(email, customHost, customPort) {
       (mx) =>
         mx.exchange.includes("outlook") ||
         mx.exchange.includes("hotmail") ||
-        mx.exchange.includes("microsoft")
+        mx.exchange.includes("microsoft"),
     );
     if (isOutlook) return { host: "smtp-mail.outlook.com", port: 587 };
 
@@ -478,7 +491,7 @@ async function getSMTPSettings(email, customHost, customPort) {
         mx.exchange.includes("cpanel") ||
         mx.exchange.includes("whm") ||
         mx.exchange === domain || // Self-hosted MX
-        mx.exchange.endsWith(`.${domain}`) // Subdomain of the same domain
+        mx.exchange.endsWith(`.${domain}`), // Subdomain of the same domain
     );
 
     if (isCPanel) {
@@ -487,7 +500,7 @@ async function getSMTPSettings(email, customHost, customPort) {
 
     // For other self-hosted domains, default to cPanel style
     const isSelfHosted = sorted.some(
-      (mx) => mx.exchange === domain || mx.exchange.endsWith(`.${domain}`)
+      (mx) => mx.exchange === domain || mx.exchange.endsWith(`.${domain}`),
     );
 
     if (isSelfHosted) {
@@ -561,11 +574,11 @@ async function sendWebhookNotification(webhookUrl, eventData) {
 
     if (response.ok) {
       console.log(
-        `✅ Webhook sent successfully to ${webhookUrl} - Status: ${response.status}`
+        `✅ Webhook sent successfully to ${webhookUrl} - Status: ${response.status}`,
       );
     } else {
       console.error(
-        `❌ Webhook failed to ${webhookUrl} - Status: ${response.status}`
+        `❌ Webhook failed to ${webhookUrl} - Status: ${response.status}`,
       );
     }
   } catch (error) {
@@ -606,7 +619,7 @@ function encodeSubjectForEmail(subject) {
   if (isHtmlContent(trimmedSubject)) {
     // Use UTF-8 encoding for HTML content in subject
     return `=?UTF-8?B?${Buffer.from(trimmedSubject, "utf8").toString(
-      "base64"
+      "base64",
     )}?=`;
   }
 
@@ -614,7 +627,7 @@ function encodeSubjectForEmail(subject) {
   const needsEncoding = /[^\x00-\x7F]/.test(trimmedSubject);
   if (needsEncoding) {
     return `=?UTF-8?B?${Buffer.from(trimmedSubject, "utf8").toString(
-      "base64"
+      "base64",
     )}?=`;
   }
 
@@ -664,7 +677,8 @@ router.post("/api/senderemail/smtpauth", async (req, res) => {
         requiresOAuth: true,
         provider: "microsoft",
         oauthUrl,
-        message: "Microsoft accounts require OAuth authentication. Redirect the user to the oauthUrl to complete setup.",
+        message:
+          "Microsoft accounts require OAuth authentication. Redirect the user to the oauthUrl to complete setup.",
       });
     }
 
@@ -716,8 +730,8 @@ router.post("/api/senderemail/smtpauth", async (req, res) => {
     const detectionMethod = knownProviders.includes(domain)
       ? "Known Provider"
       : smtpSettings.host.includes("mail.")
-      ? "cPanel API"
-      : "DNS MX Lookup";
+        ? "cPanel API"
+        : "DNS MX Lookup";
 
     return res.json({
       success: true,
@@ -1088,7 +1102,7 @@ router.post("/api/emailsend", async (req, res) => {
           }
 
           return match;
-        }
+        },
       );
     }
 
@@ -1253,7 +1267,7 @@ router.post("/api/emailforward", async (req, res) => {
       try {
         await imapClient.mailboxOpen(mailbox);
         console.log(
-          `📂 Searching in ${mailbox} for Message-ID: ${originalMessageId}`
+          `📂 Searching in ${mailbox} for Message-ID: ${originalMessageId}`,
         );
 
         const messageUids = await imapClient.search({
@@ -1306,7 +1320,7 @@ router.post("/api/emailforward", async (req, res) => {
         await Promise.race([
           imapClient.logout(),
           new Promise((_, reject) =>
-            setTimeout(() => reject(new Error("Logout timeout")), 5000)
+            setTimeout(() => reject(new Error("Logout timeout")), 5000),
           ),
         ]);
         console.log("✅ IMAP connection closed gracefully");
@@ -1334,7 +1348,7 @@ router.post("/api/emailforward", async (req, res) => {
     }
 
     console.log(
-      "📝 Building forwarded email content (IMAP closing in background)..."
+      "📝 Building forwarded email content (IMAP closing in background)...",
     );
 
     // Step 2: Build the forwarded email (Gmail-style)
@@ -1408,7 +1422,7 @@ router.post("/api/emailforward", async (req, res) => {
           safeForwardMessage
             ? `<div class="forward-message">${safeForwardMessage.replace(
                 /\n/g,
-                "<br>"
+                "<br>",
               )}</div>`
             : ""
         }
@@ -1452,7 +1466,7 @@ ${original.text || "No text content"}
       original.attachments.length > 0
     ) {
       console.log(
-        `📎 Processing ${original.attachments.length} attachments...`
+        `📎 Processing ${original.attachments.length} attachments...`,
       );
 
       // Limit to 10 attachments or 25MB total to prevent timeouts
@@ -1464,7 +1478,7 @@ ${original.text || "No text content"}
         const attSize = att.content ? att.content.length : 0;
         if (totalSize + attSize > maxTotalSize) {
           console.log(
-            `⚠️ Attachment size limit reached, skipping remaining attachments`
+            `⚠️ Attachment size limit reached, skipping remaining attachments`,
           );
           break;
         }
@@ -1484,7 +1498,7 @@ ${original.text || "No text content"}
           totalSize /
           1024 /
           1024
-        ).toFixed(2)} MB)`
+        ).toFixed(2)} MB)`,
       );
     }
 
@@ -1648,7 +1662,7 @@ router.post("/api/fetchinbox", async (req, res) => {
     const endSeq = Math.max(totalMessages - (currentPage - 1) * maxLimit, 1);
 
     console.log(
-      `Fetching messages ${startSeq}:${endSeq} (Page ${currentPage}, Limit ${maxLimit})`
+      `Fetching messages ${startSeq}:${endSeq} (Page ${currentPage}, Limit ${maxLimit})`,
     );
 
     const messages = [];
@@ -1676,12 +1690,12 @@ router.post("/api/fetchinbox", async (req, res) => {
               } catch {
                 return url;
               }
-            }
+            },
           );
 
           cleanHtml = cleanHtml.replace(
             /<span[^>]*id="inflection-email-preheader"[^>]*>.*?<\/span>/gis,
-            ""
+            "",
           );
         }
 
@@ -1690,7 +1704,7 @@ router.post("/api/fetchinbox", async (req, res) => {
         if (cleanText) {
           cleanText = cleanText.replace(
             /https:\/\/tracking\.inflection\.io\/[^\s]+/g,
-            ""
+            "",
           );
         }
 
@@ -1709,13 +1723,13 @@ router.post("/api/fetchinbox", async (req, res) => {
             attachmentId: `${msg.uid}-${att.filename || Date.now()}`,
             // URL to download the attachment
             url: `${baseUrl}/api/email/attachment?email=${encodeURIComponent(
-              email
+              email,
             )}&token=${encodeURIComponent(token)}&uid=${
               msg.uid
             }&messageId=${encodeURIComponent(
-              msg.envelope.messageId
+              msg.envelope.messageId,
             )}&filename=${encodeURIComponent(
-              att.filename || "unnamed_attachment"
+              att.filename || "unnamed_attachment",
             )}&checksum=${encodeURIComponent(att.checksum || "")}`,
           }));
         }
@@ -1726,14 +1740,14 @@ router.post("/api/fetchinbox", async (req, res) => {
             msg.bodyStructure,
             msg.uid,
             email,
-            token
+            token,
           );
         }
 
         // Method 3: Debug - log what we received
         console.log(
           `Message ${msg.uid}: attachments found:`,
-          parsed.attachments ? parsed.attachments.length : 0
+          parsed.attachments ? parsed.attachments.length : 0,
         );
         if (parsed.attachments && parsed.attachments.length > 0) {
           console.log(
@@ -1742,7 +1756,7 @@ router.post("/api/fetchinbox", async (req, res) => {
               filename: a.filename,
               contentType: a.contentType,
               size: a.size,
-            }))
+            })),
           );
         }
 
@@ -1802,7 +1816,9 @@ router.post("/api/fetchinbox", async (req, res) => {
     ) {
       return res
         .status(401)
-        .json(buildMicrosoftOAuthRequiredResponse(email, err, "fetch inbox mail"));
+        .json(
+          buildMicrosoftOAuthRequiredResponse(email, err, "fetch inbox mail"),
+        );
     }
 
     return res.status(500).json({ success: false, error: err.message });
@@ -1832,7 +1848,7 @@ function extractAttachmentsFromStructure(structure, uid, email, token) {
         contentId: node.contentId || null,
         attachmentId: `${uid}-${node.filename || Date.now()}`,
         url: `${baseUrl}/api/email/attachment?email=${encodeURIComponent(
-          email
+          email,
         )}&token=${encodeURIComponent(token)}&uid=${uid}&part=${path}`,
       });
     }
@@ -1893,7 +1909,7 @@ router.get("/api/email/attachment", async (req, res) => {
     if (searchResult && searchResult.length > 0) {
       sequenceNumber = searchResult[0];
       console.log(
-        `[Attachment] Found sequence number via UID: ${sequenceNumber}`
+        `[Attachment] Found sequence number via UID: ${sequenceNumber}`,
       );
     }
 
@@ -1901,7 +1917,7 @@ router.get("/api/email/attachment", async (req, res) => {
     const messageId = req.query.messageId;
     if (!sequenceNumber && messageId) {
       console.log(
-        `[Attachment] UID search failed, falling back to Message-ID: ${messageId}`
+        `[Attachment] UID search failed, falling back to Message-ID: ${messageId}`,
       );
       const messageUids = await client.search({
         header: { "Message-ID": messageId },
@@ -1910,7 +1926,7 @@ router.get("/api/email/attachment", async (req, res) => {
       if (messageUids && messageUids.length > 0) {
         sequenceNumber = messageUids[0];
         console.log(
-          `[Attachment] Found sequence number via Message-ID: ${sequenceNumber}`
+          `[Attachment] Found sequence number via Message-ID: ${sequenceNumber}`,
         );
       } else {
         console.log(`[Attachment] Message-ID search also failed`);
@@ -1942,13 +1958,13 @@ router.get("/api/email/attachment", async (req, res) => {
       console.log(
         `[Attachment] Parsed attachments count: ${
           parsed.attachments ? parsed.attachments.length : 0
-        }`
+        }`,
       );
 
       if (parsed.attachments) {
         parsed.attachments.forEach((a, i) => {
           console.log(
-            `[Attachment] #${i}: filename="${a.filename}", checksum="${a.checksum}", contentId="${a.contentId}", size=${a.size}`
+            `[Attachment] #${i}: filename="${a.filename}", checksum="${a.checksum}", contentId="${a.contentId}", size=${a.size}`,
           );
         });
       }
@@ -1958,14 +1974,14 @@ router.get("/api/email/attachment", async (req, res) => {
         console.log(`[Attachment] Looking for filename: ${decodedFilename}`);
         console.log(
           `[Attachment] Available attachments:`,
-          parsed.attachments.map((a) => a.filename)
+          parsed.attachments.map((a) => a.filename),
         );
 
         // 1. Try to match by checksum if provided
         const checksum = req.query.checksum;
         if (checksum) {
           foundAttachment = parsed.attachments.find(
-            (att) => att.checksum === checksum
+            (att) => att.checksum === checksum,
           );
           if (foundAttachment) console.log(`[Attachment] Matched by checksum`);
         }
@@ -1974,7 +1990,7 @@ router.get("/api/email/attachment", async (req, res) => {
         if (!foundAttachment) {
           foundAttachment = parsed.attachments.find(
             (att) =>
-              att.filename === decodedFilename || att.filename === filename
+              att.filename === decodedFilename || att.filename === filename,
           );
           if (foundAttachment) console.log(`[Attachment] Matched by filename`);
         }
@@ -1987,7 +2003,7 @@ router.get("/api/email/attachment", async (req, res) => {
               (att) =>
                 att.contentId === contentId ||
                 (att.contentId &&
-                  att.contentId.includes(contentId.replace(/[<>]/g, "")))
+                  att.contentId.includes(contentId.replace(/[<>]/g, ""))),
             );
             if (foundAttachment)
               console.log(`[Attachment] Matched by contentId`);
@@ -1996,19 +2012,19 @@ router.get("/api/email/attachment", async (req, res) => {
 
         if (foundAttachment) {
           console.log(
-            `[Attachment] Found attachment: ${foundAttachment.filename}, Size: ${foundAttachment.size}`
+            `[Attachment] Found attachment: ${foundAttachment.filename}, Size: ${foundAttachment.size}`,
           );
 
           // Send response immediately
           res.setHeader(
             "Content-Type",
-            foundAttachment.contentType || "application/octet-stream"
+            foundAttachment.contentType || "application/octet-stream",
           );
           res.setHeader(
             "Content-Disposition",
             `attachment; filename="${encodeURIComponent(
-              foundAttachment.filename
-            )}"`
+              foundAttachment.filename,
+            )}"`,
           );
           res.setHeader("Content-Length", foundAttachment.size);
 
@@ -2057,7 +2073,7 @@ router.post("/api/fetchsingleemail", async (req, res) => {
 
     console.log(`📥 [FetchSingle] START request for: ${email}`);
     console.log(
-      `👉 [FetchSingle] Looking for Message-ID: ${messageId} in Box: ${mailbox}`
+      `👉 [FetchSingle] Looking for Message-ID: ${messageId} in Box: ${mailbox}`,
     );
 
     if (!token || !email || !messageId) {
@@ -2093,7 +2109,7 @@ router.post("/api/fetchsingleemail", async (req, res) => {
 
     const lock = await client.mailboxOpen(mailbox);
     console.log(
-      `📂 [FetchSingle] Mailbox opened. Total messages: ${lock.exists}`
+      `📂 [FetchSingle] Mailbox opened. Total messages: ${lock.exists}`,
     );
     console.log(`🔎 [FetchSingle] Searching for Message-ID: ${messageId}`);
 
@@ -2103,7 +2119,7 @@ router.post("/api/fetchsingleemail", async (req, res) => {
     });
 
     console.log(
-      `🔢 [FetchSingle] Found ${messageUids.length} matching message(s)`
+      `🔢 [FetchSingle] Found ${messageUids.length} matching message(s)`,
     );
 
     if (!messageUids || messageUids.length === 0) {
@@ -2123,7 +2139,7 @@ router.post("/api/fetchsingleemail", async (req, res) => {
     let processedCount = 0;
 
     console.log(
-      `📨 [FetchSingle] Starting to fetch message with UID: ${messageUids[0]}`
+      `📨 [FetchSingle] Starting to fetch message with UID: ${messageUids[0]}`,
     );
 
     // Fetch the message
@@ -2138,7 +2154,7 @@ router.post("/api/fetchsingleemail", async (req, res) => {
 
       const parsed = await simpleParser(msg.source);
       console.log(
-        `📝 [FetchSingle] Email parsed successfully, subject: "${msg.envelope.subject}"`
+        `📝 [FetchSingle] Email parsed successfully, subject: "${msg.envelope.subject}"`,
       );
 
       // Clean HTML content
@@ -2155,12 +2171,12 @@ router.post("/api/fetchsingleemail", async (req, res) => {
             } catch {
               return url;
             }
-          }
+          },
         );
 
         cleanHtml = cleanHtml.replace(
           /<span[^>]*id="inflection-email-preheader"[^>]*>.*?<\/span>/gis,
-          ""
+          "",
         );
       }
 
@@ -2169,7 +2185,7 @@ router.post("/api/fetchsingleemail", async (req, res) => {
       if (cleanText) {
         cleanText = cleanText.replace(
           /https:\/\/tracking\.inflection\.io\/[^\s]+/g,
-          ""
+          "",
         );
       }
 
@@ -2210,7 +2226,7 @@ router.post("/api/fetchsingleemail", async (req, res) => {
 
     // SEND RESPONSE FIRST, then cleanup connection
     console.log(
-      `🎉 [FetchSingle] SUCCESS - Sending response first for: "${foundEmail.subject}"`
+      `🎉 [FetchSingle] SUCCESS - Sending response first for: "${foundEmail.subject}"`,
     );
 
     // Send response immediately
@@ -2220,7 +2236,7 @@ router.post("/api/fetchsingleemail", async (req, res) => {
     });
 
     console.log(
-      `✅ [FetchSingle] Response sent to client, now cleaning up connection...`
+      `✅ [FetchSingle] Response sent to client, now cleaning up connection...`,
     );
 
     // Then cleanup connection in background
@@ -2230,7 +2246,7 @@ router.post("/api/fetchsingleemail", async (req, res) => {
     } catch (logoutError) {
       console.log(
         `⚠️ [FetchSingle] Logout failed, forcing close:`,
-        logoutError.message
+        logoutError.message,
       );
       try {
         await client.close();
@@ -2257,7 +2273,7 @@ router.post("/api/fetchsingleemail", async (req, res) => {
       });
     } else {
       console.log(
-        "⚠️ [FetchSingle] Response already sent, but error occurred during cleanup"
+        "⚠️ [FetchSingle] Response already sent, but error occurred during cleanup",
       );
     }
 
@@ -2302,8 +2318,8 @@ router.get("/api/track/open/:trackingId", async (req, res) => {
       return res.send(
         Buffer.from(
           "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=",
-          "base64"
-        )
+          "base64",
+        ),
       );
     }
 
@@ -2380,7 +2396,7 @@ router.get("/api/track/open/:trackingId", async (req, res) => {
     const recentOpen =
       tracking.openEvents &&
       tracking.openEvents.find(
-        (event) => event.sessionId === sessionId && event.openedAt > oneHourAgo
+        (event) => event.sessionId === sessionId && event.openedAt > oneHourAgo,
       );
 
     let shouldCount = false;
@@ -2408,15 +2424,15 @@ router.get("/api/track/open/:trackingId", async (req, res) => {
             },
           },
         },
-        { new: true }
+        { new: true },
       );
 
       console.log(
-        `📧 New email open detected: ${trackingId} from IP: ${ip}, Count: ${updatedTracking.openedCount}`
+        `📧 New email open detected: ${trackingId} from IP: ${ip}, Count: ${updatedTracking.openedCount}`,
       );
     } else {
       console.log(
-        `📧 Duplicate open ignored: ${trackingId} from IP: ${ip} (same session within 1 hour)`
+        `📧 Duplicate open ignored: ${trackingId} from IP: ${ip} (same session within 1 hour)`,
       );
     }
 
@@ -2441,7 +2457,7 @@ router.get("/api/track/open/:trackingId", async (req, res) => {
           uniqueOpens: updatedTracking.openEvents
             ? updatedTracking.openEvents.length
             : 0,
-        }
+        },
       );
     }
 
@@ -2452,8 +2468,8 @@ router.get("/api/track/open/:trackingId", async (req, res) => {
     res.send(
       Buffer.from(
         "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=",
-        "base64"
-      )
+        "base64",
+      ),
     );
   } catch (error) {
     console.error("Open tracking error:", error);
@@ -2462,8 +2478,8 @@ router.get("/api/track/open/:trackingId", async (req, res) => {
       .send(
         Buffer.from(
           "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=",
-          "base64"
-        )
+          "base64",
+        ),
       );
   }
 });
@@ -2490,7 +2506,7 @@ router.get("/api/track/click/:trackingId", async (req, res) => {
           },
         },
       },
-      { new: true }
+      { new: true },
     );
 
     // Get tracking payload data (directly stored or extracted from content)
@@ -2550,7 +2566,7 @@ router.get("/api/track/click/:trackingId", async (req, res) => {
       } catch (extractError) {
         console.log(
           "Error extracting tracking data from click:",
-          extractError.message
+          extractError.message,
         );
       }
     }
@@ -2582,7 +2598,7 @@ router.get("/api/track/click/:trackingId", async (req, res) => {
           extractedTrackingData,
           clickEvents: tracking.clickEvents || [],
           totalClicks: tracking.clickEvents ? tracking.clickEvents.length : 0,
-        }
+        },
       );
     }
 
@@ -2609,7 +2625,11 @@ async function checkForReplies() {
       try {
         const imapAuth = await getAuthForIMAP(smtp, tracking.fromEmail);
         client = new ImapFlow({
-          host: getImapHost(smtp.host, tracking.fromEmail, smtp.oauth2?.provider),
+          host: getImapHost(
+            smtp.host,
+            tracking.fromEmail,
+            smtp.oauth2?.provider,
+          ),
           port: 993,
           secure: true,
           auth: imapAuth,
@@ -2627,14 +2647,14 @@ async function checkForReplies() {
         await Promise.race([
           client.connect(),
           new Promise((_, reject) =>
-            setTimeout(() => reject(new Error("Connection timeout")), 30000)
+            setTimeout(() => reject(new Error("Connection timeout")), 30000),
           ),
         ]);
 
         await Promise.race([
           client.mailboxOpen("INBOX"),
           new Promise((_, reject) =>
-            setTimeout(() => reject(new Error("Mailbox open timeout")), 15000)
+            setTimeout(() => reject(new Error("Mailbox open timeout")), 15000),
           ),
         ]);
 
@@ -2666,13 +2686,13 @@ async function checkForReplies() {
           if (inReplyToMessages.length > 0) {
             foundReplies = true;
             console.log(
-              `Found ${inReplyToMessages.length} replies via In-Reply-To for ${tracking.messageId}`
+              `Found ${inReplyToMessages.length} replies via In-Reply-To for ${tracking.messageId}`,
             );
           }
         } catch (error) {
           console.log(
             `In-Reply-To search failed for ${tracking.messageId}:`,
-            error.message
+            error.message,
           );
           // If connection is lost, break out of the search loop
           if (
@@ -2701,13 +2721,13 @@ async function checkForReplies() {
             if (referencesMessages.length > 0) {
               foundReplies = true;
               console.log(
-                `Found ${referencesMessages.length} replies via References for ${tracking.messageId}`
+                `Found ${referencesMessages.length} replies via References for ${tracking.messageId}`,
               );
             }
           } catch (error) {
             console.log(
               `References search failed for ${tracking.messageId}:`,
-              error.message
+              error.message,
             );
             // If connection is lost, break out of the search loop
             if (
@@ -2745,7 +2765,7 @@ async function checkForReplies() {
               ) {
                 foundReplies = true;
                 console.log(
-                  `Found reply via subject search for ${tracking.messageId}`
+                  `Found reply via subject search for ${tracking.messageId}`,
                 );
                 break;
               }
@@ -2753,7 +2773,7 @@ async function checkForReplies() {
           } catch (error) {
             console.log(
               `Subject search failed for ${tracking.messageId}:`,
-              error.message
+              error.message,
             );
             // If connection is lost, break out of the search loop
             if (
@@ -2808,14 +2828,14 @@ async function checkForReplies() {
           } catch (error) {
             console.log(
               `Error fetching reply details for ${tracking.messageId}:`,
-              error.message
+              error.message,
             );
             // Continue with basic reply detection even if details fetch fails
           }
 
           await EmailTracking.findOneAndUpdate(
             { messageId: tracking.messageId },
-            { $set: { repliedAt: replyTime } }
+            { $set: { repliedAt: replyTime } },
           );
 
           // Log reply detection with tracking payload
@@ -2847,7 +2867,7 @@ async function checkForReplies() {
               replyDetails: replyDetails,
               originalMessageId: tracking.originalMessageId,
               replyCount: 1,
-            }
+            },
           );
         }
       } catch (connError) {
@@ -2859,7 +2879,7 @@ async function checkForReplies() {
             await client.logout().catch(
               (e) =>
                 // console.error('Logout error:', e.message)); // Commented out to reduce log spam
-                null
+                null,
             );
           }
         } catch (logoutError) {
@@ -3062,7 +3082,11 @@ router.get("/api/track/:trackingId", async (req, res) => {
         if (smtp) {
           const imapAuth = await getAuthForIMAP(smtp, tracking.fromEmail);
           const client = new ImapFlow({
-            host: getImapHost(smtp.host, tracking.fromEmail, smtp.oauth2?.provider),
+            host: getImapHost(
+              smtp.host,
+              tracking.fromEmail,
+              smtp.oauth2?.provider,
+            ),
             port: 993,
             secure: true,
             auth: imapAuth,
@@ -3314,7 +3338,7 @@ router.post("/emailtrachwebhook", async (req, res) => {
               openedAt: new Date(timestamp),
               lastOpenedIP: ip,
             },
-          }
+          },
         );
         break;
       case "clicked":
@@ -3329,13 +3353,13 @@ router.post("/emailtrachwebhook", async (req, res) => {
                 userAgent,
               },
             },
-          }
+          },
         );
         break;
       case "replied":
         await EmailTracking.findOneAndUpdate(
           { messageId: trackingId },
-          { $set: { repliedAt: new Date(timestamp) } }
+          { $set: { repliedAt: new Date(timestamp) } },
         );
         break;
       case "sent":
@@ -3350,7 +3374,7 @@ router.post("/emailtrachwebhook", async (req, res) => {
     // Your UI update logic goes here
     // For example, you could emit a socket event or update a database for frontend polling
     console.log(
-      `Processed webhook event: ${event} for trackingId: ${trackingId}`
+      `Processed webhook event: ${event} for trackingId: ${trackingId}`,
     );
 
     res
@@ -3452,7 +3476,7 @@ router.post("/session/smatpTracking", async (req, res) => {
 
     console.log(
       "📊 Detailed Event Data:",
-      JSON.stringify(detailedEventData, null, 2)
+      JSON.stringify(detailedEventData, null, 2),
     );
 
     res.status(200).json({
@@ -3503,13 +3527,13 @@ router.get("/api/email-provider", async (req, res) => {
 
       provider_detection: {
         is_google_workspace: sorted.some((mx) =>
-          mx.exchange.includes("google")
+          mx.exchange.includes("google"),
         ),
         is_outlook: sorted.some(
           (mx) =>
             mx.exchange.includes("outlook") ||
             mx.exchange.includes("hotmail") ||
-            mx.exchange.includes("microsoft")
+            mx.exchange.includes("microsoft"),
         ),
         is_yahoo: sorted.some((mx) => mx.exchange.includes("yahoo")),
         is_cpanel: sorted.some(
@@ -3517,10 +3541,10 @@ router.get("/api/email-provider", async (req, res) => {
             mx.exchange.includes("cpanel") ||
             mx.exchange.includes("whm") ||
             mx.exchange === domain ||
-            mx.exchange.endsWith(`.${domain}`)
+            mx.exchange.endsWith(`.${domain}`),
         ),
         is_self_hosted: sorted.some(
-          (mx) => mx.exchange === domain || mx.exchange.endsWith(`.${domain}`)
+          (mx) => mx.exchange === domain || mx.exchange.endsWith(`.${domain}`),
         ),
         is_known_provider: [
           "gmail.com",
@@ -3559,7 +3583,7 @@ router.get("/api/email-provider", async (req, res) => {
       recommendations: generateProviderRecommendations(
         sorted,
         domain,
-        smtpSettings
+        smtpSettings,
       ),
     };
 
@@ -3591,11 +3615,11 @@ function calculateConfidenceScore(mxRecords, domain) {
     (mx) =>
       mx.exchange.includes("outlook") ||
       mx.exchange.includes("hotmail") ||
-      mx.exchange.includes("microsoft")
+      mx.exchange.includes("microsoft"),
   );
   const hasYahoo = mxRecords.some((mx) => mx.exchange.includes("yahoo"));
   const isSelfHosted = mxRecords.some(
-    (mx) => mx.exchange === domain || mx.exchange.endsWith(`.${domain}`)
+    (mx) => mx.exchange === domain || mx.exchange.endsWith(`.${domain}`),
   );
 
   if (hasGoogle) score += 40;
@@ -3612,7 +3636,7 @@ function calculateConfidenceScore(mxRecords, domain) {
       mx.exchange.includes("microsoft") ||
       mx.exchange.includes("yahoo") ||
       mx.exchange === domain ||
-      mx.exchange.endsWith(`.${domain}`)
+      mx.exchange.endsWith(`.${domain}`),
   ).length;
 
   score += (matchingRecords / totalRecords) * 30;
@@ -3629,10 +3653,10 @@ function generateProviderRecommendations(mxRecords, domain, smtpSettings) {
     (mx) =>
       mx.exchange.includes("outlook") ||
       mx.exchange.includes("hotmail") ||
-      mx.exchange.includes("microsoft")
+      mx.exchange.includes("microsoft"),
   );
   const isSelfHosted = mxRecords.some(
-    (mx) => mx.exchange === domain || mx.exchange.endsWith(`.${domain}`)
+    (mx) => mx.exchange === domain || mx.exchange.endsWith(`.${domain}`),
   );
 
   if (isGoogle) {
@@ -3766,7 +3790,7 @@ async function getSMTPSettingsForEmail(email) {
     } else {
       console.log(
         `❌ cPanel API response missing SMTP settings for ${email}:`,
-        cpanelResponse
+        cpanelResponse,
       );
     }
   } catch (cpanelError) {
@@ -3908,7 +3932,7 @@ router.post("/api/fetchcalendar", async (req, res) => {
     if (domain.includes("gmail") || domain.includes("google")) {
       try {
         const googleFeedUrl = `https://calendar.google.com/calendar/ical/${encodeURIComponent(
-          email
+          email,
         )}/public/basic.ics`;
         const response = await fetch(googleFeedUrl);
         const icsData = await response.text();
@@ -3959,7 +3983,7 @@ router.post("/api/fetchcalendar", async (req, res) => {
     ) {
       try {
         const outlookFeedUrl = `https://outlook.office365.com/owa/calendar/${encodeURIComponent(
-          email
+          email,
         )}/calendar.ics`;
         let authHeader;
         if (smtp.authType === "oauth2") {
@@ -3967,7 +3991,9 @@ router.post("/api/fetchcalendar", async (req, res) => {
           authHeader = `Bearer ${accessToken}`;
         } else {
           const decryptedPass = decrypt(smtp.pass);
-          authHeader = "Basic " + Buffer.from(`${email}:${decryptedPass}`).toString("base64");
+          authHeader =
+            "Basic " +
+            Buffer.from(`${email}:${decryptedPass}`).toString("base64");
         }
         const response = await fetch(outlookFeedUrl, {
           headers: { Authorization: authHeader },
@@ -3991,7 +4017,7 @@ router.post("/api/fetchcalendar", async (req, res) => {
                 ? e.attendee
                 : [e.attendee]
               : [],
-          }))
+          })),
         );
       } catch (err) {
         console.log("Outlook calendar fetch failed:", err.message);
@@ -4039,7 +4065,7 @@ router.post("/api/fetchcalendar", async (req, res) => {
                         ? e.attendee
                         : [e.attendee]
                       : [],
-                  }))
+                  })),
                 );
               }
             }
@@ -4111,7 +4137,7 @@ router.post("/api/fetchsent", async (req, res) => {
         if (lock && typeof lock.exists === "number") {
           selectedBox = { name: box, lock };
           console.log(
-            `Found sent mailbox: ${box} with ${lock.exists} messages`
+            `Found sent mailbox: ${box} with ${lock.exists} messages`,
           );
           break;
         }
@@ -4130,7 +4156,7 @@ router.post("/api/fetchsent", async (req, res) => {
               const lock = await client.mailboxOpen(mailbox.name);
               selectedBox = { name: mailbox.name, lock };
               console.log(
-                `Found sent mailbox via listing: ${mailbox.name} with ${lock.exists} messages`
+                `Found sent mailbox via listing: ${mailbox.name} with ${lock.exists} messages`,
               );
               break;
             } catch (error) {
@@ -4190,7 +4216,7 @@ router.post("/api/fetchsent", async (req, res) => {
     const endSeq = Math.max(totalMessages - (currentPage - 1) * maxLimit, 1);
 
     console.log(
-      `Fetching sent messages ${startSeq}:${endSeq} (Page ${currentPage}, Total: ${totalMessages})`
+      `Fetching sent messages ${startSeq}:${endSeq} (Page ${currentPage}, Total: ${totalMessages})`,
     );
 
     const messages = [];
@@ -4220,12 +4246,12 @@ router.post("/api/fetchsent", async (req, res) => {
                   } catch {
                     return url;
                   }
-                }
+                },
               );
 
               cleanHtml = cleanHtml.replace(
                 /<span[^>]*id="inflection-email-preheader"[^>]*>.*?<\/span>/gis,
-                ""
+                "",
               );
             }
 
@@ -4234,7 +4260,7 @@ router.post("/api/fetchsent", async (req, res) => {
             if (cleanText) {
               cleanText = cleanText.replace(
                 /https:\/\/tracking\.inflection\.io\/[^\s]+/g,
-                ""
+                "",
               );
             }
 
@@ -4264,7 +4290,7 @@ router.post("/api/fetchsent", async (req, res) => {
               `Message ${msg.uid} - Flags:`,
               flagsArray,
               "Read:",
-              isRead
+              isRead,
             );
 
             messages.push({
@@ -4574,7 +4600,7 @@ router.post("/api/fetch-email-thread", async (req, res) => {
         header: { "Message-ID": messageId },
       });
       console.log(
-        `🔍 [FetchThread] Search in ${sentBoxName} found ${sentResult.length} message(s)`
+        `🔍 [FetchThread] Search in ${sentBoxName} found ${sentResult.length} message(s)`,
       );
 
       if (sentResult.length > 0) {
@@ -4628,7 +4654,7 @@ router.post("/api/fetch-email-thread", async (req, res) => {
           };
 
           console.log(
-            `✅ [FetchThread] Original email found: "${msg.envelope.subject}"`
+            `✅ [FetchThread] Original email found: "${msg.envelope.subject}"`,
           );
           break;
         }
@@ -4638,7 +4664,7 @@ router.post("/api/fetch-email-thread", async (req, res) => {
     // Fallback: If original email not found in Sent folder, get from EmailTracking database
     if (!originalEmail) {
       console.log(
-        `📧 [FetchThread] Original email not in Sent folder, checking tracking database...`
+        `📧 [FetchThread] Original email not in Sent folder, checking tracking database...`,
       );
 
       // Search by originalMessageId (the full Message-ID) or by messageId (tracking ID)
@@ -4659,7 +4685,7 @@ router.post("/api/fetch-email-thread", async (req, res) => {
 
       if (tracking && tracking.emailContent) {
         console.log(
-          `✅ [FetchThread] Found original email in tracking database`
+          `✅ [FetchThread] Found original email in tracking database`,
         );
         originalEmail = {
           type: "sent",
@@ -4677,7 +4703,7 @@ router.post("/api/fetch-email-thread", async (req, res) => {
         };
       } else {
         console.log(
-          `⚠️ [FetchThread] Original email not found in tracking database either`
+          `⚠️ [FetchThread] Original email not found in tracking database either`,
         );
       }
     }
@@ -4696,7 +4722,7 @@ router.post("/api/fetch-email-thread", async (req, res) => {
       });
       replyIds = [...replyIds, ...inReplyToIds];
       console.log(
-        `🔍 [FetchThread] In-Reply-To search found ${inReplyToIds.length} message(s)`
+        `🔍 [FetchThread] In-Reply-To search found ${inReplyToIds.length} message(s)`,
       );
     } catch (e) {
       console.log(`⚠️ [FetchThread] In-Reply-To search failed:`, e.message);
@@ -4714,7 +4740,7 @@ router.post("/api/fetch-email-thread", async (req, res) => {
         }
       }
       console.log(
-        `🔍 [FetchThread] References search found ${referencesIds.length} message(s)`
+        `🔍 [FetchThread] References search found ${referencesIds.length} message(s)`,
       );
     } catch (e) {
       console.log(`⚠️ [FetchThread] References search failed:`, e.message);
@@ -4724,7 +4750,7 @@ router.post("/api/fetch-email-thread", async (req, res) => {
 
     if (replyIds.length > 0) {
       console.log(
-        `📧 [FetchThread] Fetching ${replyIds.length} reply message(s)`
+        `📧 [FetchThread] Fetching ${replyIds.length} reply message(s)`,
       );
 
       for await (let msg of client.fetch(replyIds, {
@@ -4808,7 +4834,7 @@ router.post("/api/fetch-email-thread", async (req, res) => {
     thread.push(...replies);
 
     console.log(
-      `✅ [FetchThread] SUCCESS - Thread has ${thread.length} message(s) (1 original + ${replies.length} replies)`
+      `✅ [FetchThread] SUCCESS - Thread has ${thread.length} message(s) (1 original + ${replies.length} replies)`,
     );
 
     // Return the complete thread with better naming
@@ -4868,7 +4894,9 @@ router.get("/api/auth/detect-provider", async (req, res) => {
 
     const provider = await detectProvider(email);
     const requiresOAuth = provider === "microsoft";
-    const baseUrl = (process.env.BASE_URL || "https://videoresponse.onepgr.com:3001").replace(/\/api\/?$/, "");
+    const baseUrl = (
+      process.env.BASE_URL || "https://videoresponse.onepgr.com:3001"
+    ).replace(/\/api\/?$/, "");
 
     return res.json({
       success: true,
@@ -4910,16 +4938,23 @@ router.get("/api/auth/microsoft/authorize", (req, res) => {
     `${(process.env.BASE_URL || "https://videoresponse.onepgr.com:3001").replace(/\/api\/?$/, "")}/api/auth/microsoft/callback`;
 
   // Include frontend URL in state for callback
-  const stateData = { 
-    email, 
-    frontend: frontend || process.env.FRONTEND_URL || "https://liame.onepgr.com" 
+  const stateData = {
+    email,
+    frontend:
+      frontend || process.env.FRONTEND_URL || "https://liame.onepgr.com",
   };
   const state = Buffer.from(JSON.stringify(stateData)).toString("base64");
 
+  // const scopes = [
+  //   "offline_access",
+  //   "https://outlook.office365.com/IMAP.AccessAsUser.All",
+  //   "https://outlook.office365.com/SMTP.Send",
+  // ].join(" ");
+
   const scopes = [
     "offline_access",
-    "https://outlook.office365.com/IMAP.AccessAsUser.All",
-    "https://outlook.office365.com/SMTP.Send",
+    "https://graph.microsoft.com/IMAP.AccessAsUser.All",
+    "https://graph.microsoft.com/SMTP.Send",
   ].join(" ");
 
   const authUrl =
@@ -4933,7 +4968,9 @@ router.get("/api/auth/microsoft/authorize", (req, res) => {
     `login_hint=${encodeURIComponent(email)}&` +
     `prompt=consent`;
 
-  console.log(`🔐 Redirecting ${email} to Microsoft OAuth consent screen (frontend: ${stateData.frontend})`);
+  console.log(
+    `🔐 Redirecting ${email} to Microsoft OAuth consent screen (frontend: ${stateData.frontend})`,
+  );
   res.redirect(authUrl);
 });
 
@@ -4941,18 +4978,19 @@ router.get("/api/auth/microsoft/authorize", (req, res) => {
 router.get("/api/auth/microsoft/callback", async (req, res) => {
   try {
     const { code, state, error: oauthError, error_description } = req.query;
-    const defaultFrontend = process.env.FRONTEND_URL || "https://liame.onepgr.com";
+    const defaultFrontend =
+      process.env.FRONTEND_URL || "https://liame.onepgr.com";
 
     if (oauthError) {
       console.error("Microsoft OAuth error:", oauthError, error_description);
       return res.redirect(
-        `${defaultFrontend}/email-settings?error=${encodeURIComponent(error_description || oauthError)}`
+        `${defaultFrontend}/email-settings?error=${encodeURIComponent(error_description || oauthError)}`,
       );
     }
 
     if (!code || !state) {
       return res.redirect(
-        `${defaultFrontend}/email-settings?error=${encodeURIComponent("Missing authorization code or state")}`
+        `${defaultFrontend}/email-settings?error=${encodeURIComponent("Missing authorization code or state")}`,
       );
     }
 
@@ -4964,7 +5002,7 @@ router.get("/api/auth/microsoft/callback", async (req, res) => {
       frontendUrl = stateData.frontend || defaultFrontend;
     } catch (e) {
       return res.redirect(
-        `${defaultFrontend}/email-settings?error=${encodeURIComponent("Invalid state parameter")}`
+        `${defaultFrontend}/email-settings?error=${encodeURIComponent("Invalid state parameter")}`,
       );
     }
 
@@ -4985,15 +5023,18 @@ router.get("/api/auth/microsoft/callback", async (req, res) => {
           redirect_uri: redirectUri,
           grant_type: "authorization_code",
         }),
-      }
+      },
     );
 
     const tokens = await tokenResponse.json();
 
     if (tokens.error) {
-      console.error("Microsoft token exchange error:", tokens.error_description);
+      console.error(
+        "Microsoft token exchange error:",
+        tokens.error_description,
+      );
       return res.redirect(
-        `${frontendUrl}/email-settings?error=${encodeURIComponent(tokens.error_description || "Token exchange failed")}`
+        `${frontendUrl}/email-settings?error=${encodeURIComponent(tokens.error_description || "Token exchange failed")}`,
       );
     }
 
@@ -5018,7 +5059,7 @@ router.get("/api/auth/microsoft/callback", async (req, res) => {
           "oauth2.expiresAt": new Date(Date.now() + tokens.expires_in * 1000),
           "oauth2.scope": tokens.scope,
           pass: null,
-        }
+        },
       );
       console.log(`✅ Updated ${email} to OAuth2 authentication`);
     } else {
@@ -5042,13 +5083,13 @@ router.get("/api/auth/microsoft/callback", async (req, res) => {
 
     // Redirect to the correct frontend with success
     res.redirect(
-      `${frontendUrl}/email-settings?success=true&email=${encodeURIComponent(email)}&token=${apiToken}&provider=microsoft`
+      `${frontendUrl}/email-settings?success=true&email=${encodeURIComponent(email)}&token=${apiToken}&provider=microsoft`,
     );
   } catch (error) {
     console.error("OAuth callback error:", error);
     const frontendUrl = process.env.FRONTEND_URL || "https://liame.onepgr.com";
     res.redirect(
-      `${frontendUrl}/email-settings?error=${encodeURIComponent("OAuth setup failed: " + error.message)}`
+      `${frontendUrl}/email-settings?error=${encodeURIComponent("OAuth setup failed: " + error.message)}`,
     );
   }
 });
