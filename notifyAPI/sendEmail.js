@@ -279,6 +279,88 @@ async function getValidAccessToken(smtpRecord) {
 }
 
 // Microsoft Graph API Email Sending
+// async function sendViaMicrosoftGraph(
+//   smtpRecord,
+//   from,
+//   to,
+//   cc,
+//   bcc,
+//   subject,
+//   html,
+//   text,
+//   attachments,
+// ) {
+//   const accessToken = await getValidAccessToken(smtpRecord);
+
+//   // Build recipient list
+//   const toRecipients = Array.isArray(to) ? to : [to];
+//   const ccRecipients = cc ? (Array.isArray(cc) ? cc : [cc]) : [];
+//   const bccRecipients = bcc ? (Array.isArray(bcc) ? bcc : [bcc]) : [];
+
+//   const emailAddressList = (emails) =>
+//     emails.map((email) => ({ emailAddress: { address: email } }));
+
+//   // Build message object
+//   const message = {
+//     subject: subject,
+//     body: {
+//       contentType: html ? "HTML" : "Text",
+//       content: html || text || "",
+//     },
+//     from: {
+//       emailAddress: {
+//         address: from,
+//       },
+//     },
+//     toRecipients: emailAddressList(toRecipients),
+//     ccRecipients:
+//       ccRecipients.length > 0 ? emailAddressList(ccRecipients) : undefined,
+//     bccRecipients:
+//       bccRecipients.length > 0 ? emailAddressList(bccRecipients) : undefined,
+//   };
+
+//   // Handle attachments (Graph API requires base64 content)
+//   if (attachments && attachments.length > 0) {
+//     message.attachments = await Promise.all(
+//       attachments.map(async (att) => {
+//         // If content is already base64 string, use it; otherwise convert buffer
+//         let contentBytes = att.content;
+//         if (Buffer.isBuffer(att.content)) {
+//           contentBytes = att.content.toString("base64");
+//         } else if (typeof att.content === "string") {
+//           // Assume already base64 or convert
+//           contentBytes = Buffer.from(att.content).toString("base64");
+//         }
+
+//         return {
+//           "@odata.type": "#microsoft.graph.fileAttachment",
+//           name: att.filename || "attachment",
+//           contentType: att.contentType || "application/octet-stream",
+//           contentBytes: contentBytes,
+//         };
+//       }),
+//     );
+//   }
+
+//   // Send via Graph API
+//   const response = await fetch("https://graph.microsoft.com/v1.0/me/sendMail", {
+//     method: "POST",
+//     headers: {
+//       Authorization: `Bearer ${accessToken}`,
+//       "Content-Type": "application/json",
+//     },
+//     body: JSON.stringify({ message: message, saveToSentItems: true }),
+//   });
+
+//   if (!response.ok) {
+//     const error = await response.text();
+//     throw new Error(`Graph API error (${response.status}): ${error}`);
+//   }
+
+//   return { success: true, method: "graph-api" };
+// }
+
+// Microsoft Graph API Email Sending
 async function sendViaMicrosoftGraph(
   smtpRecord,
   from,
@@ -292,10 +374,21 @@ async function sendViaMicrosoftGraph(
 ) {
   const accessToken = await getValidAccessToken(smtpRecord);
 
+  // Helper to parse email strings (handles comma-separated, arrays, or single)
+  const parseEmailList = (input) => {
+    if (!input) return [];
+    if (Array.isArray(input)) return input;
+    // Split by comma and trim whitespace
+    return input
+      .split(",")
+      .map((email) => email.trim())
+      .filter((e) => e);
+  };
+
   // Build recipient list
-  const toRecipients = Array.isArray(to) ? to : [to];
-  const ccRecipients = cc ? (Array.isArray(cc) ? cc : [cc]) : [];
-  const bccRecipients = bcc ? (Array.isArray(bcc) ? bcc : [bcc]) : [];
+  const toRecipients = parseEmailList(to);
+  const ccRecipients = parseEmailList(cc);
+  const bccRecipients = parseEmailList(bcc);
 
   const emailAddressList = (emails) =>
     emails.map((email) => ({ emailAddress: { address: email } }));
@@ -323,12 +416,10 @@ async function sendViaMicrosoftGraph(
   if (attachments && attachments.length > 0) {
     message.attachments = await Promise.all(
       attachments.map(async (att) => {
-        // If content is already base64 string, use it; otherwise convert buffer
         let contentBytes = att.content;
         if (Buffer.isBuffer(att.content)) {
           contentBytes = att.content.toString("base64");
         } else if (typeof att.content === "string") {
-          // Assume already base64 or convert
           contentBytes = Buffer.from(att.content).toString("base64");
         }
 
