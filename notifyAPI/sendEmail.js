@@ -1672,6 +1672,8 @@ router.post("/api/fetchinbox", async (req, res) => {
       logger: false,
     });
 
+    console.log(`IMAP CONNECT: email=${email}, host=${getImapHost(smtp.host, email, smtp.oauth2?.provider)}, smtp.host=${smtp.host}, provider=${smtp.oauth2?.provider}`);
+
     await client.connect();
     const lock = await client.mailboxOpen("INBOX");
     const totalMessages = lock.exists;
