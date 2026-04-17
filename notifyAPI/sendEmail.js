@@ -1672,7 +1672,9 @@ router.post("/api/fetchinbox", async (req, res) => {
       logger: false,
     });
 
-    console.log(`IMAP CONNECT: email=${email}, host=${getImapHost(smtp.host, email, smtp.oauth2?.provider)}, smtp.host=${smtp.host}, provider=${smtp.oauth2?.provider}`);
+    console.log(
+      `IMAP CONNECT: email=${email}, host=${getImapHost(smtp.host, email, smtp.oauth2?.provider)}, smtp.host=${smtp.host}, provider=${smtp.oauth2?.provider}`,
+    );
 
     await client.connect();
     const lock = await client.mailboxOpen("INBOX");
@@ -4971,17 +4973,17 @@ router.get("/api/auth/microsoft/authorize", (req, res) => {
   };
   const state = Buffer.from(JSON.stringify(stateData)).toString("base64");
 
-  // const scopes = [
-  //   "offline_access",
-  //   "https://outlook.office365.com/IMAP.AccessAsUser.All",
-  //   "https://outlook.office365.com/SMTP.Send",
-  // ].join(" ");
-
   const scopes = [
     "offline_access",
-    "https://graph.microsoft.com/IMAP.AccessAsUser.All",
-    "https://graph.microsoft.com/SMTP.Send",
+    "https://outlook.office365.com/IMAP.AccessAsUser.All",
+    "https://outlook.office365.com/SMTP.Send",
   ].join(" ");
+
+  // const scopes = [
+  //   "offline_access",
+  //   "https://graph.microsoft.com/IMAP.AccessAsUser.All",
+  //   "https://graph.microsoft.com/SMTP.Send",
+  // ].join(" ");
 
   const authUrl =
     `https://login.microsoftonline.com/common/oauth2/v2.0/authorize?` +
