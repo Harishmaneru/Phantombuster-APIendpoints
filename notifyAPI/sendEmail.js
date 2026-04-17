@@ -278,6 +278,118 @@ async function getValidAccessToken(smtpRecord) {
   return decrypt(smtpRecord.oauth2.accessToken);
 }
 
+// Microsoft Graph API Email Sending
+async function sendViaMicrosoftGraph(
+  smtpRecord,
+  from,
+  to,
+  cc,
+  bcc,
+  subject,
+  html,
+  text,
+  attachments,
+) {
+  const accessToken = await getValidAccessToken(smtpRecord);
+
+  // Build recipient list
+  const toRecipients = Array.isArray(to) ? to : [to];
+  const ccRecipients = cc ? (Array.isArray(cc) ? cc : [cc]) : [];
+  const bccRecipients = bcc ? (Array.isArray(bcc) ? bcc : [bcc]) : [];
+
+  const emailAddressList = (emails) =>
+    emails.map((email) => ({ emailAddress: { address: email } }));
+
+  // Build message object
+  const message = {
+    subject: subject,
+    body: {
+      contentType: html ? "HTML" : "Text",
+      content: html || text || "",
+    },
+    from: {
+      emailAddress: {
+        address: from,
+      },
+    },
+    toRecipients: emailAddressList(toRecipients),
+    ccRecipients:
+      ccRecipients.length > 0 ? emailAddressList(ccRecipients) : undefined,
+    bccRecipients:
+      bccRecipients.length > 0 ? emailAddressList(bccRecipients) : undefined,
+  };
+
+  // Handle attachments (Graph API requires base64 content)
+  if (attachments && attachments.length > 0) {
+    message.attachments = await Promise.all(
+      attachments.map(async (att) => {
+        // If content is already base64 string, use it; otherwise convert buffer
+        let contentBytes = att.content;
+        if (Buffer.isBuffer(att.content)) {
+          contentBytes = att.content.toString("base64");
+        } else if (typeof att.content === "string") {
+          // Assume already base64 or convert
+          contentBytes = Buffer.from(att.content).toString("base64");
+        }
+
+        return {
+          "@odata.type": "#microsoft.graph.fileAttachment",
+          name: att.filename || "attachment",
+          contentType: att.contentType || "application/octet-stream",
+          contentBytes: contentBytes,
+        };
+      }),
+    );
+  }
+
+  // Send via Graph API
+  const response = await fetch("https://graph.microsoft.com/v1.0/me/sendMail", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ message: message, saveToSentItems: true }),
+  });
+
+  if (!response.ok) {
+    const error = await response.text();
+    throw new Error(`Graph API error (${response.status}): ${error}`);
+  }
+
+  return { success: true, method: "graph-api" };
+}
+
+// Microsoft Graph API Inbox Fetching
+async function fetchInboxViaGraph(
+  accessToken,
+  folder = "inbox",
+  top = 20,
+  skip = 0,
+) {
+  const url = `https://graph.microsoft.com/v1.0/me/mailFolders/${folder}/messages?$top=${top}&$skip=${skip}&$orderby=receivedDateTime desc&$select=id,subject,from,toRecipients,receivedDateTime,bodyPreview,isRead,hasAttachments`;
+
+  const response = await fetch(url, {
+    headers: { Authorization: `Bearer ${accessToken}` },
+  });
+
+  if (!response.ok) throw new Error(`Graph API error: ${response.status}`);
+
+  const data = await response.json();
+
+  return data.value.map((msg) => ({
+    uid: msg.id,
+    subject: msg.subject,
+    from: msg.from?.emailAddress?.address || "Unknown",
+    to: msg.toRecipients?.map((r) => r.emailAddress.address).join(", "),
+    date: msg.receivedDateTime,
+    read: msg.isRead,
+    text: msg.bodyPreview,
+    messageId: msg.id,
+    hasAttachments: msg.hasAttachments,
+  }));
+}
+
 // Auth helpers for SMTP and IMAP
 async function getAuthForSMTP(smtpRecord, email) {
   if (smtpRecord.authType === "oauth2") {
@@ -1071,6 +1183,62 @@ router.post("/api/emailsend", async (req, res) => {
         .json({ success: false, error: "Invalid token or sender email" });
     }
 
+    // Check if this is a Microsoft OAuth2 account - use Graph API for sending
+    if (smtp.authType === "oauth2" && smtp.oauth2?.provider === "microsoft") {
+      try {
+        const result = await sendViaMicrosoftGraph(
+          smtp,
+          from,
+          to,
+          cc,
+          bcc,
+          subject,
+          html,
+          text,
+          attachments,
+        );
+
+        // Still create tracking record (optional, but good for consistency)
+        const trackingId = crypto.randomBytes(16).toString("hex");
+        const webhookUrl = "https://meet.onepgr.com/session/smatpTracking";
+
+        // Save tracking and send webhook asynchronously
+        Promise.all([
+          EmailTracking.create({
+            messageId: trackingId,
+            fromEmail: from,
+            toEmail: Array.isArray(to) ? to[0] : to,
+            subject,
+            webhookUrl,
+            emailContent: { html, text },
+            trackingPayload: trackingPayload || null,
+          }),
+          sendWebhookNotification(webhookUrl, {
+            event: "sent",
+            trackingId,
+            email: Array.isArray(to) ? to[0] : to,
+            from,
+            subject,
+            timestamp: new Date(),
+            recipients: { to, cc, bcc },
+            senderName: sender_name || null,
+          }),
+        ]).catch((err) => console.error("Tracking background error:", err));
+
+        return res.json({
+          success: true,
+          trackingId,
+          method: "microsoft-graph",
+          message: "Email sent via Microsoft Graph API",
+        });
+      } catch (graphError) {
+        console.error("Graph API Send Error:", graphError);
+        return res
+          .status(500)
+          .json({ success: false, error: graphError.message });
+      }
+    }
+
     const smtpAuth = await getAuthForSMTP(smtp, from);
     const smtpHost = getSMTPHostForProvider(smtp);
     const transporter = nodemailer.createTransport({
@@ -1660,6 +1828,37 @@ router.post("/api/fetchinbox", async (req, res) => {
       return res
         .status(403)
         .json({ success: false, error: "Invalid token or sender email" });
+    }
+
+    // Check if this is a Microsoft OAuth2 account - use Graph API for fetching
+    if (smtp.authType === "oauth2" && smtp.oauth2?.provider === "microsoft") {
+      try {
+        const accessToken = await getValidAccessToken(smtp);
+        const limitInt = parseInt(limit) || 20;
+        const pageInt = parseInt(page) || 1;
+        const skip = (pageInt - 1) * limitInt;
+
+        const messages = await fetchInboxViaGraph(
+          accessToken,
+          "inbox",
+          limitInt,
+          skip,
+        );
+
+        return res.json({
+          success: true,
+          inbox: messages,
+          pagination: {
+            currentPage: pageInt,
+            limit: limitInt,
+            totalMessages: messages.length,
+            hasNextPage: messages.length === limitInt, // Basic heuristic
+          },
+        });
+      } catch (err) {
+        console.error("Graph Inbox Fetch Error:", err);
+        return res.status(500).json({ success: false, error: err.message });
+      }
     }
 
     const imapAuth = await getAuthForIMAP(smtp, email);
@@ -4973,17 +5172,19 @@ router.get("/api/auth/microsoft/authorize", (req, res) => {
   };
   const state = Buffer.from(JSON.stringify(stateData)).toString("base64");
 
-  const scopes = [
-    "offline_access",
-    "https://outlook.office365.com/IMAP.AccessAsUser.All",
-    "https://outlook.office365.com/SMTP.Send",
-  ].join(" ");
-
   // const scopes = [
   //   "offline_access",
-  //   "https://graph.microsoft.com/IMAP.AccessAsUser.All",
-  //   "https://graph.microsoft.com/SMTP.Send",
+  //   "https://outlook.office365.com/IMAP.AccessAsUser.All",
+  //   "https://outlook.office365.com/SMTP.Send",
   // ].join(" ");
+
+  const scopes = [
+    "offline_access",
+    "https://graph.microsoft.com/IMAP.AccessAsUser.All",
+    "https://graph.microsoft.com/SMTP.Send",
+    "https://graph.microsoft.com/Mail.Read", // ✅ NEW: Read inbox via Graph
+    "https://graph.microsoft.com/Mail.Send", // ✅ Already added for sending
+  ].join(" ");
 
   const authUrl =
     `https://login.microsoftonline.com/common/oauth2/v2.0/authorize?` +
