@@ -5263,18 +5263,14 @@ router.get("/api/auth/microsoft/authorize", (req, res) => {
   };
   const state = Buffer.from(JSON.stringify(stateData)).toString("base64");
 
-  // const scopes = [
-  //   "offline_access",
-  //   "https://outlook.office365.com/IMAP.AccessAsUser.All",
-  //   "https://outlook.office365.com/SMTP.Send",
-  // ].join(" ");
-
+  // Graph API scopes only — user-consentable in the default state of most tenants.
+  // IMAP.AccessAsUser.All / SMTP.Send were removed: they require admin consent
+  // and are not used by the code (send/fetch both go through Graph API).
   const scopes = [
     "offline_access",
-    "https://graph.microsoft.com/IMAP.AccessAsUser.All",
-    "https://graph.microsoft.com/SMTP.Send",
-    "https://graph.microsoft.com/Mail.Read", // ✅ NEW: Read inbox via Graph
-    "https://graph.microsoft.com/Mail.Send", // ✅ Already added for sending
+    "https://graph.microsoft.com/User.Read",
+    "https://graph.microsoft.com/Mail.Read",
+    "https://graph.microsoft.com/Mail.Send",
   ].join(" ");
 
   const authUrl =
@@ -5286,7 +5282,7 @@ router.get("/api/auth/microsoft/authorize", (req, res) => {
     `scope=${encodeURIComponent(scopes)}&` +
     `state=${encodeURIComponent(state)}&` +
     `login_hint=${encodeURIComponent(email)}&` +
-    `prompt=consent`;
+    `prompt=select_account`;
 
   console.log(
     `🔐 Redirecting ${email} to Microsoft OAuth consent screen (frontend: ${stateData.frontend})`,
