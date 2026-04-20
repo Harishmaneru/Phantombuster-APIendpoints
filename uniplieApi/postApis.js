@@ -300,4 +300,97 @@ router.get("/api/unipile/:userId/posts/:postId/reactions", async (req, res) => {
   }
 });
 
+
+
+router.post("/api/unipile/linkedin/post-engagement", async (req, res) => {
+  try {
+    const { user_id, post_url } = req.body;
+
+    // 1. Validate input
+    if (!user_id || !post_url) {
+      return res.status(400).json({
+        success: false,
+        error: "user_id and post_url are required",
+      });
+    }
+
+    // 2. Get account_id from DB
+    const dbResult = await getLinkedInAccountStatus(user_id);
+    if (!dbResult.success || !dbResult.account_id) {
+      return res.status(400).json({
+        success: false,
+        error: "LinkedIn account not connected",
+      });
+    }
+
+    const account_id = dbResult.account_id;
+
+    // 3. Extract post ID from LinkedIn URL
+    const match = post_url.match(/activity-(\d+)/);
+    if (!match) {
+      return res.status(400).json({
+        success: false,
+        error: "Invalid LinkedIn post URL",
+      });
+    }
+
+    const postId = match[1];
+
+    // 4. Build both possible URNs
+    const activityURN = `urn:li:activity:${postId}`;
+    const ugcURN = `urn:li:ugcPost:${postId}`;
+
+    let finalURN = activityURN;
+
+    // 5. Try fetching post (to validate correct URN)
+    try {
+      await axios.get(
+        `${getBaseUrl()}/posts/${encodeURIComponent(activityURN)}?account_id=${account_id}`,
+        { headers: getHeaders() }
+      );
+    } catch (err) {
+      // fallback to ugcPost
+      finalURN = ugcURN;
+    }
+
+    // 6. Fetch comments + reactions in parallel
+    const [commentsRes, reactionsRes] = await Promise.all([
+      axios.get(
+        `${getBaseUrl()}/posts/${encodeURIComponent(finalURN)}/comments?account_id=${account_id}`,
+        { headers: getHeaders() }
+      ),
+      axios.get(
+        `${getBaseUrl()}/posts/${encodeURIComponent(finalURN)}/reactions?account_id=${account_id}`,
+        { headers: getHeaders() }
+      ),
+    ]);
+
+    // 7. Format response (clean)
+    res.json({
+      success: true,
+      post: {
+        url: post_url,
+        urn: finalURN,
+      },
+      engagement: {
+        comments: commentsRes.data?.items || [],
+        commenters_count: commentsRes.data?.items?.length || 0,
+
+        reactions: reactionsRes.data?.items || [],
+        likers_count: reactionsRes.data?.items?.length || 0,
+      },
+    });
+  } catch (err) {
+    console.error("Post engagement error:", {
+      status: err.response?.status,
+      error: err.response?.data,
+      message: err.message,
+    });
+
+    return res.status(err.response?.status || 500).json({
+      success: false,
+      error: err.response?.data || err.message,
+    });
+  }
+});
 module.exports = router;
