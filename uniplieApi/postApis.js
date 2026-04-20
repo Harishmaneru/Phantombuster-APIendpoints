@@ -820,7 +820,7 @@ router.post("/api/unipile/linkedin/post-engagement", async (req, res) => {
         if (cleanUrl.includes('-activity-')) {
           const match = cleanUrl.match(/-activity-(\d+)/);
           if (match) {
-            console.log("✅ Detected ACTIVITY type from URL pattern '-activity-'");
+            console.log("✅ Detected ACTIVITY type");
             return { id: match[1], type: 'activity' };
           }
         }
@@ -828,7 +828,7 @@ router.post("/api/unipile/linkedin/post-engagement", async (req, res) => {
         if (cleanUrl.includes('-ugcPost-')) {
           const match = cleanUrl.match(/-ugcPost-(\d+)/);
           if (match) {
-            console.log("✅ Detected UGC POST type from URL pattern '-ugcPost-'");
+            console.log("✅ Detected UGC POST type");
             return { id: match[1], type: 'ugcPost' };
           }
         }
@@ -836,37 +836,12 @@ router.post("/api/unipile/linkedin/post-engagement", async (req, res) => {
         if (cleanUrl.includes('-share-')) {
           const match = cleanUrl.match(/-share-(\d+)/);
           if (match) {
-            console.log("✅ Detected SHARE type from URL pattern '-share-'");
+            console.log("✅ Detected SHARE type");
             return { id: match[1], type: 'share' };
           }
         }
         
-        // Check for URN in URL
-        if (cleanUrl.includes('urn:li:activity:')) {
-          const match = cleanUrl.match(/urn:li:activity:(\d+)/);
-          if (match) {
-            console.log("✅ Detected ACTIVITY type from URN");
-            return { id: match[1], type: 'activity' };
-          }
-        }
-        
-        if (cleanUrl.includes('urn:li:ugcPost:')) {
-          const match = cleanUrl.match(/urn:li:ugcPost:(\d+)/);
-          if (match) {
-            console.log("✅ Detected UGC POST type from URN");
-            return { id: match[1], type: 'ugcPost' };
-          }
-        }
-        
-        if (cleanUrl.includes('urn:li:share:')) {
-          const match = cleanUrl.match(/urn:li:share:(\d+)/);
-          if (match) {
-            console.log("✅ Detected SHARE type from URN");
-            return { id: match[1], type: 'share' };
-          }
-        }
-        
-        // Fallback: Extract any numeric ID and try to determine type
+        // Fallback patterns
         const patterns = [
           { regex: /activity-(\d+)/, type: 'activity' },
           { regex: /ugcPost-(\d+)/, type: 'ugcPost' },
@@ -877,12 +852,11 @@ router.post("/api/unipile/linkedin/post-engagement", async (req, res) => {
         for (const pattern of patterns) {
           const match = cleanUrl.match(pattern.regex);
           if (match) {
-            console.log(`⚠️ Using fallback detection: ${pattern.type} from pattern`);
+            console.log(`⚠️ Using fallback: ${pattern.type}`);
             return { id: match[1], type: pattern.type };
           }
         }
         
-        console.log("❌ No ID found in URL");
         return null;
       } catch (error) {
         console.error("❌ Error extracting post info:", error);
@@ -895,34 +869,27 @@ router.post("/api/unipile/linkedin/post-engagement", async (req, res) => {
     if (!postInfo) {
       return res.status(400).json({
         success: false,
-        error: "Invalid LinkedIn post URL - could not extract post ID",
+        error: "Invalid LinkedIn post URL",
       });
     }
 
     const { id: postId, type: detectedType } = postInfo;
     console.log(`📊 Extracted - ID: ${postId}, Type: ${detectedType}`);
 
-    // 4. Build URN based on detected type
+    // 4. Build URN
     let finalURN;
     switch (detectedType) {
-      case 'activity':
-        finalURN = `urn:li:activity:${postId}`;
-        break;
-      case 'ugcPost':
-        finalURN = `urn:li:ugcPost:${postId}`;
-        break;
-      case 'share':
-        finalURN = `urn:li:share:${postId}`;
-        break;
-      default:
-        finalURN = `urn:li:activity:${postId}`;
+      case 'activity': finalURN = `urn:li:activity:${postId}`; break;
+      case 'ugcPost': finalURN = `urn:li:ugcPost:${postId}`; break;
+      case 'share': finalURN = `urn:li:share:${postId}`; break;
+      default: finalURN = `urn:li:activity:${postId}`;
     }
     
     console.log(`🎯 Using URN: ${finalURN}`);
 
-    // 5. Verify the post is accessible and get social_id
+    // 5. Verify post and get social_id
     let postMetadata = null;
-    let socialId = finalURN; // Default to URN
+    let socialId = finalURN;
     
     if (!comments_cursor && !reactions_cursor) {
       try {
@@ -930,11 +897,9 @@ router.post("/api/unipile/linkedin/post-engagement", async (req, res) => {
           `${getBaseUrl()}/posts/${encodeURIComponent(finalURN)}?account_id=${account_id}`,
           { headers: getHeaders() }
         );
-        console.log("✅ Post verified and accessible");
+        console.log("✅ Post verified");
         
-        // IMPORTANT: For LinkedIn comments/reactions, we need to use social_id
         socialId = verifyResponse.data.social_id || finalURN;
-        console.log(`📌 Using social_id for engagement: ${socialId}`);
         
         postMetadata = {
           id: verifyResponse.data.id,
@@ -946,8 +911,7 @@ router.post("/api/unipile/linkedin/post-engagement", async (req, res) => {
           repost_count: verifyResponse.data.repost_counter || 0
         };
       } catch (error) {
-        console.log(`⚠️ Initial URN failed (${error.response?.status}), trying alternatives...`);
-        
+        // Try alternative URNs
         const alternativeURNs = [
           `urn:li:activity:${postId}`,
           `urn:li:ugcPost:${postId}`,
@@ -964,7 +928,7 @@ router.post("/api/unipile/linkedin/post-engagement", async (req, res) => {
             );
             finalURN = altURN;
             socialId = altResponse.data.social_id || altURN;
-            console.log(`✅ Found working URN: ${altURN}, social_id: ${socialId}`);
+            console.log(`✅ Working URN: ${altURN}`);
             
             postMetadata = {
               id: altResponse.data.id,
@@ -978,20 +942,20 @@ router.post("/api/unipile/linkedin/post-engagement", async (req, res) => {
             found = true;
             break;
           } catch (altError) {
-            console.log(`⚠️ Alternative URN ${altURN} failed: ${altError.response?.status}`);
+            console.log(`⚠️ Alternative ${altURN} failed: ${altError.response?.status}`);
           }
         }
         
         if (!found) {
           return res.status(400).json({
             success: false,
-            error: "Could not access post with any URN format.",
+            error: "Could not access post",
           });
         }
       }
     }
 
-    // 6. Fetch comments with cursor-based pagination
+    // 6. Fetch comments (cursor at root level)
     async function fetchCommentsPage(postIdentifier, accountId, cursor = null, limitSize = 50) {
       try {
         console.log(`📄 Fetching comments (cursor: ${cursor || 'initial'}, limit: ${limitSize})`);
@@ -1001,49 +965,29 @@ router.post("/api/unipile/linkedin/post-engagement", async (req, res) => {
           url += `&cursor=${encodeURIComponent(cursor)}`;
         }
         
-        console.log(`🌐 Comments URL: ${url}`);
-        
         const response = await axios.get(url, { headers: getHeaders() });
         const data = response.data;
         
-        // Log full response structure for debugging
-        console.log(`🔍 Comments response keys:`, Object.keys(data));
-        console.log(`🔍 Comments cursor value:`, data.cursor);
-        console.log(`🔍 Comments total_items:`, data.total_items);
-        console.log(`🔍 Comments paging:`, data.paging);
-        
         const items = data.items || [];
         
-        // According to OpenAPI spec: cursor is at root level
+        // Comments: cursor is at root level
         const nextCursor = data.cursor || null;
-        
-        // Check if there are more items based on cursor presence AND items count
-        const hasMore = nextCursor !== null && nextCursor !== undefined && items.length === limitSize;
         
         const total = data.total_items || data.paging?.total_count || null;
         
-        console.log(`📝 Comments: ${items.length} items, hasMore: ${hasMore}, cursor: ${nextCursor}, total: ${total}`);
+        // Has more if cursor exists and we got a full page
+        const hasMore = nextCursor !== null && items.length === limitSize;
         
-        return {
-          items,
-          cursor: nextCursor,
-          has_more: hasMore,
-          total_count: total,
-          debug: { cursor: nextCursor, total_items: total }
-        };
+        console.log(`📝 Comments: ${items.length} items, hasMore: ${hasMore}, cursor: ${nextCursor?.substring(0, 20)}...`);
+        
+        return { items, cursor: nextCursor, has_more: hasMore, total_count: total };
       } catch (error) {
-        console.log(`❌ Error fetching comments:`, error.response?.status, error.response?.data);
-        return {
-          items: [],
-          cursor: null,
-          has_more: false,
-          total_count: 0,
-          error: error.response?.data || error.message
-        };
+        console.log(`❌ Error fetching comments:`, error.response?.status);
+        return { items: [], cursor: null, has_more: false, total_count: 0 };
       }
     }
 
-    // 7. Fetch reactions with cursor-based pagination
+    // 7. Fetch reactions (cursor is in paging.cursor)
     async function fetchReactionsPage(postIdentifier, accountId, cursor = null, limitSize = 50) {
       try {
         console.log(`📄 Fetching reactions (cursor: ${cursor || 'initial'}, limit: ${limitSize})`);
@@ -1053,58 +997,34 @@ router.post("/api/unipile/linkedin/post-engagement", async (req, res) => {
           url += `&cursor=${encodeURIComponent(cursor)}`;
         }
         
-        console.log(`🌐 Reactions URL: ${url}`);
-        
         const response = await axios.get(url, { headers: getHeaders() });
         const data = response.data;
         
-        // Log full response structure for debugging
-        console.log(`🔍 Reactions response keys:`, Object.keys(data));
-        console.log(`🔍 Reactions cursor value:`, data.cursor);
-        console.log(`🔍 Reactions total_items:`, data.total_items);
-        console.log(`🔍 Reactions paging:`, data.paging);
-        
         const items = data.items || [];
         
-        // According to pattern: cursor is at root level
-        const nextCursor = data.cursor || null;
+        // Reactions: cursor is nested in paging.cursor
+        const nextCursor = data.paging?.cursor || null;
         
-        // Check if there are more items
-        const hasMore = nextCursor !== null && nextCursor !== undefined && items.length === limitSize;
+        const total = data.paging?.total_count || data.total_items || null;
         
-        const total = data.total_items || data.paging?.total_count || null;
+        // Has more if cursor exists and we got items
+        const hasMore = nextCursor !== null && items.length > 0;
         
-        console.log(`👍 Reactions: ${items.length} items, hasMore: ${hasMore}, cursor: ${nextCursor}, total: ${total}`);
+        console.log(`👍 Reactions: ${items.length} items, hasMore: ${hasMore}, cursor: ${nextCursor?.substring(0, 20)}..., total: ${total}`);
         
-        return {
-          items,
-          cursor: nextCursor,
-          has_more: hasMore,
-          total_count: total,
-          debug: { cursor: nextCursor, total_items: total }
-        };
+        return { items, cursor: nextCursor, has_more: hasMore, total_count: total };
       } catch (error) {
-        console.log(`❌ Error fetching reactions:`, error.response?.status, error.response?.data);
-        return {
-          items: [],
-          cursor: null,
-          has_more: false,
-          total_count: 0,
-          error: error.response?.data || error.message
-        };
+        console.log(`❌ Error fetching reactions:`, error.response?.status);
+        return { items: [], cursor: null, has_more: false, total_count: 0 };
       }
     }
 
-    // 8. Fetch data using social_id (as per docs)
+    // 8. Fetch data
     console.log("🚀 Fetching engagement data...");
     
     const validLimit = Math.min(parseInt(limit) || 50, 100);
-    
-    // Use socialId for fetching engagement (IMPORTANT!)
     const postIdentifier = socialId || finalURN;
-    console.log(`🎯 Using post identifier for engagement: ${postIdentifier}`);
     
-    // Fetch comments and reactions in parallel
     const [commentsResult, reactionsResult] = await Promise.all([
       fetchCommentsPage(postIdentifier, account_id, comments_cursor, validLimit),
       fetchReactionsPage(postIdentifier, account_id, reactions_cursor, validLimit)
@@ -1114,14 +1034,12 @@ router.post("/api/unipile/linkedin/post-engagement", async (req, res) => {
     console.log("📈 Final Results:", {
       commentsCount: commentsResult.items.length,
       commentsHasMore: commentsResult.has_more,
-      commentsCursor: commentsResult.cursor,
       reactionsCount: reactionsResult.items.length,
-      reactionsHasMore: reactionsResult.has_more,
-      reactionsCursor: reactionsResult.cursor
+      reactionsHasMore: reactionsResult.has_more
     });
 
     // 10. Response
-    const response = {
+    return res.json({
       success: true,
       post: {
         url: post_url,
@@ -1154,21 +1072,14 @@ router.post("/api/unipile/linkedin/post-engagement", async (req, res) => {
       cursors: {
         comments: commentsResult.cursor,
         reactions: reactionsResult.cursor
-      },
-      debug: {
-        comments_debug: commentsResult.debug,
-        reactions_debug: reactionsResult.debug
       }
-    };
-
-    return res.json(response);
+    });
     
   } catch (err) {
     console.error("❌ Post engagement error:", {
       status: err.response?.status,
       error: err.response?.data,
-      message: err.message,
-      stack: err.stack
+      message: err.message
     });
 
     return res.status(err.response?.status || 500).json({
