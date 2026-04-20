@@ -1100,42 +1100,42 @@ router.post("/api/unipile/linkedin/post-engagement", async (req, res) => {
     }
 
     // 7. Fetch reactions with cursor-based pagination
-    async function fetchReactionsPage(urn, accountId, cursor = null, limitSize = 50) {
-      try {
-        console.log(`📄 Fetching reactions page (cursor: ${cursor || 'initial'}, limit: ${limitSize})`);
+    // async function fetchReactionsPage(urn, accountId, cursor = null, limitSize = 50) {
+    //   try {
+    //     console.log(`📄 Fetching reactions page (cursor: ${cursor || 'initial'}, limit: ${limitSize})`);
 
-        let url = `${getBaseUrl()}/posts/${encodeURIComponent(urn)}/reactions?account_id=${accountId}&limit=${limitSize}`;
-        if (cursor) {
-          url += `&cursor=${encodeURIComponent(cursor)}`;
-        }
+    //     let url = `${getBaseUrl()}/posts/${encodeURIComponent(urn)}/reactions?account_id=${accountId}&limit=${limitSize}`;
+    //     if (cursor) {
+    //       url += `&cursor=${encodeURIComponent(cursor)}`;
+    //     }
 
-        const response = await axios.get(url, { headers: getHeaders() });
-        const data = response.data;
+    //     const response = await axios.get(url, { headers: getHeaders() });
+    //     const data = response.data;
 
-        const items = data.items || [];
-        const nextCursor = data.cursor || data.next_cursor || data.paging?.cursors?.after || null;
-        const hasMore = !!(nextCursor && items.length === limitSize);
-        const total = data.total_count || data.total || null;
+    //     const items = data.items || [];
+    //     const nextCursor = data.cursor || data.next_cursor || data.paging?.cursors?.after || null;
+    //     const hasMore = !!(nextCursor && items.length === limitSize);
+    //     const total = data.total_count || data.total || null;
 
-        console.log(`👍 Reactions page: received ${items.length} items, hasMore: ${hasMore}, total: ${total}`);
+    //     console.log(`👍 Reactions page: received ${items.length} items, hasMore: ${hasMore}, total: ${total}`);
 
-        return {
-          items,
-          next_cursor: nextCursor,
-          has_more: hasMore,
-          total_count: total
-        };
-      } catch (error) {
-        console.log(`❌ Error fetching reactions:`, error.response?.status, error.response?.data);
-        return {
-          items: [],
-          next_cursor: null,
-          has_more: false,
-          total_count: 0,
-          error: error.response?.data || error.message
-        };
-      }
-    }
+    //     return {
+    //       items,
+    //       next_cursor: nextCursor,
+    //       has_more: hasMore,
+    //       total_count: total
+    //     };
+    //   } catch (error) {
+    //     console.log(`❌ Error fetching reactions:`, error.response?.status, error.response?.data);
+    //     return {
+    //       items: [],
+    //       next_cursor: null,
+    //       has_more: false,
+    //       total_count: 0,
+    //       error: error.response?.data || error.message
+    //     };
+    //   }
+    // }
 
     // 8. Fetch data based on request
     console.log("🚀 Fetching engagement data...");
