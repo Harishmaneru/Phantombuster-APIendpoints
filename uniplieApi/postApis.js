@@ -329,19 +329,19 @@ router.get("/api/unipile/:userId/posts/:postId/reactions", async (req, res) => {
 //     function extractLinkedInPostId(url) {
 //       try {
 //         const cleanUrl = url.split("?")[0].replace(/\/$/, "");
-        
+
 //         const activityMatch = cleanUrl.match(/activity-(\d+)/);
 //         if (activityMatch) return activityMatch[1];
-        
+
 //         const ugcMatch = cleanUrl.match(/ugcPost-(\d+)/);
 //         if (ugcMatch) return ugcMatch[1];
-        
+
 //         const shareMatch = cleanUrl.match(/\/posts\/(?:view\/)?(\d+)/);
 //         if (shareMatch) return shareMatch[1];
-        
+
 //         const numericMatch = cleanUrl.match(/(\d{10,})/);
 //         if (numericMatch) return numericMatch[1];
-        
+
 //         return null;
 //       } catch {
 //         return null;
@@ -468,9 +468,9 @@ router.get("/api/unipile/:userId/posts/:postId/reactions", async (req, res) => {
 //     function extractLinkedInPostInfo(url) {
 //       try {
 //         const cleanUrl = url.split("?")[0].replace(/\/$/, "");
-        
+
 //         console.log("🔍 Analyzing URL:", cleanUrl);
-        
+
 //         // Check for explicit type indicators in URL
 //         if (cleanUrl.includes('-activity-')) {
 //           const match = cleanUrl.match(/-activity-(\d+)/);
@@ -479,7 +479,7 @@ router.get("/api/unipile/:userId/posts/:postId/reactions", async (req, res) => {
 //             return { id: match[1], type: 'activity' };
 //           }
 //         }
-        
+
 //         if (cleanUrl.includes('-ugcPost-')) {
 //           const match = cleanUrl.match(/-ugcPost-(\d+)/);
 //           if (match) {
@@ -487,7 +487,7 @@ router.get("/api/unipile/:userId/posts/:postId/reactions", async (req, res) => {
 //             return { id: match[1], type: 'ugcPost' };
 //           }
 //         }
-        
+
 //         if (cleanUrl.includes('-share-')) {
 //           const match = cleanUrl.match(/-share-(\d+)/);
 //           if (match) {
@@ -495,7 +495,7 @@ router.get("/api/unipile/:userId/posts/:postId/reactions", async (req, res) => {
 //             return { id: match[1], type: 'share' };
 //           }
 //         }
-        
+
 //         // Check for URN in URL
 //         if (cleanUrl.includes('urn:li:activity:')) {
 //           const match = cleanUrl.match(/urn:li:activity:(\d+)/);
@@ -504,7 +504,7 @@ router.get("/api/unipile/:userId/posts/:postId/reactions", async (req, res) => {
 //             return { id: match[1], type: 'activity' };
 //           }
 //         }
-        
+
 //         if (cleanUrl.includes('urn:li:ugcPost:')) {
 //           const match = cleanUrl.match(/urn:li:ugcPost:(\d+)/);
 //           if (match) {
@@ -512,7 +512,7 @@ router.get("/api/unipile/:userId/posts/:postId/reactions", async (req, res) => {
 //             return { id: match[1], type: 'ugcPost' };
 //           }
 //         }
-        
+
 //         if (cleanUrl.includes('urn:li:share:')) {
 //           const match = cleanUrl.match(/urn:li:share:(\d+)/);
 //           if (match) {
@@ -520,7 +520,7 @@ router.get("/api/unipile/:userId/posts/:postId/reactions", async (req, res) => {
 //             return { id: match[1], type: 'share' };
 //           }
 //         }
-        
+
 //         // Fallback: Extract any numeric ID and try to determine type
 //         const patterns = [
 //           { regex: /activity-(\d+)/, type: 'activity' },
@@ -528,7 +528,7 @@ router.get("/api/unipile/:userId/posts/:postId/reactions", async (req, res) => {
 //           { regex: /\/posts\/(?:view\/)?(\d+)/, type: 'share' }, // Most likely share
 //           { regex: /(\d{10,})/, type: 'activity' } // Default to activity for long numbers
 //         ];
-        
+
 //         for (const pattern of patterns) {
 //           const match = cleanUrl.match(pattern.regex);
 //           if (match) {
@@ -536,7 +536,7 @@ router.get("/api/unipile/:userId/posts/:postId/reactions", async (req, res) => {
 //             return { id: match[1], type: pattern.type };
 //           }
 //         }
-        
+
 //         console.log("❌ No ID found in URL");
 //         return null;
 //       } catch (error) {
@@ -572,7 +572,7 @@ router.get("/api/unipile/:userId/posts/:postId/reactions", async (req, res) => {
 //       default:
 //         finalURN = `urn:li:activity:${postId}`;
 //     }
-    
+
 //     console.log(`🎯 Using URN: ${finalURN} (based on detected type: ${detectedType})`);
 
 //     // 5. Verify the post is accessible
@@ -584,7 +584,7 @@ router.get("/api/unipile/:userId/posts/:postId/reactions", async (req, res) => {
 //       console.log("✅ Post verified and accessible");
 //     } catch (error) {
 //       console.log(`⚠️ Initial URN failed (${error.response?.status}), trying alternatives...`);
-      
+
 //       // Fallback: Try other URN formats if the detected one fails
 //       const alternativeURNs = [
 //         `urn:li:activity:${postId}`,
@@ -592,7 +592,7 @@ router.get("/api/unipile/:userId/posts/:postId/reactions", async (req, res) => {
 //         `urn:li:share:${postId}`,
 //         postId
 //       ].filter(urn => urn !== finalURN);
-      
+
 //       let found = false;
 //       for (const altURN of alternativeURNs) {
 //         try {
@@ -608,7 +608,7 @@ router.get("/api/unipile/:userId/posts/:postId/reactions", async (req, res) => {
 //           console.log(`⚠️ Alternative URN ${altURN} failed: ${altError.response?.status}`);
 //         }
 //       }
-      
+
 //       if (!found) {
 //         return res.status(400).json({
 //           success: false,
@@ -624,50 +624,50 @@ router.get("/api/unipile/:userId/posts/:postId/reactions", async (req, res) => {
 //       const limit = 100;
 //       let hasMore = true;
 //       let pageCount = 0;
-      
+
 //       console.log("📥 Starting to fetch comments...");
-      
+
 //       while (hasMore) {
 //         try {
 //           pageCount++;
 //           console.log(`📄 Fetching comments page ${pageCount} (offset: ${offset}, limit: ${limit})`);
-          
+
 //           const response = await axios.get(
 //             `${baseUrl}/posts/${encodeURIComponent(urn)}/comments?account_id=${accountId}&limit=${limit}&offset=${offset}`,
 //             { headers }
 //           );
-          
+
 //           const data = response.data;
 //           const items = data.items || [];
-          
+
 //           console.log(`📝 Comments page ${pageCount}: received ${items.length} items`);
-          
+
 //           if (items.length > 0) {
 //             allComments = allComments.concat(items);
 //             offset += items.length;
-            
+
 //             // Check if there are more items
 //             hasMore = data.has_more || data.hasMore || (data.paging && data.paging.next) || items.length === limit;
-            
+
 //             if (data.total_count || data.total) {
 //               console.log(`📊 Total comments available: ${data.total_count || data.total}`);
 //             }
 //           } else {
 //             hasMore = false;
 //           }
-          
+
 //           // Safety limit to prevent infinite loops
 //           if (pageCount > 50) {
 //             console.log("⚠️ Reached maximum page limit (50) for comments");
 //             hasMore = false;
 //           }
-          
+
 //         } catch (error) {
 //           console.log(`❌ Error fetching comments page ${pageCount}:`, error.response?.status, error.response?.data);
 //           hasMore = false;
 //         }
 //       }
-      
+
 //       console.log(`✅ Finished fetching comments. Total collected: ${allComments.length}`);
 //       return allComments;
 //     }
@@ -679,50 +679,50 @@ router.get("/api/unipile/:userId/posts/:postId/reactions", async (req, res) => {
 //       const limit = 100;
 //       let hasMore = true;
 //       let pageCount = 0;
-      
+
 //       console.log("📥 Starting to fetch reactions...");
-      
+
 //       while (hasMore) {
 //         try {
 //           pageCount++;
 //           console.log(`📄 Fetching reactions page ${pageCount} (offset: ${offset}, limit: ${limit})`);
-          
+
 //           const response = await axios.get(
 //             `${baseUrl}/posts/${encodeURIComponent(urn)}/reactions?account_id=${accountId}&limit=${limit}&offset=${offset}`,
 //             { headers }
 //           );
-          
+
 //           const data = response.data;
 //           const items = data.items || [];
-          
+
 //           console.log(`👍 Reactions page ${pageCount}: received ${items.length} items`);
-          
+
 //           if (items.length > 0) {
 //             allReactions = allReactions.concat(items);
 //             offset += items.length;
-            
+
 //             // Check if there are more items
 //             hasMore = data.has_more || data.hasMore || (data.paging && data.paging.next) || items.length === limit;
-            
+
 //             if (data.total_count || data.total) {
 //               console.log(`📊 Total reactions available: ${data.total_count || data.total}`);
 //             }
 //           } else {
 //             hasMore = false;
 //           }
-          
+
 //           // Safety limit
 //           if (pageCount > 50) {
 //             console.log("⚠️ Reached maximum page limit (50) for reactions");
 //             hasMore = false;
 //           }
-          
+
 //         } catch (error) {
 //           console.log(`❌ Error fetching reactions page ${pageCount}:`, error.response?.status, error.response?.data);
 //           hasMore = false;
 //         }
 //       }
-      
+
 //       console.log(`✅ Finished fetching reactions. Total collected: ${allReactions.length}`);
 //       return allReactions;
 //     }
@@ -763,7 +763,7 @@ router.get("/api/unipile/:userId/posts/:postId/reactions", async (req, res) => {
 //         reactions_pages_fetched: Math.ceil(reactions.length / 100),
 //       },
 //     });
-    
+
 //   } catch (err) {
 //     console.error("❌ Post engagement error:", {
 //       status: err.response?.status,
@@ -806,9 +806,9 @@ router.post("/api/unipile/linkedin/post-engagement", async (req, res) => {
     function extractLinkedInPostInfo(url) {
       try {
         const cleanUrl = url.split("?")[0].replace(/\/$/, "");
-        
+
         console.log("🔍 Analyzing URL:", cleanUrl);
-        
+
         // Check for explicit type indicators in URL
         if (cleanUrl.includes('-activity-')) {
           const match = cleanUrl.match(/-activity-(\d+)/);
@@ -817,7 +817,7 @@ router.post("/api/unipile/linkedin/post-engagement", async (req, res) => {
             return { id: match[1], type: 'activity' };
           }
         }
-        
+
         if (cleanUrl.includes('-ugcPost-')) {
           const match = cleanUrl.match(/-ugcPost-(\d+)/);
           if (match) {
@@ -825,7 +825,7 @@ router.post("/api/unipile/linkedin/post-engagement", async (req, res) => {
             return { id: match[1], type: 'ugcPost' };
           }
         }
-        
+
         if (cleanUrl.includes('-share-')) {
           const match = cleanUrl.match(/-share-(\d+)/);
           if (match) {
@@ -833,7 +833,7 @@ router.post("/api/unipile/linkedin/post-engagement", async (req, res) => {
             return { id: match[1], type: 'share' };
           }
         }
-        
+
         // Check for URN in URL
         if (cleanUrl.includes('urn:li:activity:')) {
           const match = cleanUrl.match(/urn:li:activity:(\d+)/);
@@ -842,7 +842,7 @@ router.post("/api/unipile/linkedin/post-engagement", async (req, res) => {
             return { id: match[1], type: 'activity' };
           }
         }
-        
+
         if (cleanUrl.includes('urn:li:ugcPost:')) {
           const match = cleanUrl.match(/urn:li:ugcPost:(\d+)/);
           if (match) {
@@ -850,7 +850,7 @@ router.post("/api/unipile/linkedin/post-engagement", async (req, res) => {
             return { id: match[1], type: 'ugcPost' };
           }
         }
-        
+
         if (cleanUrl.includes('urn:li:share:')) {
           const match = cleanUrl.match(/urn:li:share:(\d+)/);
           if (match) {
@@ -858,7 +858,7 @@ router.post("/api/unipile/linkedin/post-engagement", async (req, res) => {
             return { id: match[1], type: 'share' };
           }
         }
-        
+
         // Fallback: Extract any numeric ID and try to determine type
         const patterns = [
           { regex: /activity-(\d+)/, type: 'activity' },
@@ -866,7 +866,7 @@ router.post("/api/unipile/linkedin/post-engagement", async (req, res) => {
           { regex: /\/posts\/(?:view\/)?(\d+)/, type: 'share' },
           { regex: /(\d{10,})/, type: 'activity' }
         ];
-        
+
         for (const pattern of patterns) {
           const match = cleanUrl.match(pattern.regex);
           if (match) {
@@ -874,7 +874,7 @@ router.post("/api/unipile/linkedin/post-engagement", async (req, res) => {
             return { id: match[1], type: pattern.type };
           }
         }
-        
+
         console.log("❌ No ID found in URL");
         return null;
       } catch (error) {
@@ -910,7 +910,7 @@ router.post("/api/unipile/linkedin/post-engagement", async (req, res) => {
       default:
         finalURN = `urn:li:activity:${postId}`;
     }
-    
+
     console.log(`🎯 Using URN: ${finalURN} (based on detected type: ${detectedType})`);
 
     // 5. Verify the post is accessible (only on first request without cursors)
@@ -921,7 +921,7 @@ router.post("/api/unipile/linkedin/post-engagement", async (req, res) => {
           { headers: getHeaders() }
         );
         console.log("✅ Post verified and accessible");
-        
+
         // Store post metadata in response
         var postMetadata = {
           id: verifyResponse.data.id,
@@ -932,7 +932,7 @@ router.post("/api/unipile/linkedin/post-engagement", async (req, res) => {
         };
       } catch (error) {
         console.log(`⚠️ Initial URN failed (${error.response?.status}), trying alternatives...`);
-        
+
         // Fallback: Try other URN formats
         const alternativeURNs = [
           `urn:li:activity:${postId}`,
@@ -940,7 +940,7 @@ router.post("/api/unipile/linkedin/post-engagement", async (req, res) => {
           `urn:li:share:${postId}`,
           postId
         ].filter(urn => urn !== finalURN);
-        
+
         let found = false;
         for (const altURN of alternativeURNs) {
           try {
@@ -963,7 +963,7 @@ router.post("/api/unipile/linkedin/post-engagement", async (req, res) => {
             console.log(`⚠️ Alternative URN ${altURN} failed: ${altError.response?.status}`);
           }
         }
-        
+
         if (!found) {
           return res.status(400).json({
             success: false,
@@ -974,36 +974,124 @@ router.post("/api/unipile/linkedin/post-engagement", async (req, res) => {
     }
 
     // 6. Fetch comments with cursor-based pagination
+    // async function fetchCommentsPage(urn, accountId, cursor = null, limitSize = 50) {
+    //   try {
+    //     console.log(`📄 Fetching comments page (cursor: ${cursor || 'initial'}, limit: ${limitSize})`);
+
+    //     let url = `${getBaseUrl()}/posts/${encodeURIComponent(urn)}/comments?account_id=${accountId}&limit=${limitSize}`;
+    //     if (cursor) {
+    //       url += `&cursor=${encodeURIComponent(cursor)}`;
+    //     }
+
+    //     const response = await axios.get(url, { headers: getHeaders() });
+    //     const data = response.data;
+
+    //     const items = data.items || [];
+    //     const nextCursor = data.cursor || data.next_cursor || data.paging?.cursors?.after || null;
+    //     const hasMore = !!(nextCursor && items.length === limitSize);
+    //     const total = data.total_count || data.total || null;
+
+    //     console.log(`📝 Comments page: received ${items.length} items, hasMore: ${hasMore}, total: ${total}`);
+
+    //     return {
+    //       items,
+    //       next_cursor: nextCursor,
+    //       has_more: hasMore,
+    //       total_count: total
+    //     };
+    //   } catch (error) {
+    //     console.log(`❌ Error fetching comments:`, error.response?.status, error.response?.data);
+    //     return {
+    //       items: [],
+    //       next_cursor: null,
+    //       has_more: false,
+    //       total_count: 0,
+    //       error: error.response?.data || error.message
+    //     };
+    //   }
+    // }
+
+    // 6. Fetch comments with cursor-based pagination (FIXED)
     async function fetchCommentsPage(urn, accountId, cursor = null, limitSize = 50) {
       try {
         console.log(`📄 Fetching comments page (cursor: ${cursor || 'initial'}, limit: ${limitSize})`);
-        
+
         let url = `${getBaseUrl()}/posts/${encodeURIComponent(urn)}/comments?account_id=${accountId}&limit=${limitSize}`;
         if (cursor) {
           url += `&cursor=${encodeURIComponent(cursor)}`;
         }
-        
+
         const response = await axios.get(url, { headers: getHeaders() });
         const data = response.data;
-        
+
         const items = data.items || [];
-        const nextCursor = data.cursor || data.next_cursor || data.paging?.cursors?.after || null;
-        const hasMore = !!(nextCursor && items.length === limitSize);
-        const total = data.total_count || data.total || null;
-        
-        console.log(`📝 Comments page: received ${items.length} items, hasMore: ${hasMore}, total: ${total}`);
-        
+
+        // According to docs: response has 'cursor' field (not 'next_cursor')
+        const nextCursor = data.cursor || null;
+
+        // Check if there are more items
+        const hasMore = nextCursor !== null && items.length === limitSize;
+
+        // Total count from paging object
+        const total = data.paging?.total_count || data.total_items || null;
+
+        console.log(`📝 Comments: ${items.length} items, hasMore: ${hasMore}, cursor: ${nextCursor}, total: ${total}`);
+
         return {
           items,
-          next_cursor: nextCursor,
+          cursor: nextCursor,  // Keep consistent naming
           has_more: hasMore,
           total_count: total
         };
       } catch (error) {
-        console.log(`❌ Error fetching comments:`, error.response?.status, error.response?.data);
+        console.log(`❌ Error fetching comments:`, error.response?.status);
         return {
           items: [],
-          next_cursor: null,
+          cursor: null,
+          has_more: false,
+          total_count: 0,
+          error: error.response?.data || error.message
+        };
+      }
+    }
+
+    // 7. Fetch reactions with cursor-based pagination (FIXED - same pattern)
+    async function fetchReactionsPage(urn, accountId, cursor = null, limitSize = 50) {
+      try {
+        console.log(`📄 Fetching reactions page (cursor: ${cursor || 'initial'}, limit: ${limitSize})`);
+
+        let url = `${getBaseUrl()}/posts/${encodeURIComponent(urn)}/reactions?account_id=${accountId}&limit=${limitSize}`;
+        if (cursor) {
+          url += `&cursor=${encodeURIComponent(cursor)}`;
+        }
+
+        const response = await axios.get(url, { headers: getHeaders() });
+        const data = response.data;
+
+        const items = data.items || [];
+
+        // According to pattern, response should have 'cursor' field
+        const nextCursor = data.cursor || null;
+
+        // Check if there are more items
+        const hasMore = nextCursor !== null && items.length === limitSize;
+
+        // Total count from paging object
+        const total = data.paging?.total_count || data.total_items || null;
+
+        console.log(`👍 Reactions: ${items.length} items, hasMore: ${hasMore}, cursor: ${nextCursor}, total: ${total}`);
+
+        return {
+          items,
+          cursor: nextCursor,
+          has_more: hasMore,
+          total_count: total
+        };
+      } catch (error) {
+        console.log(`❌ Error fetching reactions:`, error.response?.status);
+        return {
+          items: [],
+          cursor: null,
           has_more: false,
           total_count: 0,
           error: error.response?.data || error.message
@@ -1015,22 +1103,22 @@ router.post("/api/unipile/linkedin/post-engagement", async (req, res) => {
     async function fetchReactionsPage(urn, accountId, cursor = null, limitSize = 50) {
       try {
         console.log(`📄 Fetching reactions page (cursor: ${cursor || 'initial'}, limit: ${limitSize})`);
-        
+
         let url = `${getBaseUrl()}/posts/${encodeURIComponent(urn)}/reactions?account_id=${accountId}&limit=${limitSize}`;
         if (cursor) {
           url += `&cursor=${encodeURIComponent(cursor)}`;
         }
-        
+
         const response = await axios.get(url, { headers: getHeaders() });
         const data = response.data;
-        
+
         const items = data.items || [];
         const nextCursor = data.cursor || data.next_cursor || data.paging?.cursors?.after || null;
         const hasMore = !!(nextCursor && items.length === limitSize);
         const total = data.total_count || data.total || null;
-        
+
         console.log(`👍 Reactions page: received ${items.length} items, hasMore: ${hasMore}, total: ${total}`);
-        
+
         return {
           items,
           next_cursor: nextCursor,
@@ -1051,26 +1139,18 @@ router.post("/api/unipile/linkedin/post-engagement", async (req, res) => {
 
     // 8. Fetch data based on request
     console.log("🚀 Fetching engagement data...");
-    
-    const validLimit = Math.min(parseInt(limit) || 50, 100); // Cap at 100 items per request
-    
+
+
+
+    const validLimit = Math.min(parseInt(limit) || 50, 100);
+
+    // Fetch comments and reactions in parallel
     const [commentsResult, reactionsResult] = await Promise.all([
       fetchCommentsPage(finalURN, account_id, comments_cursor, validLimit),
       fetchReactionsPage(finalURN, account_id, reactions_cursor, validLimit)
     ]);
 
-    // 9. Log summary
-    console.log("📈 Page Results:", {
-      postId,
-      detectedType,
-      finalURN,
-      commentsCount: commentsResult.items.length,
-      commentsHasMore: commentsResult.has_more,
-      reactionsCount: reactionsResult.items.length,
-      reactionsHasMore: reactionsResult.has_more
-    });
-
-    // 10. Response with cursor-based pagination
+    // 9. Response with proper cursor field names
     const response = {
       success: true,
       post: {
@@ -1085,30 +1165,27 @@ router.post("/api/unipile/linkedin/post-engagement", async (req, res) => {
           data: commentsResult.items,
           pagination: {
             has_more: commentsResult.has_more,
-            next_cursor: commentsResult.next_cursor,
-            total_count: commentsResult.total_count,
-            current_count: commentsResult.items.length
+            cursor: commentsResult.cursor,  // Changed from next_cursor
+            total_count: commentsResult.total_count
           }
         },
         reactions: {
           data: reactionsResult.items,
           pagination: {
             has_more: reactionsResult.has_more,
-            next_cursor: reactionsResult.next_cursor,
-            total_count: reactionsResult.total_count,
-            current_count: reactionsResult.items.length
+            cursor: reactionsResult.cursor,  // Changed from next_cursor
+            total_count: reactionsResult.total_count
           }
         }
       },
-      // Include next cursors at top level for easy access
-      next_cursors: {
-        comments: commentsResult.next_cursor,
-        reactions: reactionsResult.next_cursor
+      cursors: {
+        comments: commentsResult.cursor,
+        reactions: reactionsResult.cursor
       }
     };
 
     return res.json(response);
-    
+
   } catch (err) {
     console.error("❌ Post engagement error:", {
       status: err.response?.status,
