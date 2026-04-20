@@ -325,36 +325,56 @@ router.post("/api/unipile/linkedin/post-engagement", async (req, res) => {
 
     const account_id = dbResult.account_id;
 
-    // 3. Extract post ID from LinkedIn URL
-    const match = post_url.match(/activity-(\d+)/);
-    if (!match) {
+    // 3. Extract post ID (robust)
+    function extractLinkedInPostId(url) {
+      try {
+        const cleanUrl = url.split("?")[0];
+
+        const patterns = [
+          /activity-(\d+)/,
+          /ugcPost-(\d+)/,
+          /urn:li:activity:(\d+)/,
+          /urn:li:ugcPost:(\d+)/,
+        ];
+
+        for (const pattern of patterns) {
+          const match = cleanUrl.match(pattern);
+          if (match) return match[1];
+        }
+
+        return null;
+      } catch {
+        return null;
+      }
+    }
+
+    const postId = extractLinkedInPostId(post_url);
+
+    if (!postId) {
       return res.status(400).json({
         success: false,
         error: "Invalid LinkedIn post URL",
       });
     }
 
-    const postId = match[1];
-
-    // 4. Build both possible URNs
+    // 4. Build URNs
     const activityURN = `urn:li:activity:${postId}`;
     const ugcURN = `urn:li:ugcPost:${postId}`;
 
     let finalURN = activityURN;
 
-    // 5. Try fetching post (to validate correct URN)
+    // 5. Detect correct URN
     try {
       await axios.get(
         `${getBaseUrl()}/posts/${encodeURIComponent(activityURN)}?account_id=${account_id}`,
         { headers: getHeaders() }
       );
-    } catch (err) {
-      // fallback to ugcPost
+    } catch {
       finalURN = ugcURN;
     }
 
-    // 6. Fetch comments + reactions in parallel
-    const [commentsRes, reactionsRes] = await Promise.all([
+    // 6. Fetch engagement (parallel)
+    const [commentsRes, reactionsRes] = await Promise.allSettled([
       axios.get(
         `${getBaseUrl()}/posts/${encodeURIComponent(finalURN)}/comments?account_id=${account_id}`,
         { headers: getHeaders() }
@@ -365,19 +385,29 @@ router.post("/api/unipile/linkedin/post-engagement", async (req, res) => {
       ),
     ]);
 
-    // 7. Format response (clean)
-    res.json({
+    // 7. Safe extraction
+    const commentsData =
+      commentsRes.status === "fulfilled" ? commentsRes.value.data : null;
+
+    const reactionsData =
+      reactionsRes.status === "fulfilled" ? reactionsRes.value.data : null;
+
+    // 8. Response
+    return res.json({
       success: true,
       post: {
         url: post_url,
         urn: finalURN,
       },
       engagement: {
-        comments: commentsRes.data?.items || [],
-        commenters_count: commentsRes.data?.items?.length || 0,
-
-        reactions: reactionsRes.data?.items || [],
-        likers_count: reactionsRes.data?.items?.length || 0,
+        comments: commentsData?.items || [],
+        commenters_count: commentsData?.items?.length || 0,
+        reactions: reactionsData?.items || [],
+        likers_count: reactionsData?.items?.length || 0,
+      },
+      meta: {
+        comments_api_status: commentsRes.status,
+        reactions_api_status: reactionsRes.status,
       },
     });
   } catch (err) {
