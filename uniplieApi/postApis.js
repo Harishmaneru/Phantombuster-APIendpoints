@@ -328,20 +328,20 @@ router.post("/api/unipile/linkedin/post-engagement", async (req, res) => {
     // 3. Extract post ID (robust)
     function extractLinkedInPostId(url) {
       try {
-        const cleanUrl = url.split("?")[0];
-
-        const patterns = [
-          /activity-(\d+)/,
-          /ugcPost-(\d+)/,
-          /urn:li:activity:(\d+)/,
-          /urn:li:ugcPost:(\d+)/,
-        ];
-
-        for (const pattern of patterns) {
-          const match = cleanUrl.match(pattern);
-          if (match) return match[1];
-        }
-
+        const cleanUrl = url.split("?")[0].replace(/\/$/, "");
+        
+        const activityMatch = cleanUrl.match(/activity-(\d+)/);
+        if (activityMatch) return activityMatch[1];
+        
+        const ugcMatch = cleanUrl.match(/ugcPost-(\d+)/);
+        if (ugcMatch) return ugcMatch[1];
+        
+        const shareMatch = cleanUrl.match(/\/posts\/(?:view\/)?(\d+)/);
+        if (shareMatch) return shareMatch[1];
+        
+        const numericMatch = cleanUrl.match(/(\d{10,})/);
+        if (numericMatch) return numericMatch[1];
+        
         return null;
       } catch {
         return null;
@@ -357,20 +357,39 @@ router.post("/api/unipile/linkedin/post-engagement", async (req, res) => {
       });
     }
 
-    // 4. Build URNs
-    const activityURN = `urn:li:activity:${postId}`;
-    const ugcURN = `urn:li:ugcPost:${postId}`;
+    console.log(`📝 Extracted post ID: ${postId}`);
 
-    let finalURN = activityURN;
+    // 4. Try different URN formats
+    const possibleURNs = [
+      `urn:li:activity:${postId}`,
+      `urn:li:ugcPost:${postId}`,
+      `urn:li:share:${postId}`,
+      postId
+    ];
+
+    let finalURN = null;
 
     // 5. Detect correct URN
-    try {
-      await axios.get(
-        `${getBaseUrl()}/posts/${encodeURIComponent(activityURN)}?account_id=${account_id}`,
-        { headers: getHeaders() }
-      );
-    } catch {
-      finalURN = ugcURN;
+    for (const urn of possibleURNs) {
+      try {
+        await axios.get(
+          `${getBaseUrl()}/posts/${encodeURIComponent(urn)}?account_id=${account_id}`,
+          { headers: getHeaders() }
+        );
+        finalURN = urn;
+        console.log(`✅ Found working URN: ${urn}`);
+        break;
+      } catch (error) {
+        console.log(`⚠️ URN ${urn} failed:`, error.response?.status);
+        continue;
+      }
+    }
+
+    if (!finalURN) {
+      return res.status(400).json({
+        success: false,
+        error: "Could not access post. It may be private or invalid.",
+      });
     }
 
     // 6. Fetch engagement (parallel)
@@ -386,17 +405,15 @@ router.post("/api/unipile/linkedin/post-engagement", async (req, res) => {
     ]);
 
     // 7. Safe extraction
-    const commentsData =
-      commentsRes.status === "fulfilled" ? commentsRes.value.data : null;
-
-    const reactionsData =
-      reactionsRes.status === "fulfilled" ? reactionsRes.value.data : null;
+    const commentsData = commentsRes.status === "fulfilled" ? commentsRes.value.data : null;
+    const reactionsData = reactionsRes.status === "fulfilled" ? reactionsRes.value.data : null;
 
     // 8. Response
     return res.json({
       success: true,
       post: {
         url: post_url,
+        post_id: postId,
         urn: finalURN,
       },
       engagement: {
@@ -423,4 +440,5 @@ router.post("/api/unipile/linkedin/post-engagement", async (req, res) => {
     });
   }
 });
+
 module.exports = router;
