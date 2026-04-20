@@ -302,6 +302,145 @@ router.get("/api/unipile/:userId/posts/:postId/reactions", async (req, res) => {
 
 
 
+// router.post("/api/unipile/linkedin/post-engagement", async (req, res) => {
+//   try {
+//     const { user_id, post_url } = req.body;
+
+//     // 1. Validate input
+//     if (!user_id || !post_url) {
+//       return res.status(400).json({
+//         success: false,
+//         error: "user_id and post_url are required",
+//       });
+//     }
+
+//     // 2. Get account_id from DB
+//     const dbResult = await getLinkedInAccountStatus(user_id);
+//     if (!dbResult.success || !dbResult.account_id) {
+//       return res.status(400).json({
+//         success: false,
+//         error: "LinkedIn account not connected",
+//       });
+//     }
+
+//     const account_id = dbResult.account_id;
+
+//     // 3. Extract post ID (robust)
+//     function extractLinkedInPostId(url) {
+//       try {
+//         const cleanUrl = url.split("?")[0].replace(/\/$/, "");
+        
+//         const activityMatch = cleanUrl.match(/activity-(\d+)/);
+//         if (activityMatch) return activityMatch[1];
+        
+//         const ugcMatch = cleanUrl.match(/ugcPost-(\d+)/);
+//         if (ugcMatch) return ugcMatch[1];
+        
+//         const shareMatch = cleanUrl.match(/\/posts\/(?:view\/)?(\d+)/);
+//         if (shareMatch) return shareMatch[1];
+        
+//         const numericMatch = cleanUrl.match(/(\d{10,})/);
+//         if (numericMatch) return numericMatch[1];
+        
+//         return null;
+//       } catch {
+//         return null;
+//       }
+//     }
+
+//     const postId = extractLinkedInPostId(post_url);
+
+//     if (!postId) {
+//       return res.status(400).json({
+//         success: false,
+//         error: "Invalid LinkedIn post URL",
+//       });
+//     }
+
+//     console.log(`📝 Extracted post ID: ${postId}`);
+
+//     // 4. Try different URN formats
+//     const possibleURNs = [
+//       `urn:li:activity:${postId}`,
+//       `urn:li:ugcPost:${postId}`,
+//       `urn:li:share:${postId}`,
+//       postId
+//     ];
+
+//     let finalURN = null;
+
+//     // 5. Detect correct URN
+//     for (const urn of possibleURNs) {
+//       try {
+//         await axios.get(
+//           `${getBaseUrl()}/posts/${encodeURIComponent(urn)}?account_id=${account_id}`,
+//           { headers: getHeaders() }
+//         );
+//         finalURN = urn;
+//         console.log(`✅ Found working URN: ${urn}`);
+//         break;
+//       } catch (error) {
+//         console.log(`⚠️ URN ${urn} failed:`, error.response?.status);
+//         continue;
+//       }
+//     }
+
+//     if (!finalURN) {
+//       return res.status(400).json({
+//         success: false,
+//         error: "Could not access post. It may be private or invalid.",
+//       });
+//     }
+
+//     // 6. Fetch engagement (parallel)
+//     const [commentsRes, reactionsRes] = await Promise.allSettled([
+//       axios.get(
+//         `${getBaseUrl()}/posts/${encodeURIComponent(finalURN)}/comments?account_id=${account_id}`,
+//         { headers: getHeaders() }
+//       ),
+//       axios.get(
+//         `${getBaseUrl()}/posts/${encodeURIComponent(finalURN)}/reactions?account_id=${account_id}`,
+//         { headers: getHeaders() }
+//       ),
+//     ]);
+
+//     // 7. Safe extraction
+//     const commentsData = commentsRes.status === "fulfilled" ? commentsRes.value.data : null;
+//     const reactionsData = reactionsRes.status === "fulfilled" ? reactionsRes.value.data : null;
+
+//     // 8. Response
+//     return res.json({
+//       success: true,
+//       post: {
+//         url: post_url,
+//         post_id: postId,
+//         urn: finalURN,
+//       },
+//       engagement: {
+//         comments: commentsData?.items || [],
+//         commenters_count: commentsData?.items?.length || 0,
+//         reactions: reactionsData?.items || [],
+//         likers_count: reactionsData?.items?.length || 0,
+//       },
+//       meta: {
+//         comments_api_status: commentsRes.status,
+//         reactions_api_status: reactionsRes.status,
+//       },
+//     });
+//   } catch (err) {
+//     console.error("Post engagement error:", {
+//       status: err.response?.status,
+//       error: err.response?.data,
+//       message: err.message,
+//     });
+
+//     return res.status(err.response?.status || 500).json({
+//       success: false,
+//       error: err.response?.data || err.message,
+//     });
+//   }
+// });
+
 router.post("/api/unipile/linkedin/post-engagement", async (req, res) => {
   try {
     const { user_id, post_url } = req.body;
@@ -325,113 +464,312 @@ router.post("/api/unipile/linkedin/post-engagement", async (req, res) => {
 
     const account_id = dbResult.account_id;
 
-    // 3. Extract post ID (robust)
-    function extractLinkedInPostId(url) {
+    // 3. Extract post ID and type directly from URL
+    function extractLinkedInPostInfo(url) {
       try {
         const cleanUrl = url.split("?")[0].replace(/\/$/, "");
         
-        const activityMatch = cleanUrl.match(/activity-(\d+)/);
-        if (activityMatch) return activityMatch[1];
+        console.log("🔍 Analyzing URL:", cleanUrl);
         
-        const ugcMatch = cleanUrl.match(/ugcPost-(\d+)/);
-        if (ugcMatch) return ugcMatch[1];
+        // Check for explicit type indicators in URL
+        if (cleanUrl.includes('-activity-')) {
+          const match = cleanUrl.match(/-activity-(\d+)/);
+          if (match) {
+            console.log("✅ Detected ACTIVITY type from URL pattern '-activity-'");
+            return { id: match[1], type: 'activity' };
+          }
+        }
         
-        const shareMatch = cleanUrl.match(/\/posts\/(?:view\/)?(\d+)/);
-        if (shareMatch) return shareMatch[1];
+        if (cleanUrl.includes('-ugcPost-')) {
+          const match = cleanUrl.match(/-ugcPost-(\d+)/);
+          if (match) {
+            console.log("✅ Detected UGC POST type from URL pattern '-ugcPost-'");
+            return { id: match[1], type: 'ugcPost' };
+          }
+        }
         
-        const numericMatch = cleanUrl.match(/(\d{10,})/);
-        if (numericMatch) return numericMatch[1];
+        if (cleanUrl.includes('-share-')) {
+          const match = cleanUrl.match(/-share-(\d+)/);
+          if (match) {
+            console.log("✅ Detected SHARE type from URL pattern '-share-'");
+            return { id: match[1], type: 'share' };
+          }
+        }
         
+        // Check for URN in URL
+        if (cleanUrl.includes('urn:li:activity:')) {
+          const match = cleanUrl.match(/urn:li:activity:(\d+)/);
+          if (match) {
+            console.log("✅ Detected ACTIVITY type from URN");
+            return { id: match[1], type: 'activity' };
+          }
+        }
+        
+        if (cleanUrl.includes('urn:li:ugcPost:')) {
+          const match = cleanUrl.match(/urn:li:ugcPost:(\d+)/);
+          if (match) {
+            console.log("✅ Detected UGC POST type from URN");
+            return { id: match[1], type: 'ugcPost' };
+          }
+        }
+        
+        if (cleanUrl.includes('urn:li:share:')) {
+          const match = cleanUrl.match(/urn:li:share:(\d+)/);
+          if (match) {
+            console.log("✅ Detected SHARE type from URN");
+            return { id: match[1], type: 'share' };
+          }
+        }
+        
+        // Fallback: Extract any numeric ID and try to determine type
+        const patterns = [
+          { regex: /activity-(\d+)/, type: 'activity' },
+          { regex: /ugcPost-(\d+)/, type: 'ugcPost' },
+          { regex: /\/posts\/(?:view\/)?(\d+)/, type: 'share' }, // Most likely share
+          { regex: /(\d{10,})/, type: 'activity' } // Default to activity for long numbers
+        ];
+        
+        for (const pattern of patterns) {
+          const match = cleanUrl.match(pattern.regex);
+          if (match) {
+            console.log(`⚠️ Using fallback detection: ${pattern.type} from pattern`);
+            return { id: match[1], type: pattern.type };
+          }
+        }
+        
+        console.log("❌ No ID found in URL");
         return null;
-      } catch {
-        return null;
-      }
-    }
-
-    const postId = extractLinkedInPostId(post_url);
-
-    if (!postId) {
-      return res.status(400).json({
-        success: false,
-        error: "Invalid LinkedIn post URL",
-      });
-    }
-
-    console.log(`📝 Extracted post ID: ${postId}`);
-
-    // 4. Try different URN formats
-    const possibleURNs = [
-      `urn:li:activity:${postId}`,
-      `urn:li:ugcPost:${postId}`,
-      `urn:li:share:${postId}`,
-      postId
-    ];
-
-    let finalURN = null;
-
-    // 5. Detect correct URN
-    for (const urn of possibleURNs) {
-      try {
-        await axios.get(
-          `${getBaseUrl()}/posts/${encodeURIComponent(urn)}?account_id=${account_id}`,
-          { headers: getHeaders() }
-        );
-        finalURN = urn;
-        console.log(`✅ Found working URN: ${urn}`);
-        break;
       } catch (error) {
-        console.log(`⚠️ URN ${urn} failed:`, error.response?.status);
-        continue;
+        console.error("❌ Error extracting post info:", error);
+        return null;
       }
     }
 
-    if (!finalURN) {
+    const postInfo = extractLinkedInPostInfo(post_url);
+
+    if (!postInfo) {
       return res.status(400).json({
         success: false,
-        error: "Could not access post. It may be private or invalid.",
+        error: "Invalid LinkedIn post URL - could not extract post ID",
       });
     }
 
-    // 6. Fetch engagement (parallel)
-    const [commentsRes, reactionsRes] = await Promise.allSettled([
-      axios.get(
-        `${getBaseUrl()}/posts/${encodeURIComponent(finalURN)}/comments?account_id=${account_id}`,
+    const { id: postId, type: detectedType } = postInfo;
+    console.log(`📊 Extracted - ID: ${postId}, Type: ${detectedType}`);
+
+    // 4. Build URN based on detected type
+    let finalURN;
+    switch (detectedType) {
+      case 'activity':
+        finalURN = `urn:li:activity:${postId}`;
+        break;
+      case 'ugcPost':
+        finalURN = `urn:li:ugcPost:${postId}`;
+        break;
+      case 'share':
+        finalURN = `urn:li:share:${postId}`;
+        break;
+      default:
+        finalURN = `urn:li:activity:${postId}`;
+    }
+    
+    console.log(`🎯 Using URN: ${finalURN} (based on detected type: ${detectedType})`);
+
+    // 5. Verify the post is accessible
+    try {
+      const verifyResponse = await axios.get(
+        `${getBaseUrl()}/posts/${encodeURIComponent(finalURN)}?account_id=${account_id}`,
         { headers: getHeaders() }
-      ),
-      axios.get(
-        `${getBaseUrl()}/posts/${encodeURIComponent(finalURN)}/reactions?account_id=${account_id}`,
-        { headers: getHeaders() }
-      ),
+      );
+      console.log("✅ Post verified and accessible");
+    } catch (error) {
+      console.log(`⚠️ Initial URN failed (${error.response?.status}), trying alternatives...`);
+      
+      // Fallback: Try other URN formats if the detected one fails
+      const alternativeURNs = [
+        `urn:li:activity:${postId}`,
+        `urn:li:ugcPost:${postId}`,
+        `urn:li:share:${postId}`,
+        postId
+      ].filter(urn => urn !== finalURN);
+      
+      let found = false;
+      for (const altURN of alternativeURNs) {
+        try {
+          await axios.get(
+            `${getBaseUrl()}/posts/${encodeURIComponent(altURN)}?account_id=${account_id}`,
+            { headers: getHeaders() }
+          );
+          finalURN = altURN;
+          console.log(`✅ Found working alternative URN: ${altURN}`);
+          found = true;
+          break;
+        } catch (altError) {
+          console.log(`⚠️ Alternative URN ${altURN} failed: ${altError.response?.status}`);
+        }
+      }
+      
+      if (!found) {
+        return res.status(400).json({
+          success: false,
+          error: "Could not access post with any URN format. Post may be private or deleted.",
+        });
+      }
+    }
+
+    // 6. Fetch all comments with pagination
+    async function fetchAllComments(baseUrl, urn, accountId, headers) {
+      let allComments = [];
+      let offset = 0;
+      const limit = 100;
+      let hasMore = true;
+      let pageCount = 0;
+      
+      console.log("📥 Starting to fetch comments...");
+      
+      while (hasMore) {
+        try {
+          pageCount++;
+          console.log(`📄 Fetching comments page ${pageCount} (offset: ${offset}, limit: ${limit})`);
+          
+          const response = await axios.get(
+            `${baseUrl}/posts/${encodeURIComponent(urn)}/comments?account_id=${accountId}&limit=${limit}&offset=${offset}`,
+            { headers }
+          );
+          
+          const data = response.data;
+          const items = data.items || [];
+          
+          console.log(`📝 Comments page ${pageCount}: received ${items.length} items`);
+          
+          if (items.length > 0) {
+            allComments = allComments.concat(items);
+            offset += items.length;
+            
+            // Check if there are more items
+            hasMore = data.has_more || data.hasMore || (data.paging && data.paging.next) || items.length === limit;
+            
+            if (data.total_count || data.total) {
+              console.log(`📊 Total comments available: ${data.total_count || data.total}`);
+            }
+          } else {
+            hasMore = false;
+          }
+          
+          // Safety limit to prevent infinite loops
+          if (pageCount > 50) {
+            console.log("⚠️ Reached maximum page limit (50) for comments");
+            hasMore = false;
+          }
+          
+        } catch (error) {
+          console.log(`❌ Error fetching comments page ${pageCount}:`, error.response?.status, error.response?.data);
+          hasMore = false;
+        }
+      }
+      
+      console.log(`✅ Finished fetching comments. Total collected: ${allComments.length}`);
+      return allComments;
+    }
+
+    // 7. Fetch all reactions with pagination
+    async function fetchAllReactions(baseUrl, urn, accountId, headers) {
+      let allReactions = [];
+      let offset = 0;
+      const limit = 100;
+      let hasMore = true;
+      let pageCount = 0;
+      
+      console.log("📥 Starting to fetch reactions...");
+      
+      while (hasMore) {
+        try {
+          pageCount++;
+          console.log(`📄 Fetching reactions page ${pageCount} (offset: ${offset}, limit: ${limit})`);
+          
+          const response = await axios.get(
+            `${baseUrl}/posts/${encodeURIComponent(urn)}/reactions?account_id=${accountId}&limit=${limit}&offset=${offset}`,
+            { headers }
+          );
+          
+          const data = response.data;
+          const items = data.items || [];
+          
+          console.log(`👍 Reactions page ${pageCount}: received ${items.length} items`);
+          
+          if (items.length > 0) {
+            allReactions = allReactions.concat(items);
+            offset += items.length;
+            
+            // Check if there are more items
+            hasMore = data.has_more || data.hasMore || (data.paging && data.paging.next) || items.length === limit;
+            
+            if (data.total_count || data.total) {
+              console.log(`📊 Total reactions available: ${data.total_count || data.total}`);
+            }
+          } else {
+            hasMore = false;
+          }
+          
+          // Safety limit
+          if (pageCount > 50) {
+            console.log("⚠️ Reached maximum page limit (50) for reactions");
+            hasMore = false;
+          }
+          
+        } catch (error) {
+          console.log(`❌ Error fetching reactions page ${pageCount}:`, error.response?.status, error.response?.data);
+          hasMore = false;
+        }
+      }
+      
+      console.log(`✅ Finished fetching reactions. Total collected: ${allReactions.length}`);
+      return allReactions;
+    }
+
+    // 8. Fetch engagement data in parallel
+    console.log("🚀 Starting parallel fetch of comments and reactions...");
+    const [comments, reactions] = await Promise.all([
+      fetchAllComments(getBaseUrl(), finalURN, account_id, getHeaders()),
+      fetchAllReactions(getBaseUrl(), finalURN, account_id, getHeaders())
     ]);
 
-    // 7. Safe extraction
-    const commentsData = commentsRes.status === "fulfilled" ? commentsRes.value.data : null;
-    const reactionsData = reactionsRes.status === "fulfilled" ? reactionsRes.value.data : null;
+    // 9. Log summary
+    console.log("📈 Final Results:", {
+      postId,
+      detectedType,
+      finalURN,
+      totalComments: comments.length,
+      totalReactions: reactions.length
+    });
 
-    // 8. Response
+    // 10. Response
     return res.json({
       success: true,
       post: {
         url: post_url,
         post_id: postId,
+        detected_type: detectedType,
         urn: finalURN,
       },
       engagement: {
-        comments: commentsData?.items || [],
-        commenters_count: commentsData?.items?.length || 0,
-        reactions: reactionsData?.items || [],
-        likers_count: reactionsData?.items?.length || 0,
+        comments: comments,
+        commenters_count: comments.length,
+        reactions: reactions,
+        likers_count: reactions.length,
       },
       meta: {
-        comments_api_status: commentsRes.status,
-        reactions_api_status: reactionsRes.status,
+        comments_pages_fetched: Math.ceil(comments.length / 100),
+        reactions_pages_fetched: Math.ceil(reactions.length / 100),
       },
     });
+    
   } catch (err) {
-    console.error("Post engagement error:", {
+    console.error("❌ Post engagement error:", {
       status: err.response?.status,
       error: err.response?.data,
       message: err.message,
+      stack: err.stack
     });
 
     return res.status(err.response?.status || 500).json({
