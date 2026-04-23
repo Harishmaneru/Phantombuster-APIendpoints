@@ -4425,6 +4425,41 @@ router.post("/api/fetchsent", async (req, res) => {
         .json({ success: false, error: "Invalid token or sender email" });
     }
 
+    // Check if this is a Microsoft OAuth2 account - use Graph API for fetching sent items
+    if (smtp.authType === "oauth2" && smtp.oauth2?.provider === "microsoft") {
+      try {
+        const accessToken = await getValidAccessToken(smtp);
+        const limitInt = parseInt(limit) || 20;
+        const pageInt = parseInt(page) || 1;
+        const skip = (pageInt - 1) * limitInt;
+
+        const messages = await fetchInboxViaGraph(
+          accessToken,
+          "SentItems", // ✅ Microsoft Graph folder for sent items
+          limitInt,
+          skip,
+        );
+
+        return res.json({
+          success: true,
+          mailbox: "Sent Items (Graph API)",
+          sent: messages,
+          pagination: {
+            currentPage: pageInt,
+            totalPages: Math.ceil(messages.length / limitInt),
+            totalMessages: messages.length,
+            limit: limitInt,
+            hasNextPage: messages.length === limitInt,
+            hasPrevPage: pageInt > 1,
+          },
+        });
+      } catch (err) {
+        console.error("Graph Sent Fetch Error:", err);
+        return res.status(500).json({ success: false, error: err.message });
+      }
+    }
+
+    // For non-Microsoft accounts, continue with existing IMAP code...
     const imapAuth = await getAuthForIMAP(smtp, email);
 
     client = new ImapFlow({
@@ -5290,6 +5325,119 @@ router.get("/api/auth/microsoft/authorize", (req, res) => {
   res.redirect(authUrl);
 });
 
+// Microsoft admin-consent endpoint
+// Tenant admin visits this URL once → approves app for all users in their org
+// Usage: /api/auth/microsoft/admin-consent?frontend=https://liame.onepgr.com
+router.get("/api/auth/microsoft/admin-consent", (req, res) => {
+  const { frontend } = req.query;
+  const clientId = process.env.MICROSOFT_CLIENT_ID;
+  if (!clientId) {
+    return res
+      .status(500)
+      .json({ success: false, error: "Microsoft OAuth not configured" });
+  }
+
+  const redirectUri =
+    process.env.MICROSOFT_ADMIN_CONSENT_REDIRECT_URI ||
+    `${(process.env.BASE_URL || "https://videoresponse.onepgr.com:3001").replace(/\/api\/?$/, "")}/api/auth/microsoft/admin-consent/callback`;
+
+  const state = Buffer.from(
+    JSON.stringify({
+      frontend:
+        frontend || process.env.FRONTEND_URL || "https://liame.onepgr.com",
+    }),
+  ).toString("base64");
+
+  // /common/adminconsent lets the admin approve for their specific tenant
+  const consentUrl =
+    `https://login.microsoftonline.com/common/adminconsent?` +
+    `client_id=${encodeURIComponent(clientId)}&` +
+    `redirect_uri=${encodeURIComponent(redirectUri)}&` +
+    `state=${encodeURIComponent(state)}`;
+
+  console.log(`🔐 Redirecting to Microsoft admin consent screen`);
+  res.redirect(consentUrl);
+});
+
+// Microsoft admin-consent callback
+// Admin consent is tenant pre-approval only — no user token, no account creation.
+// After admin approves, individual users run the normal OAuth flow which now passes.
+router.get("/api/auth/microsoft/admin-consent/callback", (req, res) => {
+  const { admin_consent, tenant, error, error_description } = req.query;
+
+  if (error) {
+    console.error("Microsoft admin consent error:", error, error_description);
+    return res.send(`
+      <!DOCTYPE html>
+      <html>
+        <head><title>Admin Consent Failed</title>
+        <style>
+          body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+                 display: flex; justify-content: center; align-items: center; height: 100vh;
+                 margin: 0; background: #f5f5f5; }
+          .card { background: white; padding: 40px; border-radius: 12px;
+                  box-shadow: 0 4px 12px rgba(0,0,0,0.1); text-align: center; max-width: 500px; }
+          h1 { color: #dc2626; }
+          p { color: #666; line-height: 1.5; }
+        </style>
+        </head>
+        <body>
+          <div class="card">
+            <h1>❌ Admin Consent Failed</h1>
+            <p>${error_description || error}</p>
+            <p style="font-size:13px;color:#999;">Please try again or contact support.</p>
+          </div>
+        </body>
+      </html>
+    `);
+  }
+
+  if (admin_consent === "True") {
+    console.log(`✅ Admin consent granted for tenant: ${tenant}`);
+    return res.send(`
+      <!DOCTYPE html>
+      <html>
+        <head><title>Admin Consent Successful</title>
+        <style>
+          body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+                 display: flex; justify-content: center; align-items: center; height: 100vh;
+                 margin: 0; background: #f5f5f5; }
+          .card { background: white; padding: 40px; border-radius: 12px;
+                  box-shadow: 0 4px 12px rgba(0,0,0,0.1); text-align: center; max-width: 500px; }
+          .icon { font-size: 64px; margin-bottom: 16px; }
+          h1 { color: #1a1a1a; margin-bottom: 12px; }
+          p { color: #555; line-height: 1.5; }
+          .tenant { background: #f0f9ff; padding: 10px 16px; border-radius: 8px;
+                    font-family: monospace; color: #0369a1; margin: 16px 0; display: inline-block; }
+          .note { font-size: 13px; color: #999; margin-top: 24px; }
+        </style>
+        </head>
+        <body>
+          <div class="card">
+            <div class="icon">✅</div>
+            <h1>Admin Consent Successful</h1>
+            <p><strong>OnePgr Mail OAuth</strong> has been approved for your organization.</p>
+            <div class="tenant">${tenant || "Your Organization"}</div>
+            <p>Users in your organization can now connect their email accounts without requiring additional admin approval.</p>
+            <p class="note">You may close this window.</p>
+          </div>
+        </body>
+      </html>
+    `);
+  }
+
+  res.send(`
+    <!DOCTYPE html>
+    <html>
+      <head><title>Consent Not Granted</title></head>
+      <body style="font-family:sans-serif;text-align:center;padding:50px;">
+        <h2>Consent was not granted.</h2>
+        <p>Please try again or contact support.</p>
+      </body>
+    </html>
+  `);
+});
+
 // Microsoft OAuth2 callback
 router.get("/api/auth/microsoft/callback", async (req, res) => {
   try {
@@ -5299,6 +5447,30 @@ router.get("/api/auth/microsoft/callback", async (req, res) => {
 
     if (oauthError) {
       console.error("Microsoft OAuth error:", oauthError, error_description);
+
+      // Detect admin-consent-required: tenant policy blocked user-level consent.
+      // Redirect with status=pending_admin so the frontend can show:
+      // "Ask your IT admin to approve via this link, then try again."
+      const isAdminConsentRequired =
+        oauthError === "access_denied" &&
+        (error_description || "").includes("AADSTS65001");
+
+      if (isAdminConsentRequired) {
+        let stateEmail = "";
+        try {
+          stateEmail =
+            JSON.parse(Buffer.from(req.query.state || "", "base64").toString())
+              .email || "";
+        } catch (_) {}
+
+        const adminConsentUrl = `${(process.env.BASE_URL || "https://videoresponse.onepgr.com:3001").replace(/\/api\/?$/, "")}/api/auth/microsoft/admin-consent`;
+        return res.redirect(
+          `${defaultFrontend}/account-setup/email-accounts?status=pending_admin` +
+            `&email=${encodeURIComponent(stateEmail)}` +
+            `&admin_consent_url=${encodeURIComponent(adminConsentUrl)}`,
+        );
+      }
+
       return res.redirect(
         `${defaultFrontend}/account-setup/email-accounts?error=${encodeURIComponent(error_description || oauthError)}`,
       );
