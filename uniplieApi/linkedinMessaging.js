@@ -4591,6 +4591,24 @@ router.all("/api/unipile/user/:userId/linkedin/search", async (req, res) => {
         });
       }
 
+      // Change B: Validate api and category enum values before hitting Unipile
+      const validApis = ["classic", "sales_navigator", "recruiter"];
+      const validCategories = ["people", "companies", "posts", "jobs"];
+
+      if (!validApis.includes(searchBody.api)) {
+        return res.status(400).json({
+          success: false,
+          error: `Invalid api: "${searchBody.api}". Must be one of: ${validApis.join(", ")}`,
+        });
+      }
+
+      if (!validCategories.includes(searchBody.category)) {
+        return res.status(400).json({
+          success: false,
+          error: `Invalid category: "${searchBody.category}". Must be one of: ${validCategories.join(", ")}`,
+        });
+      }
+
       // Hardcode network_distance to [1, 2, 3] for people search only
       if (searchBody.category === "people") {
         if (!searchBody.network_distance) {
@@ -4733,7 +4751,10 @@ router.all("/api/unipile/user/:userId/linkedin/search", async (req, res) => {
             obj.exclude = await resolveNamesToIds(obj.exclude, paramType);
           }
         }
-        return obj;
+        // Change 1: Return undefined if nothing resolved — prevents sending {include: undefined}
+        const hasInclude = Array.isArray(obj.include) && obj.include.length > 0;
+        const hasExclude = Array.isArray(obj.exclude) && obj.exclude.length > 0;
+        return (hasInclude || hasExclude) ? obj : undefined;
       };
 
       // Auto-resolve location names to IDs
@@ -4813,16 +4834,46 @@ router.all("/api/unipile/user/:userId/linkedin/search", async (req, res) => {
         );
       }
 
+      // ============ CLEAN UP SEARCH BODY BEFORE API CALL ============
+      // Change 2: Coerce network_distance to numbers (schema requires number[], not string[])
+      if (Array.isArray(searchBody.network_distance)) {
+        searchBody.network_distance = searchBody.network_distance
+          .map(Number)
+          .filter((n) => !isNaN(n));
+      }
+
+      // Remove null/undefined from array fields, then delete any that end up empty
+      // (Unipile schema requires minItems: 1 for all array parameters)
+      const arrayFields = [
+        "location", "industry", "company", "school", "past_company",
+        "network_distance", "open_to", "profile_language",
+      ];
+      arrayFields.forEach((field) => {
+        if (Array.isArray(searchBody[field])) {
+          searchBody[field] = searchBody[field].filter((v) => v != null);
+          if (searchBody[field].length === 0) {
+            delete searchBody[field];
+          }
+        }
+      });
+
+      // Change A: Delete any keys whose value is undefined (from failed name resolution)
+      Object.keys(searchBody).forEach((key) => {
+        if (searchBody[key] === undefined) delete searchBody[key];
+      });
+
       // Build URL with query params
       const params = new URLSearchParams();
       params.append("account_id", accountId);
       params.append("limit", limit);
       if (cursor) params.append("cursor", cursor);
 
+      // Change 3: Log both final body and query params before sending
       console.log(
-        `🔍 LinkedIn ${searchBody.category} Search (${searchBody.api}):`,
+        `🔍 FINAL REQUEST BODY for LinkedIn ${searchBody.category} Search (${searchBody.api}):`,
         JSON.stringify(searchBody, null, 2),
       );
+      console.log(`🔍 FINAL QUERY PARAMS: ${params.toString()}`);
 
       const response = await axios.post(
         `${getBaseUrl()}/linkedin/search?${params}`,
