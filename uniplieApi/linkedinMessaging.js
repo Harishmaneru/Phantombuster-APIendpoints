@@ -48,6 +48,123 @@ const chatCache = new NodeCache({
   checkperiod: 60,
 });
 
+// Cache for search parameters (locations, industries, etc.)
+// TTL: 24 hours (these don't change frequently)
+const paramCache = new NodeCache({
+  stdTTL: 24 * 60 * 60,
+  checkperiod: 600,
+});
+
+// Helper function to check if a value is a numeric ID
+const isNumericId = (val) => /^\d+$/.test(String(val));
+
+// Score how well a result title matches the search query
+const matchScore = (title, query) => {
+  const t = title.toLowerCase();
+  const q = query.toLowerCase();
+  if (t === q) return 100; // Exact match
+  if (t.startsWith(q)) return 80; // Starts with query
+  if (t.includes(q)) return 60; // Contains query
+  if (q.split(/\s+/).every((word) => t.includes(word))) return 40; // All words present
+  return 0;
+};
+
+// Global helper to resolve names to IDs using Unipile API
+const resolveNamesToIds = async (values, paramType, accountId) => {
+  if (!values || !Array.isArray(values) || values.length === 0) {
+    return values;
+  }
+
+  const resolvedIds = [];
+  const unresolvedNames = [];
+
+  for (const value of values) {
+    // If already a numeric ID, keep it
+    if (isNumericId(value)) {
+      resolvedIds.push(value);
+      continue;
+    }
+
+    // Check cache first
+    const cacheKey = `param:${paramType}:${value.toLowerCase().trim()}`;
+    const cachedId = paramCache.get(cacheKey);
+    if (cachedId) {
+      console.log(`🎯 Cache hit for ${paramType}: "${value}" → ${cachedId}`);
+      resolvedIds.push(cachedId);
+      continue;
+    }
+
+    // It's a name string, resolve to ID
+    try {
+      const lookupParams = new URLSearchParams();
+      lookupParams.append("account_id", accountId);
+      lookupParams.append("type", paramType);
+      lookupParams.append("keywords", value);
+      lookupParams.append("limit", "15");
+
+      console.log(`🔄 Resolving ${paramType}: "${value}" to ID...`);
+
+      const lookupResponse = await axios.get(
+        `https://${process.env.UNIPILE_SUBDOMAIN}.unipile.com:${process.env.UNIPILE_PORT}/api/v1/linkedin/search/parameters?${lookupParams}`,
+        {
+          headers: {
+            "X-API-KEY": process.env.UNIPILE_API_KEY,
+            Accept: "application/json",
+          },
+        },
+      );
+
+      let items = lookupResponse.data?.items || [];
+
+      // If no results, try with individual words
+      if (items.length === 0 && value.length >= 3) {
+        const words = value.trim().split(/\s+/);
+        if (words.length > 1) {
+          const retryParams = new URLSearchParams();
+          retryParams.append("account_id", accountId);
+          retryParams.append("type", paramType);
+          retryParams.append("keywords", words[0]);
+          retryParams.append("limit", "15");
+
+          const retryResponse = await axios.get(
+            `https://${process.env.UNIPILE_SUBDOMAIN}.unipile.com:${process.env.UNIPILE_PORT}/api/v1/linkedin/search/parameters?${retryParams}`,
+            {
+              headers: {
+                "X-API-KEY": process.env.UNIPILE_API_KEY,
+                Accept: "application/json",
+              },
+            },
+          );
+          items = retryResponse.data?.items || [];
+        }
+      }
+
+      if (items.length > 0) {
+        const scored = items
+          .map((item) => ({
+            ...item,
+            score: matchScore(item.title, value),
+          }))
+          .filter((item) => item.score > 0)
+          .sort((a, b) => b.score - a.score);
+
+        const bestId = scored.length > 0 ? scored[0].id : items[0].id;
+        
+        // Cache the result
+        paramCache.set(cacheKey, bestId);
+        resolvedIds.push(bestId);
+      } else {
+        unresolvedNames.push(value);
+      }
+    } catch (err) {
+      console.error(`❌ Failed to resolve ${paramType} "${value}":`, err.message);
+      unresolvedNames.push(value);
+    }
+  }
+
+  return resolvedIds.length > 0 ? resolvedIds : undefined;
+};
+
 // Helper function to generate cache keys
 const getProfileCacheKey = (identifier, accountId) => {
   return `profile:${accountId}:${identifier}`;
@@ -4616,125 +4733,7 @@ router.all("/api/unipile/user/:userId/linkedin/search", async (req, res) => {
         }
       }
 
-      // ============ AUTO-CONVERT STRING NAMES TO IDs ============
-      // Helper function to check if a value is a numeric ID
-      const isNumericId = (val) => /^\d+$/.test(String(val));
-
-      // Helper function to resolve names to IDs
-      const resolveNamesToIds = async (values, paramType) => {
-        if (!values || !Array.isArray(values) || values.length === 0) {
-          return values;
-        }
-
-        const resolvedIds = [];
-        const unresolvedNames = [];
-
-        // Score how well a result title matches the search query
-        const matchScore = (title, query) => {
-          const t = title.toLowerCase();
-          const q = query.toLowerCase();
-          if (t === q) return 100; // Exact match
-          if (t.startsWith(q)) return 80; // Starts with query
-          if (t.includes(q)) return 60; // Contains query
-          if (q.split(/\s+/).every((word) => t.includes(word))) return 40; // All words present
-          return 0;
-        };
-
-        for (const value of values) {
-          // If already a numeric ID, keep it
-          if (isNumericId(value)) {
-            resolvedIds.push(value);
-            continue;
-          }
-
-          // It's a name string, resolve to ID
-          try {
-            const lookupParams = new URLSearchParams();
-            lookupParams.append("account_id", accountId);
-            lookupParams.append("type", paramType);
-            lookupParams.append("keywords", value);
-            lookupParams.append("limit", "15");
-
-            console.log(`🔄 Resolving ${paramType}: "${value}" to ID...`);
-
-            const lookupResponse = await axios.get(
-              `${getBaseUrl()}/linkedin/search/parameters?${lookupParams}`,
-              { headers: getHeaders() },
-            );
-
-            let items = lookupResponse.data?.items || [];
-
-            // If no results, try with individual words (e.g., "Finance" might match "Financial Services")
-            if (items.length === 0 && value.length >= 3) {
-              // Retry with a shorter/broader keyword (first word or trimmed)
-              const words = value.trim().split(/\s+/);
-              if (words.length > 1) {
-                // Try first word only
-                const retryParams = new URLSearchParams();
-                retryParams.append("account_id", accountId);
-                retryParams.append("type", paramType);
-                retryParams.append("keywords", words[0]);
-                retryParams.append("limit", "15");
-
-                console.log(
-                  `🔄 Retrying ${paramType} with broader keyword: "${words[0]}"...`,
-                );
-
-                const retryResponse = await axios.get(
-                  `${getBaseUrl()}/linkedin/search/parameters?${retryParams}`,
-                  { headers: getHeaders() },
-                );
-                items = retryResponse.data?.items || [];
-              }
-            }
-
-            if (items.length > 0) {
-              // Score all results and pick the best match
-              const scored = items
-                .map((item) => ({
-                  ...item,
-                  score: matchScore(item.title, value),
-                }))
-                .filter((item) => item.score > 0)
-                .sort((a, b) => b.score - a.score);
-
-              if (scored.length > 0) {
-                const best = scored[0];
-                console.log(
-                  `✅ Resolved "${value}" → ${best.id} (${best.title}, score: ${best.score})`,
-                );
-                resolvedIds.push(best.id);
-              } else {
-                // No good match by score, use the first result as fallback
-                const fallback = items[0];
-                console.log(
-                  `✅ Resolved "${value}" → ${fallback.id} (${fallback.title}, best available match)`,
-                );
-                resolvedIds.push(fallback.id);
-              }
-            } else {
-              console.warn(
-                `⚠️ No ${paramType} found for: "${value}" — skipped`,
-              );
-              unresolvedNames.push(value);
-            }
-          } catch (err) {
-            console.error(
-              `❌ Failed to resolve ${paramType} "${value}":`,
-              err.message,
-            );
-            unresolvedNames.push(value);
-          }
-        }
-
-        if (unresolvedNames.length > 0) {
-          console.warn(
-            `⚠️ Could not resolve ${paramType}: ${unresolvedNames.join(", ")}`,
-          );
-        }
-
-        return resolvedIds.length > 0 ? resolvedIds : undefined;
-      };
+      // Auto-resolve location names to IDs
 
       // Helper to resolve include/exclude nested objects (Sales Navigator format)
       const resolveNestedObject = async (obj, paramType) => {
@@ -4742,13 +4741,13 @@ router.all("/api/unipile/user/:userId/linkedin/search", async (req, res) => {
         if (obj.include && Array.isArray(obj.include)) {
           const hasNames = obj.include.some((v) => !isNumericId(v));
           if (hasNames) {
-            obj.include = await resolveNamesToIds(obj.include, paramType);
+            obj.include = await resolveNamesToIds(obj.include, paramType, accountId);
           }
         }
         if (obj.exclude && Array.isArray(obj.exclude)) {
           const hasNames = obj.exclude.some((v) => !isNumericId(v));
           if (hasNames) {
-            obj.exclude = await resolveNamesToIds(obj.exclude, paramType);
+            obj.exclude = await resolveNamesToIds(obj.exclude, paramType, accountId);
           }
         }
         // Change 1: Return undefined if nothing resolved — prevents sending {include: undefined}
@@ -4769,6 +4768,7 @@ router.all("/api/unipile/user/:userId/linkedin/search", async (req, res) => {
           searchBody.location = await resolveNamesToIds(
             searchBody.location,
             locationParamType,
+            accountId,
           );
         }
       } else if (
@@ -4790,6 +4790,7 @@ router.all("/api/unipile/user/:userId/linkedin/search", async (req, res) => {
           searchBody.industry = await resolveNamesToIds(
             searchBody.industry,
             industryParamType,
+            accountId,
           );
         }
       } else if (
@@ -4809,6 +4810,7 @@ router.all("/api/unipile/user/:userId/linkedin/search", async (req, res) => {
           searchBody.company = await resolveNamesToIds(
             searchBody.company,
             "COMPANY",
+            accountId,
           );
         }
       } else if (searchBody.company && typeof searchBody.company === "object") {
@@ -4825,6 +4827,7 @@ router.all("/api/unipile/user/:userId/linkedin/search", async (req, res) => {
           searchBody.school = await resolveNamesToIds(
             searchBody.school,
             "SCHOOL",
+            accountId,
           );
         }
       } else if (searchBody.school && typeof searchBody.school === "object") {
@@ -5215,6 +5218,112 @@ router.get("/api/unipile/:userId/company/:identifier", async (req, res) => {
       data: companyData,
       jobs: jobs,
       account_id: accountId,
+    });
+  } catch (err) {
+    handleError(err, res);
+  }
+});
+
+// ==================== LinkedIn Parameter Resolution (Bulk) ====================
+// Resolves Location, Industry, and Company names to Unipile IDs
+// Payload format: { userId, Location, Industry, Company } or array of same
+// Supports bulk and optimized for quick response via parallel processing and caching
+router.post("/api/unipile/linkedin/resolve-ids", async (req, res) => {
+  try {
+    const body = req.body;
+    const items = Array.isArray(body) ? body : [body];
+
+    if (items.length === 0) {
+      return res.json({ success: true, data: [], message: "Empty payload" });
+    }
+
+    console.log(`🚀 Bulk Resolving LinkedIn Parameters for ${items.length} items...`);
+
+    // Quick Response strategy: Return as soon as we initiate processing?
+    // Actually, for parameter resolution, the caller usually needs the results.
+    // We'll use parallel processing to keep it fast.
+
+    // 1. Resolve all unique userIds to accountIds first
+    const userIds = [...new Set(items.map((item) => item.userId).filter(Boolean))];
+    const accountMap = {};
+
+    await Promise.all(
+      userIds.map(async (userId) => {
+        try {
+          const dbResult = await getLinkedInAccountStatus(userId);
+          if (dbResult.success && dbResult.account_id) {
+            accountMap[userId] = dbResult.account_id;
+          }
+        } catch (e) {
+          console.error(`Failed to get account for user ${userId}:`, e.message);
+        }
+      })
+    );
+
+    // 2. Resolver function for a single item
+    const resolveItem = async (item) => {
+      const accountId = accountMap[item.userId];
+      if (!accountId) {
+        return {
+          userId: item.userId,
+          error: "No LinkedIn account found or connected for this user",
+          success: false,
+        };
+      }
+
+      // Map of payload fields to Unipile search parameter types
+      const fieldMapping = {
+        Location: "LOCATION",
+        Industry: "INDUSTRY",
+        Company: "COMPANY",
+        School: "SCHOOL",
+        Skill: "SKILL",
+        JobTitle: "JOB_TITLE",
+        JobFunction: "JOB_FUNCTION",
+        Department: "DEPARTMENT",
+        Degree: "DEGREE",
+        Service: "SERVICE",
+      };
+
+      const activeFields = Object.keys(fieldMapping).filter((key) => item[key]);
+
+      // Resolve all present fields in parallel
+      const resolutionResults = await Promise.all(
+        activeFields.map((key) =>
+          resolveNamesToIds([item[key]], fieldMapping[key], accountId),
+        ),
+      );
+
+      const resolved = {};
+      activeFields.forEach((key, index) => {
+        const ids = resolutionResults[index];
+        // Use lowercase field name + 'Id' for the response key
+        const responseKey = `${key.charAt(0).toLowerCase() + key.slice(1)}Id`;
+        resolved[responseKey] = ids ? ids[0] : null;
+      });
+
+      return {
+        userId: item.userId,
+        original: item,
+        resolved,
+        success: Object.values(resolved).some((val) => val !== null),
+      };
+    };
+
+    // 3. Process in small batches to respect rate limits while remaining fast
+    const BATCH_SIZE = 5;
+    const results = [];
+    for (let i = 0; i < items.length; i += BATCH_SIZE) {
+      const batch = items.slice(i, i + BATCH_SIZE);
+      const batchResults = await Promise.all(batch.map(resolveItem));
+      results.push(...batchResults);
+    }
+
+    res.json({
+      success: true,
+      data: results,
+      count: results.length,
+      timestamp: new Date().toISOString(),
     });
   } catch (err) {
     handleError(err, res);
