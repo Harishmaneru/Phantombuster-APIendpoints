@@ -132,11 +132,11 @@ router.post("/api/linkedin/fetch-profile", async (req, res) => {
 
 // ==================== API 2: FETCH CONVERSATIONS ====================
 // POST /api/linkedin/fetch-conversations
-// Payload: { "providerID": "...", "accountId": "...", "user_id": "...", "limit": 50 }
+// Payload: { "providerID": "...", "accountId": "...", "user_id": "...", "limit": 50, "include_messages": false, "message_limit": 50 }
 
 router.post("/api/linkedin/fetch-conversations", async (req, res) => {
   try {
-    const { providerID, accountId, user_id, limit = 50 } = req.body;
+    const { providerID, accountId, user_id, limit = 50, include_messages = false, message_limit = 50 } = req.body;
 
     // Validation
     if (!providerID) {
@@ -162,10 +162,10 @@ router.post("/api/linkedin/fetch-conversations", async (req, res) => {
       });
     }
 
-    // Check cache first
+    // Check cache first (only if not including messages, as messages change frequently)
     const cacheKey = getChatCacheKey(finalAccountId, providerID);
     const cachedChats = chatCache.get(cacheKey);
-    if (cachedChats) {
+    if (cachedChats && !include_messages) {
       const limitedChats = cachedChats.slice(0, parseInt(limit));
       return res.json({
         success: true,
@@ -177,6 +177,7 @@ router.post("/api/linkedin/fetch-conversations", async (req, res) => {
         },
         account_id: finalAccountId,
         profile_id: providerID,
+        include_messages: false,
         fetched_at: new Date(),
       });
     }
@@ -208,25 +209,103 @@ router.post("/api/linkedin/fetch-conversations", async (req, res) => {
       );
     });
 
-    // Cache the filtered result
-    chatCache.set(cacheKey, hisChats);
+    // Cache the filtered result (without messages)
+    if (!include_messages) {
+      chatCache.set(cacheKey, hisChats);
+    }
 
-    // Apply limit
+    // Apply limit for chat list
     const limitedChats = hisChats.slice(0, parseInt(limit));
 
-    res.json({
-      success: true,
-      data: {
-        items: limitedChats,
-        total: hisChats.length,
-        returned: limitedChats.length,
-        cursor: chatsResponse.data?.cursor || null,
-        cached: false,
-      },
-      account_id: finalAccountId,
-      profile_id: providerID,
-      fetched_at: new Date(),
-    });
+    // If include_messages flag is true, fetch messages for each chat
+    if (include_messages === true) {
+      console.log(`📨 Fetching messages for ${limitedChats.length} chats...`);
+
+      // Helper: Fetch messages for a single chat with timeout
+      const fetchChatMessages = async (chat) => {
+        const chatId = chat.id || chat.chat_id || chat.chatId;
+        if (!chatId) return { ...chat, messages: [], message_count: 0 };
+
+        try {
+          const messageParams = new URLSearchParams();
+          messageParams.append("account_id", finalAccountId);
+          messageParams.append("limit", parseInt(message_limit) || 50);
+
+          const messageResponse = await axios.get(
+            `${getBaseUrl()}/chats/${chatId}/messages?${messageParams}`,
+            { 
+              headers: getHeaders(),
+              timeout: 3000 // 3 second timeout per chat
+            }
+          );
+
+          const messages = messageResponse.data?.messages || messageResponse.data?.items || [];
+          
+          // Process messages (simplified version)
+          const processedMessages = messages.map(msg => ({
+            id: msg.id,
+            text: msg.text || null,
+            timestamp: msg.timestamp,
+            is_my_message: msg.is_sender === 1,
+            sender_id: msg.sender_id,
+            message_type: msg.message_type || "text",
+            delivered: msg.delivered || false,
+            seen: msg.seen || msg.read || 0,
+          })).reverse(); // Oldest first
+
+          return {
+            ...chat,
+            messages: processedMessages,
+            message_count: processedMessages.length,
+          };
+        } catch (err) {
+          console.warn(`Failed to fetch messages for chat ${chatId}:`, err.message);
+          return { ...chat, messages: [], message_count: 0, message_error: err.message };
+        }
+      };
+
+      // Fetch messages for all chats in parallel (with allSettled to handle partial failures)
+      const results = await Promise.allSettled(
+        limitedChats.map(chat => fetchChatMessages(chat))
+      );
+
+      // Extract successful results
+      const chatsWithMessages = results
+        .filter(result => result.status === "fulfilled")
+        .map(result => result.value);
+
+      res.json({
+        success: true,
+        data: {
+          items: chatsWithMessages,
+          total: hisChats.length,
+          returned: chatsWithMessages.length,
+          cursor: chatsResponse.data?.cursor || null,
+          cached: false,
+        },
+        account_id: finalAccountId,
+        profile_id: providerID,
+        include_messages: true,
+        message_limit: parseInt(message_limit),
+        fetched_at: new Date(),
+      });
+    } else {
+      // Return without messages (original behavior)
+      res.json({
+        success: true,
+        data: {
+          items: limitedChats,
+          total: hisChats.length,
+          returned: limitedChats.length,
+          cursor: chatsResponse.data?.cursor || null,
+          cached: false,
+        },
+        account_id: finalAccountId,
+        profile_id: providerID,
+        include_messages: false,
+        fetched_at: new Date(),
+      });
+    }
   } catch (err) {
     handleError(err, res);
   }
