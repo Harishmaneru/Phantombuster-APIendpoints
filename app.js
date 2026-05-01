@@ -120,6 +120,8 @@ const leadsApis = require("./uniplieApi/leadsApis.js");
 const locationSearch = require("./uniplieApi/locationSearch.js");
 const postApis = require("./uniplieApi/postApis.js");
 
+const linkedinProviderApi = require("./uniplieApi/linkedinProviderApi");
+
 const notifyAPI = require("./notifyAPI/sendEmail.js");
 
 const smtp2goAPI = require("./smtp2goAPI/emailApi.js");
@@ -272,6 +274,7 @@ app.use(linkedinMessaging);
 app.use(leadsApis);
 app.use(locationSearch);
 app.use(postApis);
+app.use(linkedinProviderApi);
 app.use(notifyAPI.router);
 app.use("/api/smtp2go", smtp2goAPI);
 app.use(subscriptionManageAPI.router);
