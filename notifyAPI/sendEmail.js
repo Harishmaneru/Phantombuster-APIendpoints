@@ -801,11 +801,19 @@ async function sendWebhookNotification(webhookUrl, eventData) {
 
     if (response.ok) {
       console.log(
-        `✅ Webhook sent successfully to ${webhookUrl} - Status: ${response.status}`,
+        `Webhook sent successfully to ${webhookUrl} - Status: ${response.status}`,
+      );
+      console.log(
+        `Webhook Payload (${eventData.event || "unknown"}):`,
+        JSON.stringify(eventData, null, 2),
       );
     } else {
       console.error(
-        `❌ Webhook failed to ${webhookUrl} - Status: ${response.status}`,
+        `Webhook failed to ${webhookUrl} - Status: ${response.status}`,
+      );
+      console.error(
+        `Failed Payload (${eventData.event || "unknown"}):`,
+        JSON.stringify(eventData, null, 2),
       );
     }
   } catch (error) {
