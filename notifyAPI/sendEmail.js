@@ -1351,8 +1351,9 @@ router.post("/api/emailsend", async (req, res) => {
     await transporter.verify();
 
     const trackingId = crypto.randomBytes(16).toString("hex");
-    const baseUrl =
-      process.env.BASE_URL || "https://videoresponse.onepgr.com:3001";
+    const baseUrl = (
+      process.env.BASE_URL || "https://videoresponse.onepgr.com:3001"
+    ).replace(/\/api\/?$/, "");
     const trackingPixelUrl = `${baseUrl}/api/track/open/${trackingId}`;
 
     // Use exactly what user provided - no template processing
@@ -1365,9 +1366,12 @@ router.post("/api/emailsend", async (req, res) => {
       if (emailHtml.includes("</body>")) {
         emailHtml = emailHtml.replace("</body>", `${pixelTag}</body>`);
         console.log(`🔍 Tracking pixel injected inside </body>: ${trackingPixelUrl}`);
+      } else if (emailHtml.includes("</html>")) {
+        emailHtml = emailHtml.replace("</html>", `${pixelTag}</html>`);
+        console.log(`🔍 Tracking pixel injected inside </html>: ${trackingPixelUrl}`);
       } else {
         emailHtml += pixelTag;
-        console.log(`🔍 Tracking pixel appended (no </body> found): ${trackingPixelUrl}`);
+        console.log(`🔍 Tracking pixel appended (no closing tags): ${trackingPixelUrl}`);
       }
     }
 
@@ -2045,8 +2049,9 @@ router.post("/api/fetchinbox", async (req, res) => {
         // Method 1: Check parsed.attachments array
         let attachments = [];
         if (parsed.attachments && Array.isArray(parsed.attachments)) {
-          const baseUrl =
-            process.env.BASE_URL || "https://videoresponse.onepgr.com:3001";
+          const baseUrl = (
+            process.env.BASE_URL || "https://videoresponse.onepgr.com:3001"
+          ).replace(/\/api\/?$/, "");
           attachments = parsed.attachments.map((att) => ({
             filename: att.filename || "unnamed_attachment",
             contentType: att.contentType || "application/octet-stream",
@@ -2161,8 +2166,9 @@ router.post("/api/fetchinbox", async (req, res) => {
 // Helper function to extract attachments from body structure
 function extractAttachmentsFromStructure(structure, uid, email, token) {
   const attachments = [];
-  const baseUrl =
-    process.env.BASE_URL || "https://videoresponse.onepgr.com:3001";
+  const baseUrl = (
+    process.env.BASE_URL || "https://videoresponse.onepgr.com:3001"
+  ).replace(/\/api\/?$/, "");
 
   function traverse(node, path = "") {
     if (!node) return;
