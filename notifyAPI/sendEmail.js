@@ -1361,7 +1361,14 @@ router.post("/api/emailsend", async (req, res) => {
 
     // Add tracking pixel only if HTML content exists AND link tracking is enabled
     if (emailHtml && trackLinks) {
-      emailHtml += `<img src="${trackingPixelUrl}" width="1" height="1" style="display:none;border:0;" alt=""/>\n`;
+      const pixelTag = `<img src="${trackingPixelUrl}" width="1" height="1" style="display:none;border:0;" alt=""/>`;
+      if (emailHtml.includes("</body>")) {
+        emailHtml = emailHtml.replace("</body>", `${pixelTag}</body>`);
+        console.log(`🔍 Tracking pixel injected inside </body>: ${trackingPixelUrl}`);
+      } else {
+        emailHtml += pixelTag;
+        console.log(`🔍 Tracking pixel appended (no </body> found): ${trackingPixelUrl}`);
+      }
     }
 
     // Track links only if requested and HTML content exists
