@@ -5,6 +5,15 @@ const NodeCache = require("node-cache");
 const router = express.Router();
 const upload = require("../middlewares/upload");
 
+const {
+  INDUSTRY_V1,
+} = require("./linkedinIndustries");
+
+const v1NameById = {};
+INDUSTRY_V1.forEach((item) => {
+  v1NameById[item.id] = item.title;
+});
+
 // Import LinkedIn account service
 const {
   connectLinkedInAccount,
@@ -5513,6 +5522,64 @@ router.all("/api/unipile/user/:userId/linkedin/search", async (req, res) => {
         );
       }
 
+      // ── Sales Navigator payload restructure ──────────────────────
+      // Unipile SN requires nested { include: [...], exclude: [...] } for
+      // location, industry, and seniority — not flat arrays like classic.
+      if (searchBody.api === "sales_navigator") {
+        // Wrap resolved flat arrays into SN { include: [...] } format
+        if (Array.isArray(searchBody.location) && searchBody.location.length > 0) {
+          searchBody.location = { include: searchBody.location };
+        }
+
+        // Industry: convert classic numeric IDs → names → SALES_INDUSTRY IDs,
+        // then wrap into SN { include: [...] } format.
+        if (Array.isArray(searchBody.industry) && searchBody.industry.length > 0) {
+          const allNumeric = searchBody.industry.every((v) => isNumericId(v));
+          if (allNumeric) {
+            const industryNames = searchBody.industry.map(
+              (v) => v1NameById[String(v)] || null,
+            ).filter(Boolean);
+            if (industryNames.length > 0) {
+              console.log("[SN search] Converted industry IDs → names:", industryNames);
+              const snIds = await resolveNamesToIds(
+                industryNames, "SALES_INDUSTRY", accountId,
+              );
+              if (Array.isArray(snIds) && snIds.length > 0) {
+                searchBody.industry = { include: snIds };
+              } else {
+                console.warn("[SN search] Industry name→SALES_INDUSTRY resolution returned empty, skipping industry filter");
+                delete searchBody.industry;
+              }
+            } else {
+              console.warn("[SN search] No classic→name mapping found for industry IDs, skipping industry filter");
+              delete searchBody.industry;
+            }
+          } else if (Array.isArray(searchBody.industry)) {
+            searchBody.industry = { include: searchBody.industry };
+          }
+        }
+
+        // Map classic experience_level → SN seniority enum
+        if (Array.isArray(searchBody.experience_level) && searchBody.experience_level.length > 0) {
+          const seniorityMap = {
+            executive_level: "cxo",
+            director_level: "director",
+            mid_senior_level: "senior",
+            senior_level: "senior",
+            entry_level: "entry_level",
+            manager_level: "experienced_manager",
+          };
+          const mapped = searchBody.experience_level
+            .map((e) => seniorityMap[String(e).toLowerCase()] || null)
+            .filter(Boolean);
+          if (mapped.length > 0) {
+            searchBody.seniority = { include: mapped };
+          }
+          delete searchBody.experience_level;
+        }
+      }
+      // ──────────────────────────────────────────────────────────────
+
       // Auto-resolve company names to IDs
       if (searchBody.company && Array.isArray(searchBody.company)) {
         const hasNames = searchBody.company.some((v) => !isNumericId(v));
@@ -6108,37 +6175,28 @@ router.get("/api/unipile/user/:userId/account-type", async (req, res) => {
     const me = meRes.status === "fulfilled" ? meRes.value.data : null;
 
     // ── DEBUG LOGS ──────────────────────────────────────────────
-    console.log("─── ACCOUNT-TYPE DEBUG /api/unipile/user/" + userId + "/account-type ───");
-    console.log("[account-type] accountRes status:", accountRes.status);
-    if (accountRes.status === "rejected") {
-      console.log("[account-type] accountRes error:", accountRes.reason?.message,
-        accountRes.reason?.response?.status, accountRes.reason?.response?.data);
+    if (debug) {
+      console.log("─── ACCOUNT-TYPE DEBUG /api/unipile/user/" + userId + "/account-type ───");
+      console.log("[account-type] accountRes status:", accountRes.status);
+      if (accountRes.status === "rejected") {
+        console.log("[account-type] accountRes error:", accountRes.reason?.message,
+          accountRes.reason?.response?.status, accountRes.reason?.response?.data);
+      }
+      console.log("[account-type] meRes status:", meRes.status);
+      if (meRes.status === "rejected") {
+        console.log("[account-type] meRes error:", meRes.reason?.message,
+          meRes.reason?.response?.status, meRes.reason?.response?.data);
+      }
+      console.log("[account-type] RAW account keys:", account ? Object.keys(account) : null);
+      console.log("[account-type] account.sources:", JSON.stringify(account?.sources));
+      console.log("[account-type] account.connection_params?.im?.premiumFeatures:",
+        JSON.stringify(account?.connection_params?.im?.premiumFeatures));
+      console.log("[account-type] RAW me keys:", me ? Object.keys(me) : null);
+      console.log("[account-type] me.sales_navigator:", me?.sales_navigator);
+      console.log("[account-type] me.recruiter:", me?.recruiter);
+      console.log("[account-type] me.premium:", me?.premium);
+      console.log("[account-type] me.premium_features:", JSON.stringify(me?.premium_features));
     }
-    console.log("[account-type] meRes status:", meRes.status);
-    if (meRes.status === "rejected") {
-      console.log("[account-type] meRes error:", meRes.reason?.message,
-        meRes.reason?.response?.status, meRes.reason?.response?.data);
-    }
-    console.log("[account-type] RAW account keys:", account ? Object.keys(account) : null);
-    console.log("[account-type] account.status:", account?.status);
-    console.log("[account-type] account.type:", account?.type);
-    console.log("[account-type] account.sources:", JSON.stringify(account?.sources));
-    console.log("[account-type] account.groups:", JSON.stringify(account?.groups));
-    console.log("[account-type] account.connection_params?.im?.premiumFeatures:",
-      JSON.stringify(account?.connection_params?.im?.premiumFeatures));
-    console.log("[account-type] account.connection_params?.im?.premiumId:",
-      account?.connection_params?.im?.premiumId);
-    console.log("[account-type] RAW me keys:", me ? Object.keys(me) : null);
-    console.log("[account-type] me.premium:", me?.premium);
-    console.log("[account-type] me.premium_features:", JSON.stringify(me?.premium_features));
-    console.log("[account-type] me.premium_id:", me?.premium_id);
-    console.log("[account-type] me.premium_subscription:", JSON.stringify(me?.premium_subscription));
-    console.log("[account-type] me.current_premium_subscription:", JSON.stringify(me?.current_premium_subscription));
-    console.log("[account-type] me.subscription:", JSON.stringify(me?.subscription));
-    console.log("[account-type] me.has_sales_navigator:", me?.has_sales_navigator);
-    console.log("[account-type] me.has_recruiter:", me?.has_recruiter);
-    console.log("[account-type] me.plan:", me?.plan);
-    console.log("[account-type] me.account_type:", me?.account_type);
     // ────────────────────────────────────────────────────────────
 
     // Collect every string Unipile gives us that might mention a subscription
@@ -6168,17 +6226,17 @@ router.get("/api/unipile/user/:userId/account-type", async (req, res) => {
 
     const hasSalesNav =
       /sales[_-\s]?navigator|salesnav|sales_nav/.test(flags) ||
-      me?.sales_navigator === true;
+      !!me?.sales_navigator;
     const hasRecruiter =
-      /recruiter/.test(flags) || me?.recruiter === true;
+      /recruiter/.test(flags) || !!me?.recruiter;
 
     // ── DETECTION RESULT LOGS ───────────────────────────────────
-    console.log("[account-type] flags (all bag strings | delimited):", flags);
-    console.log("[account-type] hasSalesNav:", hasSalesNav,
-      "(bool:", me?.sales_navigator, " regex:", /sales[_-\s]?navigator|salesnav|sales_nav/.test(flags), ")");
-    console.log("[account-type] hasRecruiter:", hasRecruiter,
-      "(bool:", me?.recruiter, " regex:", /recruiter/.test(flags), ")");
-    console.log("[account-type] FINAL type:", hasRecruiter ? "recruiter" : hasSalesNav ? "sales_navigator" : "classic");
+    if (debug) {
+      console.log("[account-type] flags (all bag strings | delimited):", flags);
+      console.log("[account-type] hasSalesNav:", hasSalesNav);
+      console.log("[account-type] hasRecruiter:", hasRecruiter);
+      console.log("[account-type] FINAL type:", hasRecruiter ? "recruiter" : hasSalesNav ? "sales_navigator" : "classic");
+    }
     // ────────────────────────────────────────────────────────────
 
     const available = ["classic"];
