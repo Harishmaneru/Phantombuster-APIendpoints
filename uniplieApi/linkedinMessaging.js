@@ -6107,6 +6107,40 @@ router.get("/api/unipile/user/:userId/account-type", async (req, res) => {
       accountRes.status === "fulfilled" ? accountRes.value.data : null;
     const me = meRes.status === "fulfilled" ? meRes.value.data : null;
 
+    // ── DEBUG LOGS ──────────────────────────────────────────────
+    console.log("─── ACCOUNT-TYPE DEBUG /api/unipile/user/" + userId + "/account-type ───");
+    console.log("[account-type] accountRes status:", accountRes.status);
+    if (accountRes.status === "rejected") {
+      console.log("[account-type] accountRes error:", accountRes.reason?.message,
+        accountRes.reason?.response?.status, accountRes.reason?.response?.data);
+    }
+    console.log("[account-type] meRes status:", meRes.status);
+    if (meRes.status === "rejected") {
+      console.log("[account-type] meRes error:", meRes.reason?.message,
+        meRes.reason?.response?.status, meRes.reason?.response?.data);
+    }
+    console.log("[account-type] RAW account keys:", account ? Object.keys(account) : null);
+    console.log("[account-type] account.status:", account?.status);
+    console.log("[account-type] account.type:", account?.type);
+    console.log("[account-type] account.sources:", JSON.stringify(account?.sources));
+    console.log("[account-type] account.groups:", JSON.stringify(account?.groups));
+    console.log("[account-type] account.connection_params?.im?.premiumFeatures:",
+      JSON.stringify(account?.connection_params?.im?.premiumFeatures));
+    console.log("[account-type] account.connection_params?.im?.premiumId:",
+      account?.connection_params?.im?.premiumId);
+    console.log("[account-type] RAW me keys:", me ? Object.keys(me) : null);
+    console.log("[account-type] me.premium:", me?.premium);
+    console.log("[account-type] me.premium_features:", JSON.stringify(me?.premium_features));
+    console.log("[account-type] me.premium_id:", me?.premium_id);
+    console.log("[account-type] me.premium_subscription:", JSON.stringify(me?.premium_subscription));
+    console.log("[account-type] me.current_premium_subscription:", JSON.stringify(me?.current_premium_subscription));
+    console.log("[account-type] me.subscription:", JSON.stringify(me?.subscription));
+    console.log("[account-type] me.has_sales_navigator:", me?.has_sales_navigator);
+    console.log("[account-type] me.has_recruiter:", me?.has_recruiter);
+    console.log("[account-type] me.plan:", me?.plan);
+    console.log("[account-type] me.account_type:", me?.account_type);
+    // ────────────────────────────────────────────────────────────
+
     // Collect every string Unipile gives us that might mention a subscription
     const collectStrings = (val, bag) => {
       if (val == null) return;
@@ -6127,13 +6161,25 @@ router.get("/api/unipile/user/:userId/account-type", async (req, res) => {
     collectStrings(me?.subscription, bag);
     collectStrings(account?.sources, bag);
     collectStrings(account?.groups, bag);
+    // Also scan connection_params and any top-level account fields we might miss
+    collectStrings(account?.connection_params, bag);
+    collectStrings(me, bag);
     const flags = bag.join("|");
 
     const hasSalesNav =
       /sales[_-\s]?navigator|salesnav|sales_nav/.test(flags) ||
-      me?.has_sales_navigator === true;
+      me?.sales_navigator === true;
     const hasRecruiter =
-      /recruiter/.test(flags) || me?.has_recruiter === true;
+      /recruiter/.test(flags) || me?.recruiter === true;
+
+    // ── DETECTION RESULT LOGS ───────────────────────────────────
+    console.log("[account-type] flags (all bag strings | delimited):", flags);
+    console.log("[account-type] hasSalesNav:", hasSalesNav,
+      "(bool:", me?.sales_navigator, " regex:", /sales[_-\s]?navigator|salesnav|sales_nav/.test(flags), ")");
+    console.log("[account-type] hasRecruiter:", hasRecruiter,
+      "(bool:", me?.recruiter, " regex:", /recruiter/.test(flags), ")");
+    console.log("[account-type] FINAL type:", hasRecruiter ? "recruiter" : hasSalesNav ? "sales_navigator" : "classic");
+    // ────────────────────────────────────────────────────────────
 
     const available = ["classic"];
     if (hasSalesNav) available.push("sales_navigator");
@@ -6172,8 +6218,10 @@ router.get("/api/unipile/user/:userId/account-type", async (req, res) => {
           me_premium_id: me?.premium_id,
           me_premium_subscription:
             me?.premium_subscription || me?.current_premium_subscription,
-          me_has_sales_navigator: me?.has_sales_navigator,
-          me_has_recruiter: me?.has_recruiter,
+          me_sales_navigator: me?.sales_navigator,
+          me_recruiter: me?.recruiter,
+          conn_premium_features: account?.connection_params?.im?.premiumFeatures,
+          conn_premium_id: account?.connection_params?.im?.premiumId,
           accounts_call_ok: accountRes.status === "fulfilled",
           me_call_ok: meRes.status === "fulfilled",
           accounts_error:
@@ -6249,16 +6297,19 @@ router.get("/api/unipile/user/:userId/quick-info", async (req, res) => {
     const premiumFeatures = Array.isArray(me?.premium_features)
       ? me.premium_features.map((s) => String(s).toLowerCase())
       : [];
+    const connPremiumFeatures = Array.isArray(account?.connection_params?.im?.premiumFeatures)
+      ? account.connection_params.im.premiumFeatures.map((s) => String(s).toLowerCase())
+      : [];
     const sourceTypes = Array.isArray(account?.sources)
       ? account.sources.map((s) => String(s?.type || s?.name || s).toLowerCase())
       : [];
-    const flags = [...premiumFeatures, ...sourceTypes].join(",");
+    const flags = [...premiumFeatures, ...connPremiumFeatures, ...sourceTypes].join(",");
 
     const hasSalesNav =
       /sales[_-]?navigator|salesnav|sales_nav/.test(flags) ||
-      !!me?.has_sales_navigator;
+      !!me?.sales_navigator;
     const hasRecruiter =
-      /recruiter/.test(flags) || !!me?.has_recruiter;
+      /recruiter/.test(flags) || !!me?.recruiter;
 
     const payload = {
       success: true,
