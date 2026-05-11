@@ -6060,4 +6060,177 @@ router.post("/api/unipile/linkedin/resolve-ids", async (req, res) => {
   }
 });
 
+
+// ==================== Account Type (minimal, fastest) ====================
+// GET /api/unipile/user/:userId/account-type
+// Returns ONLY: which LinkedIn search APIs the user can call.
+// 1 Unipile call (/accounts/{id}), 1-hour cache. Tiny payload.
+router.get("/api/unipile/user/:userId/account-type", async (req, res) => {
+  try {
+    const { userId } = req.params;
+
+    const dbResult = await getLinkedInAccountStatus(userId);
+    if (!dbResult.success || !dbResult.account_id) {
+      return res.json({
+        success: true,
+        connected: false,
+        account_id: null,
+        type: null,
+        available: [],
+      });
+    }
+
+    const accountId = dbResult.account_id;
+    const cacheKey = `acctype:${accountId}`;
+
+    if (req.query.fresh !== "true") {
+      const cached = paramCache.get(cacheKey);
+      if (cached) return res.json({ ...cached, cached: true });
+    }
+
+    const { data: account } = await axios.get(
+      `${getBaseUrl()}/accounts/${accountId}`,
+      { headers: getHeaders(), timeout: 4000 },
+    );
+
+    const sourceFlags = Array.isArray(account?.sources)
+      ? account.sources
+          .map((s) => String(s?.type || s?.name || s).toLowerCase())
+          .join(",")
+      : "";
+
+    const hasSalesNav = /sales[_-]?navigator|salesnav|sales_nav/.test(sourceFlags);
+    const hasRecruiter = /recruiter/.test(sourceFlags);
+
+    const available = ["classic"];
+    if (hasSalesNav) available.push("sales_navigator");
+    if (hasRecruiter) available.push("recruiter");
+
+    const payload = {
+      success: true,
+      connected: account?.status === "OK" || account?.status === "CONNECTED",
+      account_id: accountId,
+      type: hasRecruiter
+        ? "recruiter"
+        : hasSalesNav
+          ? "sales_navigator"
+          : "classic",
+      available,
+    };
+
+    paramCache.set(cacheKey, payload, 60 * 60);
+    res.json(payload);
+  } catch (err) {
+    handleError(err, res);
+  }
+});
+
+// ==================== Quick Account Lookup ====================
+// GET /api/unipile/user/:userId/quick-info
+// One fast call that tells the client:
+//   - whether the user has a connected LinkedIn account
+//   - which search APIs they can use (classic / sales_navigator / recruiter)
+//   - minimal profile (name, headline, public_identifier, picture, premium)
+//   - connection/follower counts
+// Cached for 5 min per account to keep the response sub-100ms on repeat hits.
+router.get("/api/unipile/user/:userId/quick-info", async (req, res) => {
+  try {
+    const { userId } = req.params;
+
+    const dbResult = await getLinkedInAccountStatus(userId);
+    if (!dbResult.success || !dbResult.account_id) {
+      return res.json({
+        success: true,
+        connected: false,
+        user_id: userId,
+        account_id: null,
+        message: "No LinkedIn account connected for this user",
+      });
+    }
+
+    const accountId = dbResult.account_id;
+    const cacheKey = `quickinfo:${accountId}`;
+
+    if (req.query.fresh !== "true") {
+      const cached = profileCache.get(cacheKey);
+      if (cached) {
+        return res.json({ ...cached, cached: true });
+      }
+    }
+
+    const [accountRes, meRes] = await Promise.allSettled([
+      axios.get(`${getBaseUrl()}/accounts/${accountId}`, {
+        headers: getHeaders(),
+        timeout: 5000,
+      }),
+      axios.get(`${getBaseUrl()}/users/me?account_id=${accountId}`, {
+        headers: getHeaders(),
+        timeout: 5000,
+      }),
+    ]);
+
+    const account =
+      accountRes.status === "fulfilled" ? accountRes.value.data : null;
+    const me = meRes.status === "fulfilled" ? meRes.value.data : null;
+
+    // Detect which search APIs the user can call. Unipile exposes subscription
+    // info via `premium_features` on /users/me and per-source flags on /accounts.
+    const premiumFeatures = Array.isArray(me?.premium_features)
+      ? me.premium_features.map((s) => String(s).toLowerCase())
+      : [];
+    const sourceTypes = Array.isArray(account?.sources)
+      ? account.sources.map((s) => String(s?.type || s?.name || s).toLowerCase())
+      : [];
+    const flags = [...premiumFeatures, ...sourceTypes].join(",");
+
+    const hasSalesNav =
+      /sales[_-]?navigator|salesnav|sales_nav/.test(flags) ||
+      !!me?.has_sales_navigator;
+    const hasRecruiter =
+      /recruiter/.test(flags) || !!me?.has_recruiter;
+
+    const payload = {
+      success: true,
+      connected: account?.status === "OK" || account?.status === "CONNECTED",
+      user_id: userId,
+      account_id: accountId,
+      status: account?.status || "UNKNOWN",
+      provider: account?.provider || account?.type || "LINKEDIN",
+      profile: {
+        provider_id: me?.provider_id || null,
+        public_identifier: me?.public_identifier || null,
+        name: me?.name || account?.name || null,
+        first_name: me?.first_name || null,
+        last_name: me?.last_name || null,
+        headline: me?.headline || null,
+        profile_url: me?.profile_url || null,
+        picture: me?.picture || null,
+        location: me?.location || null,
+        industry: me?.industry || null,
+        premium: !!me?.premium || premiumFeatures.includes("premium"),
+      },
+      available_apis: {
+        classic: true,
+        sales_navigator: hasSalesNav,
+        recruiter: hasRecruiter,
+      },
+      counts: {
+        connections: me?.connections_count ?? null,
+        followers: me?.followers_count ?? null,
+      },
+      last_sync: account?.last_sync || null,
+      premium_features: premiumFeatures,
+      fetched_at: new Date().toISOString(),
+    };
+
+    profileCache.set(cacheKey, payload, 5 * 60);
+    res.json(payload);
+  } catch (err) {
+    handleError(err, res);
+  }
+});
+
 module.exports = router;
+
+
+
