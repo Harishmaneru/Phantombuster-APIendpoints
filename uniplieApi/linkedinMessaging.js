@@ -4618,6 +4618,634 @@ router.delete(
 // 3. To search from LinkedIn URL:
 //    POST /api/unipile/user/:userId/linkedin/search
 //    Body: { "url": "https://www.linkedin.com/search/results/people/?keywords=..." }
+// router.all("/api/unipile/user/:userId/linkedin/search", async (req, res) => {
+//   try {
+//     const { userId } = req.params;
+//     const {
+//       limit = 25,
+//       cursor,
+//       action,
+//       type,
+//       keywords: queryKeywords,
+//       api: queryApi,
+//     } = req.query;
+
+//     const dbResult = await getLinkedInAccountStatus(userId);
+//     if (!dbResult.success || !dbResult.account_id) {
+//       return res.status(404).json({
+//         success: false,
+//         error: "No LinkedIn account found",
+//       });
+//     }
+
+//     const accountId = dbResult.account_id;
+
+//     // ============ GET: Fetch Search Parameters (Location IDs, Industry IDs, etc.) ============
+//     if (req.method === "GET" || action === "parameters") {
+//       const paramType = type || "LOCATION";
+//       const keywords = queryKeywords;
+//       const api = queryApi || "classic";
+
+//       // Valid parameter types
+//       const validTypes = [
+//         "LOCATION",
+//         "REGION",
+//         "POSTAL_CODE",
+//         "INDUSTRY",
+//         "SALES_INDUSTRY",
+//         "COMPANY",
+//         "SCHOOL",
+//         "SERVICE",
+//         "JOB_TITLE",
+//         "JOB_FUNCTION",
+//         "DEPARTMENT",
+//         "SKILL",
+//         "GROUPS",
+//         "PEOPLE",
+//         "CONNECTIONS",
+//         "SAVED_SEARCHES",
+//         "RECENT_SEARCHES",
+//         "ACCOUNT_LISTS",
+//         "LEAD_LISTS",
+//         "HIRING_PROJECTS",
+//         "PERSONA",
+//         "TECHNOLOGIES",
+//         "DEGREE",
+//         "SAVED_FILTERS",
+//       ];
+
+//       if (!validTypes.includes(paramType.toUpperCase())) {
+//         return res.status(400).json({
+//           success: false,
+//           error: `Invalid type. Valid types: ${validTypes.join(", ")}`,
+//         });
+//       }
+
+//       // Build query params for Unipile API
+//       const params = new URLSearchParams();
+//       params.append("account_id", accountId);
+//       params.append("type", paramType);
+//       if (keywords) params.append("keywords", keywords);
+//       params.append("limit", limit);
+//       if (api !== "classic") params.append("api", api);
+
+//       console.log(
+//         `🔍 LinkedIn Search Parameters: type=${paramType}, keywords=${
+//           keywords || "none"
+//         }`,
+//       );
+
+//       const response = await axios.get(
+//         `${getBaseUrl()}/linkedin/search/parameters?${params}`,
+//         { headers: getHeaders() },
+//       );
+
+//       return res.json({
+//         success: true,
+//         data: response.data,
+//         type: paramType,
+//         keywords: keywords || null,
+//         account_id: accountId,
+//         usage: `Use the 'id' field from items to filter your search. Example: { "location": ["${
+//           response.data?.items?.[0]?.id || "123456"
+//         }"] }`,
+//       });
+//     }
+
+//     // ============ POST: Perform Search ============
+//     if (req.method === "POST") {
+//       const searchBody = req.body;
+
+//       // Handle URL-based search (just paste a LinkedIn URL)
+//       if (searchBody.url) {
+//         const params = new URLSearchParams();
+//         params.append("account_id", accountId);
+//         params.append("limit", limit);
+//         if (cursor) params.append("cursor", cursor);
+
+//         console.log("🔗 LinkedIn Search from URL:", searchBody.url);
+
+//         const response = await axios.post(
+//           `${getBaseUrl()}/linkedin/search?${params}`,
+//           { url: searchBody.url },
+//           { headers: getHeaders() },
+//         );
+
+//         return res.json({
+//           success: true,
+//           data: response.data,
+//           search_type: "from_url",
+//           source_url: searchBody.url,
+//           account_id: accountId,
+//           results_count: response.data?.items?.length || 0,
+//         });
+//       }
+
+//       // Validate required fields for regular search
+//       if (!searchBody.api) {
+//         return res.status(400).json({
+//           success: false,
+//           error: "Missing required field: api",
+//           valid_values: ["classic", "sales_navigator", "recruiter"],
+//           note: "You can pass location/industry/company/school as names (e.g., 'India') - they will be auto-converted to IDs!",
+//           examples: {
+//             people_search: {
+//               api: "classic",
+//               category: "people",
+//               keywords: "Software Engineer",
+//               location: ["India", "Hyderabad"], // Names auto-convert to IDs!
+//             },
+//             companies_search: {
+//               api: "classic",
+//               category: "companies",
+//               keywords: "Technology",
+//               industry: ["Software Development"], // Names auto-convert to IDs!
+//               has_job_offers: true,
+//             },
+//             posts_search: {
+//               api: "classic",
+//               category: "posts",
+//               keywords: "AI",
+//               date_posted: "past_week",
+//             },
+//             jobs_search: {
+//               api: "classic",
+//               category: "jobs",
+//               keywords: "Developer",
+//               location: ["Remote"],
+//               presence: ["remote"],
+//             },
+//           },
+//         });
+//       }
+
+//       if (!searchBody.category) {
+//         return res.status(400).json({
+//           success: false,
+//           error: "Missing required field: category",
+//           valid_values: ["people", "companies", "posts", "jobs"],
+//         });
+//       }
+
+//       // Change B: Validate api and category enum values before hitting Unipile
+//       const validApis = ["classic", "sales_navigator", "recruiter"];
+//       const validCategories = ["people", "companies", "posts", "jobs"];
+
+//       if (!validApis.includes(searchBody.api)) {
+//         return res.status(400).json({
+//           success: false,
+//           error: `Invalid api: "${searchBody.api}". Must be one of: ${validApis.join(", ")}`,
+//         });
+//       }
+
+//       if (!validCategories.includes(searchBody.category)) {
+//         return res.status(400).json({
+//           success: false,
+//           error: `Invalid category: "${searchBody.category}". Must be one of: ${validCategories.join(", ")}`,
+//         });
+//       }
+
+//       // Hardcode network_distance to [1, 2, 3] for people search only
+//       if (searchBody.category === "people") {
+//         if (!searchBody.network_distance) {
+//           searchBody.network_distance = [1, 2, 3];
+//         }
+//       }
+
+//       // Auto-resolve location names to IDs
+
+//       // Helper to resolve include/exclude nested objects (Sales Navigator format)
+//       const resolveNestedObject = async (obj, paramType) => {
+//         if (!obj || typeof obj !== "object") return obj;
+//         if (obj.include && Array.isArray(obj.include)) {
+//           const hasNames = obj.include.some((v) => !isNumericId(v));
+//           if (hasNames) {
+//             obj.include = await resolveNamesToIds(obj.include, paramType, accountId);
+//           }
+//         }
+//         if (obj.exclude && Array.isArray(obj.exclude)) {
+//           const hasNames = obj.exclude.some((v) => !isNumericId(v));
+//           if (hasNames) {
+//             obj.exclude = await resolveNamesToIds(obj.exclude, paramType, accountId);
+//           }
+//         }
+//         // Change 1: Return undefined if nothing resolved — prevents sending {include: undefined}
+//         const hasInclude = Array.isArray(obj.include) && obj.include.length > 0;
+//         const hasExclude = Array.isArray(obj.exclude) && obj.exclude.length > 0;
+//         return (hasInclude || hasExclude) ? obj : undefined;
+//       };
+
+//       // Auto-resolve location names to IDs
+//       // Sales Navigator People uses REGION; SN Companies uses LOCATION; Classic uses LOCATION
+//       const locationParamType =
+//         searchBody.api === "sales_navigator" && searchBody.category === "people"
+//           ? "REGION"
+//           : "LOCATION";
+//       if (searchBody.location && Array.isArray(searchBody.location)) {
+//         const hasNames = searchBody.location.some((v) => !isNumericId(v));
+//         if (hasNames) {
+//           searchBody.location = await resolveNamesToIds(
+//             searchBody.location,
+//             locationParamType,
+//             accountId,
+//           );
+//         }
+//       } else if (
+//         searchBody.location &&
+//         typeof searchBody.location === "object"
+//       ) {
+//         searchBody.location = await resolveNestedObject(
+//           searchBody.location,
+//           locationParamType,
+//         );
+//       }
+
+//       // Auto-resolve industry names to IDs
+//       const industryParamType =
+//         searchBody.api === "sales_navigator" ? "SALES_INDUSTRY" : "INDUSTRY";
+//       if (searchBody.industry && Array.isArray(searchBody.industry)) {
+//         const hasNames = searchBody.industry.some((v) => !isNumericId(v));
+//         if (hasNames) {
+//           searchBody.industry = await resolveNamesToIds(
+//             searchBody.industry,
+//             industryParamType,
+//             accountId,
+//           );
+//         }
+//       } else if (
+//         searchBody.industry &&
+//         typeof searchBody.industry === "object"
+//       ) {
+//         searchBody.industry = await resolveNestedObject(
+//           searchBody.industry,
+//           industryParamType,
+//         );
+//       }
+
+//       // Auto-resolve company names to IDs
+//       if (searchBody.company && Array.isArray(searchBody.company)) {
+//         const hasNames = searchBody.company.some((v) => !isNumericId(v));
+//         if (hasNames) {
+//           searchBody.company = await resolveNamesToIds(
+//             searchBody.company,
+//             "COMPANY",
+//             accountId,
+//           );
+//         }
+//       } else if (searchBody.company && typeof searchBody.company === "object") {
+//         searchBody.company = await resolveNestedObject(
+//           searchBody.company,
+//           "COMPANY",
+//         );
+//       }
+
+//       // Auto-resolve school names to IDs
+//       if (searchBody.school && Array.isArray(searchBody.school)) {
+//         const hasNames = searchBody.school.some((v) => !isNumericId(v));
+//         if (hasNames) {
+//           searchBody.school = await resolveNamesToIds(
+//             searchBody.school,
+//             "SCHOOL",
+//             accountId,
+//           );
+//         }
+//       } else if (searchBody.school && typeof searchBody.school === "object") {
+//         searchBody.school = await resolveNestedObject(
+//           searchBody.school,
+//           "SCHOOL",
+//         );
+//       }
+
+//       // ============ CLEAN UP SEARCH BODY BEFORE API CALL ============
+//       // Change 2: Coerce network_distance to numbers (schema requires number[], not string[])
+//       if (Array.isArray(searchBody.network_distance)) {
+//         searchBody.network_distance = searchBody.network_distance
+//           .map(Number)
+//           .filter((n) => !isNaN(n));
+//       }
+
+//       // Remove null/undefined from array fields, then delete any that end up empty
+//       // (Unipile schema requires minItems: 1 for all array parameters)
+//       const arrayFields = [
+//         "location", "industry", "company", "school", "past_company",
+//         "network_distance", "open_to", "profile_language",
+//       ];
+//       arrayFields.forEach((field) => {
+//         if (Array.isArray(searchBody[field])) {
+//           searchBody[field] = searchBody[field].filter((v) => v != null);
+//           if (searchBody[field].length === 0) {
+//             delete searchBody[field];
+//           }
+//         }
+//       });
+
+//       // Change A: Delete any keys whose value is undefined (from failed name resolution)
+//       Object.keys(searchBody).forEach((key) => {
+//         if (searchBody[key] === undefined) delete searchBody[key];
+//       });
+
+//       // Build URL with query params
+//       const params = new URLSearchParams();
+//       params.append("account_id", accountId);
+//       params.append("limit", limit);
+//       if (cursor) params.append("cursor", cursor);
+
+//       // Change 3: Log both final body and query params before sending
+//       console.log(
+//         `🔍 FINAL REQUEST BODY for LinkedIn ${searchBody.category} Search (${searchBody.api}):`,
+//         JSON.stringify(searchBody, null, 2),
+//       );
+//       console.log(`🔍 FINAL QUERY PARAMS: ${params.toString()}`);
+
+//       const response = await axios.post(
+//         `${getBaseUrl()}/linkedin/search?${params}`,
+//         searchBody,
+//         { headers: getHeaders() },
+//       );
+
+//       let searchResults = response.data;
+//       let enrichedCount = 0;
+
+//       // ============ PROFILE ENRICHMENT (for People search only) ============
+//       // When enrich_profiles=true, fetch full profile details for each person
+//       const shouldEnrich =
+//         req.query.enrich_profiles === "true" &&
+//         searchBody.category === "people" &&
+//         searchResults?.items?.length > 0;
+
+//       if (shouldEnrich) {
+//         console.log(
+//           `🔄 Enriching ${searchResults.items.length} profiles with full details...`,
+//         );
+//         const startTime = Date.now();
+
+//         // Helper to fetch full profile
+//         const fetchFullProfile = async (person) => {
+//           const providerId = person.id || person.public_identifier;
+//           if (!providerId) return person;
+
+//           // Check cache first
+//           const cacheKey = getProfileCacheKey(providerId, accountId);
+//           const cachedProfile = profileCache.get(cacheKey);
+
+//           if (cachedProfile) {
+//             return {
+//               ...person,
+//               full_profile: cachedProfile,
+//               enrichment_status: "cached",
+//             };
+//           }
+
+//           try {
+//             const profileResponse = await axios.get(
+//               `${getBaseUrl()}/users/${encodeURIComponent(
+//                 providerId,
+//               )}?account_id=${accountId}`,
+//               { headers: getHeaders(), timeout: 5000 },
+//             );
+
+//             const fullProfile = profileResponse.data;
+
+//             // Cache the profile
+//             profileCache.set(cacheKey, fullProfile);
+
+//             // Return enriched person object
+//             return {
+//               ...person,
+//               full_profile: {
+//                 // Basic info
+//                 first_name: fullProfile.first_name,
+//                 last_name: fullProfile.last_name,
+//                 headline: fullProfile.headline,
+//                 summary: fullProfile.summary,
+//                 location: fullProfile.location,
+
+//                 // Contact & social
+//                 email: fullProfile.email,
+//                 phone: fullProfile.phone,
+//                 websites: fullProfile.websites,
+
+//                 // Professional details
+//                 skills: fullProfile.skills || [],
+//                 languages: fullProfile.languages || [],
+//                 certifications: fullProfile.certifications || [],
+
+//                 // Experience & Education
+//                 work_experience:
+//                   fullProfile.work_experience || fullProfile.positions || [],
+//                 education: fullProfile.education || [],
+
+//                 // Additional
+//                 connections_count: fullProfile.connections_count,
+//                 followers_count: fullProfile.followers_count,
+//                 is_open_to_work: fullProfile.is_open_to_work,
+//                 is_hiring: fullProfile.is_hiring,
+//                 premium: fullProfile.premium,
+//               },
+//               enrichment_status: "fetched",
+//             };
+//           } catch (err) {
+//             console.warn(
+//               `⚠️ Failed to enrich profile ${providerId}:`,
+//               err.message,
+//             );
+//             return {
+//               ...person,
+//               full_profile: null,
+//               enrichment_status: "error",
+//             };
+//           }
+//         };
+
+//         // Process profiles in parallel (max 5 concurrent to avoid rate limits)
+//         const batchSize = 5;
+//         const enrichedItems = [];
+
+//         for (let i = 0; i < searchResults.items.length; i += batchSize) {
+//           const batch = searchResults.items.slice(i, i + batchSize);
+//           const enrichedBatch = await Promise.all(batch.map(fetchFullProfile));
+//           enrichedItems.push(...enrichedBatch);
+
+//           // Small delay between batches
+//           if (i + batchSize < searchResults.items.length) {
+//             await new Promise((resolve) => setTimeout(resolve, 100));
+//           }
+//         }
+
+//         searchResults = {
+//           ...searchResults,
+//           items: enrichedItems,
+//         };
+
+//         enrichedCount = enrichedItems.filter(
+//           (p) =>
+//             p.enrichment_status === "fetched" ||
+//             p.enrichment_status === "cached",
+//         ).length;
+//         const elapsed = Date.now() - startTime;
+//         console.log(
+//           `✅ Enriched ${enrichedCount}/${searchResults.items.length} profiles in ${elapsed}ms`,
+//         );
+//       }
+
+//       // ============ POST ENRICHMENT (for Posts search only) ============
+//       // When enrich_posts=true, fetch comments & reactions for each post
+//       // Use comments_limit and reactions_limit query params to control preview size
+//       const commentsLimit = parseInt(req.query.comments_limit) || 3;
+//       const reactionsLimit = parseInt(req.query.reactions_limit) || 10;
+//       const shouldEnrichPosts =
+//         req.query.enrich_posts === "true" &&
+//         searchBody.category === "posts" &&
+//         searchResults?.items?.length > 0;
+
+//       let postsEnrichedCount = 0;
+
+//       if (shouldEnrichPosts) {
+//         console.log(
+//           `🔄 Enriching ${searchResults.items.length} posts (comments_limit=${commentsLimit}, reactions_limit=${reactionsLimit})...`,
+//         );
+//         const startTime = Date.now();
+
+//         // Helper: build LinkedIn profile URL
+//         const buildLinkedInUrl = (actor) => {
+//           if (!actor || !actor.public_identifier) return null;
+//           return actor.is_company
+//             ? `https://www.linkedin.com/company/${actor.public_identifier}`
+//             : `https://www.linkedin.com/in/${actor.public_identifier}`;
+//         };
+
+//         // Helper to enrich a single post
+//         const enrichPost = async (post) => {
+//           const postId = post.social_id || post.id;
+//           if (!postId) return { ...post, enrichment_status: "skipped" };
+
+//           const encodedPostId = encodeURIComponent(postId);
+
+//           try {
+//             // Fetch comments and reactions in parallel
+//             const [commentsRes, reactionsRes] = await Promise.allSettled([
+//               axios.get(
+//                 `${getBaseUrl()}/posts/${encodedPostId}/comments?account_id=${accountId}&limit=${commentsLimit}`,
+//                 { headers: getHeaders(), timeout: 10000 },
+//               ),
+//               axios.get(
+//                 `${getBaseUrl()}/posts/${encodedPostId}/reactions?account_id=${accountId}&limit=${reactionsLimit}`,
+//                 { headers: getHeaders(), timeout: 10000 },
+//               ),
+//             ]);
+
+//             const commentsData =
+//               commentsRes.status === "fulfilled"
+//                 ? commentsRes.value.data
+//                 : { items: [] };
+//             const reactionsData =
+//               reactionsRes.status === "fulfilled"
+//                 ? reactionsRes.value.data
+//                 : { items: [] };
+
+//             // Add profile URL to the post author
+//             const authorProfileUrl = buildLinkedInUrl(post.author);
+
+//             return {
+//               ...post,
+//               author_profile_url: authorProfileUrl,
+//               comments_preview: {
+//                 items: commentsData.items || [],
+//                 count: (commentsData.items || []).length,
+//                 has_more: !!commentsData.cursor,
+//                 cursor: commentsData.cursor || null,
+//               },
+//               reactions_preview: {
+//                 items: reactionsData.items || [],
+//                 count: (reactionsData.items || []).length,
+//                 has_more: !!reactionsData.cursor,
+//                 cursor: reactionsData.cursor || null,
+//               },
+//               enrichment_status: "fetched",
+//             };
+//           } catch (err) {
+//             console.warn(`⚠️ Failed to enrich post ${postId}:`, err.message);
+//             return {
+//               ...post,
+//               author_profile_url: buildLinkedInUrl(post.author),
+//               comments_preview: {
+//                 items: [],
+//                 count: 0,
+//                 has_more: false,
+//                 cursor: null,
+//               },
+//               reactions_preview: {
+//                 items: [],
+//                 count: 0,
+//                 has_more: false,
+//                 cursor: null,
+//               },
+//               enrichment_status: "error",
+//             };
+//           }
+//         };
+
+//         // Process posts in batches of 3 to avoid rate limits
+//         const batchSize = 3;
+//         const enrichedItems = [];
+
+//         for (let i = 0; i < searchResults.items.length; i += batchSize) {
+//           const batch = searchResults.items.slice(i, i + batchSize);
+//           const enrichedBatch = await Promise.all(batch.map(enrichPost));
+//           enrichedItems.push(...enrichedBatch);
+
+//           // Small delay between batches
+//           if (i + batchSize < searchResults.items.length) {
+//             await new Promise((resolve) => setTimeout(resolve, 200));
+//           }
+//         }
+
+//         searchResults = {
+//           ...searchResults,
+//           items: enrichedItems,
+//         };
+
+//         postsEnrichedCount = enrichedItems.filter(
+//           (p) => p.enrichment_status === "fetched",
+//         ).length;
+//         const elapsed = Date.now() - startTime;
+//         console.log(
+//           `✅ Enriched ${postsEnrichedCount}/${searchResults.items.length} posts in ${elapsed}ms`,
+//         );
+//       }
+
+//       return res.json({
+//         success: true,
+//         data: searchResults,
+//         search_type: searchBody.category,
+//         api: searchBody.api,
+//         account_id: accountId,
+//         results_count: searchResults?.items?.length || 0,
+//         ...(shouldEnrich && {
+//           profiles_enriched: enrichedCount,
+//           enrichment_note:
+//             "Full profile details included in 'full_profile' field for each person",
+//         }),
+//         ...(shouldEnrichPosts && {
+//           posts_enriched: postsEnrichedCount,
+//           enrichment_note:
+//             "Comments, reactions, and author profile URL included for each post",
+//         }),
+//       });
+//     }
+
+//     // Method not allowed
+//     return res.status(405).json({
+//       success: false,
+//       error:
+//         "Method not allowed. Use GET for search parameters, POST for search.",
+//     });
+//   } catch (err) {
+//     handleError(err, res);
+//   }
+// });
+
+
 router.all("/api/unipile/user/:userId/linkedin/search", async (req, res) => {
   try {
     const { userId } = req.params;
@@ -4805,11 +5433,14 @@ router.all("/api/unipile/user/:userId/linkedin/search", async (req, res) => {
         });
       }
 
-      // Hardcode network_distance to [1, 2, 3] for people search only
-      if (searchBody.category === "people") {
-        if (!searchBody.network_distance) {
-          searchBody.network_distance = [1, 2, 3];
-        }
+      // Default network_distance to [1, 2, 3] for Classic people only.
+      // SN/Recruiter accept "GROUP" too, so let the caller decide there.
+      if (
+        searchBody.category === "people" &&
+        searchBody.api === "classic" &&
+        !searchBody.network_distance
+      ) {
+        searchBody.network_distance = [1, 2, 3];
       }
 
       // Auto-resolve location names to IDs
@@ -4899,6 +5530,26 @@ router.all("/api/unipile/user/:userId/linkedin/search", async (req, res) => {
         );
       }
 
+      // Auto-resolve past_company names to IDs (same shape rules as company)
+      if (searchBody.past_company && Array.isArray(searchBody.past_company)) {
+        const hasNames = searchBody.past_company.some((v) => !isNumericId(v));
+        if (hasNames) {
+          searchBody.past_company = await resolveNamesToIds(
+            searchBody.past_company,
+            "COMPANY",
+            accountId,
+          );
+        }
+      } else if (
+        searchBody.past_company &&
+        typeof searchBody.past_company === "object"
+      ) {
+        searchBody.past_company = await resolveNestedObject(
+          searchBody.past_company,
+          "COMPANY",
+        );
+      }
+
       // Auto-resolve school names to IDs
       if (searchBody.school && Array.isArray(searchBody.school)) {
         const hasNames = searchBody.school.some((v) => !isNumericId(v));
@@ -4917,11 +5568,11 @@ router.all("/api/unipile/user/:userId/linkedin/search", async (req, res) => {
       }
 
       // ============ CLEAN UP SEARCH BODY BEFORE API CALL ============
-      // Change 2: Coerce network_distance to numbers (schema requires number[], not string[])
+      // Coerce numeric strings to numbers, preserve "GROUP" (valid for SN/Recruiter people).
       if (Array.isArray(searchBody.network_distance)) {
         searchBody.network_distance = searchBody.network_distance
-          .map(Number)
-          .filter((n) => !isNaN(n));
+          .map((v) => (v === "GROUP" ? "GROUP" : Number(v)))
+          .filter((v) => v === "GROUP" || (typeof v === "number" && !isNaN(v)));
       }
 
       // Remove null/undefined from array fields, then delete any that end up empty
