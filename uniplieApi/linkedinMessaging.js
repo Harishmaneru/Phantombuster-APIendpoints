@@ -3451,6 +3451,85 @@ router.get(
   },
 );
 
+// ==================== Lightweight Email/Contact Enrichment ====================
+// Fast endpoint to fetch just email + phone from Unipile — no chat lookup overhead
+router.get(
+  "/api/unipile/linkedin/enrich-email/:identifier",
+  async (req, res) => {
+    try {
+      const { identifier } = req.params;
+      const { user_id } = req.query;
+
+      if (!user_id) {
+        return res.status(400).json({
+          success: false,
+          error: "user_id is required",
+        });
+      }
+
+      const dbResult = await getLinkedInAccountStatus(user_id);
+      if (!dbResult.success || !dbResult.account_id) {
+        return res.status(404).json({
+          success: false,
+          error: "No LinkedIn account found for this user",
+        });
+      }
+
+      const accountId = dbResult.account_id;
+      const cacheKey = getProfileCacheKey(identifier, accountId);
+      const cached = profileCache.get(cacheKey);
+
+      if (cached) {
+        return res.json({
+          success: true,
+          data: {
+            email: cached.email || null,
+            phone: cached.phone || null,
+            public_identifier: cached.public_identifier || identifier,
+            name: cached.name || [cached.first_name, cached.last_name].filter(Boolean).join(" ") || null,
+            headline: cached.headline || null,
+            profile_picture_url: cached.profile_picture_url || cached.picture || null,
+          },
+          source: "cache",
+          account_id: accountId,
+        });
+      }
+
+      const response = await axios.get(
+        `${getBaseUrl()}/users/${encodeURIComponent(identifier)}?account_id=${accountId}`,
+        { headers: getHeaders(), timeout: 10000 },
+      );
+
+      const p = response.data;
+
+      profileCache.set(cacheKey, p);
+
+      return res.json({
+        success: true,
+        data: {
+          email: p.email || null,
+          phone: p.phone || null,
+          public_identifier: p.public_identifier || identifier,
+          name: p.name || [p.first_name, p.last_name].filter(Boolean).join(" ") || null,
+          headline: p.headline || null,
+          profile_picture_url: p.profile_picture_url || p.picture || null,
+        },
+        source: "fetched",
+        account_id: accountId,
+      });
+    } catch (err) {
+      if (err.response?.status === 404) {
+        return res.status(404).json({
+          success: false,
+          error: "User not found",
+          identifier: req.params.identifier,
+        });
+      }
+      handleError(err, res);
+    }
+  },
+);
+
 // router.get(
 //   "/api/unipile/linkedin/fetch-profile/:identifier",
 //   async (req, res) => {
