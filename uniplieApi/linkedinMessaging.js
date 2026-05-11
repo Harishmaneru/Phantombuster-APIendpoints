@@ -6064,10 +6064,13 @@ router.post("/api/unipile/linkedin/resolve-ids", async (req, res) => {
 // ==================== Account Type (minimal, fastest) ====================
 // GET /api/unipile/user/:userId/account-type
 // Returns ONLY: which LinkedIn search APIs the user can call.
-// 1 Unipile call (/accounts/{id}), 1-hour cache. Tiny payload.
+// Hits /accounts/{id} + /users/me in parallel (both light), 1-hour cache.
+// ?fresh=true   -> bypass cache
+// ?debug=true   -> include raw Unipile fields used for detection
 router.get("/api/unipile/user/:userId/account-type", async (req, res) => {
   try {
     const { userId } = req.params;
+    const debug = req.query.debug === "true";
 
     const dbResult = await getLinkedInAccountStatus(userId);
     if (!dbResult.success || !dbResult.account_id) {
@@ -6083,42 +6086,110 @@ router.get("/api/unipile/user/:userId/account-type", async (req, res) => {
     const accountId = dbResult.account_id;
     const cacheKey = `acctype:${accountId}`;
 
-    if (req.query.fresh !== "true") {
+    if (req.query.fresh !== "true" && !debug) {
       const cached = paramCache.get(cacheKey);
       if (cached) return res.json({ ...cached, cached: true });
     }
 
-    const { data: account } = await axios.get(
-      `${getBaseUrl()}/accounts/${accountId}`,
-      { headers: getHeaders(), timeout: 4000 },
-    );
+    // Parallel: /accounts (status + sources) and /users/me (premium_features)
+    const [accountRes, meRes] = await Promise.allSettled([
+      axios.get(`${getBaseUrl()}/accounts/${accountId}`, {
+        headers: getHeaders(),
+        timeout: 4000,
+      }),
+      axios.get(`${getBaseUrl()}/users/me?account_id=${accountId}`, {
+        headers: getHeaders(),
+        timeout: 4000,
+      }),
+    ]);
 
-    const sourceFlags = Array.isArray(account?.sources)
-      ? account.sources
-          .map((s) => String(s?.type || s?.name || s).toLowerCase())
-          .join(",")
-      : "";
+    const account =
+      accountRes.status === "fulfilled" ? accountRes.value.data : null;
+    const me = meRes.status === "fulfilled" ? meRes.value.data : null;
 
-    const hasSalesNav = /sales[_-]?navigator|salesnav|sales_nav/.test(sourceFlags);
-    const hasRecruiter = /recruiter/.test(sourceFlags);
+    // Collect every string Unipile gives us that might mention a subscription
+    const collectStrings = (val, bag) => {
+      if (val == null) return;
+      if (typeof val === "string" || typeof val === "number") {
+        bag.push(String(val).toLowerCase());
+      } else if (Array.isArray(val)) {
+        val.forEach((v) => collectStrings(v, bag));
+      } else if (typeof val === "object") {
+        Object.values(val).forEach((v) => collectStrings(v, bag));
+      }
+    };
+
+    const bag = [];
+    collectStrings(me?.premium_features, bag);
+    collectStrings(me?.premium_id, bag);
+    collectStrings(me?.premium_subscription, bag);
+    collectStrings(me?.current_premium_subscription, bag);
+    collectStrings(me?.subscription, bag);
+    collectStrings(account?.sources, bag);
+    collectStrings(account?.groups, bag);
+    const flags = bag.join("|");
+
+    const hasSalesNav =
+      /sales[_-\s]?navigator|salesnav|sales_nav/.test(flags) ||
+      me?.has_sales_navigator === true;
+    const hasRecruiter =
+      /recruiter/.test(flags) || me?.has_recruiter === true;
 
     const available = ["classic"];
     if (hasSalesNav) available.push("sales_navigator");
     if (hasRecruiter) available.push("recruiter");
 
+    // "Connected" means Unipile knows about the account and didn't error.
+    // Status strings vary (OK, CONNECTED, CREDENTIALS, etc.) — treat any
+    // successful /accounts response as connected, only flag the bad states.
+    const badStatuses = new Set([
+      "DISCONNECTED",
+      "ERROR",
+      "STOPPED",
+      "EXPIRED",
+      "INVALID",
+    ]);
+    const status = account?.status || (account ? "OK" : "UNKNOWN");
+    const connected = !!account && !badStatuses.has(String(status).toUpperCase());
+
     const payload = {
       success: true,
-      connected: account?.status === "OK" || account?.status === "CONNECTED",
+      connected,
       account_id: accountId,
+      status,
       type: hasRecruiter
         ? "recruiter"
         : hasSalesNav
           ? "sales_navigator"
           : "classic",
       available,
+      ...(debug && {
+        _debug: {
+          account_status: account?.status,
+          account_sources: account?.sources,
+          account_groups: account?.groups,
+          me_premium_features: me?.premium_features,
+          me_premium_id: me?.premium_id,
+          me_premium_subscription:
+            me?.premium_subscription || me?.current_premium_subscription,
+          me_has_sales_navigator: me?.has_sales_navigator,
+          me_has_recruiter: me?.has_recruiter,
+          accounts_call_ok: accountRes.status === "fulfilled",
+          me_call_ok: meRes.status === "fulfilled",
+          accounts_error:
+            accountRes.status === "rejected"
+              ? accountRes.reason?.response?.data || accountRes.reason?.message
+              : null,
+          me_error:
+            meRes.status === "rejected"
+              ? meRes.reason?.response?.data || meRes.reason?.message
+              : null,
+          flags_matched: flags,
+        },
+      }),
     };
 
-    paramCache.set(cacheKey, payload, 60 * 60);
+    if (!debug) paramCache.set(cacheKey, payload, 60 * 60);
     res.json(payload);
   } catch (err) {
     handleError(err, res);
