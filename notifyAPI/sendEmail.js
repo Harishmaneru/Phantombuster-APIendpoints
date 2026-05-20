@@ -3010,9 +3010,18 @@ async function checkForReplies() {
       fromEmail: { $exists: true },
     }).limit(50);
 
+    console.log(
+      `🔁 [checkForReplies] Cycle start — ${trackings.length} tracking record(s) awaiting a reply`,
+    );
+
     for (const tracking of trackings) {
       const smtp = await SMTPAuth.findOne({ email: tracking.fromEmail });
-      if (!smtp) continue;
+      if (!smtp) {
+        console.log(
+          `⚠️ [checkForReplies] No SMTP/IMAP credentials for sender ${tracking.fromEmail} — skipping ${tracking.messageId}`,
+        );
+        continue;
+      }
 
       let client;
       try {
@@ -3031,6 +3040,12 @@ async function checkForReplies() {
           keepalive: true,
           maxRetries: 1, // Limit retry attempts
         });
+
+        console.log(
+          `🔌 [checkForReplies] Connecting IMAP for ${tracking.fromEmail} ` +
+            `(host: ${getImapHost(smtp.host, tracking.fromEmail, smtp.oauth2?.provider)}) ` +
+            `to find replies to ${tracking.originalMessageId}`,
+        );
 
         // Add connection event listeners
         // client.on('error', err => console.error(`IMAP error for ${tracking.fromEmail}:`, err.message));
@@ -3178,6 +3193,13 @@ async function checkForReplies() {
           }
         }
 
+        if (!foundReplies) {
+          console.log(
+            `🔍 [checkForReplies] No reply found yet for ${tracking.messageId} ` +
+              `(sender ${tracking.fromEmail}, In-Reply-To/References ${tracking.originalMessageId})`,
+          );
+        }
+
         if (foundReplies) {
           const replyTime = new Date();
 
@@ -3264,7 +3286,10 @@ async function checkForReplies() {
           );
         }
       } catch (connError) {
-        // console.error(`Connection error for ${tracking.fromEmail}:`, connError.message);
+        console.error(
+          `❌ [checkForReplies] Reply check FAILED for ${tracking.fromEmail} ` +
+            `(${tracking.messageId}): ${connError.message}`,
+        );
         continue; // Skip to next tracking record
       } finally {
         try {
