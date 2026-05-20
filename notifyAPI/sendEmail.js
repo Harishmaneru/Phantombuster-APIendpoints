@@ -584,6 +584,16 @@ const emailTrackingSchema = new mongoose.Schema(
         sessionId: String, // To track unique sessions
       },
     ],
+    // Replay open tracking (re-opens by the same session within the dedup window)
+    replayCount: { type: Number, default: 0 },
+    replayEvents: [
+      {
+        replayedAt: Date,
+        ip: String,
+        userAgent: String,
+        sessionId: String,
+      },
+    ],
     clickEvents: [
       {
         url: String,
@@ -2739,6 +2749,7 @@ router.get("/api/track/open/:trackingId", async (req, res) => {
       );
 
     let shouldCount = false;
+    let isReplay = false;
     let updatedTracking = tracking;
 
     if (!recentOpen) {
@@ -2770,8 +2781,28 @@ router.get("/api/track/open/:trackingId", async (req, res) => {
         `📧 New email open detected: ${trackingId} from IP: ${ip}, Count: ${updatedTracking.openedCount}`,
       );
     } else {
+      // This is a replay: same session re-opened within the dedup window.
+      // Record it separately so repeat-engagement is not lost.
+      isReplay = true;
+
+      updatedTracking = await EmailTracking.findOneAndUpdate(
+        { messageId: trackingId },
+        {
+          $inc: { replayCount: 1 },
+          $push: {
+            replayEvents: {
+              replayedAt: now,
+              ip: ip,
+              userAgent: userAgent,
+              sessionId: sessionId,
+            },
+          },
+        },
+        { new: true },
+      );
+
       console.log(
-        `📧 Duplicate open ignored: ${trackingId} from IP: ${ip} (same session within 1 hour)`,
+        `📧 Replay open logged: ${trackingId} from IP: ${ip} (same session within 1 hour), Replay Count: ${updatedTracking.replayCount}`,
       );
     }
 
@@ -2796,6 +2827,29 @@ router.get("/api/track/open/:trackingId", async (req, res) => {
           uniqueOpens: updatedTracking.openEvents
             ? updatedTracking.openEvents.length
             : 0,
+        },
+      );
+    }
+
+    // Send webhook notification for replay opens
+    if (isReplay) {
+      await sendWebhookNotification(
+        "https://meet.onepgr.com/session/smatpTracking",
+        {
+          event: "replayed",
+          trackingId,
+          email: tracking.toEmail,
+          from: tracking.fromEmail,
+          subject: tracking.subject,
+          ip,
+          userAgent,
+          openedCount: updatedTracking.openedCount,
+          replayCount: updatedTracking.replayCount,
+          sessionId: sessionId,
+          isNewOpen: false,
+          timestamp: now,
+          extractedTrackingData,
+          replayEvents: updatedTracking.replayEvents || [],
         },
       );
     }
@@ -3571,6 +3625,17 @@ router.get("/api/track/:trackingId", async (req, res) => {
           : [],
         uniqueOpens: tracking.openEvents ? tracking.openEvents.length : 0,
 
+        // Replay Open Tracking
+        replayCount: tracking.replayCount || 0,
+        replayEvents: tracking.replayEvents
+          ? tracking.replayEvents.map((event) => ({
+              replayedAt: formatDate(event.replayedAt),
+              ip: cleanIP(event.ip),
+              userAgent: event.userAgent,
+              sessionId: event.sessionId,
+            }))
+          : [],
+
         // Click Events
         clicks: tracking.clickEvents
           ? tracking.clickEvents.map((click) => ({
@@ -3752,6 +3817,8 @@ router.post("/session/smatpTracking", async (req, res) => {
       totalClicks,
       originalMessageId,
       replyCount,
+      replayCount,
+      replayEvents,
     } = req.body;
 
     if (!event || !trackingId) {
@@ -3783,6 +3850,8 @@ router.post("/session/smatpTracking", async (req, res) => {
       totalClicks,
       originalMessageId,
       replyCount,
+      replayCount,
+      replayEvents,
     });
 
     // Log detailed event data
@@ -3810,6 +3879,8 @@ router.post("/session/smatpTracking", async (req, res) => {
       totalClicks,
       originalMessageId,
       replyCount,
+      replayCount,
+      replayEvents,
       receivedAt: new Date().toISOString(),
     };
 
