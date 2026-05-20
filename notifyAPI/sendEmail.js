@@ -1450,7 +1450,8 @@ router.post("/api/emailsend", async (req, res) => {
 
     const trackingRecord = new EmailTracking({
       messageId: trackingId,
-      originalMessageId: info.messageId,
+      originalMessageId:
+        info.messageId || `<${trackingId}@${from.split("@")[1]}>`,
       fromEmail: from,
       toEmail: to,
       subject,
@@ -3023,6 +3024,13 @@ async function checkForReplies() {
         continue;
       }
 
+      if (!tracking.originalMessageId) {
+        console.log(
+          `⚠️ [checkForReplies] No originalMessageId on ${tracking.messageId} — cannot match a reply, skipping`,
+        );
+        continue;
+      }
+
       let client;
       try {
         const imapAuth = await getAuthForIMAP(smtp, tracking.fromEmail);
@@ -3066,27 +3074,11 @@ async function checkForReplies() {
           ),
         ]);
 
-        // Send NOOP to keep connection alive
-        await client.run("NOOP");
-
-        // Check connection state before proceeding
-        if (!client.connection || client.connection.state !== "authenticated") {
-          throw new Error("Connection not properly authenticated");
-        }
-
         // Search for replies using multiple methods
         let foundReplies = false;
 
         // Method 1: Search by In-Reply-To header
         try {
-          // Check connection before search
-          if (
-            !client.connection ||
-            client.connection.state !== "authenticated"
-          ) {
-            throw new Error("Connection lost during search");
-          }
-
           const inReplyToMessages = await client.search({
             header: { "In-Reply-To": tracking.originalMessageId },
           });
@@ -3114,14 +3106,6 @@ async function checkForReplies() {
         // Method 2: Search by References header
         if (!foundReplies) {
           try {
-            // Check connection before search
-            if (
-              !client.connection ||
-              client.connection.state !== "authenticated"
-            ) {
-              throw new Error("Connection lost during search");
-            }
-
             const referencesMessages = await client.search({
               header: { References: tracking.originalMessageId },
             });
@@ -3150,14 +3134,6 @@ async function checkForReplies() {
         // Method 3: Search by subject line containing "Re:" and from the recipient
         if (!foundReplies) {
           try {
-            // Check connection before search
-            if (
-              !client.connection ||
-              client.connection.state !== "authenticated"
-            ) {
-              throw new Error("Connection lost during search");
-            }
-
             const subjectReplies = await client.search({
               from: tracking.toEmail,
               subject: "Re:",
@@ -3206,14 +3182,6 @@ async function checkForReplies() {
           // Get detailed reply information
           let replyDetails = null;
           try {
-            // Check connection before fetching reply details
-            if (
-              !client.connection ||
-              client.connection.state !== "authenticated"
-            ) {
-              throw new Error("Connection lost during reply details fetch");
-            }
-
             // Fetch the actual reply message to get details
             const replyMessages = await client.search({
               header: { "In-Reply-To": tracking.originalMessageId },
