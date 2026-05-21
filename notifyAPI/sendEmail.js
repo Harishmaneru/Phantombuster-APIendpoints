@@ -3004,62 +3004,95 @@ router.get("/api/track/click/:trackingId", async (req, res) => {
 });
 
 // 5️⃣ Reply Detection
+let replyCheckRunning = false; // prevents overlapping cycles
+
+// Structured JSON-line logger for the reply-detection cycle
+function replyLog(level, event, data = {}) {
+  console.log(
+    JSON.stringify({
+      ts: new Date().toISOString(),
+      scope: "checkForReplies",
+      level, // "info" | "warn" | "error"
+      event,
+      ...data,
+    }),
+  );
+}
+
 async function checkForReplies() {
+  if (replyCheckRunning) {
+    replyLog("warn", "cycle_skipped", { reason: "previous_cycle_running" });
+    return;
+  }
+  replyCheckRunning = true;
+  const startedAt = Date.now();
+
   try {
     const trackings = await EmailTracking.find({
       repliedAt: { $exists: false },
       fromEmail: { $exists: true },
     }).limit(50);
 
-    console.log(
-      `🔁 [checkForReplies] Cycle start — ${trackings.length} tracking record(s) awaiting a reply`,
-    );
-
+    // Group pending records by sender mailbox so each mailbox is opened once
+    const byMailbox = new Map();
     for (const tracking of trackings) {
-      const smtp = await SMTPAuth.findOne({ email: tracking.fromEmail });
+      if (!byMailbox.has(tracking.fromEmail)) {
+        byMailbox.set(tracking.fromEmail, []);
+      }
+      byMailbox.get(tracking.fromEmail).push(tracking);
+    }
+
+    replyLog("info", "cycle_start", {
+      candidates: trackings.length,
+      mailboxes: byMailbox.size,
+    });
+
+    const totals = { recordsChecked: 0, repliesFound: 0, errors: 0 };
+
+    // Sequential — one mailbox at a time
+    for (const [mailbox, records] of byMailbox) {
+      const smtp = await SMTPAuth.findOne({ email: mailbox });
       if (!smtp) {
-        console.log(
-          `⚠️ [checkForReplies] No SMTP/IMAP credentials for sender ${tracking.fromEmail} — skipping ${tracking.messageId}`,
-        );
+        replyLog("warn", "mailbox_skipped", {
+          mailbox,
+          reason: "no_credentials",
+          records: records.length,
+        });
         continue;
       }
 
-      if (!tracking.originalMessageId) {
-        console.log(
-          `⚠️ [checkForReplies] No originalMessageId on ${tracking.messageId} — cannot match a reply, skipping`,
-        );
-        continue;
+      // Drop records that can't be matched to a reply
+      const valid = [];
+      for (const tracking of records) {
+        if (tracking.originalMessageId) {
+          valid.push(tracking);
+        } else {
+          replyLog("warn", "record_skipped", {
+            mailbox,
+            trackingId: tracking.messageId,
+            reason: "no_original_message_id",
+          });
+        }
       }
+      if (valid.length === 0) continue;
 
+      const host = getImapHost(smtp.host, mailbox, smtp.oauth2?.provider);
       let client;
+      const mb = { checked: 0, replies: 0, errors: 0 };
+
       try {
-        const imapAuth = await getAuthForIMAP(smtp, tracking.fromEmail);
+        const imapAuth = await getAuthForIMAP(smtp, mailbox);
         client = new ImapFlow({
-          host: getImapHost(
-            smtp.host,
-            tracking.fromEmail,
-            smtp.oauth2?.provider,
-          ),
+          host,
           port: 993,
           secure: true,
           auth: imapAuth,
           logger: false,
-          timeout: 60000, // 60 second timeout (increased for safety)
+          timeout: 60000,
           keepalive: true,
-          maxRetries: 1, // Limit retry attempts
+          maxRetries: 1,
         });
 
-        console.log(
-          `🔌 [checkForReplies] Connecting IMAP for ${tracking.fromEmail} ` +
-            `(host: ${getImapHost(smtp.host, tracking.fromEmail, smtp.oauth2?.provider)}) ` +
-            `to find replies to ${tracking.originalMessageId}`,
-        );
-
-        // Add connection event listeners
-        // client.on('error', err => console.error(`IMAP error for ${tracking.fromEmail}:`, err.message));
-        // client.on('close', () => console.log(`Connection closed for ${tracking.fromEmail}`));
-
-        // Add connection timeout
         await Promise.race([
           client.connect(),
           new Promise((_, reject) =>
@@ -3074,207 +3107,228 @@ async function checkForReplies() {
           ),
         ]);
 
-        // Search for replies using multiple methods
-        let foundReplies = false;
+        replyLog("info", "mailbox_connected", {
+          mailbox,
+          host,
+          records: valid.length,
+        });
 
-        // Method 1: Search by In-Reply-To header
-        try {
-          const inReplyToMessages = await client.search({
-            header: { "In-Reply-To": tracking.originalMessageId },
-          });
-
-          if (inReplyToMessages.length > 0) {
-            foundReplies = true;
-            console.log(
-              `Found ${inReplyToMessages.length} replies via In-Reply-To for ${tracking.messageId}`,
-            );
-          }
-        } catch (error) {
-          console.log(
-            `In-Reply-To search failed for ${tracking.messageId}:`,
-            error.message,
-          );
-          // If connection is lost, break out of the search loop
-          if (
-            error.message.includes("Connection") ||
-            error.message.includes("timeout")
-          ) {
-            break;
-          }
-        }
-
-        // Method 2: Search by References header
-        if (!foundReplies) {
+        // Reuse the SAME connection for every pending record of this mailbox
+        for (const tracking of valid) {
           try {
-            const referencesMessages = await client.search({
-              header: { References: tracking.originalMessageId },
-            });
+            let foundReplies = false;
+            let matchMethod = null;
 
-            if (referencesMessages.length > 0) {
-              foundReplies = true;
-              console.log(
-                `Found ${referencesMessages.length} replies via References for ${tracking.messageId}`,
-              );
-            }
-          } catch (error) {
-            console.log(
-              `References search failed for ${tracking.messageId}:`,
-              error.message,
-            );
-            // If connection is lost, break out of the search loop
-            if (
-              error.message.includes("Connection") ||
-              error.message.includes("timeout")
-            ) {
-              break;
-            }
-          }
-        }
-
-        // Method 3: Search by subject line containing "Re:" and from the recipient
-        if (!foundReplies) {
-          try {
-            const subjectReplies = await client.search({
-              from: tracking.toEmail,
-              subject: "Re:",
-            });
-
-            for await (let msg of client.fetch(subjectReplies, {
-              source: true,
-            })) {
-              const parsed = await simpleParser(msg.source);
-              if (
-                parsed.references &&
-                parsed.references.includes(tracking.originalMessageId)
-              ) {
+            // Method 1: In-Reply-To header
+            try {
+              const inReplyToMessages = await client.search({
+                header: { "In-Reply-To": tracking.originalMessageId },
+              });
+              if (inReplyToMessages.length > 0) {
                 foundReplies = true;
-                console.log(
-                  `Found reply via subject search for ${tracking.messageId}`,
-                );
-                break;
+                matchMethod = "in_reply_to";
+              }
+            } catch (error) {
+              if (/Connection|timeout/i.test(error.message)) throw error;
+              replyLog("warn", "search_failed", {
+                mailbox,
+                trackingId: tracking.messageId,
+                method: "in_reply_to",
+                error: error.message,
+              });
+            }
+
+            // Method 2: References header
+            if (!foundReplies) {
+              try {
+                const referencesMessages = await client.search({
+                  header: { References: tracking.originalMessageId },
+                });
+                if (referencesMessages.length > 0) {
+                  foundReplies = true;
+                  matchMethod = "references";
+                }
+              } catch (error) {
+                if (/Connection|timeout/i.test(error.message)) throw error;
+                replyLog("warn", "search_failed", {
+                  mailbox,
+                  trackingId: tracking.messageId,
+                  method: "references",
+                  error: error.message,
+                });
               }
             }
-          } catch (error) {
-            console.log(
-              `Subject search failed for ${tracking.messageId}:`,
-              error.message,
-            );
-            // If connection is lost, break out of the search loop
-            if (
-              error.message.includes("Connection") ||
-              error.message.includes("timeout")
-            ) {
-              break;
+
+            // Method 3: Subject "Re:" from the recipient
+            if (!foundReplies) {
+              try {
+                const subjectReplies = await client.search({
+                  from: tracking.toEmail,
+                  subject: "Re:",
+                });
+                for await (let msg of client.fetch(subjectReplies, {
+                  source: true,
+                })) {
+                  const parsed = await simpleParser(msg.source);
+                  if (
+                    parsed.references &&
+                    parsed.references.includes(tracking.originalMessageId)
+                  ) {
+                    foundReplies = true;
+                    matchMethod = "subject";
+                    break;
+                  }
+                }
+              } catch (error) {
+                if (/Connection|timeout/i.test(error.message)) throw error;
+                replyLog("warn", "search_failed", {
+                  mailbox,
+                  trackingId: tracking.messageId,
+                  method: "subject",
+                  error: error.message,
+                });
+              }
             }
-          }
-        }
 
-        if (!foundReplies) {
-          console.log(
-            `🔍 [checkForReplies] No reply found yet for ${tracking.messageId} ` +
-              `(sender ${tracking.fromEmail}, In-Reply-To/References ${tracking.originalMessageId})`,
-          );
-        }
+            mb.checked++;
+            totals.recordsChecked++;
 
-        if (foundReplies) {
-          const replyTime = new Date();
+            if (!foundReplies) {
+              replyLog("info", "reply_not_found", {
+                mailbox,
+                trackingId: tracking.messageId,
+                originalMessageId: tracking.originalMessageId,
+              });
+              continue;
+            }
 
-          // Get detailed reply information
-          let replyDetails = null;
-          try {
-            // Fetch the actual reply message to get details
-            const replyMessages = await client.search({
-              header: { "In-Reply-To": tracking.originalMessageId },
+            // Reply found — fetch detailed reply information
+            const replyTime = new Date();
+            let replyDetails = null;
+            try {
+              const replyMessages = await client.search({
+                header: { "In-Reply-To": tracking.originalMessageId },
+              });
+              if (replyMessages.length > 0) {
+                for await (let msg of client.fetch(replyMessages.slice(0, 1), {
+                  envelope: true,
+                  source: true,
+                })) {
+                  const parsed = await simpleParser(msg.source);
+                  replyDetails = {
+                    replyFrom: msg.envelope.from
+                      ? msg.envelope.from
+                          .map((f) => `${f.name || ""} <${f.address}>`)
+                          .join(", ")
+                      : "Unknown",
+                    replySubject: msg.envelope.subject || "(No Subject)",
+                    replyDate: msg.envelope.date,
+                    replyText: parsed.text || "",
+                    replyHtml: parsed.html || "",
+                    replyMessageId: parsed.messageId,
+                  };
+                  break;
+                }
+              }
+            } catch (error) {
+              replyLog("warn", "reply_details_failed", {
+                mailbox,
+                trackingId: tracking.messageId,
+                error: error.message,
+              });
+              // Continue with basic reply detection even if details fetch fails
+            }
+
+            await EmailTracking.findOneAndUpdate(
+              { messageId: tracking.messageId },
+              { $set: { repliedAt: replyTime } },
+            );
+
+            replyLog("info", "reply_found", {
+              mailbox,
+              trackingId: tracking.messageId,
+              method: matchMethod,
+              originalMessageId: tracking.originalMessageId,
+              replyFrom: replyDetails ? replyDetails.replyFrom : null,
             });
 
-            if (replyMessages.length > 0) {
-              for await (let msg of client.fetch(replyMessages.slice(0, 1), {
-                envelope: true,
-                source: true,
-              })) {
-                const parsed = await simpleParser(msg.source);
-                replyDetails = {
-                  replyFrom: msg.envelope.from
-                    ? msg.envelope.from
-                        .map((f) => `${f.name || ""} <${f.address}>`)
-                        .join(", ")
-                    : "Unknown",
-                  replySubject: msg.envelope.subject || "(No Subject)",
-                  replyDate: msg.envelope.date,
-                  replyText: parsed.text || "",
-                  replyHtml: parsed.html || "",
-                  replyMessageId: parsed.messageId,
-                };
-                break;
-              }
+            let extractedTrackingData = {};
+            if (tracking.trackingPayload) {
+              extractedTrackingData = { ...tracking.trackingPayload };
             }
-          } catch (error) {
-            console.log(
-              `Error fetching reply details for ${tracking.messageId}:`,
-              error.message,
+
+            await sendWebhookNotification(
+              "https://meet.onepgr.com/session/smatpTracking",
+              {
+                event: "replied",
+                trackingId: tracking.messageId,
+                email: tracking.toEmail,
+                from: tracking.fromEmail,
+                subject: tracking.subject,
+                timestamp: replyTime,
+                extractedTrackingData,
+                replyDetails: replyDetails,
+                originalMessageId: tracking.originalMessageId,
+                replyCount: 1,
+              },
             );
-            // Continue with basic reply detection even if details fetch fails
-          }
 
-          await EmailTracking.findOneAndUpdate(
-            { messageId: tracking.messageId },
-            { $set: { repliedAt: replyTime } },
-          );
-
-          // Log reply detection with tracking payload
-          console.log("📧 Reply detected:", {
-            trackingId: tracking.messageId,
-            originalEmail: tracking.toEmail,
-            originalFrom: tracking.fromEmail,
-            replyTime: replyTime,
-            replyDetails: replyDetails,
-            trackingPayload: tracking.trackingPayload || null,
-          });
-
-          // Get tracking payload for reply notification
-          let extractedTrackingData = {};
-          if (tracking.trackingPayload) {
-            extractedTrackingData = { ...tracking.trackingPayload };
-          }
-
-          await sendWebhookNotification(
-            "https://meet.onepgr.com/session/smatpTracking",
-            {
-              event: "replied",
+            replyLog("info", "reply_webhook_sent", {
+              mailbox,
               trackingId: tracking.messageId,
-              email: tracking.toEmail,
-              from: tracking.fromEmail,
-              subject: tracking.subject,
-              timestamp: replyTime,
-              extractedTrackingData,
-              replyDetails: replyDetails,
-              originalMessageId: tracking.originalMessageId,
-              replyCount: 1,
-            },
-          );
+            });
+
+            mb.replies++;
+            totals.repliesFound++;
+          } catch (recordErr) {
+            mb.errors++;
+            totals.errors++;
+            replyLog("error", "record_error", {
+              mailbox,
+              trackingId: tracking.messageId,
+              error: recordErr.message,
+            });
+            // A connection-level error means the mailbox session is dead
+            if (/Connection|timeout/i.test(recordErr.message)) break;
+          }
         }
-      } catch (connError) {
-        console.error(
-          `❌ [checkForReplies] Reply check FAILED for ${tracking.fromEmail} ` +
-            `(${tracking.messageId}): ${connError.message}`,
-        );
-        continue; // Skip to next tracking record
+      } catch (connErr) {
+        mb.errors++;
+        totals.errors++;
+        replyLog("error", "mailbox_connect_failed", {
+          mailbox,
+          host,
+          error: connErr.message,
+        });
       } finally {
         try {
           if (client && typeof client.logout === "function") {
-            await client.logout().catch(
-              (e) =>
-                // console.error('Logout error:', e.message)); // Commented out to reduce log spam
-                null,
-            );
+            await client.logout().catch(() => null);
           }
         } catch (logoutError) {
-          // console.error('Final logout error:', logoutError.message); // Commented out to reduce log spam
+          /* ignore logout errors */
         }
       }
+
+      replyLog("info", "mailbox_done", {
+        mailbox,
+        checked: mb.checked,
+        replies: mb.replies,
+        errors: mb.errors,
+      });
     }
-  } catch (error) {
-    console.error("Reply checking error:", error);
+
+    replyLog("info", "cycle_done", {
+      mailboxes: byMailbox.size,
+      recordsChecked: totals.recordsChecked,
+      repliesFound: totals.repliesFound,
+      errors: totals.errors,
+      durationMs: Date.now() - startedAt,
+    });
+  } catch (err) {
+    replyLog("error", "cycle_error", { error: err.message });
+  } finally {
+    replyCheckRunning = false;
   }
 }
 
