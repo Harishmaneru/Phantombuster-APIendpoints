@@ -12,6 +12,8 @@ const qs = require("qs");
 // Note: DMARC operations now use cPanel UAPI (same as email operations) instead of WHM API
 // Import the NamecheapDomain model from the existing schema
 const { NamecheapDomain } = require("./nameCheapDomainApi.js");
+const ConnectedDomain = require("./connectedDomains.model.js");
+const dns = require("dns").promises;
 
 // Import simple file logging system
 const fileLogger = require("../loggingSystem/fileLogger");
@@ -3090,8 +3092,404 @@ router.post("/cpanel/upsert-dns-record", async (req, res) => {
   }
 });
 
+// Route: Fetch all hosting domains from cPanel (main + addon + parked + sub)
+// Optional: pass ?userId=xxx&sync=true to persist the addon domains to the user's
+// NamecheapDomain collection as connected/external domains.
+router.get("/cpanel/hosting-domains", async (req, res) => {
+  const { userId, sync } = req.query;
+  const shouldSync = sync === "true" || sync === "1";
+
+  try {
+    const result = await cpanelRequest("DomainInfo/list_domains");
+
+    if (result.status !== 1 || !result.data) {
+      return res.status(500).json({
+        success: false,
+        error: result.errors?.[0] || "Failed to fetch hosting domains",
+        apiResponse: result,
+      });
+    }
+
+    const {
+      main_domain = null,
+      addon_domains = [],
+      parked_domains = [],
+      sub_domains = [],
+    } = result.data;
+
+    // cPanel may return addon_domains as either an array of strings or
+    // an array of objects with a `domain` field — normalize both shapes.
+    const normalize = (list) =>
+      (list || []).map((d) =>
+        typeof d === "string" ? d.toLowerCase() : (d.domain || "").toLowerCase(),
+      ).filter(Boolean);
+
+    const addonDomains = normalize(addon_domains);
+    const parkedDomains = normalize(parked_domains);
+    const subDomains = normalize(sub_domains);
+
+    const allDomains = [
+      ...(main_domain ? [main_domain.toLowerCase()] : []),
+      ...addonDomains,
+      ...parkedDomains,
+    ];
+
+    let syncResult = null;
+    if (shouldSync && userId) {
+      const synced = [];
+      const skipped = [];
+      const failed = [];
+
+      for (const domain of addonDomains) {
+        try {
+          const existing = await NamecheapDomain.findOne({
+            userId,
+            domain: domain.toLowerCase(),
+          });
+
+          if (existing) {
+            skipped.push(domain);
+            continue;
+          }
+
+          await NamecheapDomain.create({
+            userId,
+            domain: domain.toLowerCase(),
+            registrationData: {
+              registrationDate: new Date(),
+            },
+            domainStatus: {
+              isActive: true,
+              status: "connected",
+            },
+            dnsConfiguration: {
+              isUsingNamecheapDNS: false,
+              customNameservers: true,
+            },
+            cpanelConfiguration: {
+              domainAdded: true,
+              domainAddedAt: new Date(),
+              subdomain: domain,
+              directory: `public_html/${domain}`,
+            },
+            source: "external",
+            registrar: "external",
+            hostingProvider: "cpanel",
+          });
+
+          synced.push(domain);
+        } catch (dbErr) {
+          console.error(`Failed to sync domain ${domain}:`, dbErr.message);
+          failed.push({ domain, error: dbErr.message });
+        }
+      }
+
+      syncResult = {
+        userId,
+        syncedCount: synced.length,
+        skippedCount: skipped.length,
+        failedCount: failed.length,
+        synced,
+        skipped,
+        failed,
+      };
+    }
+
+    return res.json({
+      success: true,
+      cpanelHost: WHM_HOST,
+      domains: {
+        main: main_domain ? main_domain.toLowerCase() : null,
+        addon: addonDomains,
+        parked: parkedDomains,
+        sub: subDomains,
+        all: allDomains,
+      },
+      counts: {
+        total: allDomains.length,
+        addon: addonDomains.length,
+        parked: parkedDomains.length,
+        sub: subDomains.length,
+      },
+      sync: syncResult,
+      fetchedAt: new Date().toISOString(),
+    });
+  } catch (err) {
+    console.error("Failed to fetch hosting domains:", err.message);
+    return res.status(500).json({
+      success: false,
+      error: err.message,
+      details: err.response?.data || null,
+    });
+  }
+});
+
+// ============================================================
+//   Connected (externally-registered) domains
+//   Domains bought elsewhere (e.g. GoDaddy) and hosted on this
+//   cPanel server. Stored in `connected_domains` collection.
+// ============================================================
+
+async function createDomainInCpanel(domain) {
+  const normalized = domain.toLowerCase();
+
+  try {
+    const modern = await cpanelRequest(
+      "Domains/create_domain",
+      { domain: normalized },
+      "POST",
+    );
+    if (modern && modern.status === 1) {
+      return {
+        method: "Domains/create_domain",
+        documentRoot:
+          modern.data?.docroot ||
+          modern.data?.document_root ||
+          `/home/${MASTER_USER}/public_html/${normalized}`,
+        raw: modern,
+        alreadyExists: false,
+      };
+    }
+    const errMsg = (modern?.errors || []).join("; ") || "unknown error";
+    if (/already (exists|configured|in use)/i.test(errMsg)) {
+      return {
+        method: "Domains/create_domain",
+        documentRoot: `/home/${MASTER_USER}/public_html/${normalized}`,
+        raw: modern,
+        alreadyExists: true,
+      };
+    }
+    throw new Error(errMsg);
+  } catch (modernErr) {
+    const msg = modernErr.response?.data?.errors?.join("; ") || modernErr.message;
+    if (/already (exists|configured|in use)/i.test(msg)) {
+      return {
+        method: "Domains/create_domain",
+        documentRoot: `/home/${MASTER_USER}/public_html/${normalized}`,
+        raw: modernErr.response?.data || null,
+        alreadyExists: true,
+      };
+    }
+    console.warn(
+      "[Connect Domain] Domains/create_domain failed, falling back to AddonDomain:",
+      msg,
+    );
+  }
+
+  const fallback = await addDomainIfNotExists(normalized);
+  if (fallback.status !== 1) {
+    throw new Error(fallback.error || "Failed to add domain in cPanel");
+  }
+  return {
+    method: "AddonDomain/addaddondomain",
+    documentRoot: `/home/${MASTER_USER}/public_html/${normalized}`,
+    raw: fallback,
+    alreadyExists: /already exists/i.test(fallback.message || ""),
+  };
+}
+
+// POST /cpanel/connect-domain
+// Add an externally-registered domain to cPanel and store in DB.
+router.post("/cpanel/connect-domain", async (req, res) => {
+  try {
+    const {
+      userId,
+      domain,
+      registrar = "godaddy",
+      hostingProvider = "namecheap_vps",
+      notes,
+    } = req.body || {};
+
+    if (!userId || !domain) {
+      return res.status(400).json({
+        success: false,
+        error: "userId and domain are required",
+      });
+    }
+
+    const normalized = String(domain).toLowerCase().trim();
+
+    if (!isValidDomain(normalized)) {
+      return res.status(400).json({
+        success: false,
+        error: "Invalid domain format",
+      });
+    }
+
+    const existing = await ConnectedDomain.findOne({
+      userId: String(userId),
+      domain: normalized,
+    });
+
+    if (existing) {
+      return res.status(409).json({
+        success: false,
+        error: "Domain already connected for this user",
+        data: existing,
+      });
+    }
+
+    const cpanelResult = await createDomainInCpanel(normalized);
+
+    const saved = await ConnectedDomain.create({
+      userId: String(userId),
+      domain: normalized,
+      source: "external",
+      registrar,
+      hostingProvider,
+      cpanel: {
+        added: true,
+        addedAt: new Date(),
+        documentRoot: cpanelResult.documentRoot,
+        method: cpanelResult.method,
+      },
+      status: "pending",
+      notes,
+    });
+
+    return res.json({
+      success: true,
+      message: cpanelResult.alreadyExists
+        ? "Domain already existed in cPanel — DB record created"
+        : "Domain connected successfully",
+      domain: normalized,
+      data: saved,
+      cpanelResponse: cpanelResult.raw,
+    });
+  } catch (error) {
+    console.error("[Connect Domain] Failed:", error.message);
+
+    if (error.code === 11000) {
+      return res.status(409).json({
+        success: false,
+        error: "Domain already connected (duplicate key)",
+      });
+    }
+
+    return res.status(500).json({
+      success: false,
+      error: error.message,
+      details: error.response?.data || null,
+    });
+  }
+});
+
+// GET /cpanel/connected-domains?userId=...
+// List all connected domains for a user.
+router.get("/cpanel/connected-domains", async (req, res) => {
+  try {
+    const userId = req.query.userId || req.body.userId;
+    if (!userId) {
+      return res.status(400).json({
+        success: false,
+        error: "userId is required",
+      });
+    }
+
+    const domains = await ConnectedDomain.find({ userId: String(userId) })
+      .sort({ createdAt: -1 })
+      .lean();
+
+    return res.json({
+      success: true,
+      userId: String(userId),
+      count: domains.length,
+      domains,
+    });
+  } catch (error) {
+    console.error("[Connected Domains] List failed:", error.message);
+    return res.status(500).json({
+      success: false,
+      error: error.message,
+    });
+  }
+});
+
+// POST /cpanel/connect-domain/verify-dns
+// Resolve domain A/MX records and compare against server IP.
+router.post("/cpanel/connect-domain/verify-dns", async (req, res) => {
+  try {
+    const { userId, domain, expectedIp } = req.body || {};
+
+    if (!userId || !domain) {
+      return res.status(400).json({
+        success: false,
+        error: "userId and domain are required",
+      });
+    }
+
+    const normalized = String(domain).toLowerCase().trim();
+
+    const record = await ConnectedDomain.findOne({
+      userId: String(userId),
+      domain: normalized,
+    });
+
+    if (!record) {
+      return res.status(404).json({
+        success: false,
+        error: "Connected domain not found for this user",
+      });
+    }
+
+    let resolvedIps = [];
+    let mxResolved = [];
+    let resolveError = null;
+
+    try {
+      resolvedIps = await dns.resolve4(normalized);
+    } catch (err) {
+      resolveError = `A record: ${err.code || err.message}`;
+    }
+
+    try {
+      const mx = await dns.resolveMx(normalized);
+      mxResolved = mx.map((m) => `${m.priority} ${m.exchange}`);
+    } catch (err) {
+      resolveError = resolveError
+        ? `${resolveError}; MX: ${err.code || err.message}`
+        : `MX: ${err.code || err.message}`;
+    }
+
+    const target = expectedIp || WHM_HOST;
+    const aMatches = resolvedIps.includes(target);
+    const verified = aMatches && resolvedIps.length > 0;
+
+    record.dnsCheck = {
+      expectedIp: target,
+      resolvedIps,
+      mxResolved,
+      lastCheckedAt: new Date(),
+    };
+    record.dnsVerified = verified;
+    if (verified) {
+      record.dnsVerifiedAt = new Date();
+      record.status = "connected";
+    }
+    await record.save();
+
+    return res.json({
+      success: true,
+      domain: normalized,
+      verified,
+      expectedIp: target,
+      resolvedIps,
+      mxResolved,
+      resolveError,
+      data: record,
+    });
+  } catch (error) {
+    console.error("[Verify DNS] Failed:", error.message);
+    return res.status(500).json({
+      success: false,
+      error: error.message,
+    });
+  }
+});
+
 module.exports = {
   router,
   cpanelRequest,
   validateDMARCRecords,
+  ConnectedDomain,
 };
