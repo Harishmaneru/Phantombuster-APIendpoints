@@ -3452,11 +3452,28 @@ router.post("/cpanel/connect-domain/verify-dns", async (req, res) => {
     }
 
     const target = expectedIp || WHM_HOST;
-    const aMatches = resolvedIps.includes(target);
-    const verified = aMatches && resolvedIps.length > 0;
+    const isIp = /^\d{1,3}(\.\d{1,3}){3}$/.test(target);
+    let expectedIps = [];
+    if (isIp) {
+      expectedIps = [target];
+    } else {
+      try {
+        expectedIps = await dns.resolve4(target);
+      } catch (err) {
+        resolveError = resolveError
+          ? `${resolveError}; expected host (${target}): ${err.code || err.message}`
+          : `expected host (${target}): ${err.code || err.message}`;
+      }
+    }
+
+    const verified =
+      resolvedIps.length > 0 &&
+      expectedIps.length > 0 &&
+      resolvedIps.some((ip) => expectedIps.includes(ip));
 
     record.dnsCheck = {
       expectedIp: target,
+      expectedIps,
       resolvedIps,
       mxResolved,
       lastCheckedAt: new Date(),
@@ -3473,6 +3490,7 @@ router.post("/cpanel/connect-domain/verify-dns", async (req, res) => {
       domain: normalized,
       verified,
       expectedIp: target,
+      expectedIps,
       resolvedIps,
       mxResolved,
       resolveError,
