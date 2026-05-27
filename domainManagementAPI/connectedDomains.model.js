@@ -41,6 +41,15 @@ const ConnectedDomainSchema = new mongoose.Schema(
       mxResolved: [String],
     },
     emailEnabled: { type: Boolean, default: false },
+    emailAccounts: [
+      {
+        username: String,
+        email: String,
+        quota: { type: Number, default: 500 },
+        createdAt: { type: Date, default: Date.now },
+        suspended: { type: Boolean, default: false },
+      },
+    ],
     status: {
       type: String,
       enum: ["pending", "connected", "failed"],

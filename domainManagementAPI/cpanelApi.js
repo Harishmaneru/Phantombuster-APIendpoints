@@ -318,19 +318,34 @@ async function addDomainIfNotExists(domain) {
   }
 }
 
-// Verify user owns domain in database
-async function userOwnsDomain(userId, domain) {
+// Resolve which collection owns a given user+domain.
+// Returns null if not found, otherwise { kind, Model, doc }.
+async function resolveUserDomain(userId, domain) {
   try {
-    const domainRecord = await NamecheapDomain.findOne({
-      userId: userId,
-      domain: domain.toLowerCase(),
-    });
+    const d = String(domain).toLowerCase();
+    const uid = String(userId);
 
-    return !!domainRecord && domainRecord.domainStatus.isActive;
+    const nc = await NamecheapDomain.findOne({ userId: uid, domain: d });
+    if (nc && nc.domainStatus && nc.domainStatus.isActive) {
+      return { kind: "namecheap", Model: NamecheapDomain, doc: nc };
+    }
+
+    const ext = await ConnectedDomain.findOne({ userId: uid, domain: d });
+    if (ext && ext.cpanel && ext.cpanel.added) {
+      return { kind: "connected", Model: ConnectedDomain, doc: ext };
+    }
+
+    return null;
   } catch (error) {
-    console.error("Error checking domain ownership:", error);
-    return false;
+    console.error("Error resolving user domain:", error);
+    return null;
   }
+}
+
+// Verify user owns domain in database (checks both NamecheapDomain and ConnectedDomain).
+async function userOwnsDomain(userId, domain) {
+  const r = await resolveUserDomain(userId, domain);
+  return !!r;
 }
 
 // Helper function to list available email functions
@@ -659,19 +674,30 @@ router.post("/cpanel/create-email", emailCreationLimiter, async (req, res) => {
       suspended: false,
     };
 
-    // Update domain in database with new email account
-    const updatedDomain = await NamecheapDomain.findOneAndUpdate(
-      { userId, domain: domain.toLowerCase() },
-      {
-        $push: { emailAccounts: emailAccountData },
-        $set: {
-          "dnsConfiguration.emailDNSConfigured": true,
-          "dnsConfiguration.emailDNSConfiguredAt": new Date(),
-          updatedAt: new Date(),
+    // Update domain in database with new email account (handles both Namecheap and Connected domains).
+    const ownerRecord = await resolveUserDomain(userId, domain);
+    let updatedDomain = null;
+    if (ownerRecord) {
+      const setFields =
+        ownerRecord.kind === "namecheap"
+          ? {
+              "dnsConfiguration.emailDNSConfigured": true,
+              "dnsConfiguration.emailDNSConfiguredAt": new Date(),
+              updatedAt: new Date(),
+            }
+          : {
+              emailEnabled: true,
+              updatedAt: new Date(),
+            };
+      updatedDomain = await ownerRecord.Model.findOneAndUpdate(
+        { userId: String(userId), domain: domain.toLowerCase() },
+        {
+          $push: { emailAccounts: emailAccountData },
+          $set: setFields,
         },
-      },
-      { new: true, upsert: false },
-    );
+        { new: true, upsert: false },
+      );
+    }
 
     if (!updatedDomain) {
       console.warn(
@@ -1138,11 +1164,9 @@ router.get("/cpanel/email-stats/:userId/:domain", async (req, res) => {
       });
     }
 
-    // Get domain info from database
-    const domainRecord = await NamecheapDomain.findOne({
-      userId,
-      domain: domain.toLowerCase(),
-    });
+    // Get domain info from database (works for both Namecheap and Connected domains)
+    const ownerRecord = await resolveUserDomain(userId, domain);
+    const domainRecord = ownerRecord ? ownerRecord.doc : null;
 
     // Get email accounts from cPanel
     const emailResult = await cpanelRequest("Email/list_pops", {
@@ -1428,23 +1452,23 @@ router.delete("/cpanel/delete-email", async (req, res) => {
       throw new Error(errorMsg);
     }
 
-    // Step 4: Remove email account from database
-    const updatedDomain = await NamecheapDomain.findOneAndUpdate(
-      {
-        userId,
-        domain: emailDomain.toLowerCase(),
-        "emailAccounts.email": emailAddress,
-      },
-      {
-        $pull: {
-          emailAccounts: { email: emailAddress },
+    // Step 4: Remove email account from database (handles both Namecheap and Connected domains).
+    const ownerRecord = await resolveUserDomain(userId, emailDomain);
+    let updatedDomain = null;
+    if (ownerRecord) {
+      updatedDomain = await ownerRecord.Model.findOneAndUpdate(
+        {
+          userId: String(userId),
+          domain: emailDomain.toLowerCase(),
+          "emailAccounts.email": emailAddress,
         },
-        $set: {
-          updatedAt: new Date(),
+        {
+          $pull: { emailAccounts: { email: emailAddress } },
+          $set: { updatedAt: new Date() },
         },
-      },
-      { new: true },
-    );
+        { new: true },
+      );
+    }
 
     // Step 5: Log email deletion to Slack
     try {
@@ -1557,11 +1581,18 @@ router.get("/cpanel/user-all-emails/:userId", async (req, res) => {
   }
 
   try {
-    // Step 1: Get all domains owned by this user
-    const userDomains = await NamecheapDomain.find({
-      userId: userId,
-      "domainStatus.isActive": true,
-    });
+    // Step 1: Get all domains owned by this user (Namecheap + external Connected).
+    const [namecheapDomains, connectedDomains] = await Promise.all([
+      NamecheapDomain.find({
+        userId: userId,
+        "domainStatus.isActive": true,
+      }),
+      ConnectedDomain.find({
+        userId: String(userId),
+        "cpanel.added": true,
+      }),
+    ]);
+    const userDomains = [...namecheapDomains, ...connectedDomains];
 
     if (!userDomains || userDomains.length === 0) {
       return res.json({
@@ -2321,12 +2352,17 @@ router.get("/cpanel/email-sending-stats/:userId/:domain", async (req, res) => {
 // Helper function to get accurate email creation date
 async function getEmailCreationDate(email, domain, userId) {
   try {
-    // Method 1: Check our database first (most accurate for emails we created)
-    const domainRecord = await NamecheapDomain.findOne({
-      userId: userId,
-      domain: domain.toLowerCase(),
-      "emailAccounts.email": email.toLowerCase(),
-    });
+    // Method 1: Check our database first (most accurate for emails we created).
+    // Resolve which collection owns this domain, then look up the mailbox.
+    const ownerRecord = await resolveUserDomain(userId, domain);
+    const domainRecord =
+      ownerRecord &&
+      ownerRecord.doc.emailAccounts &&
+      ownerRecord.doc.emailAccounts.some(
+        (a) => a.email && a.email.toLowerCase() === email.toLowerCase(),
+      )
+        ? ownerRecord.doc
+        : null;
 
     if (domainRecord) {
       const emailAccount = domainRecord.emailAccounts.find(
