@@ -2834,6 +2834,11 @@ router.post('/create-checkout-session-by-app', async (req, res) => {
             return sandboxUrls[app] || 'https://liame.onepgr.com';
         };
         const getSuccessUrl = (app, planType, isSandbox) => {
+            // For liame.ai-home, success pages should redirect to the OnePGR Liame frontend
+            if (app === 'liame.ai-home') {
+                const successBase = isSandbox ? getSandboxUrl('liame') : appUrlMap['liame'];
+                return `${successBase}/success?session_id={CHECKOUT_SESSION_ID}`;
+            }
             const baseUrl = isSandbox ? getSandboxUrl(app) : appUrlMap[app];
             
             // All email-related plans go to email-success
@@ -3424,7 +3429,7 @@ router.post('/get-subscription-info-by-app', async (req, res) => {
                 gps: 'https://gps.onepgr.com',
                 getsalesgpt: 'https://sales.onepgr.com',
                 liame: 'https://liame.onepgr.com',
-                'liame.ai-home': 'https://liame.onepgr.com',
+                'liame.ai-home': 'https://www.liame.ai',
             };
 
             let returnUrl = appUrlMap[app] ? `${appUrlMap[app]}/profile` : 'https://onepgr.com';
