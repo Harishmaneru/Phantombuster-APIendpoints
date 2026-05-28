@@ -2778,11 +2778,13 @@ router.post('/create-checkout-session-by-app', async (req, res) => {
             gps: 'http://localhost:4200',
             getsalesgpt: 'http://localhost:4200',
             liame: 'https://liame.onepgr.com',
+            'liame.ai-home': 'https://liame.onepgr.com',
         } : {
             kampaignai: 'https://kampaign.onepgr.com',
             gps: 'https://gps.onepgr.com',
             getsalesgpt: 'https://sales.onepgr.com',
             liame: 'https://liame.onepgr.com',
+            'liame.ai-home': 'https://liame.onepgr.com',
         };
 
         if (!app || !appUrlMap[app]) return res.status(400).json({ error: 'Invalid or missing app parameter' });
@@ -2828,7 +2830,7 @@ router.post('/create-checkout-session-by-app', async (req, res) => {
 
         // 4) Helper functions for URLs
         const getSandboxUrl = (app) => {
-            const sandboxUrls = { kampaignai: 'http://localhost:4200', gps: 'http://localhost:4200', getsalesgpt: 'http://localhost:4200', liame: 'https://liame.onepgr.com' };
+            const sandboxUrls = { kampaignai: 'http://localhost:4200', gps: 'http://localhost:4200', getsalesgpt: 'http://localhost:4200', liame: 'https://liame.onepgr.com', 'liame.ai-home': 'https://www.liame.ai' };
             return sandboxUrls[app] || 'https://liame.onepgr.com';
         };
         const getSuccessUrl = (app, planType, isSandbox) => {
@@ -3015,12 +3017,14 @@ router.post('/create-billing-portal-session-by-app', async (req, res) => {
             gps: 'http://localhost:4200',
             getsalesgpt: 'http://localhost:4200',
             liame: 'https://liame.onepgr.com',
+           'liame.ai-home': 'https://www.liame.ai',
         } : {
             // Production URLs
             kampaignai: 'https://kampaign.onepgr.com',
             gps: 'https://gps.onepgr.com',
             getsalesgpt: 'https://sales.onepgr.com',
             liame: 'https://liame.onepgr.com',
+            'liame.ai-home': 'https://www.liame.ai',
         };
 
         // Determine return URL based on app type
@@ -3420,6 +3424,7 @@ router.post('/get-subscription-info-by-app', async (req, res) => {
                 gps: 'https://gps.onepgr.com',
                 getsalesgpt: 'https://sales.onepgr.com',
                 liame: 'https://liame.onepgr.com',
+                'liame.ai-home': 'https://liame.onepgr.com',
             };
 
             let returnUrl = appUrlMap[app] ? `${appUrlMap[app]}/profile` : 'https://onepgr.com';
