@@ -3039,6 +3039,63 @@ function replyLog(level, event, data = {}) {
   );
 }
 
+// Human-readable cycle summary printed alongside the cycle_done JSON line.
+// Additive — does not replace any existing JSON-line log.
+function printCycleSummary(report, totals, durationMs, candidatesLoaded, startedAtIso) {
+  const STATUS_ICON = { completed: "✅", skipped: "⚠️ ", failed: "❌", pending: "❔" };
+  const rows = [];
+  let counts = { completed: 0, skipped: 0, failed: 0 };
+  let i = 0;
+  for (const [mailbox, m] of report) {
+    i++;
+    counts[m.status] = (counts[m.status] || 0) + 1;
+    const icon = STATUS_ICON[m.status] || "❔";
+    let details;
+    if (m.status === "skipped") {
+      details = `${m.reason}${m.recordsSkipped ? ` (${m.recordsSkipped} record(s))` : ""}`;
+    } else if (m.status === "failed") {
+      details = `${m.reason || "error"}`;
+    } else {
+      const skipped = m.recordsSkipped
+        ? `${m.recordsSkipped} dropped, `
+        : "";
+      details = `${skipped}${m.checked} checked → ${m.replies} repl${m.replies === 1 ? "y" : "ies"}${m.errors ? `, ${m.errors} err` : ""}`;
+    }
+    rows.push({ i, mailbox, icon, records: m.recordsTotal, host: m.host, details });
+  }
+
+  const widths = {
+    i: Math.max(1, ...rows.map((r) => String(r.i).length)),
+    mailbox: Math.max(7, ...rows.map((r) => r.mailbox.length)),
+    records: Math.max(7, ...rows.map((r) => String(r.records).length)),
+    host: Math.max(4, ...rows.map((r) => r.host.length)),
+    details: Math.max(7, ...rows.map((r) => r.details.length)),
+  };
+  const pad = (s, w) => String(s).padEnd(w);
+
+  const lines = [];
+  lines.push("");
+  lines.push("================ Reply Check Cycle Summary ================");
+  lines.push(
+    `${startedAtIso} · duration ${(durationMs / 1000).toFixed(1)}s · ${totals.repliesFound} repl${totals.repliesFound === 1 ? "y" : "ies"} · ${totals.errors} error(s)`,
+  );
+  lines.push(
+    `mailboxes: ${report.size} (✅ ${counts.completed || 0}  ⚠️  ${counts.skipped || 0}  ❌ ${counts.failed || 0})  ·  candidates: ${candidatesLoaded}  ·  records checked: ${totals.recordsChecked}`,
+  );
+  lines.push("");
+  lines.push(
+    `${pad("#", widths.i)}  ${pad("Mailbox", widths.mailbox)}  St  ${pad("Records", widths.records)}  ${pad("Host", widths.host)}  Details`,
+  );
+  for (const r of rows) {
+    lines.push(
+      `${pad(r.i, widths.i)}  ${pad(r.mailbox, widths.mailbox)}  ${r.icon}  ${pad(r.records, widths.records)}  ${pad(r.host, widths.host)}  ${r.details}`,
+    );
+  }
+  lines.push("===========================================================");
+  lines.push("");
+  console.log(lines.join("\n"));
+}
+
 async function checkForReplies() {
   if (replyCheckRunning) {
     replyLog("warn", "cycle_skipped", { reason: "previous_cycle_running" });
@@ -3051,7 +3108,10 @@ async function checkForReplies() {
     const trackings = await EmailTracking.find({
       repliedAt: { $exists: false },
       fromEmail: { $exists: true },
-    }).limit(50);
+      originalMessageId: { $exists: true, $ne: null },
+    })
+      .sort({ createdAt: -1 })
+      .limit(200);
 
     // Group pending records by sender mailbox so each mailbox is opened once
     const byMailbox = new Map();
@@ -3067,6 +3127,21 @@ async function checkForReplies() {
       mailboxes: byMailbox.size,
     });
 
+    const cycleStartedAtIso = new Date(startedAt).toISOString();
+    const mailboxReport = new Map();
+    for (const [mailbox, records] of byMailbox) {
+      mailboxReport.set(mailbox, {
+        status: "pending",
+        reason: null,
+        recordsTotal: records.length,
+        recordsSkipped: 0,
+        host: "—",
+        checked: 0,
+        replies: 0,
+        errors: 0,
+      });
+    }
+
     const totals = { recordsChecked: 0, repliesFound: 0, errors: 0 };
 
     // Sequential — one mailbox at a time
@@ -3078,6 +3153,8 @@ async function checkForReplies() {
           reason: "no_credentials",
           records: records.length,
         });
+        const r = mailboxReport.get(mailbox);
+        if (r) { r.status = "skipped"; r.reason = "no_credentials"; }
         continue;
       }
 
@@ -3092,9 +3169,20 @@ async function checkForReplies() {
             trackingId: tracking.messageId,
             reason: "no_original_message_id",
           });
+          const r = mailboxReport.get(mailbox);
+          if (r) r.recordsSkipped += 1;
         }
       }
-      if (valid.length === 0) continue;
+      if (valid.length === 0) {
+        replyLog("warn", "mailbox_skipped", {
+          mailbox,
+          reason: "all_records_invalid",
+          records: records.length,
+        });
+        const r = mailboxReport.get(mailbox);
+        if (r) { r.status = "skipped"; r.reason = "all_records_invalid"; }
+        continue;
+      }
 
       const host = getImapHost(smtp.host, mailbox, smtp.oauth2?.provider);
       let client;
@@ -3132,6 +3220,8 @@ async function checkForReplies() {
           host,
           records: valid.length,
         });
+        const rConn = mailboxReport.get(mailbox);
+        if (rConn) rConn.host = host;
 
         // Reuse the SAME connection for every pending record of this mailbox
         for (const tracking of valid) {
@@ -3320,6 +3410,12 @@ async function checkForReplies() {
           host,
           error: connErr.message,
         });
+        const rFail = mailboxReport.get(mailbox);
+        if (rFail) {
+          rFail.status = "failed";
+          rFail.reason = connErr.message;
+          rFail.host = host;
+        }
       } finally {
         try {
           if (client && typeof client.logout === "function") {
@@ -3336,15 +3432,30 @@ async function checkForReplies() {
         replies: mb.replies,
         errors: mb.errors,
       });
+      const rDone = mailboxReport.get(mailbox);
+      if (rDone) {
+        if (rDone.status === "pending") rDone.status = "completed";
+        rDone.checked = mb.checked;
+        rDone.replies = mb.replies;
+        rDone.errors = mb.errors;
+      }
     }
 
+    const cycleDurationMs = Date.now() - startedAt;
     replyLog("info", "cycle_done", {
       mailboxes: byMailbox.size,
       recordsChecked: totals.recordsChecked,
       repliesFound: totals.repliesFound,
       errors: totals.errors,
-      durationMs: Date.now() - startedAt,
+      durationMs: cycleDurationMs,
     });
+    printCycleSummary(
+      mailboxReport,
+      totals,
+      cycleDurationMs,
+      trackings.length,
+      cycleStartedAtIso,
+    );
   } catch (err) {
     replyLog("error", "cycle_error", { error: err.message });
   } finally {
