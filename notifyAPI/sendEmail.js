@@ -1309,12 +1309,14 @@ router.post("/api/emailsend", async (req, res) => {
 
         // Still create tracking record (optional, but good for consistency)
         const trackingId = crypto.randomBytes(16).toString("hex");
+        const messageId = `<${trackingId}@${from.split("@")[1]}>`;
         const webhookUrl = "https://meet.onepgr.com/session/smatpTracking";
 
         // Save tracking and send webhook asynchronously
         Promise.all([
           EmailTracking.create({
             messageId: trackingId,
+            originalMessageId: messageId,
             fromEmail: from,
             toEmail: Array.isArray(to) ? to[0] : to,
             subject,
@@ -1329,14 +1331,32 @@ router.post("/api/emailsend", async (req, res) => {
             from,
             subject,
             timestamp: new Date(),
-            recipients: { to, cc, bcc },
+            messageId,
+            recipients: { to, cc: cc || null, bcc: bcc || null },
+            contentUsed: {
+              html: !!html,
+              text: !!text,
+              trackingEnabled: !!trackLinks,
+              attachmentsCount: attachments ? attachments.length : 0,
+            },
+            trackingPayload: trackingPayload || null,
             senderName: sender_name || null,
           }),
         ]).catch((err) => console.error("Tracking background error:", err));
 
         return res.json({
           success: true,
+          messageId,
           trackingId,
+          recipients: { to, cc: cc || null, bcc: bcc || null },
+          contentUsed: {
+            html: !!html,
+            text: !!text,
+            trackingEnabled: !!trackLinks,
+            attachmentsCount: attachments ? attachments.length : 0,
+          },
+          trackingPayload: trackingPayload || null,
+          senderName: sender_name || null,
           method: "microsoft-graph",
           message: "Email sent via Microsoft Graph API",
         });
