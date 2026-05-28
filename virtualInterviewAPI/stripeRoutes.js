@@ -2951,7 +2951,26 @@ router.post('/create-checkout-session-by-app', async (req, res) => {
         if (customerId) sessionPayload.customer = customerId;
 
         // 7) Create session
+        console.log(`[${isSandbox ? 'SANDBOX' : 'PRODUCTION'}] create-checkout-session-by-app payload summary:`, {
+            userId,
+            app,
+            planType,
+            environment,
+            customerId,
+            priceList,
+            sessionMode,
+            successUrl: getSuccessUrl(app, planType, isSandbox),
+            cancelUrl: getCancelUrl(app, planType, isSandbox),
+            allow_promotion_codes: sessionPayload.allow_promotion_codes || false
+        });
+
         const session = await stripe.checkout.sessions.create(sessionPayload);
+
+        console.log(`[${isSandbox ? 'SANDBOX' : 'PRODUCTION'}] Stripe checkout session created: id=${session.id}`, {
+            url: session.url,
+            mode: session.mode,
+            payment_status: session.payment_status
+        });
 
         // Store session info in DB
         if (customerId) {
