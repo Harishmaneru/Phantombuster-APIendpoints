@@ -3089,7 +3089,8 @@ router.post('/create-billing-portal-session-by-app', async (req, res) => {
             gps: 'http://localhost:4200',
             getsalesgpt: 'http://localhost:4200',
             liame: 'https://liame.onepgr.com',
-           'liame.ai-home': 'https://www.liame.ai',
+        //    'liame.ai-home': 'https://www.liame.ai',
+         'liame.ai-home': 'http://localhost:3000',
         } : {
             // Production URLs
             kampaignai: 'https://kampaign.onepgr.com',
