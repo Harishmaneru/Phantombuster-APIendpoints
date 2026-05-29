@@ -1052,6 +1052,28 @@ router.post('/get-subscription-from-session', async (req, res) => {
     try {
         console.log('[get-subscription-from-session] Retrieving session:', sessionId, 'Sandbox:', isSandbox);
 
+        // Detailed inbound payload logging (non-intrusive, for debugging only)
+        const sessionIdLooksLikeTest = typeof sessionId === 'string' && sessionId.startsWith('cs_test_');
+        console.log('[get-subscription-from-session] Request payload:', {
+            body: req.body,
+            query: req.query,
+            resolvedSandbox: isSandbox,
+            stripeInstance: isSandbox ? 'SANDBOX (test)' : 'PRODUCTION (live)',
+            sessionIdPrefix: typeof sessionId === 'string' ? sessionId.slice(0, 8) : null,
+            sessionIdLooksLikeTest,
+            ipAddress: req.ip || req.connection?.remoteAddress,
+            userAgent: req.get('User-Agent')
+        });
+
+        // Warn early if the session id mode does not match the Stripe instance being used
+        if (sessionIdLooksLikeTest && !isSandbox) {
+            console.warn('[get-subscription-from-session] ⚠️ MODE MISMATCH: test-mode session id (cs_test_*) is being retrieved with the PRODUCTION Stripe instance. ' +
+                'Pass { sandbox: true } in the request body (or ?sandbox=true) so the sandbox Stripe key is used. This will otherwise fail with "No such checkout.session".');
+        } else if (!sessionIdLooksLikeTest && isSandbox && typeof sessionId === 'string' && sessionId.startsWith('cs_live_')) {
+            console.warn('[get-subscription-from-session] ⚠️ MODE MISMATCH: live-mode session id (cs_live_*) is being retrieved with the SANDBOX Stripe instance. ' +
+                'Remove the sandbox flag so the production Stripe key is used.');
+        }
+
         // Retrieve the session with expanded subscription data
         const session = await stripe.checkout.sessions.retrieve(sessionId, {
             expand: ['subscription', 'customer', 'line_items', 'line_items.data.price.product']
@@ -1629,6 +1651,32 @@ router.post('/get-subscription-from-session', async (req, res) => {
 
     } catch (error) {
         console.error("Error in get-subscription-from-session:", error);
+
+        // Detailed error diagnostics (non-intrusive, for debugging only)
+        const failedSessionId = req.body?.sessionId;
+        const failedSessionLooksLikeTest = typeof failedSessionId === 'string' && failedSessionId.startsWith('cs_test_');
+        console.error('[get-subscription-from-session] Error details:', {
+            message: error.message,
+            type: error.type,
+            code: error.code || error.raw?.code,
+            statusCode: error.statusCode,
+            requestId: error.requestId || error.raw?.requestId,
+            docUrl: error.doc_url || error.raw?.doc_url,
+            sessionId: failedSessionId,
+            sessionIdLooksLikeTest: failedSessionLooksLikeTest,
+            resolvedSandbox: isSandbox,
+            stripeInstance: isSandbox ? 'SANDBOX (test)' : 'PRODUCTION (live)'
+        });
+
+        // Explain the most common cause for "No such checkout.session"
+        if (error.message && error.message.includes('No such checkout.session')) {
+            if (failedSessionLooksLikeTest && !isSandbox) {
+                console.error('[get-subscription-from-session] 🔎 LIKELY CAUSE: a sandbox/test session (cs_test_*) was looked up against the PRODUCTION Stripe key. ' +
+                    'The caller must send { sandbox: true } (or ?sandbox=true) so the request hits the same Stripe mode the session was created in.');
+            } else {
+                console.error('[get-subscription-from-session] 🔎 The session id does not exist in the Stripe mode that was used. Verify the sessionId and that sandbox/live mode matches how it was created.');
+            }
+        }
 
         // Log the error response
         try {
