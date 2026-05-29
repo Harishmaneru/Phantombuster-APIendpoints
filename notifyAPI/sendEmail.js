@@ -3028,19 +3028,19 @@ let replyCheckRunning = false; // prevents overlapping cycles
 
 // Structured JSON-line logger for the reply-detection cycle
 function replyLog(level, event, data = {}) {
-  console.log(
-    JSON.stringify(
-      {
-        ts: new Date().toISOString(),
-        scope: "checkForReplies",
-        level, // "info" | "warn" | "error"
-        event,
-        ...data,
-      },
-      null,
-      2,
-    ),
-  );
+  // console.log(
+  //   JSON.stringify(
+  //     {
+  //       ts: new Date().toISOString(),
+  //       scope: "checkForReplies",
+  //       level, // "info" | "warn" | "error"
+  //       event,
+  //       ...data,
+  //     },
+  //     null,
+  //     2,
+  //   ),
+  // );
 }
 
 // Human-readable cycle summary printed alongside the cycle_done JSON line.
