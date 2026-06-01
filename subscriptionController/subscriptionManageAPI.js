@@ -46,6 +46,15 @@ try {
     console.log('Created new SubscriptionFlags model');
 }
 
+// ========== App-name canonicalization ==========
+// Apps that are the same product across multiple domains share ONE subscription record.
+// Canonicalize alias app-names to a single key used only for subscription_flags store/fetch.
+// URL routing in stripeRoutes.js keeps using the raw app name (so success pages route per-domain).
+const APP_ALIASES = {
+    'liame.ai-home': 'liame', // www.liame.ai and liame.onepgr.com are the same product
+};
+const canonicalApp = (app) => APP_ALIASES[app] || app;
+
 // ========== Reusable Functions ==========
 
 // Store subscription & payment details
@@ -65,13 +74,16 @@ async function storeSubscription(req, res) {
             });
         }
 
+        // Canonicalize the app name so aliased domains share one record
+        const appKey = canonicalApp(app);
+
         // Log the data being saved for debugging
-        console.log('Saving subscription data:', { userId, app, subscription });
+        console.log('Saving subscription data:', { userId, app, appKey, subscription });
 
         // Upsert (update if exists, otherwise insert)
         const saved = await SubscriptionFlags.findOneAndUpdate(
-            { userId, app },
-            { userId, app, subscription },
+            { userId, app: appKey },
+            { userId, app: appKey, subscription },
             { upsert: true, new: true, runValidators: true }
         );
 
@@ -91,7 +103,7 @@ async function fetchSubscription(req, res) {
             return res.status(400).json({ success: false, message: "Missing required fields" });
         }
 
-        const sub = await SubscriptionFlags.findOne({ userId, app });
+        const sub = await SubscriptionFlags.findOne({ userId, app: canonicalApp(app) });
 
         if (!sub) {
             return res.status(200).json({ success: false, message: "No active subscription. User has not subscribed yet." });
@@ -113,12 +125,12 @@ async function updateUsage(req, res) {
             return res.status(400).json({ success: false, message: "Missing required fields" });
         }
 
-        const sub = await SubscriptionFlags.findOne({ userId, app });
+        const sub = await SubscriptionFlags.findOne({ userId, app: canonicalApp(app) });
         if (!sub) {
-            return res.status(200).json({ 
-                success: true, 
+            return res.status(200).json({
+                success: true,
                 hasSubscription: false,  // Clear boolean flag
-                message: "No subscription found" 
+                message: "No subscription found"
             });
         }
 
@@ -248,7 +260,7 @@ async function checkUsageLimit(req, res) {
             return res.status(400).json({ success: false, message: "Missing required fields" });
         }
 
-        const sub = await SubscriptionFlags.findOne({ userId, app });
+        const sub = await SubscriptionFlags.findOne({ userId, app: canonicalApp(app) });
         if (!sub) {
             console.log(`CheckUsageLimit: Subscription not found for userId: ${userId}, app: ${app}`);
             return res.status(404).json({ success: false, message: "Subscription not found" });
