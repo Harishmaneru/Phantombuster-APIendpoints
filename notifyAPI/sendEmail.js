@@ -361,6 +361,47 @@ async function getValidAccessToken(smtpRecord) {
 // }
 
 // Microsoft Graph API Email Sending
+// Inject the open-tracking pixel and rewrite links for click tracking.
+// Mirrors the SMTP send path so Graph-sent mail is tracked identically.
+// Returns the processed HTML (unchanged when html is empty or trackLinks off).
+function applyEmailTracking(html, trackLinks, trackingId) {
+  if (!html || !trackLinks) return html;
+
+  const baseUrl = (
+    process.env.BASE_URL || "https://videoresponse.onepgr.com:3001"
+  ).replace(/\/api\/?$/, "");
+  const trackingPixelUrl = `${baseUrl}/api/track/open/${trackingId}`;
+  const pixelTag = `<img src="${trackingPixelUrl}" width="1" height="1" style="display:none;border:0;" alt=""/>`;
+
+  let out = html;
+  if (out.includes("</body>")) {
+    out = out.replace("</body>", `${pixelTag}</body>`);
+  } else if (out.includes("</html>")) {
+    out = out.replace("</html>", `${pixelTag}</html>`);
+  } else {
+    out += pixelTag;
+  }
+
+  out = out.replace(
+    /<a\s+([^>]*)href=["']([^"']+)["']([^>]*)>(.*?)<\/a>/gi,
+    (match, beforeHref, url, afterHref, content) => {
+      const fullAttributes = beforeHref + 'href="' + url + '"' + afterHref;
+      const shouldSkipTracking =
+        fullAttributes.includes('data-no-track="true"') ||
+        fullAttributes.includes("data-no-track='true'") ||
+        fullAttributes.includes('data-media-link="true"') ||
+        fullAttributes.includes("data-media-link='true'");
+      if (shouldSkipTracking) return match;
+      if (url.startsWith("http") && !url.includes(baseUrl)) {
+        const encodedUrl = encodeURIComponent(url);
+        return `<a ${beforeHref}href="${baseUrl}/api/track/click/${trackingId}?url=${encodedUrl}"${afterHref}>${content}</a>`;
+      }
+      return match;
+    },
+  );
+  return out;
+}
+
 async function sendViaMicrosoftGraph(
   smtpRecord,
   from,
@@ -371,6 +412,7 @@ async function sendViaMicrosoftGraph(
   html,
   text,
   attachments,
+  internetMessageId,
 ) {
   const accessToken = await getValidAccessToken(smtpRecord);
 
@@ -411,6 +453,11 @@ async function sendViaMicrosoftGraph(
     bccRecipients:
       bccRecipients.length > 0 ? emailAddressList(bccRecipients) : undefined,
   };
+
+  // Pin our own Message-ID so replies (In-Reply-To/References) can be matched.
+  if (internetMessageId) {
+    message.internetMessageId = internetMessageId;
+  }
 
   // Handle attachments (Graph API requires base64 content)
   if (attachments && attachments.length > 0) {
@@ -479,6 +526,82 @@ async function fetchInboxViaGraph(
     messageId: msg.id,
     hasAttachments: msg.hasAttachments,
   }));
+}
+
+// Microsoft Graph reply detection.
+// Microsoft OAuth tokens here carry Graph scopes only (Mail.Read/Mail.Send) and
+// NOT IMAP.AccessAsUser.All, so IMAP XOAUTH2 fails with "Command failed".
+// We read the inbox over Graph and match replies by the original Message-ID.
+async function fetchInboxForReplyMatch(accessToken, sinceIso) {
+  const select = [
+    "id",
+    "subject",
+    "from",
+    "toRecipients",
+    "receivedDateTime",
+    "conversationId",
+    "internetMessageId",
+    "internetMessageHeaders",
+    "bodyPreview",
+  ].join(",");
+
+  let url =
+    `https://graph.microsoft.com/v1.0/me/mailFolders/inbox/messages` +
+    `?$top=100&$orderby=receivedDateTime%20desc&$select=${encodeURIComponent(select)}`;
+  if (sinceIso) {
+    url += `&$filter=${encodeURIComponent(`receivedDateTime ge ${sinceIso}`)}`;
+  }
+
+  const messages = [];
+  let next = url;
+  let pages = 0;
+  while (next && pages < 5) {
+    const response = await fetch(next, {
+      headers: { Authorization: `Bearer ${accessToken}` },
+    });
+    if (!response.ok) {
+      const body = await response.text();
+      throw new Error(`Graph API error (${response.status}): ${body}`);
+    }
+    const data = await response.json();
+    if (Array.isArray(data.value)) messages.push(...data.value);
+    next = data["@odata.nextLink"] || null;
+    pages++;
+  }
+  return messages;
+}
+
+function getInternetHeader(message, name) {
+  const headers = message.internetMessageHeaders || [];
+  const lower = name.toLowerCase();
+  const found = headers.find((h) => (h.name || "").toLowerCase() === lower);
+  return found ? found.value : "";
+}
+
+// Mirrors the IMAP match methods (In-Reply-To / References / "Re:" from recipient).
+function graphMessageMatchesTracking(message, tracking) {
+  const orig = tracking.originalMessageId;
+  if (!orig) return null;
+
+  const inReplyTo = getInternetHeader(message, "In-Reply-To");
+  if (inReplyTo && inReplyTo.includes(orig)) return "in_reply_to";
+
+  const references = getInternetHeader(message, "References");
+  if (references && references.includes(orig)) return "references";
+
+  const fromAddr =
+    message.from?.emailAddress?.address?.toLowerCase() || "";
+  const subj = (message.subject || "").toLowerCase();
+  if (
+    tracking.toEmail &&
+    fromAddr === tracking.toEmail.toLowerCase() &&
+    subj.startsWith("re:") &&
+    references &&
+    references.includes(orig)
+  ) {
+    return "subject";
+  }
+  return null;
 }
 
 // Auth helpers for SMTP and IMAP
@@ -1295,6 +1418,12 @@ router.post("/api/emailsend", async (req, res) => {
     // Check if this is a Microsoft OAuth2 account - use Graph API for sending
     if (smtp.authType === "oauth2" && smtp.oauth2?.provider === "microsoft") {
       try {
+        // Generate the tracking id BEFORE sending so the open pixel, click
+        // tracking, and Message-ID can all be embedded in the outgoing mail.
+        const trackingId = crypto.randomBytes(16).toString("hex");
+        const messageId = `<${trackingId}@${from.split("@")[1]}>`;
+        const trackedHtml = applyEmailTracking(html, trackLinks, trackingId);
+
         const result = await sendViaMicrosoftGraph(
           smtp,
           from,
@@ -1302,14 +1431,12 @@ router.post("/api/emailsend", async (req, res) => {
           cc,
           bcc,
           subject,
-          html,
+          trackedHtml,
           text,
           attachments,
+          messageId,
         );
 
-        // Still create tracking record (optional, but good for consistency)
-        const trackingId = crypto.randomBytes(16).toString("hex");
-        const messageId = `<${trackingId}@${from.split("@")[1]}>`;
         const webhookUrl = "https://meet.onepgr.com/session/smatpTracking";
 
         // Save tracking and send webhook asynchronously
@@ -3186,6 +3313,156 @@ async function checkForReplies() {
         const r = mailboxReport.get(mailbox);
         if (r) { r.status = "skipped"; r.reason = "all_records_invalid"; }
         continue;
+      }
+
+      // Microsoft OAuth mailboxes: tokens carry Graph scopes only (no IMAP
+      // scope), so IMAP XOAUTH2 fails with "Command failed". Read replies over
+      // Microsoft Graph instead. All other mailboxes keep the IMAP path below.
+      if (isMicrosoftMailbox(smtp, mailbox) && smtp.authType === "oauth2") {
+        const mb = { checked: 0, replies: 0, errors: 0 };
+        const rConn = mailboxReport.get(mailbox);
+        try {
+          const accessToken = await getValidAccessToken(smtp);
+
+          // Look back only as far as the oldest pending record (1-day buffer).
+          let sinceIso = null;
+          let oldest = null;
+          for (const t of valid) {
+            const ts = t.createdAt || t.sentAt;
+            if (ts && (!oldest || new Date(ts) < new Date(oldest))) oldest = ts;
+          }
+          if (oldest) {
+            sinceIso = new Date(
+              new Date(oldest).getTime() - 24 * 60 * 60 * 1000,
+            ).toISOString();
+          }
+
+          const messages = await fetchInboxForReplyMatch(accessToken, sinceIso);
+          if (rConn) rConn.host = "graph.microsoft.com";
+          replyLog("info", "mailbox_connected", {
+            mailbox,
+            host: "graph.microsoft.com",
+            records: valid.length,
+          });
+
+          for (const tracking of valid) {
+            try {
+              let matchMethod = null;
+              let matchedMsg = null;
+              for (const msg of messages) {
+                const m = graphMessageMatchesTracking(msg, tracking);
+                if (m) {
+                  matchMethod = m;
+                  matchedMsg = msg;
+                  break;
+                }
+              }
+
+              mb.checked++;
+              totals.recordsChecked++;
+
+              if (!matchMethod) {
+                replyLog("info", "reply_not_found", {
+                  mailbox,
+                  trackingId: tracking.messageId,
+                  originalMessageId: tracking.originalMessageId,
+                });
+                continue;
+              }
+
+              const replyTime = new Date();
+              const replyDetails = {
+                replyFrom: matchedMsg.from
+                  ? `${matchedMsg.from.emailAddress?.name || ""} <${matchedMsg.from.emailAddress?.address || ""}>`
+                  : "Unknown",
+                replySubject: matchedMsg.subject || "(No Subject)",
+                replyDate: matchedMsg.receivedDateTime,
+                replyText: matchedMsg.bodyPreview || "",
+                replyHtml: "",
+                replyMessageId:
+                  matchedMsg.internetMessageId || matchedMsg.id,
+              };
+
+              await EmailTracking.findOneAndUpdate(
+                { messageId: tracking.messageId },
+                { $set: { repliedAt: replyTime } },
+              );
+
+              replyLog("info", "reply_found", {
+                mailbox,
+                trackingId: tracking.messageId,
+                method: matchMethod,
+                originalMessageId: tracking.originalMessageId,
+                replyFrom: replyDetails.replyFrom,
+              });
+
+              let extractedTrackingData = {};
+              if (tracking.trackingPayload) {
+                extractedTrackingData = { ...tracking.trackingPayload };
+              }
+
+              await sendWebhookNotification(
+                "https://meet.onepgr.com/session/smatpTracking",
+                {
+                  event: "replied",
+                  trackingId: tracking.messageId,
+                  email: tracking.toEmail,
+                  from: tracking.fromEmail,
+                  subject: tracking.subject,
+                  timestamp: replyTime,
+                  extractedTrackingData,
+                  replyDetails,
+                  originalMessageId: tracking.originalMessageId,
+                  replyCount: 1,
+                },
+              );
+
+              replyLog("info", "reply_webhook_sent", {
+                mailbox,
+                trackingId: tracking.messageId,
+              });
+
+              mb.replies++;
+              totals.repliesFound++;
+            } catch (recordErr) {
+              mb.errors++;
+              totals.errors++;
+              replyLog("error", "record_error", {
+                mailbox,
+                trackingId: tracking.messageId,
+                error: recordErr.message,
+              });
+            }
+          }
+        } catch (graphErr) {
+          mb.errors++;
+          totals.errors++;
+          replyLog("error", "mailbox_connect_failed", {
+            mailbox,
+            host: "graph.microsoft.com",
+            error: graphErr.message,
+          });
+          if (rConn) {
+            rConn.status = "failed";
+            rConn.reason = graphErr.message;
+            rConn.host = "graph.microsoft.com";
+          }
+        }
+
+        replyLog("info", "mailbox_done", {
+          mailbox,
+          checked: mb.checked,
+          replies: mb.replies,
+          errors: mb.errors,
+        });
+        const rDone = mailboxReport.get(mailbox);
+        if (rDone) {
+          if (rDone.status === "pending") rDone.status = "completed";
+          rDone.checked = mb.checked;
+          rDone.replies = mb.replies;
+          rDone.errors = mb.errors;
+        }
+        continue; // handled via Graph — skip the IMAP path
       }
 
       const host = getImapHost(smtp.host, mailbox, smtp.oauth2?.provider);
