@@ -153,6 +153,11 @@ app.use(
       // Allow requests with no origin (like mobile apps or curl requests)
       if (!origin) return callback(null, true);
 
+      // Debug log incoming origin for CORS troubleshooting
+      try {
+        console.log("CORS origin check:", origin);
+      } catch (e) {}
+
       const allowedOrigins = [
         "http://localhost:4000",
         "http://localhost:3000",
@@ -166,6 +171,7 @@ app.use(
         "https://getprospectsignals.com",
         "https://record.onepgr.com",
         "https://kampaign.onepgr.com",
+        "https://aixsdr.onepgr.com",
       ];
 
       // Check if origin is in allowed list or is a controlled subdomain
@@ -173,6 +179,9 @@ app.use(
         allowedOrigins.includes(origin) ||
         (origin.endsWith(".onepgr.com") && origin.startsWith("https://"))
       ) {
+        try {
+          console.log("CORS allowed for:", origin);
+        } catch (e) {}
         return callback(null, true);
       }
 
@@ -191,6 +200,9 @@ app.use(
     optionsSuccessStatus: 204,
   }),
 );
+
+// Ensure preflight OPTIONS requests are handled for all routes
+app.options("*", cors());
 
 // Register Stripe webhook route before body parser
 app.use("/api/stripe", stripeRoutes);
