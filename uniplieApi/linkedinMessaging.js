@@ -1686,6 +1686,63 @@ router.get(
       );
       const currentUserProviderId = currentUserResponse.data?.provider_id;
 
+      // Fetch the connected user's (account owner) full LinkedIn profile.
+      // Non-blocking & cached: failures must never break the messages response.
+      let connectedProfile = null;
+      if (currentUserProviderId) {
+        try {
+          const ownerCacheKey = getProfileCacheKey(
+            currentUserProviderId,
+            accountId,
+          );
+          let ownerProfileRaw = profileCache.get(ownerCacheKey);
+
+          if (!ownerProfileRaw) {
+            const ownerResp = await axios.get(
+              `${getBaseUrl()}/users/${encodeURIComponent(
+                currentUserProviderId,
+              )}?account_id=${accountId}`,
+              { headers: getHeaders(), timeout: 5000 },
+            );
+            ownerProfileRaw = ownerResp.data;
+            if (ownerProfileRaw) {
+              profileCache.set(ownerCacheKey, ownerProfileRaw);
+            }
+          }
+
+          if (ownerProfileRaw) {
+            const firstName = ownerProfileRaw.first_name || "";
+            const lastName = ownerProfileRaw.last_name || "";
+            const fullName =
+              ownerProfileRaw.name ||
+              (firstName && lastName
+                ? `${firstName} ${lastName}`.trim()
+                : null);
+
+            connectedProfile = {
+              provider_id: ownerProfileRaw.provider_id || currentUserProviderId,
+              name: fullName,
+              first_name: firstName || null,
+              last_name: lastName || null,
+              headline: ownerProfileRaw.headline || null,
+              profile_picture_url:
+                ownerProfileRaw.profile_picture_url ||
+                ownerProfileRaw.picture ||
+                null,
+              profile_url: ownerProfileRaw.profile_url || null,
+              public_identifier: ownerProfileRaw.public_identifier || null,
+              location: ownerProfileRaw.location || null,
+            };
+          }
+        } catch (ownerErr) {
+          console.warn(
+            "Connected profile enrichment failed:",
+            ownerErr.message || ownerErr,
+          );
+          connectedProfile = null;
+        }
+      }
+
       const params = new URLSearchParams();
       params.append("account_id", accountId);
       params.append("limit", limit);
@@ -1885,6 +1942,26 @@ router.get(
                   occupation: currentUserAttendee.specifics?.occupation,
                 }
               : null,
+
+            // Connected LinkedIn account owner's full profile.
+            // Falls back to the current_user attendee data if the
+            // dedicated profile fetch was unavailable.
+            connected_profile:
+              connectedProfile ||
+              (currentUserAttendee
+                ? {
+                    provider_id: currentUserProviderId || null,
+                    name: currentUserAttendee.name || null,
+                    first_name: null,
+                    last_name: null,
+                    headline: currentUserAttendee.specifics?.occupation || null,
+                    profile_picture_url:
+                      currentUserAttendee.picture_url || null,
+                    profile_url: currentUserAttendee.profile_url || null,
+                    public_identifier: null,
+                    location: null,
+                  }
+                : null),
 
             other_attendees: otherAttendees.map((attendee) => ({
               id: attendee.id,
