@@ -921,6 +921,9 @@ router.get("/api/unipile/user/:userId/allchats", async (req, res) => {
           items: enrichedChats,
           cursor: chatsData.cursor || null,
         },
+        // Connected LinkedIn account owner's profile (same object as
+        // data.object.owner_profile, surfaced at top level for convenience).
+        connected_profile: ownerProfile || null,
         account_id: accountId,
         user_id: userId,
         profiles_included: true,
@@ -958,6 +961,9 @@ router.get("/api/unipile/user/:userId/allchats", async (req, res) => {
           items: cleanChats,
           cursor: chatsData.cursor || null,
         },
+        // Connected LinkedIn account owner's profile (same object as
+        // data.object.owner_profile, surfaced at top level for convenience).
+        connected_profile: ownerProfile || null,
         account_id: accountId,
         user_id: userId,
         profiles_included: false,
