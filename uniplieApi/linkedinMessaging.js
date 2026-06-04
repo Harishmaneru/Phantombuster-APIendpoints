@@ -742,6 +742,58 @@ router.get("/api/unipile/user/:userId/allchats", async (req, res) => {
     let chatsData = response.data;
     const chats = chatsData?.items || [];
 
+    // Optional owner profile enrichment (off by default)
+    const includeOwner = req.query.include_owner_profile === "true";
+    let ownerProfile = null;
+
+    if (includeOwner) {
+      try {
+        const ownerCacheKey = getProfileCacheKey("owner", accountId);
+        let cachedOwner = profileCache.get(ownerCacheKey);
+
+        if (!cachedOwner) {
+          // Fetch account to discover provider_id for the owner
+          const acctResp = await axios.get(
+            `${getBaseUrl()}/accounts/${accountId}`,
+            { headers: getHeaders(), timeout: 2000 },
+          );
+
+          const ownerProviderId = acctResp.data?.provider_id;
+          if (ownerProviderId) {
+            const ownerResp = await axios.get(
+              `${getBaseUrl()}/users/${encodeURIComponent(ownerProviderId)}?account_id=${accountId}`,
+              { headers: getHeaders(), timeout: 2000 },
+            );
+            cachedOwner = ownerResp.data;
+            // Cache raw profile
+            profileCache.set(ownerCacheKey, cachedOwner);
+          }
+        }
+
+        if (cachedOwner) {
+          const firstName = cachedOwner.first_name || "";
+          const lastName = cachedOwner.last_name || "";
+          const fullName =
+            cachedOwner.name || (firstName && lastName ? `${firstName} ${lastName}`.trim() : null);
+
+          ownerProfile = {
+            provider_id: cachedOwner.provider_id || null,
+            name: fullName,
+            first_name: firstName || null,
+            last_name: lastName || null,
+            headline: cachedOwner.headline || null,
+            profile_picture_url: cachedOwner.profile_picture_url || cachedOwner.picture || null,
+            profile_url: cachedOwner.profile_url || null,
+            public_identifier: cachedOwner.public_identifier || null,
+            location: cachedOwner.location || null,
+          };
+        }
+      } catch (e) {
+        console.warn("Owner profile enrichment failed:", e.message || e);
+        ownerProfile = null;
+      }
+    }
+
     // Determine if we should fetch profiles
     const shouldFetchProfiles =
       skip_profiles !== "true" &&
@@ -862,13 +914,17 @@ router.get("/api/unipile/user/:userId/allchats", async (req, res) => {
       res.json({
         success: true,
         data: {
-          object: chatsData.object,
+          object: {
+            ...(chatsData.object || {}),
+            ...(ownerProfile ? { owner_profile: ownerProfile } : {}),
+          },
           items: enrichedChats,
           cursor: chatsData.cursor || null,
         },
         account_id: accountId,
         user_id: userId,
         profiles_included: true,
+        profiles_included_owner: ownerProfile ? true : false,
         enrichment_time_ms: elapsed,
       });
     } else {
@@ -895,13 +951,17 @@ router.get("/api/unipile/user/:userId/allchats", async (req, res) => {
       res.json({
         success: true,
         data: {
-          object: chatsData.object,
+          object: {
+            ...(chatsData.object || {}),
+            ...(ownerProfile ? { owner_profile: ownerProfile } : {}),
+          },
           items: cleanChats,
           cursor: chatsData.cursor || null,
         },
         account_id: accountId,
         user_id: userId,
         profiles_included: false,
+        profiles_included_owner: ownerProfile ? true : false,
       });
     }
   } catch (err) {
