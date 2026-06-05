@@ -908,10 +908,16 @@ router.get("/api/unipile/user/:userId/allchats", async (req, res) => {
         };
       };
 
-      // Process ALL profiles in parallel with individual timeouts (much faster)
-      const enrichedChats = await Promise.all(
-        chats.map((chat) => fetchProfileWithTimeout(chat, 1500)),
-      );
+      // Process profiles in batches to avoid Unipile/LinkedIn rate limiting
+      const BATCH_SIZE = 5;
+      const enrichedChats = [];
+      for (let i = 0; i < chats.length; i += BATCH_SIZE) {
+        const batch = chats.slice(i, i + BATCH_SIZE);
+        const results = await Promise.all(
+          batch.map((chat) => fetchProfileWithTimeout(chat, 3000)),
+        );
+        enrichedChats.push(...results);
+      }
 
       const elapsed = Date.now() - startTime;
       console.log(`✅ Enriched ${enrichedChats.length} chats in ${elapsed}ms`);
