@@ -196,8 +196,9 @@ const getHeaders = (contentType = "application/json") => ({
 });
 
 // Unified error handler
-const handleError = (err, res) => {
+const handleError = (err, res, context = {}) => {
   console.error("API Error:", {
+    ...context,
     status: err.response?.status,
     message: err.message,
     data: err.response?.data,
@@ -3588,7 +3589,7 @@ router.get(
         fetched_at: new Date(),
       });
     } catch (err) {
-      console.error("Get user error:", err.response?.data || err.message);
+      console.error("Get user error:", { user_id, identifier, error: err.response?.data || err.message });
 
       if (err.response?.status === 404) {
         return res.status(404).json({
@@ -3598,7 +3599,7 @@ router.get(
         });
       }
 
-      handleError(err, res);
+      handleError(err, res, { user_id, identifier });
     }
   },
 );
