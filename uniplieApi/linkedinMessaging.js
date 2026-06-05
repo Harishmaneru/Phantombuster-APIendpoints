@@ -3589,7 +3589,7 @@ router.get(
         fetched_at: new Date(),
       });
     } catch (err) {
-      console.error("Get user error:", { user_id, identifier, error: err.response?.data || err.message });
+      console.error("Get user error:", { user_id: req.query.user_id, identifier: req.params.identifier, error: err.response?.data || err.message });
 
       if (err.response?.status === 404) {
         return res.status(404).json({
@@ -3599,7 +3599,7 @@ router.get(
         });
       }
 
-      handleError(err, res, { user_id, identifier });
+      handleError(err, res, { user_id: req.query.user_id, identifier: req.params.identifier });
     }
   },
 );
