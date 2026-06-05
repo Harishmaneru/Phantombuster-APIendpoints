@@ -850,6 +850,11 @@ router.get("/api/unipile/user/:userId/allchats", async (req, res) => {
 
           return createCleanChatItem(chat, profile, "fetched");
         } catch (err) {
+          console.error("Profile fetch error:", {
+            attendee_provider_id: attendeeProviderId,
+            status: err.response?.status,
+            error: err.response?.data || err.message,
+          });
           return createCleanChatItem(chat, null, "timeout_or_error");
         }
       };
