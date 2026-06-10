@@ -1793,7 +1793,7 @@ router.post("/api/emailforward", async (req, res) => {
           console.log("⚠️ IMAP force-close failed, destroying connection");
           try {
             imapClient.connection?.destroy();
-          } catch (e) {}
+          } catch (e) { }
         }
       }
     })();
@@ -1832,14 +1832,14 @@ router.post("/api/emailforward", async (req, res) => {
 
     const forwardedDate = envelope.date
       ? new Date(envelope.date).toLocaleString("en-US", {
-          weekday: "short",
-          year: "numeric",
-          month: "short",
-          day: "numeric",
-          hour: "2-digit",
-          minute: "2-digit",
-          timeZoneName: "short",
-        })
+        weekday: "short",
+        year: "numeric",
+        month: "short",
+        day: "numeric",
+        hour: "2-digit",
+        minute: "2-digit",
+        timeZoneName: "short",
+      })
       : "";
 
     const forwardedCc = envelope.cc
@@ -1878,14 +1878,13 @@ router.post("/api/emailforward", async (req, res) => {
         </style>
       </head>
       <body>
-        ${
-          safeForwardMessage
-            ? `<div class="forward-message">${safeForwardMessage.replace(
-                /\n/g,
-                "<br>",
-              )}</div>`
-            : ""
-        }
+        ${safeForwardMessage
+        ? `<div class="forward-message">${safeForwardMessage.replace(
+          /\n/g,
+          "<br>",
+        )}</div>`
+        : ""
+      }
         
         <div class="gmail-attr">
           ---------- Forwarded message ---------<br>
@@ -1896,11 +1895,10 @@ router.post("/api/emailforward", async (req, res) => {
         </div>
         
         <div class="gmail-quote">
-          ${
-            original.html ||
-            original.textAsHtml ||
-            `<pre>${original.text || ""}</pre>`
-          }
+          ${original.html ||
+      original.textAsHtml ||
+      `<pre>${original.text || ""}</pre>`
+      }
         </div>
       </body>
       </html>
@@ -2063,7 +2061,7 @@ ${original.text || "No text content"}
       console.log("🔒 Force closing IMAP on error...");
       try {
         // Force close immediately on error - don't wait
-        imapClient.close().catch(() => {});
+        imapClient.close().catch(() => { });
         imapClient.connection?.destroy();
       } catch (e) {
         // Ignore cleanup errors
@@ -2220,13 +2218,12 @@ router.post("/api/fetchinbox", async (req, res) => {
             // URL to download the attachment
             url: `${baseUrl}/api/email/attachment?email=${encodeURIComponent(
               email,
-            )}&token=${encodeURIComponent(token)}&uid=${
-              msg.uid
-            }&messageId=${encodeURIComponent(
-              msg.envelope.messageId,
-            )}&filename=${encodeURIComponent(
-              att.filename || "unnamed_attachment",
-            )}&checksum=${encodeURIComponent(att.checksum || "")}`,
+            )}&token=${encodeURIComponent(token)}&uid=${msg.uid
+              }&messageId=${encodeURIComponent(
+                msg.envelope.messageId,
+              )}&filename=${encodeURIComponent(
+                att.filename || "unnamed_attachment",
+              )}&checksum=${encodeURIComponent(att.checksum || "")}`,
           }));
         }
         // Method 2: Alternative - check for attachments in email structure
@@ -2301,7 +2298,7 @@ router.post("/api/fetchinbox", async (req, res) => {
     console.error("Inbox Fetch Error:", err);
 
     if (client) {
-      await client.logout().catch(() => {});
+      await client.logout().catch(() => { });
     }
 
     if (
@@ -2453,8 +2450,7 @@ router.get("/api/email/attachment", async (req, res) => {
 
       console.log(`[Attachment] Parsed subject: ${parsed.subject}`);
       console.log(
-        `[Attachment] Parsed attachments count: ${
-          parsed.attachments ? parsed.attachments.length : 0
+        `[Attachment] Parsed attachments count: ${parsed.attachments ? parsed.attachments.length : 0
         }`,
       );
 
@@ -2710,10 +2706,10 @@ router.post("/api/fetchsingleemail", async (req, res) => {
         messageId: msg.envelope.messageId,
         attachments: parsed.attachments
           ? parsed.attachments.map((att) => ({
-              filename: att.filename,
-              contentType: att.contentType,
-              size: att.size,
-            }))
+            filename: att.filename,
+            contentType: att.contentType,
+            size: att.size,
+          }))
           : [],
       };
 
@@ -2793,8 +2789,10 @@ router.get("/api/track/open/:trackingId", async (req, res) => {
     const trackingId = req.params.trackingId;
     const ip =
       req.headers["x-forwarded-for"]?.split(",")[0] ||
-      req.connection.remoteAddress;
-    const userAgent = req.headers["user-agent"];
+      req.connection?.remoteAddress ||
+      req.socket?.remoteAddress ||
+      "";
+    const userAgent = req.headers["user-agent"] || "";
     const referer = req.headers["referer"] || "";
 
     // Create a session ID based on IP and User Agent to detect unique opens
@@ -2811,7 +2809,9 @@ router.get("/api/track/open/:trackingId", async (req, res) => {
     if (!tracking) {
       console.log(`Tracking not found for: ${trackingId}`);
       res.set("Content-Type", "image/png");
-      res.set("Cache-Control", "no-store, no-cache, must-revalidate, private");
+      res.set("Cache-Control", "no-store, no-cache, must-revalidate, private, max-age=0, post-check=0, pre-check=0");
+      res.set("Pragma", "no-cache");
+      res.set("Expires", "0");
       return res.send(
         Buffer.from(
           "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=",
@@ -2888,12 +2888,12 @@ router.get("/api/track/open/:trackingId", async (req, res) => {
       });
     }
 
-    // Check if this is a duplicate open (same session within 1 hour)
-    const oneHourAgo = new Date(now.getTime() - 60 * 60 * 1000);
+    // Check if this is a duplicate open (same session within 30 seconds)
+    const thirtySecondsAgo = new Date(now.getTime() - 30 * 1000);
     const recentOpen =
       tracking.openEvents &&
       tracking.openEvents.find(
-        (event) => event.sessionId === sessionId && event.openedAt > oneHourAgo,
+        (event) => event.sessionId === sessionId && event.openedAt > thirtySecondsAgo,
       );
 
     let shouldCount = false;
@@ -2950,7 +2950,7 @@ router.get("/api/track/open/:trackingId", async (req, res) => {
       );
 
       console.log(
-        `📧 Replay open logged: ${trackingId} from IP: ${ip} (same session within 1 hour), Replay Count: ${updatedTracking.replayCount}`,
+        `📧 Replay open logged: ${trackingId} from IP: ${ip} (same session within 30 seconds), Replay Count: ${updatedTracking.replayCount}`,
       );
     }
 
@@ -3002,10 +3002,11 @@ router.get("/api/track/open/:trackingId", async (req, res) => {
       );
     }
 
-    // Set cache headers to prevent multiple loads
+    // Disable cache completely to ensure accurate tracking on every email open
     res.set("Content-Type", "image/png");
-    res.set("Cache-Control", "public, max-age=3600"); // Cache for 1 hour
-    res.set("Expires", new Date(now.getTime() + 3600 * 1000).toUTCString());
+    res.set("Cache-Control", "no-store, no-cache, must-revalidate, private, max-age=0, post-check=0, pre-check=0");
+    res.set("Pragma", "no-cache");
+    res.set("Expires", "0");
     res.send(
       Buffer.from(
         "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=",
@@ -3014,6 +3015,10 @@ router.get("/api/track/open/:trackingId", async (req, res) => {
     );
   } catch (error) {
     console.error("Open tracking error:", error);
+    res.set("Content-Type", "image/png");
+    res.set("Cache-Control", "no-store, no-cache, must-revalidate, private, max-age=0, post-check=0, pre-check=0");
+    res.set("Pragma", "no-cache");
+    res.set("Expires", "0");
     res
       .status(200)
       .send(
@@ -3609,8 +3614,8 @@ async function checkForReplies() {
                   replyDetails = {
                     replyFrom: msg.envelope.from
                       ? msg.envelope.from
-                          .map((f) => `${f.name || ""} <${f.address}>`)
-                          .join(", ")
+                        .map((f) => `${f.name || ""} <${f.address}>`)
+                        .join(", ")
                       : "Unknown",
                     replySubject: msg.envelope.subject || "(No Subject)",
                     replyDate: msg.envelope.date,
@@ -3798,8 +3803,8 @@ router.post("/api/check-replies", async (req, res) => {
           subject: msg.envelope.subject || "(No Subject)",
           from: msg.envelope.from
             ? msg.envelope.from
-                .map((f) => `${f.name || ""} <${f.address}>`)
-                .join(", ")
+              .map((f) => `${f.name || ""} <${f.address}>`)
+              .join(", ")
             : "Unknown",
           date: msg.envelope.date,
           uid: msg.uid,
@@ -3841,8 +3846,8 @@ router.post("/api/check-replies", async (req, res) => {
             subject: msg.envelope.subject || "(No Subject)",
             from: msg.envelope.from
               ? msg.envelope.from
-                  .map((f) => `${f.name || ""} <${f.address}>`)
-                  .join(", ")
+                .map((f) => `${f.name || ""} <${f.address}>`)
+                .join(", ")
               : "Unknown",
             date: msg.envelope.date,
             uid: msg.uid,
@@ -3970,8 +3975,8 @@ router.get("/api/track/:trackingId", async (req, res) => {
                 subject: msg.envelope.subject || "(No Subject)",
                 from: msg.envelope.from
                   ? msg.envelope.from
-                      .map((f) => `${f.name || ""} <${f.address}>`)
-                      .join(", ")
+                    .map((f) => `${f.name || ""} <${f.address}>`)
+                    .join(", ")
                   : "Unknown",
                 date: formatDate(msg.envelope.date),
                 uid: msg.uid,
@@ -4012,8 +4017,8 @@ router.get("/api/track/:trackingId", async (req, res) => {
                   subject: msg.envelope.subject || "(No Subject)",
                   from: msg.envelope.from
                     ? msg.envelope.from
-                        .map((f) => `${f.name || ""} <${f.address}>`)
-                        .join(", ")
+                      .map((f) => `${f.name || ""} <${f.address}>`)
+                      .join(", ")
                     : "Unknown",
                   date: formatDate(msg.envelope.date),
                   uid: msg.uid,
@@ -4076,11 +4081,11 @@ router.get("/api/track/:trackingId", async (req, res) => {
         // Enhanced Open Tracking
         openEvents: tracking.openEvents
           ? tracking.openEvents.map((event) => ({
-              openedAt: formatDate(event.openedAt),
-              ip: cleanIP(event.ip),
-              userAgent: event.userAgent,
-              sessionId: event.sessionId,
-            }))
+            openedAt: formatDate(event.openedAt),
+            ip: cleanIP(event.ip),
+            userAgent: event.userAgent,
+            sessionId: event.sessionId,
+          }))
           : [],
         uniqueOpens: tracking.openEvents ? tracking.openEvents.length : 0,
 
@@ -4088,20 +4093,20 @@ router.get("/api/track/:trackingId", async (req, res) => {
         replayCount: tracking.replayCount || 0,
         replayEvents: tracking.replayEvents
           ? tracking.replayEvents.map((event) => ({
-              replayedAt: formatDate(event.replayedAt),
-              ip: cleanIP(event.ip),
-              userAgent: event.userAgent,
-              sessionId: event.sessionId,
-            }))
+            replayedAt: formatDate(event.replayedAt),
+            ip: cleanIP(event.ip),
+            userAgent: event.userAgent,
+            sessionId: event.sessionId,
+          }))
           : [],
 
         // Click Events
         clicks: tracking.clickEvents
           ? tracking.clickEvents.map((click) => ({
-              ...click,
-              clickedAt: formatDate(click.clickedAt),
-              ip: cleanIP(click.ip),
-            }))
+            ...click,
+            clickedAt: formatDate(click.clickedAt),
+            ip: cleanIP(click.ip),
+          }))
           : [],
         totalClicks: tracking.clickEvents ? tracking.clickEvents.length : 0,
 
@@ -5426,7 +5431,7 @@ router.post("/api/fetch-conversation", async (req, res) => {
     });
   } catch (error) {
     console.error("Fetch Conversation Error:", error);
-    if (client) client.close().catch(() => {});
+    if (client) client.close().catch(() => { });
     return res.status(500).json({ success: false, error: error.message });
   }
 });
@@ -5532,21 +5537,21 @@ router.post("/api/fetch-email-thread", async (req, res) => {
             subject: msg.envelope.subject,
             from: msg.envelope.from
               ? msg.envelope.from.map((f) => ({
-                  name: f.name || "",
-                  address: f.address,
-                }))
+                name: f.name || "",
+                address: f.address,
+              }))
               : [],
             to: msg.envelope.to
               ? msg.envelope.to.map((t) => ({
-                  name: t.name || "",
-                  address: t.address,
-                }))
+                name: t.name || "",
+                address: t.address,
+              }))
               : [],
             cc: msg.envelope.cc
               ? msg.envelope.cc.map((c) => ({
-                  name: c.name || "",
-                  address: c.address,
-                }))
+                name: c.name || "",
+                address: c.address,
+              }))
               : [],
             date: msg.envelope.date,
             html: parsed.html || parsed.textAsHtml || "",
@@ -5683,21 +5688,21 @@ router.post("/api/fetch-email-thread", async (req, res) => {
           subject: msg.envelope.subject || "(No Subject)",
           from: msg.envelope.from
             ? msg.envelope.from.map((f) => ({
-                name: f.name || "",
-                address: f.address,
-              }))
+              name: f.name || "",
+              address: f.address,
+            }))
             : [],
           to: msg.envelope.to
             ? msg.envelope.to.map((t) => ({
-                name: t.name || "",
-                address: t.address,
-              }))
+              name: t.name || "",
+              address: t.address,
+            }))
             : [],
           cc: msg.envelope.cc
             ? msg.envelope.cc.map((c) => ({
-                name: c.name || "",
-                address: c.address,
-              }))
+              name: c.name || "",
+              address: c.address,
+            }))
             : [],
           date: msg.envelope.date,
           html: parsed.html || parsed.textAsHtml || "",
@@ -5721,7 +5726,7 @@ router.post("/api/fetch-email-thread", async (req, res) => {
       console.log(`⚠️ [FetchThread] Logout warning:`, logoutErr.message);
       try {
         client.close();
-      } catch (e) {}
+      } catch (e) { }
     }
     client = null;
 
@@ -5770,7 +5775,7 @@ router.post("/api/fetch-email-thread", async (req, res) => {
     if (client) {
       try {
         await client.close();
-      } catch (e) {}
+      } catch (e) { }
     }
 
     return res.status(500).json({
@@ -6012,13 +6017,13 @@ router.get("/api/auth/microsoft/callback", async (req, res) => {
           stateEmail =
             JSON.parse(Buffer.from(req.query.state || "", "base64").toString())
               .email || "";
-        } catch (_) {}
+        } catch (_) { }
 
         const adminConsentUrl = `${(process.env.BASE_URL || "https://videoresponse.onepgr.com:3001").replace(/\/api\/?$/, "")}/api/auth/microsoft/admin-consent`;
         return res.redirect(
           `${defaultFrontend}/account-setup/email-accounts?status=pending_admin` +
-            `&email=${encodeURIComponent(stateEmail)}` +
-            `&admin_consent_url=${encodeURIComponent(adminConsentUrl)}`,
+          `&email=${encodeURIComponent(stateEmail)}` +
+          `&admin_consent_url=${encodeURIComponent(adminConsentUrl)}`,
         );
       }
 
