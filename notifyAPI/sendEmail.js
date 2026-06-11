@@ -1,6 +1,16 @@
 const express = require("express");
 const nodemailer = require("nodemailer");
-const { ImapFlow } = require("imapflow");
+const { ImapFlow: OriginalImapFlow } = require("imapflow");
+
+class ImapFlow extends OriginalImapFlow {
+  constructor(options) {
+    super(options);
+    // Prevent background socket errors/timeouts from crashing the Node.js process
+    this.on("error", (err) => {
+      console.error("[ImapFlow Client Error Logged Safely]:", err.message || err);
+    });
+  }
+}
 const { simpleParser } = require("mailparser");
 const dns = require("node:dns").promises;
 const crypto = require("crypto");
