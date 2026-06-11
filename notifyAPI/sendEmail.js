@@ -705,6 +705,7 @@ const emailTrackingSchema = new mongoose.Schema(
         ip: String,
         userAgent: String,
         sessionId: String, // To track unique sessions
+        isMachineOpen: { type: Boolean, default: false },
       },
     ],
     // Replay open tracking (re-opens by the same session within the dedup window)
@@ -715,6 +716,7 @@ const emailTrackingSchema = new mongoose.Schema(
         ip: String,
         userAgent: String,
         sessionId: String,
+        isMachineOpen: { type: Boolean, default: false },
       },
     ],
     clickEvents: [
@@ -1391,6 +1393,21 @@ router.post("/api/emailsend", async (req, res) => {
       trackingPayload,
       attachments,
     } = req.body;
+
+    console.log(`✉️ [API Triggered] POST /api/emailsend`, {
+      from,
+      to,
+      cc: cc || null,
+      bcc: bcc || null,
+      subject,
+      hasHtml: !!html,
+      hasText: !!text,
+      trackLinks: !!trackLinks,
+      senderName: sender_name || null,
+      attachmentsCount: attachments ? attachments.length : 0,
+      trackingPayload: trackingPayload || null,
+      timestamp: new Date().toISOString(),
+    });
 
     if (!token || !from || !to) {
       return res.status(400).json({
@@ -2783,6 +2800,62 @@ router.post("/api/fetchsingleemail", async (req, res) => {
 
 //_________________________Tracking API's_________________________
 
+// Helper to identify automated machine opens (scanners/pre-fetchers) for all major email providers
+function checkIsMachineOpen(userAgent = "") {
+  const ua = userAgent.toLowerCase();
+  
+  // 1. Google/Gmail Scanners & Prefetchers
+  if (
+    ua.includes("gmail-content-sampling") ||
+    ua.includes("googleimageproxy") ||
+    ua.includes("google-image-proxy") ||
+    ua.includes("via ggpht.com")
+  ) {
+    return true;
+  }
+  
+  // 2. Microsoft/Outlook/Office 365 Scanners & SafeLinks
+  if (
+    ua.includes("office365") ||
+    ua.includes("outlook-express") ||
+    ua.includes("microsoft-office") ||
+    ua.includes("safelinks")
+  ) {
+    return true;
+  }
+  
+  // 3. Yahoo Mail Proxy
+  if (
+    ua.includes("yahoomailproxy") ||
+    ua.includes("yahoo-mail-proxy")
+  ) {
+    return true;
+  }
+
+  // 4. Apple Mail Privacy Protection (MPP) & generic masked agents (ends with "Mozilla/5.0" or is exactly "Mozilla/5.0")
+  if (
+    userAgent.trim() === "Mozilla/5.0" || 
+    userAgent.trim() === "mozilla/5.0" ||
+    ua.endsWith("mozilla/5.0")
+  ) {
+    return true;
+  }
+  
+  // 5. General Security Scanners, Crawlers, and Bots
+  if (
+    ua.includes("bot") ||
+    ua.includes("crawler") ||
+    ua.includes("spider") ||
+    ua.includes("scanner") ||
+    ua.includes("pingdom") ||
+    ua.includes("headless")
+  ) {
+    return true;
+  }
+  
+  return false;
+}
+
 // 3️⃣ Track Email Opens with Better Accuracy
 router.get("/api/track/open/:trackingId", async (req, res) => {
   try {
@@ -2800,6 +2873,29 @@ router.get("/api/track/open/:trackingId", async (req, res) => {
       .createHash("md5")
       .update(`${ip}-${userAgent}`)
       .digest("hex");
+
+    // Detect if this is an automated scanner/machine open
+    const isMachineOpen = checkIsMachineOpen(userAgent);
+
+    /* 
+      FUTURE TOGGLE: If you want to completely ignore machine/bot opens in the future 
+      and get back to a "no machine open" state (meaning bots/scanners won't trigger 
+      any database updates or webhooks), uncomment the block below:
+      
+      if (isMachineOpen) {
+        console.log(`Ignored machine open for trackingId: ${trackingId}`);
+        res.set("Content-Type", "image/png");
+        res.set("Cache-Control", "no-store, no-cache, must-revalidate, private, max-age=0, post-check=0, pre-check=0");
+        res.set("Pragma", "no-cache");
+        res.set("Expires", "0");
+        return res.send(
+          Buffer.from(
+            "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=",
+            "base64",
+          ),
+        );
+      }
+    */
 
     // Get current time
     const now = new Date();
@@ -2919,6 +3015,7 @@ router.get("/api/track/open/:trackingId", async (req, res) => {
               ip: ip,
               userAgent: userAgent,
               sessionId: sessionId,
+              isMachineOpen: isMachineOpen,
             },
           },
         },
@@ -2943,6 +3040,7 @@ router.get("/api/track/open/:trackingId", async (req, res) => {
               ip: ip,
               userAgent: userAgent,
               sessionId: sessionId,
+              isMachineOpen: isMachineOpen,
             },
           },
         },
@@ -2969,6 +3067,7 @@ router.get("/api/track/open/:trackingId", async (req, res) => {
           openedCount: updatedTracking.openedCount,
           sessionId: sessionId,
           isNewOpen: true,
+          isMachineOpen: isMachineOpen,
           timestamp: now,
           extractedTrackingData,
           openEvents: updatedTracking.openEvents || [],
@@ -2995,6 +3094,7 @@ router.get("/api/track/open/:trackingId", async (req, res) => {
           replayCount: updatedTracking.replayCount,
           sessionId: sessionId,
           isNewOpen: false,
+          isMachineOpen: isMachineOpen,
           timestamp: now,
           extractedTrackingData,
           replayEvents: updatedTracking.replayEvents || [],
@@ -4085,6 +4185,7 @@ router.get("/api/track/:trackingId", async (req, res) => {
             ip: cleanIP(event.ip),
             userAgent: event.userAgent,
             sessionId: event.sessionId,
+            isMachineOpen: event.isMachineOpen || false,
           }))
           : [],
         uniqueOpens: tracking.openEvents ? tracking.openEvents.length : 0,
@@ -4097,6 +4198,7 @@ router.get("/api/track/:trackingId", async (req, res) => {
             ip: cleanIP(event.ip),
             userAgent: event.userAgent,
             sessionId: event.sessionId,
+            isMachineOpen: event.isMachineOpen || false,
           }))
           : [],
 
