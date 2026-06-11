@@ -3312,12 +3312,12 @@ router.get(
       const { account_id, user_id, force_refresh } = req.query;
 
       // ✅ optional: allow client to override what sections to fetch
-      // defaults to "*" (all sections)
+      // defaults to [] (no extra heavy sections, basic info only for speed)
       // usage: ?linkedin_sections=experience&linkedin_sections=education ...
       const requestedSections = req.query.linkedin_sections;
       const linkedinSections =
         requestedSections === undefined
-          ? ["*"] // ✅ default: get ALL sections
+          ? [] // ✅ default: get basic profile info, skip heavy sections
           : Array.isArray(requestedSections)
             ? requestedSections
             : [requestedSections];
@@ -3338,29 +3338,42 @@ router.get(
         });
       }
 
-      /**
-       * NOTE: Profile caching is intentionally disabled for this endpoint.
-       * Reason: Unipile's `/users/:identifier` payload can include dynamic fields
-       * (e.g. `invitation`) that must remain fresh for the profile screen UX.
-       */
-      console.log(
-        `🔄 Fetching fresh FULL profile for ${identifier} (account: ${finalAccountId})`,
-      );
+      const cacheKey = getProfileCacheKey(identifier, finalAccountId);
+      let userProfile = null;
+      let fromCache = false;
 
-      // ✅ build params safely (handles repeated linkedin_sections)
-      const params = new URLSearchParams();
-      params.set("account_id", finalAccountId);
+      // Check cache first if force_refresh is not requested
+      if (force_refresh !== "true" && force_refresh !== "1") {
+        const cachedProfile = profileCache.get(cacheKey);
+        if (cachedProfile) {
+          userProfile = cachedProfile;
+          fromCache = true;
+          console.log(`🎯 [Cache HIT] Profile loaded from cache: ${identifier}`);
+        }
+      }
 
-      // add linkedin_sections (repeat query param)
-      linkedinSections.forEach((s) => params.append("linkedin_sections", s));
+      if (!userProfile) {
+        console.log(
+          `🔄 Fetching fresh profile for ${identifier} (account: ${finalAccountId})`,
+        );
 
-      const response = await axios.get(
-        `${getBaseUrl()}/users/${encodeURIComponent(identifier)}?${params.toString()}`,
-        { headers: getHeaders() },
-      );
+        // ✅ build params safely (handles repeated linkedin_sections)
+        const params = new URLSearchParams();
+        params.set("account_id", finalAccountId);
 
-      const userProfile = response.data;
-      const fromCache = false;
+        // add linkedin_sections (repeat query param)
+        linkedinSections.forEach((s) => params.append("linkedin_sections", s));
+
+        const response = await axios.get(
+          `${getBaseUrl()}/users/${encodeURIComponent(identifier)}?${params.toString()}`,
+          { headers: getHeaders() },
+        );
+
+        userProfile = response.data;
+        
+        // Cache the raw profile
+        profileCache.set(cacheKey, userProfile);
+      }
 
       // ---------------------------
       // ✅ normalize fields (Unipile often uses work_experience)
