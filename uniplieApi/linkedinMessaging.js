@@ -3461,56 +3461,60 @@ router.get(
 
                   if (!userChat && chatsArray.length > 0) {
                     const maxChatsToCheck = Math.min(chatsArray.length, 20);
-                    for (let i = 0; i < maxChatsToCheck; i++) {
-                      const chat = chatsArray[i];
-                      try {
+                    const attendeePromises = chatsArray
+                      .slice(0, maxChatsToCheck)
+                      .map(async (chat) => {
                         const currentChatId =
                           chat.id || chat.chat_id || chat.chatId;
-                        if (!currentChatId) continue;
+                        if (!currentChatId) return null;
 
-                        const attendeesResponse = await axios.get(
-                          `${getBaseUrl()}/chats/${currentChatId}/attendees?account_id=${finalAccountId}`,
-                          { headers: getHeaders() },
-                        );
+                        try {
+                          const attendeesResponse = await axios.get(
+                            `${getBaseUrl()}/chats/${currentChatId}/attendees?account_id=${finalAccountId}`,
+                            { headers: getHeaders(), timeout: 2000 },
+                          );
 
-                        const attendeesData =
-                          attendeesResponse.data?.attendees ||
-                          attendeesResponse.data?.items ||
-                          attendeesResponse.data ||
-                          [];
-                        const attendees = Array.isArray(attendeesData)
-                          ? attendeesData
-                          : [];
+                          const attendeesData =
+                            attendeesResponse.data?.attendees ||
+                            attendeesResponse.data?.items ||
+                            attendeesResponse.data ||
+                            [];
+                          const attendees = Array.isArray(attendeesData)
+                            ? attendeesData
+                            : [];
 
-                        const foundAttendee = attendees.find((attendee) => {
-                          if (
-                            providerId &&
-                            (attendee.provider_id === providerId ||
-                              attendee.id === providerId ||
-                              attendee.account_id === providerId)
-                          ) {
-                            return true;
+                          const foundAttendee = attendees.find((attendee) => {
+                            if (
+                              providerId &&
+                              (attendee.provider_id === providerId ||
+                                attendee.id === providerId ||
+                                attendee.account_id === providerId)
+                            ) {
+                              return true;
+                            }
+                            if (
+                              publicIdentifier &&
+                              (attendee.public_identifier === publicIdentifier ||
+                                attendee.identifier === publicIdentifier ||
+                                attendee.username === publicIdentifier ||
+                                attendee.profile_url?.includes(publicIdentifier))
+                            ) {
+                              return true;
+                            }
+                            return false;
+                          });
+
+                          if (foundAttendee) {
+                            return chat;
                           }
-                          if (
-                            publicIdentifier &&
-                            (attendee.public_identifier === publicIdentifier ||
-                              attendee.identifier === publicIdentifier ||
-                              attendee.username === publicIdentifier ||
-                              attendee.profile_url?.includes(publicIdentifier))
-                          ) {
-                            return true;
-                          }
-                          return false;
-                        });
-
-                        if (foundAttendee) {
-                          userChat = chat;
-                          break;
+                        } catch (attendeeError) {
+                          // ignore errors for individual chat lookups
                         }
-                      } catch (attendeeError) {
-                        continue;
-                      }
-                    }
+                        return null;
+                      });
+
+                    const results = await Promise.all(attendeePromises);
+                    userChat = results.find((chat) => chat !== null) || null;
                   }
 
                   if (userChat) {
