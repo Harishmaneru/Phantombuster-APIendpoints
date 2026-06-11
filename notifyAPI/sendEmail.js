@@ -528,6 +528,18 @@ async function fetchInboxViaGraph(
   }));
 }
 
+async function fetchMimeContentViaGraph(accessToken, messageId) {
+  const url = `https://graph.microsoft.com/v1.0/me/messages/${messageId}/$value`;
+  const response = await fetch(url, {
+    headers: { Authorization: `Bearer ${accessToken}` },
+  });
+  if (!response.ok) {
+    const body = await response.text();
+    throw new Error(`Graph API raw MIME fetch error (${response.status}): ${body}`);
+  }
+  return await response.buffer();
+}
+
 // Microsoft Graph reply detection.
 // Microsoft OAuth tokens here carry Graph scopes only (Mail.Read/Mail.Send) and
 // NOT IMAP.AccessAsUser.All, so IMAP XOAUTH2 fails with "Command failed".
@@ -3476,14 +3488,30 @@ async function checkForReplies() {
               }
 
               const replyTime = new Date();
+              let replyText = matchedMsg.bodyPreview || "";
+              let replyHtml = "";
+
+              try {
+                const mimeContent = await fetchMimeContentViaGraph(accessToken, matchedMsg.id);
+                const parsed = await simpleParser(mimeContent);
+                if (parsed.text) replyText = parsed.text;
+                if (parsed.html) replyHtml = parsed.html;
+              } catch (mimeErr) {
+                replyLog("warn", "graph_mime_fetch_failed", {
+                  mailbox,
+                  messageId: matchedMsg.id,
+                  error: mimeErr.message,
+                });
+              }
+
               const replyDetails = {
                 replyFrom: matchedMsg.from
                   ? `${matchedMsg.from.emailAddress?.name || ""} <${matchedMsg.from.emailAddress?.address || ""}>`
                   : "Unknown",
                 replySubject: matchedMsg.subject || "(No Subject)",
                 replyDate: matchedMsg.receivedDateTime,
-                replyText: matchedMsg.bodyPreview || "",
-                replyHtml: "",
+                replyText,
+                replyHtml,
                 replyMessageId:
                   matchedMsg.internetMessageId || matchedMsg.id,
               };
