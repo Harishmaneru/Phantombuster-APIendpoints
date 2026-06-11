@@ -1527,7 +1527,7 @@ router.post("/api/emailsend", async (req, res) => {
           message: "Email sent via Microsoft Graph API",
         });
       } catch (graphError) {
-        console.error("Graph API Send Error:", graphError);
+        console.error(`❌ Graph API Send Error (To: ${to}, From: ${from}):`, graphError);
         return res
           .status(500)
           .json({ success: false, error: graphError.message });
@@ -1686,7 +1686,7 @@ router.post("/api/emailsend", async (req, res) => {
       senderName: sender_name || null,
     });
   } catch (err) {
-    console.error("Email Send Error:", err);
+    console.error(`❌ Email Send Error (To: ${to}, From: ${from}):`, err);
     return res.status(500).json({ success: false, error: err.message });
   }
 });
@@ -3045,7 +3045,7 @@ router.get("/api/track/open/:trackingId", async (req, res) => {
       );
 
       console.log(
-        `📧 New email open detected: ${trackingId} from IP: ${ip}, Count: ${updatedTracking.openedCount}`,
+        `New email open detected: ${trackingId} (Recipient: ${tracking.toEmail}) from IP: ${ip}, Count: ${updatedTracking.openedCount}`,
       );
     } else {
       // This is a replay: same session re-opened within the dedup window.
@@ -3070,7 +3070,7 @@ router.get("/api/track/open/:trackingId", async (req, res) => {
       );
 
       console.log(
-        `📧 Replay open logged: ${trackingId} from IP: ${ip} (same session within 30 seconds), Replay Count: ${updatedTracking.replayCount}`,
+        `📧 Replay open logged: ${trackingId} (Recipient: ${tracking.toEmail}) from IP: ${ip} (same session within 30 seconds), Replay Count: ${updatedTracking.replayCount}`,
       );
     }
 
@@ -3136,7 +3136,7 @@ router.get("/api/track/open/:trackingId", async (req, res) => {
       ),
     );
   } catch (error) {
-    console.error("Open tracking error:", error);
+    console.error(`❌ Open tracking error for trackingId ${req.params.trackingId || "unknown"}:`, error);
     res.set("Content-Type", "image/png");
     res.set("Cache-Control", "no-store, no-cache, must-revalidate, private, max-age=0, post-check=0, pre-check=0");
     res.set("Pragma", "no-cache");
@@ -3272,7 +3272,7 @@ router.get("/api/track/click/:trackingId", async (req, res) => {
 
     res.redirect(url);
   } catch (error) {
-    console.error("Click tracking error:", error);
+    console.error(`❌ Click tracking error for trackingId ${req.params.trackingId || "unknown"} (URL: ${req.query.url || "unknown"}):`, error);
     res.redirect(decodeURIComponent(req.query.url));
   }
 });
