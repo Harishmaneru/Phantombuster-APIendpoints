@@ -109,7 +109,13 @@ async function fetchSubscription(req, res) {
             return res.status(200).json({ success: false, message: "No active subscription. User has not subscribed yet." });
         }
 
-        res.json({ success: true, data: sub });
+        const Customer = mongoose.model('Customer');
+        const customerRecord = await Customer.findOne({ userId });
+
+        const data = sub.toObject ? sub.toObject() : { ...sub };
+        data.customerId = customerRecord?.customerId || null;
+
+        res.json({ success: true, data });
     } catch (err) {
         console.error('Fetch subscription error:', err);
         res.status(500).json({ success: false, message: err.message });
