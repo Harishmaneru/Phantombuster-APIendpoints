@@ -944,7 +944,7 @@ function determinePlanType(productData, priceData, metadataPlanType) {
     const priceNickname = (priceData?.nickname || '').toLowerCase();
     const planMetadata = (priceData?.metadata?.Plan || priceData?.metadata?.plan || '').toLowerCase();
     const metadataPlan = (metadataPlanType || '').toLowerCase();
-    
+
     // PRIORITY 1: Check metadata plan type first (most reliable)
     if (metadataPlan === 'warmup-only') {
         return 'warmup_only';
@@ -955,30 +955,30 @@ function determinePlanType(productData, priceData, metadataPlanType) {
     if (metadataPlan === 'email/warmup' || metadataPlan === 'email_with_warmup') {
         return 'email_with_warmup';
     }
-    
+
     // PRIORITY 2: Check for email + warmup combination
-    if ((productName.includes('email') && productName.includes('warmup')) || 
+    if ((productName.includes('email') && productName.includes('warmup')) ||
         (metadataPlan.includes('email') && metadataPlan.includes('warmup'))) {
         return 'email_with_warmup';
     }
-    
+
     // PRIORITY 3: Check for warmup-only (no email mentioned)
-    if ((productName.includes('warmup') && !productName.includes('email')) || 
+    if ((productName.includes('warmup') && !productName.includes('email')) ||
         (metadataPlan.includes('warmup') && !metadataPlan.includes('email'))) {
         return 'warmup_only';
     }
-    
+
     // PRIORITY 4: Check for email-only (no warmup mentioned)
-    if ((productName.includes('email') && !productName.includes('warmup')) || 
+    if ((productName.includes('email') && !productName.includes('warmup')) ||
         (metadataPlan.includes('email') && !metadataPlan.includes('warmup'))) {
         return 'email_only';
     }
-    
+
     // PRIORITY 5: General warmup detection (fallback)
     if (productName.includes('warmup') || priceNickname.includes('warmup') || planMetadata.includes('warmup')) {
         return 'warmup_only'; // Changed from email_with_warmup to warmup_only
     }
-    
+
     // Default fallback
     return 'standard';
 }
@@ -988,29 +988,29 @@ function extractPlanFeatures(productData, priceData, subscriptionItem, metadataP
     const productName = (productData?.name || '').toLowerCase();
     const description = (productData?.description || '').toLowerCase();
     const metadataPlan = (metadataPlanType || '').toLowerCase();
-    
+
     // Get quantity from subscription item (default to 1 if not found)
     const quantity = subscriptionItem?.quantity || 1;
-    
+
     // Email features
     if (productName.includes('email') || description.includes('email') || metadataPlan.includes('email')) {
         features.push(`email_accounts: ${quantity}`);
     }
-    
+
     // Warmup features
     if (productName.includes('warmup') || description.includes('warmup') || metadataPlan.includes('warmup')) {
         features.push(`warmup_inbox: ${quantity}`);
     }
-    
+
     // Additional feature detection based on common patterns
     if (description.includes('domain') || productName.includes('domain')) {
         features.push(`domain_management: ${quantity}`);
     }
-    
+
     if (description.includes('scraping') || productName.includes('scrap')) {
         features.push(`data_scraping: ${quantity}`);
     }
-    
+
     return features;
 }
 
@@ -1026,7 +1026,7 @@ function isEmailWithWarmupPlan(productData, priceData, metadataPlanType) {
 
 function getPlanCategory(productData, priceData, metadataPlanType) {
     const planType = determinePlanType(productData, priceData, metadataPlanType);
-    
+
     switch (planType) {
         case 'email_only':
             return 'email_services';
@@ -1179,28 +1179,28 @@ router.post('/get-subscription-from-session', async (req, res) => {
             } else {
                 // Generic one-time payment - return same structure as subscription
                 console.log('[get-subscription-from-session] One-time payment detected, returning structured response');
-                
+
                 // Get line items to extract product information
                 const lineItems = session.line_items?.data || [];
                 let productData = null;
                 let priceData = null;
                 let quantity = 1; // Default quantity
-                
+
                 console.log('[get-subscription-from-session] Line items:', lineItems.length);
-                
+
                 if (lineItems.length > 0) {
                     const firstItem = lineItems[0];
                     priceData = firstItem.price;
                     quantity = firstItem.quantity || 1; // Get actual quantity from line item
                     console.log('[get-subscription-from-session] Price data:', priceData);
                     console.log('[get-subscription-from-session] Quantity:', quantity);
-                    
+
                     if (priceData && priceData.product) {
                         productData = priceData.product;
                         console.log('[get-subscription-from-session] Product data:', productData);
                     }
                 }
-                
+
                 // Fallback: if no product data, try to get it from metadata or create basic info
                 if (!productData && session.metadata?.planType) {
                     productData = {
@@ -1208,11 +1208,11 @@ router.post('/get-subscription-from-session', async (req, res) => {
                         description: ''
                     };
                 }
-                
+
                 // Additional fallback: use session metadata for plan detection
                 const planTypeFromMetadata = session.metadata?.planType || 'unknown';
                 console.log('[get-subscription-from-session] Plan type from metadata:', planTypeFromMetadata);
-                
+
                 // Helper function to safely format dates
                 const safeFormatDate = (timestamp) => {
                     if (!timestamp) return null;
@@ -1227,9 +1227,9 @@ router.post('/get-subscription-from-session', async (req, res) => {
                         return null;
                     }
                 };
-                
+
                 const createdAt = safeFormatDate(session.created);
-                
+
                 // Build response in same format as subscription
                 const response = {
                     checkout: {
@@ -2827,12 +2827,16 @@ router.post('/create-checkout-session-by-app', async (req, res) => {
             getsalesgpt: 'http://localhost:4200',
             liame: 'https://liame.onepgr.com',
             'liame.ai-home': 'https://www.liame.ai',
+            aixsdr: 'http://localhost:4200',
+            'aixsdr.home': 'http://localhost:3000',
         } : {
             kampaignai: 'https://kampaign.onepgr.com',
             gps: 'https://gps.onepgr.com',
             getsalesgpt: 'https://sales.onepgr.com',
             liame: 'https://liame.onepgr.com',
             'liame.ai-home': 'https://www.liame.ai',
+            aixsdr: 'https://aixsdr.onepgr.com',
+            'aixsdr.home': 'https://www.aixsdr.com',
         };
 
         if (!app || !appUrlMap[app]) return res.status(400).json({ error: 'Invalid or missing app parameter' });
@@ -2878,7 +2882,7 @@ router.post('/create-checkout-session-by-app', async (req, res) => {
 
         // 4) Helper functions for URLs
         const getSandboxUrl = (app) => {
-            const sandboxUrls = { kampaignai: 'http://localhost:4200', gps: 'http://localhost:4200', getsalesgpt: 'http://localhost:4200', liame: 'https://liame.onepgr.com', 'liame.ai-home': 'https://www.liame.ai' };
+            const sandboxUrls = { kampaignai: 'http://localhost:4200', gps: 'http://localhost:4200', getsalesgpt: 'http://localhost:4200', liame: 'https://liame.onepgr.com', 'liame.ai-home': 'https://www.liame.ai', aixsdr: 'http://localhost:4200', 'aixsdr.home': 'http://localhost:3000' };
             return sandboxUrls[app] || 'https://liame.onepgr.com';
         };
         const getSuccessUrl = (app, planType, isSandbox) => {
@@ -2887,12 +2891,17 @@ router.post('/create-checkout-session-by-app', async (req, res) => {
                 const successBase = isSandbox ? getSandboxUrl('liame.ai-home') : appUrlMap['liame.ai-home'];
                 return `${successBase}/success?session_id={CHECKOUT_SESSION_ID}`;
             }
+            // For aixsdr.home, success pages should redirect to the AIxSDR landing page
+            if (app === 'aixsdr.home') {
+                const successBase = isSandbox ? getSandboxUrl('aixsdr.home') : appUrlMap['aixsdr.home'];
+                return `${successBase}/success?session_id={CHECKOUT_SESSION_ID}`;
+            }
             const baseUrl = isSandbox ? getSandboxUrl(app) : appUrlMap[app];
-            
+
             // All email-related plans go to email-success
             if (planType && (
-                planType.includes('email') || 
-                planType.includes('warmup') || 
+                planType.includes('email') ||
+                planType.includes('warmup') ||
                 planType === 'email/warmup' ||
                 planType === 'email-only' ||
                 planType === 'email_with_warmup' ||
@@ -2900,7 +2909,7 @@ router.post('/create-checkout-session-by-app', async (req, res) => {
             )) {
                 return `${baseUrl}/email-success?session_id={CHECKOUT_SESSION_ID}`;
             }
-            
+
             switch (planType) {
                 case 'kampaign-main': return `${baseUrl}/kampaign-success?session_id={CHECKOUT_SESSION_ID}`;
                 case 'gps': return `${baseUrl}/gps-success?session_id={CHECKOUT_SESSION_ID}`;
@@ -2922,8 +2931,8 @@ router.post('/create-checkout-session-by-app', async (req, res) => {
         const priceList = Array.isArray(priceIds) && priceIds.length > 0
             ? priceIds
             : priceId
-            ? [priceId]
-            : [];
+                ? [priceId]
+                : [];
 
         if (priceList.length === 0) {
             return res.status(400).json({ error: "No price IDs provided" });
@@ -2952,7 +2961,7 @@ router.post('/create-checkout-session-by-app', async (req, res) => {
         // 8.1) Add invoice creation for one-time payments (especially warmup services)
         if (sessionMode === 'payment') {
             console.log(`[${isSandbox ? 'SANDBOX' : 'PRODUCTION'}] Adding invoice creation for one-time payment`);
-            
+
             sessionPayload.invoice_creation = {
                 enabled: true,
                 invoice_data: {
@@ -2963,20 +2972,20 @@ router.post('/create-checkout-session-by-app', async (req, res) => {
                         environment,
                         sandbox: isSandbox,
                         paymentType: 'one_time',
-                        serviceType: planType === 'warmup-only' ? 'warmup_service' : 
-                                   planType === 'email-only' ? 'email_service' :
-                                   planType === 'email_with_warmup' ? 'email_warmup_service' : 'general_service'
+                        serviceType: planType === 'warmup-only' ? 'warmup_service' :
+                            planType === 'email-only' ? 'email_service' :
+                                planType === 'email_with_warmup' ? 'email_warmup_service' : 'general_service'
                     },
                     footer: planType === 'warmup-only' ? 'Thank you for your warmup service purchase' :
-                           planType === 'email-only' ? 'Thank you for your email service purchase' :
-                           planType === 'email_with_warmup' ? 'Thank you for your email + warmup service purchase' :
-                           'Thank you for your purchase',
+                        planType === 'email-only' ? 'Thank you for your email service purchase' :
+                            planType === 'email_with_warmup' ? 'Thank you for your email + warmup service purchase' :
+                                'Thank you for your purchase',
                     custom_fields: [
                         {
                             name: 'Service Type',
                             value: planType === 'warmup-only' ? 'Warmup Service' :
-                                   planType === 'email-only' ? 'Email Service' :
-                                   planType === 'email_with_warmup' ? 'Email + Warmup Service' : 'General Service'
+                                planType === 'email-only' ? 'Email Service' :
+                                    planType === 'email_with_warmup' ? 'Email + Warmup Service' : 'General Service'
                         },
                         {
                             name: 'Plan Type',
@@ -3029,12 +3038,14 @@ router.post('/create-checkout-session-by-app', async (req, res) => {
         if (customerId && planType) {
             await Customer.updateOne(
                 { userId, environment },
-                { $set: { 
-                    lastPlanType: planType,
-                    lastCheckoutPlanType: planType,
-                    lastCheckoutSessionId: session.id,
-                    lastCheckoutTimestamp: new Date()
-                }}
+                {
+                    $set: {
+                        lastPlanType: planType,
+                        lastCheckoutPlanType: planType,
+                        lastCheckoutSessionId: session.id,
+                        lastCheckoutTimestamp: new Date()
+                    }
+                }
             );
             console.log(`[${isSandbox ? 'SANDBOX' : 'PRODUCTION'}] 🚨 CRITICAL: Stored planType '${planType}' in customer record for user ${userId}`);
         }
@@ -3089,7 +3100,9 @@ router.post('/create-billing-portal-session-by-app', async (req, res) => {
             gps: 'http://localhost:4200',
             getsalesgpt: 'http://localhost:4200',
             liame: 'https://liame.onepgr.com',
-           'liame.ai-home': 'https://www.liame.ai',
+            'liame.ai-home': 'https://www.liame.ai',
+            aixsdr: 'http://localhost:4200',
+            'aixsdr.home': 'http://localhost:3000',
         } : {
             // Production URLs
             kampaignai: 'https://kampaign.onepgr.com',
@@ -3097,6 +3110,8 @@ router.post('/create-billing-portal-session-by-app', async (req, res) => {
             getsalesgpt: 'https://sales.onepgr.com',
             liame: 'https://liame.onepgr.com',
             'liame.ai-home': 'https://www.liame.ai',
+            aixsdr: 'https://aixsdr.onepgr.com',
+            'aixsdr.home': 'https://www.aixsdr.com',
         };
 
         // Determine return URL based on app type
@@ -3497,6 +3512,8 @@ router.post('/get-subscription-info-by-app', async (req, res) => {
                 getsalesgpt: 'https://sales.onepgr.com',
                 liame: 'https://liame.onepgr.com',
                 'liame.ai-home': 'https://www.liame.ai',
+                aixsdr: 'https://aixsdr.onepgr.com',
+                'aixsdr.home': 'https://www.aixsdr.com',
             };
 
             let returnUrl = appUrlMap[app] ? `${appUrlMap[app]}/profile` : 'https://onepgr.com';
@@ -3684,7 +3701,7 @@ router.post('/get-user-payment-info', async (req, res) => {
             response.billingHistory = await Promise.all(invoices.map(async (inv) => {
                 // Get detailed line items for each invoice
                 const lineItems = inv.lines?.data || [];
-                
+
                 // Try to get subscription metadata for accurate plan type detection
                 let subscriptionMetadata = null;
                 if (inv.subscription) {
@@ -3698,7 +3715,7 @@ router.post('/get-user-payment-info', async (req, res) => {
                 } else {
                     console.log(`🔍 Invoice ${inv.id} - No subscription ID found, trying to find subscription by customer and price`);
                     console.log(`🔍 Invoice customer: ${inv.customer}, line items: ${lineItems.length}`);
-                    
+
                     // Try to find subscription by customer and price ID from line items
                     if (inv.customer && lineItems.length > 0) {
                         try {
@@ -3707,25 +3724,25 @@ router.post('/get-user-payment-info', async (req, res) => {
                                 status: 'active',
                                 limit: 10
                             });
-                            
+
                             console.log(`🔍 Found ${subscriptions.data.length} active subscriptions for customer ${inv.customer}`);
-                            
+
                             // Look for subscription with matching price ID
                             const matchingSubscription = subscriptions.data.find(sub => {
-                                const hasMatchingPrice = sub.items.data.some(item => 
+                                const hasMatchingPrice = sub.items.data.some(item =>
                                     lineItems.some(invItem => invItem.price?.id === item.price.id)
                                 );
                                 console.log(`🔍 Checking subscription ${sub.id} - has matching price: ${hasMatchingPrice}`);
                                 console.log(`🔍 Subscription ${sub.id} metadata:`, sub.metadata);
                                 return hasMatchingPrice;
                             });
-                            
+
                             if (matchingSubscription) {
                                 subscriptionMetadata = matchingSubscription.metadata;
                                 console.log(`🔍 Found matching subscription ${matchingSubscription.id} metadata:`, subscriptionMetadata);
                             } else {
                                 console.log(`🔍 No matching subscription found for customer ${inv.customer}`);
-                                
+
                                 // Try to get checkout session metadata as fallback
                                 if (inv.payment_intent) {
                                     try {
@@ -3739,13 +3756,13 @@ router.post('/get-user-payment-info', async (req, res) => {
                                         console.warn(`Could not fetch payment intent ${inv.payment_intent}:`, error.message);
                                     }
                                 }
-                                
+
                                 // Try to get invoice metadata as another fallback
                                 if (!subscriptionMetadata && inv.metadata?.planType) {
                                     subscriptionMetadata = { planType: inv.metadata.planType };
                                     console.log(`🔍 Found invoice metadata:`, subscriptionMetadata);
                                 }
-                                
+
                                 // CRITICAL FALLBACK: Use customer record's stored plan type
                                 if (!subscriptionMetadata && inv.customer) {
                                     try {
@@ -3769,7 +3786,7 @@ router.post('/get-user-payment-info', async (req, res) => {
                     // Try to get product data for better plan type detection
                     let productData = null;
                     let planType = 'standard';
-                    
+
                     if (item.price?.product) {
                         try {
                             productData = await stripe.products.retrieve(item.price.product);
@@ -3807,11 +3824,11 @@ router.post('/get-user-payment-info', async (req, res) => {
                     }
 
                     // Detect if this is a warmup item based on plan type and description
-                    const isWarmup = planType === 'warmup_only' || 
-                                   planType === 'email_with_warmup' ||
-                                   item.description?.toLowerCase().includes('kampaignai-warmup') ||
-                                   (item.description?.toLowerCase().includes('kampaignai') && 
-                                    item.description?.toLowerCase().includes('warmup'));
+                    const isWarmup = planType === 'warmup_only' ||
+                        planType === 'email_with_warmup' ||
+                        item.description?.toLowerCase().includes('kampaignai-warmup') ||
+                        (item.description?.toLowerCase().includes('kampaignai') &&
+                            item.description?.toLowerCase().includes('warmup'));
 
                     return {
                         description: item.description || 'Subscription item',
@@ -3827,7 +3844,7 @@ router.post('/get-user-payment-info', async (req, res) => {
 
                 // Calculate totals
                 const totalAmount = detailedItems.reduce((sum, item) => sum + (item.amount * item.quantity), 0);
-            console.log(`🔍 Invoice ${inv.id} - Calculated totalAmount: ${totalAmount}, Invoice amount: ${inv.amount_paid / 100}`);
+                console.log(`🔍 Invoice ${inv.id} - Calculated totalAmount: ${totalAmount}, Invoice amount: ${inv.amount_paid / 100}`);
                 const warmupItems = detailedItems.filter(item => item.isWarmup);
                 const hasWarmup = warmupItems.length > 0;
 
@@ -3844,7 +3861,7 @@ router.post('/get-user-payment-info', async (req, res) => {
                     hasWarmup: hasWarmup,
                     warmupItems: warmupItems,
                     // Summary of items
-                    itemSummary: detailedItems.map(item => 
+                    itemSummary: detailedItems.map(item =>
                         `${item.description} - Qty ${item.quantity} - $${item.amount.toFixed(2)}`
                     ).join(', ')
                 };
@@ -3906,7 +3923,7 @@ router.post('/get-user-payment-info', async (req, res) => {
 
                 try {
                     primaryProductData = await stripe.products.retrieve(plan.product);
-                    
+
                     // Determine plan type and features for primary subscription
                     primaryPlanType = determinePlanType(primaryProductData, plan, primarySub.metadata?.planType);
                     primaryFeatures = extractPlanFeatures(primaryProductData, plan, primarySub.items.data[0], primarySub.metadata?.planType);
@@ -4038,7 +4055,7 @@ router.post('/get-user-payment-info', async (req, res) => {
 
                         try {
                             productData = await stripe.products.retrieve(plan.product);
-                            
+
                             // Determine plan type and features
                             planType = determinePlanType(productData, plan, sub.metadata?.planType);
                             features = extractPlanFeatures(productData, plan, subscriptionItem, sub.metadata?.planType);
