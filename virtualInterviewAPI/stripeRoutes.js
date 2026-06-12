@@ -3117,7 +3117,8 @@ router.post('/create-billing-portal-session-by-app', async (req, res) => {
         // Determine return URL based on app type
         let returnUrl;
         if (app && appUrlMap[app]) {
-            returnUrl = `${appUrlMap[app]}/profile`;
+            const returnPath = app === 'aixsdr' ? '/settings/pricing' : '/profile';
+            returnUrl = `${appUrlMap[app]}${returnPath}`;
         }
 
         // Create a Billing Portal session to manage subscription
@@ -3516,7 +3517,8 @@ router.post('/get-subscription-info-by-app', async (req, res) => {
                 'aixsdr.home': 'https://www.aixsdr.com',
             };
 
-            let returnUrl = appUrlMap[app] ? `${appUrlMap[app]}/profile` : 'https://onepgr.com';
+            const returnPath = app === 'aixsdr' ? '/settings/pricing' : '/profile';
+            let returnUrl = appUrlMap[app] ? `${appUrlMap[app]}${returnPath}` : 'https://onepgr.com';
 
             const portalSession = await stripe.billingPortal.sessions.create({
                 customer: customerId,
