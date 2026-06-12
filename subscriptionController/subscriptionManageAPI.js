@@ -109,11 +109,19 @@ async function fetchSubscription(req, res) {
             return res.status(200).json({ success: false, message: "No active subscription. User has not subscribed yet." });
         }
 
-        const Customer = mongoose.model('Customer');
-        const customerRecord = await Customer.findOne({ userId });
-
         const data = sub.toObject ? sub.toObject() : { ...sub };
-        data.customerId = customerRecord?.customerId || null;
+
+        // Try to get customerId from this subscription, fallback to any other subscription for same user
+        if (!data.subscription?.customer?.id) {
+            const otherSub = await SubscriptionFlags.findOne({
+                userId,
+                'subscription.customer.id': { $exists: true, $ne: null },
+                app: { $ne: canonicalApp(app) }
+            });
+            data.customerId = otherSub?.subscription?.customer?.id || null;
+        } else {
+            data.customerId = data.subscription.customer.id;
+        }
 
         res.json({ success: true, data });
     } catch (err) {
