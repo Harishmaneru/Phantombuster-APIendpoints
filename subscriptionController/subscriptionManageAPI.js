@@ -394,16 +394,53 @@ async function checkUsageLimit(req, res) {
         const usageKey = `${action}Used`;
         const limit = sub.subscription.features[featureKey];
         const currentUsage = (sub.usage && sub.usage[usageKey]) || 0;
+        const isUnlimited = limit === "unlimited" || String(limit).toLowerCase() === "unlimited";
 
-        if (currentUsage >= limit) {
-            // Return 200 OK - limit exceeded but check completed successfully
+        // If unlimited, always allow
+        if (isUnlimited) {
+            return res.status(200).json({
+                success: true,
+                message: `Usage check completed for ${featureKey}`,
+                canProceed: true,
+                feature: featureKey,
+                planDetails: {
+                    totalAllowed: "unlimited",
+                    currentlyUsed: currentUsage,
+                    remaining: "unlimited"
+                },
+                status: "action_allowed",
+                recommendation: `You can proceed with creating ${featureKey}. Your plan has unlimited capacity.`
+            });
+        }
+
+        // Convert limit to number for numeric limits
+        const numLimit = typeof limit === 'string' ? parseInt(limit, 10) : limit;
+        if (isNaN(numLimit)) {
+            // If limit cannot be parsed, treat as unlimited
+            return res.status(200).json({
+                success: true,
+                message: `Usage check completed for ${featureKey}`,
+                canProceed: true,
+                feature: featureKey,
+                planDetails: {
+                    totalAllowed: limit,
+                    currentlyUsed: currentUsage,
+                    remaining: "unlimited"
+                },
+                status: "action_allowed",
+                recommendation: `You can proceed with creating ${featureKey}. Your plan has unlimited capacity.`
+            });
+        }
+
+        // Numeric limit: check if exceeded
+        if (currentUsage >= numLimit) {
             return res.status(200).json({
                 success: true,
                 message: `Usage limit exceeded for ${featureKey}`,
                 canProceed: false,
                 feature: featureKey,
                 planDetails: {
-                    totalAllowed: limit,
+                    totalAllowed: numLimit,
                     currentlyUsed: currentUsage,
                     remaining: 0
                 },
@@ -419,12 +456,12 @@ async function checkUsageLimit(req, res) {
             canProceed: true,
             feature: featureKey,
             planDetails: {
-                totalAllowed: limit,
+                totalAllowed: numLimit,
                 currentlyUsed: currentUsage,
-                remaining: limit - currentUsage
+                remaining: numLimit - currentUsage
             },
             status: "action_allowed",
-            recommendation: `You can proceed with creating ${featureKey}. ${limit - currentUsage} remaining in your current plan.`
+            recommendation: `You can proceed with creating ${featureKey}. ${numLimit - currentUsage} remaining in your current plan.`
         });
 
     } catch (err) {
