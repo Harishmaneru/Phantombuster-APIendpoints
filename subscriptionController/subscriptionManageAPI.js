@@ -78,6 +78,16 @@ function normalizeFeatures(features) {
                     out[key] = val;
                     continue;
                 }
+                
+                // Try to extract a numeric limit at the beginning, e.g., "3 active ICP profiles"
+                const numMatch = item.trim().match(/^(\d+)\s+(.+)$/);
+                if (numMatch) {
+                    // Keep the original string as the key for frontend compatibility
+                    // but set the value to the numeric limit.
+                    out[item.trim()] = Number(numMatch[1]);
+                    continue;
+                }
+
                 // If string without colon, treat as flag with unlimited
                 out[item.trim()] = "unlimited";
                 continue;
@@ -245,7 +255,15 @@ async function updateUsage(req, res) {
 
                 // Check limits
                 if (sub.subscription.features && sub.subscription.features[featureKey] !== undefined) {
-                    const limit = sub.subscription.features[featureKey];
+                    let limit = sub.subscription.features[featureKey];
+
+                    // Extract limit from featureKey if it starts with a number and is marked as unlimited
+                    if (limit === "unlimited" || String(limit).toLowerCase() === "unlimited") {
+                        const match = featureKey.match(/^\s*(\d+)\s+(.+)$/);
+                        if (match) {
+                            limit = parseInt(match[1], 10);
+                        }
+                    }
 
                     if (limit !== "unlimited" && newUsage > limit) {
                         hasLimitExceeded = true;
@@ -392,9 +410,18 @@ async function checkUsageLimit(req, res) {
         // Check specific action limit
         const featureKey = action; // e.g., "campaigns", "domains", "emails"
         const usageKey = `${action}Used`;
-        const limit = sub.subscription.features[featureKey];
+        let limit = sub.subscription.features[featureKey];
         const currentUsage = (sub.usage && sub.usage[usageKey]) || 0;
-        const isUnlimited = limit === "unlimited" || String(limit).toLowerCase() === "unlimited";
+        let isUnlimited = limit === "unlimited" || String(limit).toLowerCase() === "unlimited";
+
+        // Extract limit from featureKey if it starts with a number and is marked as unlimited
+        if (isUnlimited) {
+            const match = featureKey.match(/^\s*(\d+)\s+(.+)$/);
+            if (match) {
+                limit = parseInt(match[1], 10);
+                isUnlimited = false;
+            }
+        }
 
         // If unlimited, always allow
         if (isUnlimited) {
