@@ -358,7 +358,7 @@ async function checkUsageLimit(req, res) {
         const sub = await SubscriptionFlags.findOne({ userId, app: canonicalApp(app) });
         if (!sub) {
             console.log(`CheckUsageLimit: Subscription not found for userId: ${userId}, app: ${app}`);
-            return res.status(404).json({ success: false, message: "Subscription not found" });
+            return res.status(200).json({ success: false, message: "Subscription not found" });
         }
 
         // Defensive normalization for legacy docs: convert array-shaped features to object map
