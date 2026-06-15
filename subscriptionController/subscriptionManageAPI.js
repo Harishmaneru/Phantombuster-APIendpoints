@@ -57,6 +57,60 @@ const canonicalApp = (app) => APP_ALIASES[app] || app;
 
 // ========== Reusable Functions ==========
 
+// Normalize `features` into an object map { featureName: limit }
+function normalizeFeatures(features) {
+    if (!features) return {};
+
+    // Already an object map (typical case)
+    if (!Array.isArray(features) && typeof features === 'object') return features;
+
+    const out = {};
+
+    // Handle arrays of strings like "emails: 2" or objects like { emails: 2 }
+    if (Array.isArray(features)) {
+        for (const item of features) {
+            if (typeof item === 'string') {
+                const m = item.match(/^\s*([^:\n]+)\s*:\s*(.+)\s*$/);
+                if (m) {
+                    const key = m[1].trim();
+                    let val = m[2].trim();
+                    if (/^\d+$/.test(val)) val = Number(val);
+                    out[key] = val;
+                    continue;
+                }
+                // If string without colon, treat as flag with unlimited
+                out[item.trim()] = "unlimited";
+                continue;
+            }
+
+            if (typeof item === 'object' && item !== null) {
+                // Merge object entries
+                for (const k of Object.keys(item)) {
+                    out[k] = item[k];
+                }
+                continue;
+            }
+
+            // Fallback: stringify
+            out[String(item)] = "unlimited";
+        }
+        return out;
+    }
+
+    // Fallback: return empty map
+    return {};
+}
+
+// Helper to ensure a subscription document (or plain object) has features as an object
+function ensureSubscriptionFeatures(sub) {
+    if (!sub || !sub.subscription) return;
+    const f = sub.subscription.features;
+    if (Array.isArray(f) || typeof f !== 'object') {
+        sub.subscription.features = normalizeFeatures(f);
+    }
+}
+
+
 // Store subscription & payment details
 async function storeSubscription(req, res) {
     try {
@@ -76,6 +130,9 @@ async function storeSubscription(req, res) {
 
         // Canonicalize the app name so aliased domains share one record
         const appKey = canonicalApp(app);
+
+        // Normalize features before saving (accept arrays from producers)
+        subscription.features = normalizeFeatures(subscription.features);
 
         // Log the data being saved for debugging
         console.log('Saving subscription data:', { userId, app, appKey, subscription });
@@ -110,6 +167,9 @@ async function fetchSubscription(req, res) {
         }
 
         const data = sub.toObject ? sub.toObject() : { ...sub };
+
+        // Normalize features for consumers so callers always receive object map
+        ensureSubscriptionFeatures(data);
 
         // Try to get customerId from this subscription, fallback to any other subscription for same user
         if (!data.subscription?.customer?.id) {
@@ -147,6 +207,9 @@ async function updateUsage(req, res) {
                 message: "No subscription found"
             });
         }
+
+        // Defensive normalization for legacy docs: convert array-shaped features to object map
+        ensureSubscriptionFeatures(sub);
 
         // Check if subscription is active
         const paymentStatus = sub.subscription.payment?.status;
@@ -279,6 +342,9 @@ async function checkUsageLimit(req, res) {
             console.log(`CheckUsageLimit: Subscription not found for userId: ${userId}, app: ${app}`);
             return res.status(404).json({ success: false, message: "Subscription not found" });
         }
+
+        // Defensive normalization for legacy docs: convert array-shaped features to object map
+        ensureSubscriptionFeatures(sub);
 
         // Check if subscription is active
         const paymentStatus = sub.subscription.payment?.status;

@@ -1,0 +1,672 @@
+[
+  {
+    "_id": "68b6cf475d19a3fbba381812",
+    "app": "kampaignai",
+    "userId": "10936",
+    "__v": 0,
+    "createdAt": "2025-09-02T11:04:39.337Z",
+    "subscription": {
+      "plan": "Onepgr-kampaign.ai",
+      "features": {
+        "campaigns": 25,
+        "domains": 5,
+        "emails": 10
+      },
+      "payment": {
+        "status": "active",
+        "txnId": "sub_1S2tVZ4CXyekys3eUrAZZHqe"
+      },
+      "endDate": "2025-10-02T12:40:19.000Z"
+    },
+    "updatedAt": "2025-09-02T12:40:26.662Z",
+    "usage": {
+      "campaignsUsed": 0,
+      "domainsUsed": 0,
+      "emailsUsed": 0
+    }
+  },
+  {
+    "_id": "68b6f2b05d19a3fbba388b62",
+    "app": "kampaignai",
+    "userId": "10940",
+    "__v": 0,
+    "createdAt": "2025-09-02T13:35:44.880Z",
+    "subscription": {
+      "plan": "Onepgr-kampaign.ai",
+      "features": {
+        "campaigns": 25,
+        "domains": 5,
+        "emails": 10
+      },
+      "payment": {
+        "status": "active",
+        "txnId": "sub_1S2uN64CXyekys3eBHizEVrj"
+      },
+      "endDate": "2025-10-02T13:35:38.000Z"
+    },
+    "updatedAt": "2025-09-02T13:35:44.880Z",
+    "usage": {
+      "campaignsUsed": 0,
+      "domainsUsed": 0,
+      "emailsUsed": 0
+    }
+  },
+  {
+    "_id": "68b6f5485d19a3fbba389314",
+    "app": "kampaignai",
+    "userId": "10941",
+    "__v": 0,
+    "createdAt": "2025-09-02T13:46:48.759Z",
+    "subscription": {
+      "plan": "Onepgr-kampaign.ai",
+      "planType": "kai-personal",
+      "planId": "price_1ReaZh4CXyekys3eQrJjSnku",
+      "description": "",
+      "amount": 79,
+      "currency": "usd",
+      "interval": "1 month",
+      "features": {
+        "campaigns": 5,
+        "domains": 1,
+        "emails": 2
+      },
+      "payment": {
+        "status": "active",
+        "txnId": "sub_1S2veL4CXyekys3eFnqb5zww",
+        "paymentStatus": "paid",
+        "paymentMethod": "card",
+        "amountTotal": 79
+      },
+      "billing": {
+        "nextBillingDate": "2025-10-02T14:57:31.000Z",
+        "nextBillingDateFormatted": "Thu Oct 02 2025",
+        "currentPeriodStart": "2025-09-02T14:57:31.000Z",
+        "currentPeriodEnd": "2025-10-02T14:57:31.000Z",
+        "cancelAtPeriodEnd": false,
+        "trialEnd": null
+      },
+      "customer": {
+        "id": "cus_SysIffPGKLRtnK",
+        "email": "nikhilesh.mern@gmail.com",
+        "name": null
+      },
+      "invoice": {
+        "id": "in_1S2veJ4CXyekys3eg3nqvXMc",
+        "hosted_invoice_url": "https://invoice.stripe.com/i/acct_1RBTlb4CXyekys3e/test_YWNjdF8xUkJUbGI0Q1h5ZWt5czNlLF9TeXRSdVRXRUdhd3JEbVhmeUU2Rlh0NHFKZTBpcWxaLDE0NzM2NTg1OQ0200MJ6dbf0O?s=ap",
+        "invoice_pdf": "https://pay.stripe.com/invoice/acct_1RBTlb4CXyekys3e/test_YWNjdF8xUkJUbGI0Q1h5ZWt5czNlLF9TeXRSdVRXRUdhd3JEbVhmeUU2Rlh0NHFKZTBpcWxaLDE0NzM2NTg1OQ0200MJ6dbf0O/pdf?s=ap",
+        "status": "paid",
+        "amount_paid": 79,
+        "currency": "usd"
+      },
+      "createdAt": "2025-09-02T14:57:31.000Z",
+      "endDate": "2025-10-02T14:57:31.000Z"
+    },
+    "updatedAt": "2025-09-02T14:57:40.596Z",
+    "usage": {
+      "campaignsUsed": 0,
+      "domainsUsed": 0,
+      "emailsUsed": 0
+    }
+  },
+  {
+    "_id": "68b70d735d19a3fbba38d7ad",
+    "app": "kampaignai",
+    "userId": "10944",
+    "__v": 0,
+    "createdAt": "2025-09-02T15:29:55.590Z",
+    "subscription": {
+      "plan": "Onepgr-kampaign.ai",
+      "planType": "kai-personal",
+      "planId": "price_1ReaZh4CXyekys3eQrJjSnku",
+      "description": "",
+      "amount": 79,
+      "currency": "usd",
+      "interval": "1 month",
+      "features": {
+        "campaigns": 5,
+        "domains": 1,
+        "emails": 2
+      },
+      "payment": {
+        "status": "active",
+        "txnId": "sub_1S2w9Y4CXyekys3ePgXTwx0x",
+        "paymentStatus": "paid",
+        "paymentMethod": "card",
+        "amountTotal": 79
+      },
+      "billing": {
+        "nextBillingDate": "2025-10-02T15:29:46.000Z",
+        "nextBillingDateFormatted": "Thu Oct 02 2025",
+        "currentPeriodStart": "2025-09-02T15:29:46.000Z",
+        "currentPeriodEnd": "2025-10-02T15:29:46.000Z",
+        "cancelAtPeriodEnd": false,
+        "trialEnd": null
+      },
+      "customer": {
+        "id": "cus_SytxUkZzOJjLyH",
+        "email": "nikhilesh.mern@gmail.com",
+        "name": null
+      },
+      "invoice": {
+        "id": "in_1S2w9W4CXyekys3ell15y9dR",
+        "hosted_invoice_url": "https://invoice.stripe.com/i/acct_1RBTlb4CXyekys3e/test_YWNjdF8xUkJUbGI0Q1h5ZWt5czNlLF9TeXR4TlZoVDY1WE1oWGExS0pBRW5SbU4xNkNqUWlaLDE0NzM2Nzc5NA0200K3jlhss1?s=ap",
+        "invoice_pdf": "https://pay.stripe.com/invoice/acct_1RBTlb4CXyekys3e/test_YWNjdF8xUkJUbGI0Q1h5ZWt5czNlLF9TeXR4TlZoVDY1WE1oWGExS0pBRW5SbU4xNkNqUWlaLDE0NzM2Nzc5NA0200K3jlhss1/pdf?s=ap",
+        "status": "paid",
+        "amount_paid": 79,
+        "currency": "usd"
+      },
+      "createdAt": "2025-09-02T15:29:46.000Z",
+      "endDate": "2025-10-02T15:29:46.000Z"
+    },
+    "updatedAt": "2025-09-02T15:29:55.590Z",
+    "usage": {
+      "campaignsUsed": 0,
+      "domainsUsed": 0,
+      "emailsUsed": 0
+    }
+  },
+  {
+    "_id": "68b711075d19a3fbba38e1da",
+    "app": "kampaignai",
+    "userId": "10945",
+    "__v": 0,
+    "createdAt": "2025-09-02T15:45:11.774Z",
+    "subscription": {
+      "plan": "Onepgr-kampaign.ai",
+      "planType": "kai-personal",
+      "planId": "price_1ReaZh4CXyekys3eQrJjSnku",
+      "description": "",
+      "amount": 79,
+      "currency": "usd",
+      "interval": "1 month",
+      "features": {
+        "campaigns": 5,
+        "domains": 1,
+        "emails": 2,
+        "phoneCalls": false
+      },
+      "payment": {
+        "status": "active",
+        "txnId": "sub_1S2wsX4CXyekys3e131ZvpoK",
+        "paymentStatus": "paid",
+        "paymentMethod": "card",
+        "amountTotal": 79
+      },
+      "billing": {
+        "nextBillingDate": "2025-10-02T16:16:15.000Z",
+        "nextBillingDateFormatted": "Thu Oct 02 2025",
+        "currentPeriodStart": "2025-09-02T16:16:15.000Z",
+        "currentPeriodEnd": "2025-10-02T16:16:15.000Z",
+        "cancelAtPeriodEnd": false,
+        "trialEnd": null
+      },
+      "customer": {
+        "id": "cus_SyuC5ZT1sXu21c",
+        "email": "nikhilesh.mern@gmail.com",
+        "name": null
+      },
+      "invoice": {
+        "id": "in_1S2wsV4CXyekys3ebGx2pZaw",
+        "hosted_invoice_url": "https://invoice.stripe.com/i/acct_1RBTlb4CXyekys3e/test_YWNjdF8xUkJUbGI0Q1h5ZWt5czNlLF9TeXVoaGs3R3o5aHRVZkt0aVhmUzQxUHdnS3ZOY2I5LDE0NzM3MDU4MQ0200y7XuuSAK?s=ap",
+        "invoice_pdf": "https://pay.stripe.com/invoice/acct_1RBTlb4CXyekys3e/test_YWNjdF8xUkJUbGI0Q1h5ZWt5czNlLF9TeXVoaGs3R3o5aHRVZkt0aVhmUzQxUHdnS3ZOY2I5LDE0NzM3MDU4MQ0200y7XuuSAK/pdf?s=ap",
+        "status": "paid",
+        "amount_paid": 79,
+        "currency": "usd"
+      },
+      "createdAt": "2025-09-02T16:16:15.000Z",
+      "endDate": "2025-10-02T16:16:15.000Z"
+    },
+    "updatedAt": "2025-09-02T16:16:22.232Z",
+    "usage": {
+      "campaignsUsed": 0,
+      "domainsUsed": 0,
+      "emailsUsed": 0
+    }
+  },
+  {
+    "_id": "68c143c05d19a3fbba5648ce",
+    "app": "kampaignai",
+    "userId": "4991",
+    "__v": 0,
+    "createdAt": "2025-09-10T09:24:16.932Z",
+    "subscription": {
+      "plan": "kampaign.ai",
+      "planType": "standard",
+      "planId": "price_1S5iDq4CXyekys3eyEsdE7iE",
+      "description": "",
+      "amount": 99,
+      "currency": "usd",
+      "interval": "1 month",
+      "features": {
+        "campaigns": 5,
+        "domains": 1,
+        "emails": 2,
+        "phoneCalls": false
+      },
+      "payment": {
+        "status": "trialing",
+        "txnId": "sub_1S7c0k4CXyekys3exHWuPCQG",
+        "paymentStatus": "paid",
+        "paymentMethod": "card",
+        "amountTotal": 0
+      },
+      "billing": {
+        "nextBillingDate": "2025-10-22T13:00:01.000Z",
+        "nextBillingDateFormatted": "Wed Oct 22 2025",
+        "currentPeriodStart": "2025-09-22T13:00:01.000Z",
+        "currentPeriodEnd": "2025-10-22T13:00:01.000Z",
+        "cancelAtPeriodEnd": false,
+        "trialEnd": "2025-09-22T13:00:01.000Z"
+      },
+      "customer": {
+        "id": "cus_T1mav9kp14JcTc",
+        "email": "nikhilesh.mern@gmail.com",
+        "name": null
+      },
+      "invoice": {
+        "id": "in_1S7c0j4CXyekys3evzq5rCaI",
+        "hosted_invoice_url": "https://invoice.stripe.com/i/acct_1RBTlb4CXyekys3e/test_YWNjdF8xUkJUbGI0Q1h5ZWt5czNlLF9UM2pUckM1VDZNOUxyZzhmcmVVeUtVdzJhVUUzNUl0LDE0ODQ4MjAwNg0200vrTk4koj?s=ap",
+        "invoice_pdf": "https://pay.stripe.com/invoice/acct_1RBTlb4CXyekys3e/test_YWNjdF8xUkJUbGI0Q1h5ZWt5czNlLF9UM2pUckM1VDZNOUxyZzhmcmVVeUtVdzJhVUUzNUl0LDE0ODQ4MjAwNg0200vrTk4koj/pdf?s=ap",
+        "status": "paid",
+        "amount_paid": 0,
+        "currency": "usd"
+      },
+      "createdAt": "2025-09-15T13:00:01.000Z",
+      "endDate": "2025-10-22T13:00:01.000Z"
+    },
+    "updatedAt": "2025-09-15T13:00:07.283Z",
+    "usage": {
+      "campaignsUsed": 0,
+      "domainsUsed": 0,
+      "emailsUsed": 0
+    }
+  },
+  {
+    "_id": "6943f0c35d19a3fbba34327e",
+    "app": "liame",
+    "userId": "491",
+    "__v": 0,
+    "createdAt": "2025-12-18T12:17:07.801Z",
+    "subscription": {
+      "subscriptionId": "sub_1Sfg8g4CXyekys3ektFii3UD",
+      "status": "trialing",
+      "plan": {
+        "id": "price_1SfECU4CXyekys3el41eJZQC",
+        "name": "Starter",
+        "displayName": "Liame.ai",
+        "type": "standard",
+        "category": "others",
+        "amount": 0,
+        "currency": "usd",
+        "interval": "month",
+        "intervalCount": 1
+      },
+      "features": {
+        "credits": 50,
+        "callMinutes": 30,
+        "linkedinDMs": 10,
+        "emailAccounts": 2,
+        "linkedinAccounts": 1,
+        "phoneNumbers": 1,
+        "contacts": 100,
+        "connectionRequests": 1,
+        "messages": 10,
+        "callTranscription": false,
+        "callAnalysis": false,
+        "enrichment": false,
+        "videoAI": false,
+        "advancedAnalytics": false,
+        "prioritySupport": false,
+        "dedicatedSupport": false,
+        "apiAccess": false,
+        "bulkOperations": false,
+        "customIntegrations": false,
+        "liAutomation": false,
+        "isEmailOnly": false,
+        "isEmailWithWarmup": false
+      },
+      "billing": {
+        "currentPeriodStart": "2026-01-01T12:17:01.000Z",
+        "currentPeriodEnd": "2026-02-01T12:17:01.000Z",
+        "nextBillingDate": "2026-02-01T12:17:01.000Z",
+        "trialEnd": "2026-01-01T12:17:01.000Z",
+        "cancelAtPeriodEnd": false
+      },
+      "payment": {
+        "status": "trialing",
+        "paymentStatus": "paid",
+        "paymentMethod": "card",
+        "customerId": "cus_T1mav9kp14JcTc",
+        "invoiceId": "in_1Sfg8f4CXyekys3erXnHHhZr",
+        "amount": 0,
+        "currency": "usd",
+        "checkoutSessionId": "cs_test_b1SciWjq5XIRLU5PmsvsrlSZhsKJPB0fh2j6z35ujjwJmXVyY8jmPZAhMu",
+        "invoiceUrl": "https://invoice.stripe.com/i/acct_1RBTlb4CXyekys3e/test_YWNjdF8xUkJUbGI0Q1h5ZWt5czNlLF9UY3cwMnNvbmY1V0I1QVhaMjU1UnNmNVlvaEd6SEtFLDE1NjYwMTA0Ng0200FP2cTwZ6?s=ap",
+        "invoicePdf": "https://pay.stripe.com/invoice/acct_1RBTlb4CXyekys3e/test_YWNjdF8xUkJUbGI0Q1h5ZWt5czNlLF9UY3cwMnNvbmY1V0I1QVhaMjU1UnNmNVlvaEd6SEtFLDE1NjYwMTA0Ng0200FP2cTwZ6/pdf?s=ap"
+      },
+      "timestamps": {
+        "createdAt": "2025-12-18T12:17:24.340Z",
+        "updatedAt": "2025-12-18T12:17:24.340Z"
+      },
+      "metadata": {
+        "isActive": true,
+        "isTrialing": true,
+        "autoRenew": true,
+        "lastPaymentDate": "2025-12-18T12:17:24.340Z"
+      }
+    },
+    "updatedAt": "2025-12-30T05:49:56.700Z",
+    "usage": {
+      "campaignsUsed": 0,
+      "domainsUsed": 0,
+      "emailsUsed": 0,
+      "creditsUsed": -10519,
+      "aiReplyUsed": 3,
+      "linkedinDMsUsed": 4
+    }
+  },
+  {
+    "_id": "694412225d19a3fbba34b6e5",
+    "app": "liame",
+    "userId": "10639",
+    "__v": 0,
+    "createdAt": "2025-12-18T14:39:30.472Z",
+    "subscription": {
+      "subscriptionId": "sub_1SfiMT4CXyekys3e8Dp9p4ZT",
+      "status": "trialing",
+      "plan": {
+        "id": "price_1SfECU4CXyekys3el41eJZQC",
+        "name": "Starter",
+        "displayName": "Liame.ai",
+        "type": "standard",
+        "category": "others",
+        "amount": 0,
+        "currency": "usd",
+        "interval": "month",
+        "intervalCount": 1
+      },
+      "features": {
+        "credits": 50,
+        "callMinutes": 30,
+        "linkedinDMs": 10,
+        "emailAccounts": 2,
+        "linkedinAccounts": 1,
+        "phoneNumbers": 1,
+        "contacts": 100,
+        "connectionRequests": 1,
+        "messages": 10,
+        "callTranscription": false,
+        "callAnalysis": false,
+        "enrichment": false,
+        "videoAI": false,
+        "advancedAnalytics": false,
+        "prioritySupport": false,
+        "dedicatedSupport": false,
+        "apiAccess": false,
+        "bulkOperations": false,
+        "customIntegrations": false,
+        "liAutomation": false,
+        "isEmailOnly": false,
+        "isEmailWithWarmup": false
+      },
+      "billing": {
+        "currentPeriodStart": "2026-01-01T14:39:23.000Z",
+        "currentPeriodEnd": "2026-02-01T14:39:23.000Z",
+        "nextBillingDate": "2026-02-01T14:39:23.000Z",
+        "trialEnd": "2026-01-01T14:39:23.000Z",
+        "cancelAtPeriodEnd": false
+      },
+      "payment": {
+        "status": "trialing",
+        "paymentStatus": "paid",
+        "paymentMethod": "card",
+        "customerId": "cus_TcyB3fCx38JqsL",
+        "invoiceId": "in_1SfiMS4CXyekys3eTTvqJI5F",
+        "amount": 0,
+        "currency": "usd",
+        "checkoutSessionId": "cs_test_b1KHx1VnEoQ6gtFhE0xun3arliQe899SECNtdvuikfyd0VJMTDjrpEtwZA",
+        "invoiceUrl": "https://invoice.stripe.com/i/acct_1RBTlb4CXyekys3e/test_YWNjdF8xUkJUbGI0Q1h5ZWt5czNlLF9UY3lKU21mdWMxZ0NLMGxmOXlVdU1UOHpIYWdkdTgxLDE1NjYwOTU2OQ0200IPGQqs15?s=ap",
+        "invoicePdf": "https://pay.stripe.com/invoice/acct_1RBTlb4CXyekys3e/test_YWNjdF8xUkJUbGI0Q1h5ZWt5czNlLF9UY3lKU21mdWMxZ0NLMGxmOXlVdU1UOHpIYWdkdTgxLDE1NjYwOTU2OQ0200IPGQqs15/pdf?s=ap"
+      },
+      "timestamps": {
+        "createdAt": "2025-12-18T14:39:29.851Z",
+        "updatedAt": "2025-12-18T14:39:29.851Z"
+      },
+      "metadata": {
+        "isActive": true,
+        "isTrialing": true,
+        "autoRenew": true,
+        "lastPaymentDate": "2025-12-18T14:39:29.851Z"
+      }
+    },
+    "updatedAt": "2025-12-18T14:39:30.472Z",
+    "usage": {}
+  },
+  {
+    "_id": "6a1986b35d19a3fbba862ca9",
+    "app": "liame.ai-home",
+    "userId": "11238",
+    "__v": 0,
+    "createdAt": "2026-05-29T12:29:39.231Z",
+    "subscription": {
+      "plan": "standard",
+      "features": [],
+      "payment": {
+        "status": "trialing"
+      }
+    },
+    "updatedAt": "2026-05-29T12:29:39.231Z",
+    "usage": {}
+  },
+  {
+    "_id": "6a198eba5d19a3fbba864e94",
+    "app": "liame.ai-home",
+    "userId": "11239",
+    "__v": 0,
+    "createdAt": "2026-05-29T13:03:54.728Z",
+    "subscription": {
+      "plan": "standard",
+      "features": [],
+      "payment": {
+        "status": "trialing"
+      }
+    },
+    "updatedAt": "2026-05-29T13:03:54.728Z",
+    "usage": {}
+  },
+  {
+    "_id": "6a199af75d19a3fbba86845d",
+    "app": "liame.ai-home",
+    "userId": "11241",
+    "__v": 0,
+    "createdAt": "2026-05-29T13:56:07.654Z",
+    "subscription": {
+      "plan": "standard",
+      "features": [],
+      "payment": {
+        "status": "trialing"
+      }
+    },
+    "updatedAt": "2026-05-29T13:56:07.654Z",
+    "usage": {}
+  },
+  {
+    "_id": "6a199ea35d19a3fbba8693f2",
+    "app": "liame.ai-home",
+    "userId": "11242",
+    "__v": 0,
+    "createdAt": "2026-05-29T14:11:47.069Z",
+    "subscription": {
+      "plan": "standard",
+      "features": [],
+      "payment": {
+        "status": "trialing"
+      }
+    },
+    "updatedAt": "2026-05-29T14:11:47.069Z",
+    "usage": {}
+  },
+  {
+    "_id": "6a19a6335d19a3fbba86b430",
+    "app": "liame.ai-home",
+    "userId": "11243",
+    "__v": 0,
+    "createdAt": "2026-05-29T14:44:03.529Z",
+    "subscription": {
+      "plan": "standard",
+      "features": [],
+      "payment": {
+        "status": "trialing"
+      }
+    },
+    "updatedAt": "2026-05-29T14:44:03.529Z",
+    "usage": {}
+  },
+  {
+    "_id": "6a19a99c5d19a3fbba86c2ad",
+    "app": "liame.ai-home",
+    "userId": "11244",
+    "__v": 0,
+    "createdAt": "2026-05-29T14:58:36.035Z",
+    "subscription": {
+      "plan": "standard",
+      "features": [],
+      "payment": {
+        "status": "trialing"
+      }
+    },
+    "updatedAt": "2026-05-29T14:58:36.035Z",
+    "usage": {}
+  },
+  {
+    "_id": "6a19b4635d19a3fbba86f18a",
+    "app": "liame.ai-home",
+    "userId": "11245",
+    "__v": 0,
+    "createdAt": "2026-05-29T15:44:35.820Z",
+    "subscription": {
+      "plan": "standard",
+      "features": [],
+      "payment": {
+        "status": "trialing"
+      }
+    },
+    "updatedAt": "2026-05-29T15:44:35.820Z",
+    "usage": {}
+  },
+  {
+    "_id": "6a1d127c5d19a3fbba956d62",
+    "app": "liame.ai-home",
+    "userId": "11247",
+    "__v": 0,
+    "createdAt": "2026-06-01T05:02:52.885Z",
+    "subscription": {
+      "plan": "standard",
+      "features": [],
+      "payment": {
+        "status": "trialing"
+      }
+    },
+    "updatedAt": "2026-06-01T05:02:52.885Z",
+    "usage": {}
+  },
+  {
+    "_id": "6a1d17335d19a3fbba958063",
+    "app": "liame.ai-home",
+    "userId": "11248",
+    "__v": 0,
+    "createdAt": "2026-06-01T05:22:59.688Z",
+    "subscription": {
+      "plan": "standard",
+      "features": [],
+      "payment": {
+        "status": "trialing"
+      }
+    },
+    "updatedAt": "2026-06-01T05:22:59.884Z",
+    "usage": {}
+  },
+  {
+    "_id": "6a1d21415d19a3fbba95abb4",
+    "app": "liame.ai-home",
+    "userId": "11249",
+    "__v": 0,
+    "createdAt": "2026-06-01T06:05:53.903Z",
+    "subscription": {
+      "plan": "standard",
+      "features": [],
+      "payment": {
+        "status": "trialing"
+      }
+    },
+    "updatedAt": "2026-06-01T06:05:53.925Z",
+    "usage": {}
+  },
+  {
+    "_id": "6a1d5b8e5d19a3fbba96a669",
+    "app": "liame.ai-home",
+    "userId": "11251",
+    "__v": 0,
+    "createdAt": "2026-06-01T10:14:38.675Z",
+    "subscription": {
+      "plan": "standard",
+      "features": [],
+      "payment": {
+        "status": "trialing"
+      }
+    },
+    "updatedAt": "2026-06-01T10:14:38.691Z",
+    "usage": {}
+  },
+  {
+    "_id": "6a1d620b5d19a3fbba96c201",
+    "app": "liame",
+    "userId": "11252",
+    "__v": 0,
+    "createdAt": "2026-06-01T10:42:19.645Z",
+    "subscription": {
+      "plan": "standard",
+      "features": [],
+      "payment": {
+        "status": "trialing"
+      }
+    },
+    "updatedAt": "2026-06-01T10:42:19.645Z",
+    "usage": {}
+  },
+  {
+    "_id": "6a2c0c965d19a3fbbaede80a",
+    "app": "aixsdr",
+    "userId": "4991",
+    "__v": 0,
+    "createdAt": "2026-06-12T13:41:42.285Z",
+    "subscription": {
+      "plan": {
+        "id": "price_1ThRXl4CXyekys3esa2Nu7H5",
+        "name": "entry",
+        "amount": 29,
+        "currency": "usd",
+        "interval": "1 month"
+      },
+      "status": "trialing",
+      "features": [
+        "3 active ICP profiles",
+        "4 discovery runs per day",
+        "5,000 monthly outreach drops",
+        "Advanced activity analytics"
+      ],
+      "trialEnd": "2026-06-26T12:40:58.000Z",
+      "nextBillingDate": "2026-07-26T12:40:58.000Z",
+      "payment": {
+        "status": "paid",
+        "method": "card"
+      },
+      "invoice": {
+        "url": "https://invoice.stripe.com/i/acct_1RBTlb4CXyekys3e/test_YWNjdF8xUkJUbGI0Q1h5ZWt5czNlLF9VZ3M4MDNxbmdDTG9QTHFYdW5sVzJJck5qelp5TXVXLDE3MTgxNDMyOA0200FBXK7Fug?s=ap",
+        "pdf": "https://pay.stripe.com/invoice/acct_1RBTlb4CXyekys3e/test_YWNjdF8xUkJUbGI0Q1h5ZWt5czNlLF9VZ3M4MDNxbmdDTG9QTHFYdW5sVzJJck5qelp5TXVXLDE3MTgxNDMyOA0200FBXK7Fug/pdf?s=ap"
+      }
+    },
+    "updatedAt": "2026-06-12T14:12:17.229Z",
+    "usage": {}
+  }
+]
