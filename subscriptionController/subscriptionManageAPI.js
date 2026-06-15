@@ -367,14 +367,24 @@ async function checkUsageLimit(req, res) {
             });
         }
 
+        // Build a list of available features as { key, label }
+        const availableFeaturesList = [];
+        if (sub.subscription.features && typeof sub.subscription.features === 'object') {
+            for (const [k, v] of Object.entries(sub.subscription.features)) {
+                availableFeaturesList.push({ key: k, label: typeof v === 'string' ? v : String(v) });
+            }
+        }
+
         // Check if the action exists in the subscription features
-        if (!sub.subscription.features || !sub.subscription.features.hasOwnProperty(action)) {
+        if (!sub.subscription.features || !Object.prototype.hasOwnProperty.call(sub.subscription.features, action)) {
             return res.status(400).json({
                 success: false,
                 message: `Invalid action: '${action}' is not a valid feature in your current plan`,
                 canProceed: false,
                 feature: action,
-                availableFeatures: Object.keys(sub.subscription.features || {}),
+                // Provide both machine keys and human-friendly labels to help callers
+                availableFeatures: availableFeaturesList,
+                suggestion: availableFeaturesList.length ? 'Use one of the feature `key` values in `availableFeatures[].key` as the action parameter.' : undefined,
                 status: "invalid_action"
             });
         }
