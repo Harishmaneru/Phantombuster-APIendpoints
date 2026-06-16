@@ -410,7 +410,15 @@ router.post("/api/unipile/auth/link", async (req, res) => {
       name,
       user_id,
       type = "create",
+      reconnect_account,
     } = req.body;
+
+    if (type === "reconnect" && !reconnect_account) {
+      return res.status(400).json({
+        success: false,
+        error: "reconnect_account is required when type is 'reconnect'",
+      });
+    }
 
     // Validate providers
     if (!providers || !Array.isArray(providers) || providers.length === 0) {
@@ -439,6 +447,7 @@ router.post("/api/unipile/auth/link", async (req, res) => {
       ...(failure_redirect_url && { failure_redirect_url }),
       ...(finalNotifyUrl && { notify_url: finalNotifyUrl }),
       ...(name && { name }),
+      ...(reconnect_account && { reconnect_account }),
       // Use metadata to pass custom data
       metadata: {
         user_id: user_id,

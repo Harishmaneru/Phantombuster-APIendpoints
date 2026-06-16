@@ -49,6 +49,44 @@ router.post("/api/sales-leads/fetch/saved-leads", async (req, res) => {
 
     const accountId = accountResult.account_id;
 
+    const meResponse = await axios.get(
+      `${getBaseUrl()}/users/me?account_id=${accountId}`,
+      { headers: getHeaders(), timeout: 5000 },
+    );
+
+    const salesNav = meResponse.data?.sales_navigator || meResponse.data?.premium_features?.sales_navigator;
+    if (salesNav && (salesNav.error || salesNav === false)) {
+      let reconnect_url = null;
+      try {
+        const expiresOn = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
+        const authResponse = await axios.post(
+          `${getBaseUrl()}/hosted/accounts/link`,
+          {
+            type: "reconnect",
+            reconnect_account: accountId,
+            providers: ["LINKEDIN"],
+            expiresOn,
+            api_url: `https://${process.env.UNIPILE_SUBDOMAIN}.unipile.com:${process.env.UNIPILE_PORT}`,
+          },
+          { headers: getHeaders(), timeout: 5000 },
+        );
+        reconnect_url = authResponse.data?.url || null;
+      } catch (authError) {
+        console.error("Failed to generate reconnect link:", authError.message);
+      }
+
+      return res.status(403).json({
+        success: false,
+        account_id: accountId,
+        error: "Sales Navigator is not connected or has expired for this account",
+        sales_navigator: salesNav,
+        ...(reconnect_url && { reconnect_url }),
+        detail: reconnect_url
+          ? "Open reconnect_url in your browser and log into your LinkedIn Sales Navigator account"
+          : "Please reconnect Sales Navigator via /api/unipile/auth/link",
+      });
+    }
+
     const params = new URLSearchParams();
     params.append("account_id", accountId);
     params.append("limit", limit);
