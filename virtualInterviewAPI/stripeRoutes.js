@@ -2827,8 +2827,8 @@ router.post('/create-checkout-session-by-app', async (req, res) => {
             getsalesgpt: 'http://localhost:4200',
             liame: 'https://liame.onepgr.com',
             'liame.ai-home': 'https://www.liame.ai',
-            aixsdr: 'http://localhost:4200',
-            'aixsdr.home': 'http://localhost:3000',
+            aixsdr: 'https://aixsdr.onepgr.com',
+            'aixsdr.home': 'https://www.aixsdr.com',
         } : {
             kampaignai: 'https://kampaign.onepgr.com',
             gps: 'https://gps.onepgr.com',
@@ -2882,7 +2882,7 @@ router.post('/create-checkout-session-by-app', async (req, res) => {
 
         // 4) Helper functions for URLs
         const getSandboxUrl = (app) => {
-            const sandboxUrls = { kampaignai: 'http://localhost:4200', gps: 'http://localhost:4200', getsalesgpt: 'http://localhost:4200', liame: 'https://liame.onepgr.com', 'liame.ai-home': 'https://www.liame.ai', aixsdr: 'http://localhost:4200', 'aixsdr.home': 'http://localhost:3000' };
+            const sandboxUrls = { kampaignai: 'http://localhost:4200', gps: 'http://localhost:4200', getsalesgpt: 'http://localhost:4200', liame: 'https://liame.onepgr.com', 'liame.ai-home': 'https://www.liame.ai', aixsdr: 'https://aixsdr.onepgr.com', 'aixsdr.home': 'https://www.aixsdr.com' };
             return sandboxUrls[app] || 'https://liame.onepgr.com';
         };
         const getSuccessUrl = (app, planType, isSandbox) => {
