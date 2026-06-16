@@ -76,7 +76,7 @@ router.post("/api/sales-leads/fetch/saved-leads", async (req, res) => {
         account_id: accountId,
         error: "This LinkedIn account does not have a Sales Navigator subscription",
         sales_navigator: meResponse.data?.sales_navigator || null,
-        detail: "User 4991-type accounts: standard LinkedIn only, upgrade to Sales Navigator to use this endpoint",
+        detail: `User ${userId}: standard LinkedIn account — upgrade to Sales Navigator to access saved leads`
       });
     }
 
