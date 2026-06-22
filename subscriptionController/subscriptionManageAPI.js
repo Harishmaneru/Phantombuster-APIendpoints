@@ -80,16 +80,19 @@ function normalizeFeatures(features) {
         if (m) {
           const key = m[1].trim();
           let val = m[2].trim();
-          if (/^\d+$/.test(val)) val = Number(val);
+          const stripped = val.replace(/,/g, "");
+          if (/^\d+$/.test(stripped)) val = Number(stripped);
           out[key] = val;
           continue;
         }
 
         // Try to extract a numeric limit at the beginning, e.g., "3 active ICP profiles"
-        const numMatch = item.trim().match(/^(\d+)\s+(.+)$/);
+        // Strip commas first so "5,000 outreach…" parses to 5000.
+        const cleaned = item.trim().replace(/,/g, "");
+        const numMatch = cleaned.match(/^(\d+)\s+(.+)$/);
         if (numMatch) {
-          // Keep the original string as the key for frontend compatibility
-          // but set the value to the numeric limit.
+          // Keep the original (possibly comma-formatted) key for backward compatibility,
+          // but store the parsed numeric limit as the value.
           out[item.trim()] = Number(numMatch[1]);
           continue;
         }
@@ -117,7 +120,47 @@ function normalizeFeatures(features) {
   return {};
 }
 
-// Helper to ensure a subscription document (or plain object) has features as an object
+// ─── Periodic usage-reset config ───────────────────────────────────────────
+// Only keys that actually exist in the subscription usage are reset (so other
+// apps using this shared backend are never polluted with AIxSDR-specific keys).
+const PERIODIC_RESETS = {
+  discoveryRunsUsed: 24 * 60 * 60 * 1000,      // daily
+  outreachMonthlyUsed: 30 * 24 * 60 * 60 * 1000, // monthly (30-day approximation)
+  linkedinDmsUsed: 30 * 24 * 60 * 60 * 1000,     // monthly
+};
+
+/**
+ * Apply periodic resets to a subscription's usage counters.
+ * Only resets keys that already exist in sub.usage (never creates new keys
+ * for apps that don't use them). Mutates sub.usage in place (zeroes counters
+ * whose window has elapsed) and updates sub.usage.__resets with the current
+ * timestamp. Returns true if any counter was reset.
+ */
+function applyUsageResets(sub) {
+  if (!sub || !sub.usage) return false;
+  const now = Date.now();
+  let didReset = false;
+
+  for (const [key, windowMs] of Object.entries(PERIODIC_RESETS)) {
+    // Only reset keys that already exist in usage (avoids injecting AIxSDR
+    // specific keys into other apps' documents).
+    if (!(key in sub.usage)) continue;
+    const lastReset = sub.usage.__resets?.[key];
+    if (lastReset == null || now - new Date(lastReset).getTime() >= windowMs) {
+      sub.usage[key] = 0;
+      sub.usage.__resets = sub.usage.__resets || {};
+      sub.usage.__resets[key] = new Date(now).toISOString();
+      didReset = true;
+    }
+  }
+
+  return didReset;
+}
+
+/**
+ * Helper to ensure a subscription document (or plain object) has features as
+ * an object map rather than an array or string (legacy compatibility).
+ */
 function ensureSubscriptionFeatures(sub) {
   if (!sub || !sub.subscription) return;
   const f = sub.subscription.features;
@@ -251,6 +294,9 @@ async function updateUsage(req, res) {
     // Defensive normalization for legacy docs: convert array-shaped features to object map
     ensureSubscriptionFeatures(sub);
 
+    // Apply periodic resets (daily/monthly counters) before reading usage
+    applyUsageResets(sub);
+
     // Check if subscription is active
     const paymentStatus = sub.subscription.payment?.status;
     const allowedStatuses = ["active", "trialing", "paid", "succeeded"];
@@ -304,7 +350,7 @@ async function updateUsage(req, res) {
             limit === "unlimited" ||
             String(limit).toLowerCase() === "unlimited"
           ) {
-            const match = featureKey.match(/^\s*(\d+)\s+(.+)$/);
+            const match = featureKey.replace(/,/g, "").match(/^\s*(\d+)\s+(.+)$/);
             if (match) {
               limit = parseInt(match[1], 10);
             }
@@ -425,6 +471,13 @@ async function checkUsageLimit(req, res) {
     // Defensive normalization for legacy docs: convert array-shaped features to object map
     ensureSubscriptionFeatures(sub);
 
+    // Apply periodic resets (daily/monthly counters) before reading usage
+    const didReset = applyUsageResets(sub);
+    if (didReset) {
+      sub.markModified("usage");
+      await sub.save();
+    }
+
     // Check if subscription is active
     const paymentStatus = sub.subscription.payment?.status;
     const allowedStatuses = ["active", "trialing", "paid", "succeeded"];
@@ -498,7 +551,7 @@ async function checkUsageLimit(req, res) {
 
     // Extract limit from featureKey if it starts with a number and is marked as unlimited
     if (isUnlimited) {
-      const match = featureKey.match(/^\s*(\d+)\s+(.+)$/);
+      const match = featureKey.replace(/,/g, "").match(/^\s*(\d+)\s+(.+)$/);
       if (match) {
         limit = parseInt(match[1], 10);
         isUnlimited = false;
