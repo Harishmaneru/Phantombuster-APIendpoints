@@ -1953,13 +1953,83 @@ router.post('/fetch-live-subscription', async (req, res) => {
             });
         }
 
-        // Get the most recent subscription
-        const activeSub = stripeSubs.data.sort((a, b) => b.created - a.created)[0];
+        const APP_ALIASES = {
+            "liame.ai-home": "liame",
+        };
+        const canonicalApp = (appName) => APP_ALIASES[appName] || appName;
+        const appKey = app ? canonicalApp(app) : customerRecord.app || 'default';
 
-        // Retrieve price and product info from Stripe
+        // Helper to check if a product name/description corresponds to an app
+        const isProductForApp = (productName = '', productDesc = '', targetApp) => {
+            const pName = productName.toLowerCase();
+            const pDesc = productDesc.toLowerCase();
+            const target = targetApp.toLowerCase();
+            
+            if (target === 'aixsdr') {
+                return pName.includes('aixsdr') || pName.includes('sdr') || pName.includes('ai sdr') || pDesc.includes('aixsdr') || pDesc.includes('sdr');
+            }
+            if (target === 'liame') {
+                return pName.includes('liame') || pDesc.includes('liame');
+            }
+            if (target === 'kampaignai') {
+                return pName.includes('kampaign') || pName.includes('video') || pName.includes('interview') || pDesc.includes('kampaign') || pDesc.includes('video') || pDesc.includes('interview');
+            }
+            if (target === 'gps') {
+                return pName.includes('gps') || pName.includes('prospect') || pDesc.includes('gps') || pDesc.includes('prospect');
+            }
+            return pName.includes(target) || pDesc.includes(target);
+        };
+
+        // Fetch products in parallel to identify plans and filter by app name
+        const subsWithProducts = await Promise.all(stripeSubs.data.map(async (sub) => {
+            try {
+                const priceItem = sub.items.data[0];
+                const product = await stripe.products.retrieve(priceItem.price.product);
+                return { sub, product, price: priceItem.price };
+            } catch (e) {
+                console.warn('[fetch-live-subscription] Failed to retrieve product details:', sub.id, e.message);
+                return { sub, product: null, price: null };
+            }
+        }));
+
+        // Filter subscriptions matching the requested app
+        const matchingSubItems = subsWithProducts.filter(item => {
+            const { sub, product } = item;
+            if (!product) return false;
+
+            // 1. Check metadata on subscription
+            if (sub.metadata?.app) {
+                return canonicalApp(sub.metadata.app) === canonicalApp(appKey);
+            }
+
+            // 2. Check metadata on price/product
+            if (item.price?.metadata?.app) {
+                return canonicalApp(item.price.metadata.app) === canonicalApp(appKey);
+            }
+            if (product.metadata?.app) {
+                return canonicalApp(product.metadata.app) === canonicalApp(appKey);
+            }
+
+            // 3. Check product name/description heuristics
+            return isProductForApp(product.name, product.description, appKey);
+        });
+
+        if (matchingSubItems.length === 0) {
+            return res.json({
+                success: true,
+                hasCustomer: true,
+                customerId,
+                hasSubscription: false,
+                message: `No active subscription found on Stripe for customer ${customerId} matching app ${appKey}`
+            });
+        }
+
+        // Get the most recent matching subscription
+        const bestMatch = matchingSubItems.sort((a, b) => b.sub.created - a.sub.created)[0];
+        const activeSub = bestMatch.sub;
+        const product = bestMatch.product;
+        const price = bestMatch.price;
         const priceItem = activeSub.items.data[0];
-        const price = priceItem.price;
-        const product = await stripe.products.retrieve(price.product);
 
         // Determine plan details
         const planName = product.name || price.nickname || 'Standard Plan';
@@ -2006,14 +2076,7 @@ router.post('/fetch-live-subscription', async (req, res) => {
             { upsert: true }
         );
 
-        // 4. Sync to subscription_flags if app name is provided or we can identify it
         let syncedFlags = false;
-        
-        const APP_ALIASES = {
-            "liame.ai-home": "liame",
-        };
-        const canonicalApp = (appName) => APP_ALIASES[appName] || appName;
-        const appKey = app ? canonicalApp(app) : customerRecord.app || 'default';
 
         if (appKey) {
             try {
@@ -2053,6 +2116,7 @@ router.post('/fetch-live-subscription', async (req, res) => {
                     features: featuresMap,
                     payment: {
                         status: status,
+                        txnId: activeSub.id,
                         paymentStatus: subscriptionData.paymentStatus,
                         amount: subscriptionData.amount,
                         currency: subscriptionData.currency
