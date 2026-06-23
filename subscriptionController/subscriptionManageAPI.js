@@ -335,7 +335,7 @@ async function updateUsage(req, res) {
     for (let key in usageDetails) {
       const currentUsage = (sub.usage && sub.usage[key]) || 0;
       if (typeof usageDetails[key] === "number") {
-        const newUsage = currentUsage + usageDetails[key];
+        const newUsage = Math.max(0, currentUsage + usageDetails[key]);
         const featureKey = key.replace("Used", "");
 
         // Check limits

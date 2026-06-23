@@ -1909,6 +1909,203 @@ router.get('/users/:userId/subscriptions', async (req, res) => {
 });
 
 
+// Fetch live subscription details directly from Stripe and sync with local databases
+router.post('/fetch-live-subscription', async (req, res) => {
+    const { userId, app } = req.body;
+
+    if (!userId) {
+        return res.status(400).json({ error: 'userId is required' });
+    }
+
+    try {
+        const isSandbox = isSandboxMode(req);
+        const stripe = getStripeInstance(isSandbox);
+        const environment = isSandbox ? 'sandbox' : 'production';
+
+        await connectToMongoDB();
+
+        // 1. Get customer record from local DB
+        const customerRecord = await Customer.findOne({ userId, environment });
+        if (!customerRecord) {
+            return res.json({
+                success: false,
+                hasCustomer: false,
+                message: `No Stripe customer record found for this user in ${environment} environment.`
+            });
+        }
+
+        const customerId = customerRecord.customerId;
+
+        // 2. Fetch live subscriptions from Stripe
+        const stripeSubs = await stripe.subscriptions.list({
+            customer: customerId,
+            limit: 10,
+            expand: ['data.latest_invoice']
+        });
+
+        if (!stripeSubs.data || stripeSubs.data.length === 0) {
+            return res.json({
+                success: true,
+                hasCustomer: true,
+                customerId,
+                hasSubscription: false,
+                message: `No subscriptions found on Stripe for customer ${customerId}`
+            });
+        }
+
+        // Get the most recent subscription
+        const activeSub = stripeSubs.data.sort((a, b) => b.created - a.created)[0];
+
+        // Retrieve price and product info from Stripe
+        const priceItem = activeSub.items.data[0];
+        const price = priceItem.price;
+        const product = await stripe.products.retrieve(price.product);
+
+        // Determine plan details
+        const planName = product.name || price.nickname || 'Standard Plan';
+        const planId = price.id;
+        const productId = price.product;
+        const interval = price.recurring?.interval || 'month';
+        const intervalCount = price.recurring?.interval_count || 1;
+        const status = activeSub.status; // active, trialing, past_due, canceled, unpaid, paused
+
+        const currentPeriodStart = new Date(activeSub.current_period_start * 1000);
+        const currentPeriodEnd = new Date(activeSub.current_period_end * 1000);
+        const trialStart = activeSub.trial_start ? new Date(activeSub.trial_start * 1000) : null;
+        const trialEnd = activeSub.trial_end ? new Date(activeSub.trial_end * 1000) : null;
+
+        // 3. Sync to user_subscriptions (Subscription model)
+        const subscriptionData = {
+            userId,
+            customerId,
+            subscriptionId: activeSub.id,
+            status,
+            amount: activeSub.items.data[0]?.price?.unit_amount ? activeSub.items.data[0].price.unit_amount / 100 : 0,
+            currency: activeSub.currency,
+            paymentStatus: activeSub.latest_invoice?.payment_status || (status === 'active' || status === 'trialing' ? 'paid' : 'unpaid'),
+            planName,
+            currentPeriodStart,
+            currentPeriodEnd,
+            planId,
+            productId,
+            interval,
+            intervalCount,
+            trialStart,
+            trialEnd,
+            lastInvoice: activeSub.latest_invoice?.id || null,
+            metadata: activeSub.metadata
+        };
+
+        await Subscription.updateOne(
+            { subscriptionId: activeSub.id },
+            { $set: subscriptionData },
+            { upsert: true }
+        );
+
+        // 4. Sync to subscription_flags if app name is provided or we can identify it
+        let syncedFlags = false;
+        
+        const APP_ALIASES = {
+            "liame.ai-home": "liame",
+        };
+        const canonicalApp = (appName) => APP_ALIASES[appName] || appName;
+        const appKey = app ? canonicalApp(app) : customerRecord.app || 'default';
+
+        if (appKey) {
+            try {
+                const SubscriptionFlags = mongoose.model('SubscriptionFlags');
+                
+                // Construct subscription object structure expected by subscription_flags
+                const planType = determinePlanType(product, price, activeSub.metadata?.planType);
+                const featuresList = extractPlanFeatures(product, price, priceItem, activeSub.metadata?.planType);
+                
+                const featuresMap = {};
+                for (const item of featuresList) {
+                    if (typeof item === 'string') {
+                        const match = item.match(/^\s*([^:\n]+)\s*:\s*(.+)\s*$/);
+                        if (match) {
+                            const key = match[1].trim();
+                            let val = match[2].trim();
+                            if (/^\d+$/.test(val)) val = Number(val);
+                            featuresMap[key] = val;
+                        } else {
+                            featuresMap[item.trim()] = 'unlimited';
+                        }
+                    }
+                }
+
+                // If features map is empty, default some standard features based on the plan type
+                if (Object.keys(featuresMap).length === 0) {
+                    featuresMap['accessLevel'] = 'premium';
+                }
+
+                const flagSubscriptionObj = {
+                    plan: {
+                        name: planName,
+                        id: planId,
+                        productId: productId,
+                        planType: planType
+                    },
+                    features: featuresMap,
+                    payment: {
+                        status: status,
+                        paymentStatus: subscriptionData.paymentStatus,
+                        amount: subscriptionData.amount,
+                        currency: subscriptionData.currency
+                    },
+                    startDate: currentPeriodStart.toISOString(),
+                    endDate: currentPeriodEnd.toISOString(),
+                    trialStart: trialStart ? trialStart.toISOString() : null,
+                    trialEnd: trialEnd ? trialEnd.toISOString() : null,
+                    customer: {
+                        id: customerId
+                    }
+                };
+
+                await SubscriptionFlags.updateOne(
+                    { userId, app: appKey },
+                    { 
+                        $set: { 
+                            userId, 
+                            app: appKey, 
+                            subscription: flagSubscriptionObj 
+                        } 
+                    },
+                    { upsert: true }
+                );
+                syncedFlags = true;
+            } catch (flagError) {
+                console.error('[fetch-live-subscription] Failed to sync subscription_flags:', flagError.message);
+            }
+        }
+
+        res.json({
+            success: true,
+            hasSubscription: true,
+            syncedFlags,
+            environment,
+            subscription: {
+                id: activeSub.id,
+                status,
+                planName,
+                amount: subscriptionData.amount,
+                currency: subscriptionData.currency,
+                currentPeriodStart: currentPeriodStart.toISOString(),
+                currentPeriodEnd: currentPeriodEnd.toISOString(),
+                trialStart: trialStart ? trialStart.toISOString() : null,
+                trialEnd: trialEnd ? trialEnd.toISOString() : null,
+                paymentStatus: subscriptionData.paymentStatus,
+                latestInvoiceId: subscriptionData.lastInvoice
+            }
+        });
+
+    } catch (err) {
+        console.error('Error fetching live subscription:', err);
+        res.status(500).json({ error: err.message });
+    }
+});
+
+
 // Create a Billing Portal session to manage subscription
 router.post('/create-billing-portal-session', async (req, res) => {
     // Extract customerId and userId from the body
