@@ -1960,10 +1960,10 @@ router.post('/fetch-live-subscription', async (req, res) => {
         const appKey = app ? canonicalApp(app) : customerRecord.app || 'default';
 
         // Helper to check if a product name/description corresponds to an app
-        const isProductForApp = (productName = '', productDesc = '', targetApp) => {
-            const pName = productName.toLowerCase();
-            const pDesc = productDesc.toLowerCase();
-            const target = targetApp.toLowerCase();
+        const isProductForApp = (productName, productDesc, targetApp) => {
+            const pName = (productName || '').toLowerCase();
+            const pDesc = (productDesc || '').toLowerCase();
+            const target = (targetApp || '').toLowerCase();
             
             if (target === 'aixsdr') {
                 return pName.includes('aixsdr') || pName.includes('sdr') || pName.includes('ai sdr') || pDesc.includes('aixsdr') || pDesc.includes('sdr');
