@@ -1969,8 +1969,12 @@ router.post('/fetch-live-subscription', async (req, res) => {
         const intervalCount = price.recurring?.interval_count || 1;
         const status = activeSub.status; // active, trialing, past_due, canceled, unpaid, paused
 
-        const currentPeriodStart = new Date(activeSub.current_period_start * 1000);
-        const currentPeriodEnd = new Date(activeSub.current_period_end * 1000);
+        // Retrieve current period dates from subscription item, falling back to top level or trial dates
+        const startUnix = priceItem.current_period_start || activeSub.current_period_start || activeSub.trial_start || activeSub.start_date;
+        const endUnix = priceItem.current_period_end || activeSub.current_period_end || activeSub.trial_end;
+
+        const currentPeriodStart = startUnix ? new Date(startUnix * 1000) : new Date();
+        const currentPeriodEnd = endUnix ? new Date(endUnix * 1000) : new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
         const trialStart = activeSub.trial_start ? new Date(activeSub.trial_start * 1000) : null;
         const trialEnd = activeSub.trial_end ? new Date(activeSub.trial_end * 1000) : null;
 
