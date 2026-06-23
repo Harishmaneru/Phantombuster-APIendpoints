@@ -174,6 +174,7 @@ app.use(
         "https://record.onepgr.com",
         "https://kampaign.onepgr.com",
         "https://aixsdr.onepgr.com",
+        "https://www.onepgr.com",
       ];
 
       // Check if origin is in allowed list or is a controlled subdomain
