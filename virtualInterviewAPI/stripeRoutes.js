@@ -3769,6 +3769,44 @@ router.post('/get-subscription-info-by-app', async (req, res) => {
             }
         }
 
+        // 5️⃣ Free Trial Info
+        if (features.includes('trial')) {
+            const subscriptions = await stripe.subscriptions.list({
+                customer: customerId,
+                status: 'trialing',
+                limit: 1
+            });
+
+            if (subscriptions.data.length > 0) {
+                const subscription = subscriptions.data[0];
+                const nowInSeconds = Math.floor(Date.now() / 1000);
+
+                result.trial = {
+                    subscriptionId: subscription.id,
+                    customerId: customerId,
+                    status: subscription.status,
+                    trialStart: subscription.trial_start,
+                    trialEnd: subscription.trial_end,
+                    daysRemaining: subscription.trial_end
+                        ? Math.max(0, Math.ceil((subscription.trial_end - nowInSeconds) / 86400))
+                        : 0,
+                    plan: subscription.items.data.map(i => ({
+                        priceId: i.price.id,
+                        interval: i.price.recurring.interval,
+                        amount: i.price.unit_amount / 100,
+                        currency: i.price.currency,
+                        quantity: i.quantity || 1,
+                        totalAmount: (i.price.unit_amount / 100) * (i.quantity || 1)
+                    })),
+                };
+            } else {
+                result.trial = {
+                    isTrialing: false,
+                    message: 'No active trial found for this customer'
+                };
+            }
+        }
+
         // 4️⃣ Manage Subscription (Billing Portal)
         if (features.includes('manageSubscription')) {
             const appUrlMap = {
