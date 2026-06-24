@@ -120,6 +120,88 @@ function normalizeFeatures(features) {
   return {};
 }
 
+// ─── Feature-key resolution for /api/subscriptions/stats ──────────────────
+// Maps canonical tokens (used by clients) to matchers against stored feature
+// keys and the corresponding usage-counter key.
+const FEATURE_ALIASES = {
+  icp:              { match: /icp/i,              usageKey: "icpUsed" },
+  discoveryRuns:    { match: /discovery run/i,    usageKey: "discoveryRunsUsed" },
+  outreach:         { match: /outreach/i,          usageKey: "outreachMonthlyUsed" },
+  analytics:        { match: /analytics/i,         usageKey: "analyticsUsed" },
+};
+
+// Derive a canonical short token from a stored feature key.
+function tokenForFeatureKey(featureKey) {
+  for (const [token, entry] of Object.entries(FEATURE_ALIASES)) {
+    if (entry.match.test(featureKey)) return token;
+  }
+  // Fallback: return the key as-is (handles short keys like "campaigns", "domains", "emails")
+  return featureKey;
+}
+
+// Case-insensitive lookup in a usage object.
+function findUsage(usage, usageKey) {
+  if (!usage || typeof usage !== "object") return 0;
+  if (usage[usageKey] !== undefined) return usage[usageKey];
+  const lowerKey = usageKey.toLowerCase();
+  for (const [k, v] of Object.entries(usage)) {
+    if (k.toLowerCase() === lowerKey) return v;
+  }
+  return 0;
+}
+
+// Compute a single feature-stat object from a stored feature key + value + usage.
+function computeFeatureStat(featureKey, value, usage) {
+  const token = tokenForFeatureKey(featureKey);
+  const alias = FEATURE_ALIASES[token];
+  const usageKey = alias ? alias.usageKey : `${token}Used`;
+  const used = findUsage(usage, usageKey);
+
+  let limit = value;
+  let isUnlimited =
+    limit === "unlimited" || String(limit).toLowerCase() === "unlimited";
+
+  // When value is "unlimited" but the key starts with a number,
+  // extract that number as the actual limit.
+  if (isUnlimited) {
+    const cleaned = featureKey.replace(/,/g, "");
+    const numMatch = cleaned.match(/^\s*(\d+)\s+(.+)$/);
+    if (numMatch) {
+      limit = parseInt(numMatch[1], 10);
+      isUnlimited = false;
+    }
+  }
+
+  let numLimit = typeof limit === "string" ? parseInt(limit, 10) : limit;
+  if (isNaN(numLimit)) {
+    // Non-numeric value (e.g. "premium", true, false) — treat as unlimited flag
+    return {
+      key: featureKey,
+      token,
+      limit: value,
+      used,
+      remaining: "unlimited",
+      isUnlimited: true,
+      canProceed: true,
+    };
+  }
+
+  const canProceed = isUnlimited || used < numLimit;
+  const remaining = isUnlimited
+    ? "unlimited"
+    : Math.max(0, numLimit - used);
+
+  return {
+    key: featureKey,
+    token,
+    limit: isUnlimited ? "unlimited" : numLimit,
+    used,
+    remaining,
+    isUnlimited,
+    canProceed,
+  };
+}
+
 // ─── Periodic usage-reset config ───────────────────────────────────────────
 // Only keys that actually exist in the subscription usage are reset (so other
 // apps using this shared backend are never polluted with AIxSDR-specific keys).
@@ -631,11 +713,97 @@ async function checkUsageLimit(req, res) {
   }
 }
 
+// Get aggregate stats for a user + app (all features, usage, plan context)
+async function getSubscriptionStats(req, res) {
+  try {
+    const { userId, app } = req.body;
+
+    if (!userId || !app) {
+      return res
+        .status(400)
+        .json({ success: false, message: "Missing required fields" });
+    }
+
+    const sub = await SubscriptionFlags.findOne({
+      userId,
+      app: canonicalApp(app),
+    });
+    if (!sub) {
+      return res.status(200).json({
+        success: false,
+        message: "Subscription not found",
+      });
+    }
+
+    ensureSubscriptionFeatures(sub);
+
+    const didReset = applyUsageResets(sub);
+    if (didReset) {
+      sub.markModified("usage");
+      await sub.save();
+    }
+
+    // Compute isActive flag (non-blocking — always return 200)
+    const paymentStatus = sub.subscription.payment?.status;
+    const allowedStatuses = ["active", "trialing", "paid", "succeeded"];
+    const paymentOk =
+      !sub.subscription.payment ||
+      !paymentStatus ||
+      allowedStatuses.includes(paymentStatus);
+    const notExpired =
+      !sub.subscription.endDate ||
+      new Date() <= new Date(sub.subscription.endDate);
+    const isActive = paymentOk && notExpired;
+
+    const plan = sub.subscription.plan || {};
+    const payment = { status: sub.subscription.payment?.status || null };
+    const endDate = sub.subscription.endDate || null;
+
+    // Build feature stats
+    const features = [];
+    const featuresByToken = {};
+    const availableActions = [];
+
+    if (
+      sub.subscription.features &&
+      typeof sub.subscription.features === "object"
+    ) {
+      for (const [featureKey, value] of Object.entries(
+        sub.subscription.features,
+      )) {
+        const stat = computeFeatureStat(featureKey, value, sub.usage);
+        features.push(stat);
+        if (!featuresByToken[stat.token]) {
+          featuresByToken[stat.token] = stat;
+          availableActions.push(stat.token);
+        }
+      }
+    }
+
+    return res.json({
+      success: true,
+      userId: sub.userId,
+      app: sub.app,
+      isActive,
+      plan,
+      payment,
+      endDate,
+      availableActions,
+      featuresByToken,
+      features,
+    });
+  } catch (err) {
+    console.error("Get subscription stats error:", err);
+    res.status(500).json({ success: false, message: err.message });
+  }
+}
+
 // ========== Routes ==========
 router.post("/api/subscriptions", storeSubscription);
 router.get("/api/fetch-subscriptions", fetchSubscription);
 router.patch("/api/subscriptions/usage", updateUsage);
 router.post("/api/subscriptions/check-limit", checkUsageLimit);
+router.post("/api/subscriptions/stats", getSubscriptionStats);
 
 // ========== Exports ==========
 module.exports = {
@@ -644,4 +812,5 @@ module.exports = {
   fetchSubscription,
   updateUsage,
   checkUsageLimit,
+  getSubscriptionStats,
 };
