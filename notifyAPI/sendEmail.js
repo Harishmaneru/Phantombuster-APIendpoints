@@ -3101,28 +3101,28 @@ router.get("/api/track/open/:trackingId", async (req, res) => {
     }
 
     // Send webhook notification for replay opens
-    if (isReplay) {
-      await sendWebhookNotification(
-        "https://meet.onepgr.com/session/smatpTracking",
-        {
-          event: "replayed",
-          trackingId,
-          email: tracking.toEmail,
-          from: tracking.fromEmail,
-          subject: tracking.subject,
-          ip,
-          userAgent,
-          openedCount: updatedTracking.openedCount,
-          replayCount: updatedTracking.replayCount,
-          sessionId: sessionId,
-          isNewOpen: false,
-          isMachineOpen: isMachineOpen,
-          timestamp: now,
-          extractedTrackingData,
-          replayEvents: updatedTracking.replayEvents || [],
-        },
-      );
-    }
+    // if (isReplay) {
+    //   await sendWebhookNotification(
+    //     "https://meet.onepgr.com/session/smatpTracking",
+    //     {
+    //       event: "replayed",
+    //       trackingId,
+    //       email: tracking.toEmail,
+    //       from: tracking.fromEmail,
+    //       subject: tracking.subject,
+    //       ip,
+    //       userAgent,
+    //       openedCount: updatedTracking.openedCount,
+    //       replayCount: updatedTracking.replayCount,
+    //       sessionId: sessionId,
+    //       isNewOpen: false,
+    //       isMachineOpen: isMachineOpen,
+    //       timestamp: now,
+    //       extractedTrackingData,
+    //       replayEvents: updatedTracking.replayEvents || [],
+    //     },
+    //   );
+    // }
 
     // Disable cache completely to ensure accurate tracking on every email open
     res.set("Content-Type", "image/png");
