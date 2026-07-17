@@ -4267,6 +4267,101 @@ router.get("/api/track/:trackingId", async (req, res) => {
   }
 });
 
+// 6️⃣.1️⃣ Batch Get Tracking Status (by trackingIds or recipient toEmail)
+router.post("/api/track/batch", async (req, res) => {
+  try {
+    const { trackingIds, toEmail } = req.body;
+
+    let query = {};
+    if (trackingIds && Array.isArray(trackingIds)) {
+      query.messageId = { $in: trackingIds };
+    } else if (toEmail) {
+      query.toEmail = toEmail;
+    } else {
+      return res.status(400).json({
+        success: false,
+        error: "Either 'trackingIds' (array) or 'toEmail' (string) must be provided in request body",
+      });
+    }
+
+    const trackings = await EmailTracking.find(query).sort({ createdAt: -1 });
+
+    // Format dates to readable format
+    const formatDate = (date) => {
+      if (!date) return null;
+      return new Date(date).toLocaleString("en-US", {
+        year: "numeric",
+        month: "long",
+        day: "numeric",
+        hour: "2-digit",
+        minute: "2-digit",
+        second: "2-digit",
+        timeZoneName: "short",
+      });
+    };
+
+    // Clean IP address (remove IPv6 prefix)
+    const cleanIP = (ip) => {
+      if (!ip) return null;
+      return ip.replace("::ffff:", "");
+    };
+
+    const formattedTrackings = trackings.map((tracking) => ({
+      fromEmail: tracking.fromEmail,
+      toEmail: tracking.toEmail,
+      subject: tracking.subject,
+      messageId: tracking.messageId,
+      originalMessageId: tracking.originalMessageId,
+      sentAt: formatDate(tracking.sentAt),
+      opened: !!tracking.openedAt,
+      openedCount: tracking.openedCount,
+      lastOpenedAt: formatDate(tracking.openedAt),
+      lastOpenedIP: cleanIP(tracking.lastOpenedIP),
+      replied: !!tracking.repliedAt,
+      repliedAt: formatDate(tracking.repliedAt),
+      openEvents: tracking.openEvents
+        ? tracking.openEvents.map((event) => ({
+            openedAt: formatDate(event.openedAt),
+            ip: cleanIP(event.ip),
+            userAgent: event.userAgent,
+            sessionId: event.sessionId,
+            isMachineOpen: event.isMachineOpen || false,
+          }))
+        : [],
+      uniqueOpens: tracking.openEvents ? tracking.openEvents.length : 0,
+      replayCount: tracking.replayCount || 0,
+      replayEvents: tracking.replayEvents
+        ? tracking.replayEvents.map((event) => ({
+            replayedAt: formatDate(event.replayedAt),
+            ip: cleanIP(event.ip),
+            userAgent: event.userAgent,
+            sessionId: event.sessionId,
+            isMachineOpen: event.isMachineOpen || false,
+          }))
+        : [],
+      clickEvents: tracking.clickEvents
+        ? tracking.clickEvents.map((click) => ({
+            url: click.url,
+            clickedAt: formatDate(click.clickedAt),
+            ip: cleanIP(click.ip),
+            userAgent: click.userAgent,
+          }))
+        : [],
+      createdAt: formatDate(tracking.createdAt),
+      updatedAt: formatDate(tracking.updatedAt),
+    }));
+
+    res.json({
+      success: true,
+      count: formattedTrackings.length,
+      trackings: formattedTrackings,
+    });
+  } catch (error) {
+    console.error("Batch tracking status error:", error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
 // 7️⃣ Webhook Endpoint for POST Notifications (Legacy)
 router.post("/emailtrachwebhook", async (req, res) => {
   try {
