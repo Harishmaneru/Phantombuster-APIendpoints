@@ -4306,6 +4306,145 @@ router.post("/api/track/batch", async (req, res) => {
       return ip.replace("::ffff:", "");
     };
 
+    // Group tracking records by fromEmail to optimize IMAP connections
+    const trackingsBySender = {};
+    for (const tracking of trackings) {
+      if (!trackingsBySender[tracking.fromEmail]) {
+        trackingsBySender[tracking.fromEmail] = [];
+      }
+      trackingsBySender[tracking.fromEmail].push(tracking);
+    }
+
+    const replyDetailsMap = {};
+
+    // Connect to IMAP once per sender email
+    for (const fromEmail of Object.keys(trackingsBySender)) {
+      const senderTrackings = trackingsBySender[fromEmail];
+      const needsReplies = senderTrackings.some((t) => t.webhookUrl);
+      if (!needsReplies) continue;
+
+      try {
+        const smtp = await SMTPAuth.findOne({ email: fromEmail });
+        if (smtp) {
+          const imapAuth = await getAuthForIMAP(smtp, fromEmail);
+          const client = new ImapFlow({
+            host: getImapHost(
+              smtp.host,
+              fromEmail,
+              smtp.oauth2?.provider,
+            ),
+            port: 993,
+            secure: true,
+            auth: imapAuth,
+            logger: false,
+          });
+
+          await client.connect();
+          await client.mailboxOpen("INBOX");
+
+          for (const tracking of senderTrackings) {
+            if (!tracking.webhookUrl) continue;
+
+            const replies = [];
+
+            // Method 1: Search by In-Reply-To header
+            try {
+              const inReplyToMessages = await client.search({
+                header: { "In-Reply-To": tracking.originalMessageId },
+              });
+
+              for await (let msg of client.fetch(inReplyToMessages, {
+                envelope: true,
+                uid: true,
+                flags: true,
+                source: true,
+              })) {
+                const parsed = await simpleParser(msg.source);
+                const flags = Array.isArray(msg.flags) ? msg.flags : [];
+                const isRead = flags.includes("Seen") || flags.includes("\\Seen");
+
+                replies.push({
+                  subject: msg.envelope.subject || "(No Subject)",
+                  from: msg.envelope.from
+                    ? msg.envelope.from
+                        .map((f) => `${f.name || ""} <${f.address}>`)
+                        .join(", ")
+                    : "Unknown",
+                  date: formatDate(msg.envelope.date),
+                  uid: msg.uid,
+                  read: isRead,
+                  status: isRead ? "read" : "unread",
+                  text: parsed.text || "",
+                  html: parsed.html || "",
+                  messageId: parsed.messageId,
+                  inReplyTo: parsed.inReplyTo,
+                  references: parsed.references,
+                  replyMethod: "In-Reply-To",
+                });
+              }
+            } catch (error) {
+              console.log("In-Reply-To search failed in batch:", error.message);
+            }
+
+            // Method 2: Search by References header
+            try {
+              const referencesMessages = await client.search({
+                header: { References: tracking.originalMessageId },
+              });
+
+              for await (let msg of client.fetch(referencesMessages, {
+                envelope: true,
+                uid: true,
+                flags: true,
+                source: true,
+              })) {
+                const parsed = await simpleParser(msg.source);
+                const flags = Array.isArray(msg.flags) ? msg.flags : [];
+                const isRead = flags.includes("Seen") || flags.includes("\\Seen");
+
+                // Avoid duplicates
+                const existingReply = replies.find((r) => r.uid === msg.uid);
+                if (!existingReply) {
+                  replies.push({
+                    subject: msg.envelope.subject || "(No Subject)",
+                    from: msg.envelope.from
+                      ? msg.envelope.from
+                          .map((f) => `${f.name || ""} <${f.address}>`)
+                          .join(", ")
+                      : "Unknown",
+                    date: formatDate(msg.envelope.date),
+                    uid: msg.uid,
+                    read: isRead,
+                    status: isRead ? "read" : "unread",
+                    text: parsed.text || "",
+                    html: parsed.html || "",
+                    messageId: parsed.messageId,
+                    inReplyTo: parsed.inReplyTo,
+                    references: parsed.references,
+                    replyMethod: "References",
+                  });
+                }
+              }
+            } catch (error) {
+              console.log("References search failed in batch:", error.message);
+            }
+
+            replies.sort((a, b) => new Date(a.date) - new Date(b.date));
+
+            replyDetailsMap[tracking.messageId] = {
+              foundReplies: replies.length > 0,
+              replies: replies,
+              totalReplies: replies.length,
+            };
+          }
+
+          await client.logout();
+        }
+      } catch (error) {
+        console.error(`Reply details batch fetch error for ${fromEmail}:`, error);
+      }
+    }
+
     const formattedTrackings = trackings.map((tracking) => ({
       fromEmail: tracking.fromEmail,
       toEmail: tracking.toEmail,
@@ -4347,6 +4486,11 @@ router.post("/api/track/batch", async (req, res) => {
             userAgent: click.userAgent,
           }))
         : [],
+      replyDetails: replyDetailsMap[tracking.messageId] || {
+        foundReplies: false,
+        replies: [],
+        totalReplies: 0,
+      },
       createdAt: formatDate(tracking.createdAt),
       updatedAt: formatDate(tracking.updatedAt),
     }));
