@@ -4708,11 +4708,19 @@ router.get("/api/unipile/user/:userId/fetch/invitations", async (req, res) => {
           headline: invitation.invited_user_description || null,
           designation: invitation.invited_user_description || null,
           location: null,
+          first_name: null,
+          last_name: null,
+          profile_url: invitation.invited_user_public_id ? `https://www.linkedin.com/in/${invitation.invited_user_public_id}` : null,
+          connections_count: null,
+          about: null,
+          inviter: invitation.inviter || null,
+          specifics: invitation.specifics || null,
         };
       };
 
       // Helper to merge profile data
       const enrichInvitationWithProfile = (invitation, profile) => {
+        const publicId = profile.public_identifier || invitation.invited_user_public_id;
         return {
           ...invitation,
           status: invitation.status || "pending", // Default to pending for sent invitations
@@ -4731,8 +4739,14 @@ router.get("/api/unipile/user/:userId/fetch/invitations", async (req, res) => {
             null,
           // Add extra useful fields
           invitation_id: invitation.id,
-          invited_user_public_identifier:
-            profile.public_identifier || invitation.invited_user_public_id,
+          invited_user_public_identifier: publicId,
+          first_name: profile.first_name || null,
+          last_name: profile.last_name || null,
+          profile_url: publicId ? `https://www.linkedin.com/in/${publicId}` : null,
+          connections_count: profile.connections_count || null,
+          about: profile.about || profile.summary || null,
+          inviter: invitation.inviter || null,
+          specifics: invitation.specifics || null,
         };
       };
 
