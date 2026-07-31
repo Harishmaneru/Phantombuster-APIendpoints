@@ -7,7 +7,10 @@ class ImapFlow extends OriginalImapFlow {
     super(options);
     // Prevent background socket errors/timeouts from crashing the Node.js process
     this.on("error", (err) => {
-      console.error("[ImapFlow Client Error Logged Safely]:", err.message || err);
+      console.error(
+        "[ImapFlow Client Error Logged Safely]:",
+        err.message || err,
+      );
     });
   }
 }
@@ -545,7 +548,9 @@ async function fetchMimeContentViaGraph(accessToken, messageId) {
   });
   if (!response.ok) {
     const body = await response.text();
-    throw new Error(`Graph API raw MIME fetch error (${response.status}): ${body}`);
+    throw new Error(
+      `Graph API raw MIME fetch error (${response.status}): ${body}`,
+    );
   }
   return await response.buffer();
 }
@@ -611,8 +616,7 @@ function graphMessageMatchesTracking(message, tracking) {
   const references = getInternetHeader(message, "References");
   if (references && references.includes(orig)) return "references";
 
-  const fromAddr =
-    message.from?.emailAddress?.address?.toLowerCase() || "";
+  const fromAddr = message.from?.emailAddress?.address?.toLowerCase() || "";
   const subj = (message.subject || "").toLowerCase();
   if (
     tracking.toEmail &&
@@ -795,58 +799,38 @@ const { cpanelRequest } = require("../domainManagementAPI/cpanelApi.js");
 async function getSMTPSettings(email, customHost, customPort) {
   const domain = email.split("@")[1].toLowerCase();
 
-  // 1. Check for custom settings first
-  if (customHost && customPort) return { host: customHost, port: customPort };
+  // 1. Check for custom settings provided by caller first
+  if (customHost) {
+    return {
+      host: customHost,
+      port: parseInt(customPort) || 587,
+    };
+  }
 
-  // 2. Check for known providers (Gmail, Outlook, etc.)
+  // 2. Check for known provider domains
   const providerSettings = {
     "gmail.com": { host: "smtp.gmail.com", port: 587 },
+    "googlemail.com": { host: "smtp.gmail.com", port: 587 },
     "outlook.com": { host: "smtp-mail.outlook.com", port: 587 },
     "hotmail.com": { host: "smtp-mail.outlook.com", port: 587 },
+    "live.com": { host: "smtp-mail.outlook.com", port: 587 },
+    "msn.com": { host: "smtp-mail.outlook.com", port: 587 },
     "yahoo.com": { host: "smtp.mail.yahoo.com", port: 587 },
+    "ymail.com": { host: "smtp.mail.yahoo.com", port: 587 },
     "icloud.com": { host: "smtp.mail.me.com", port: 587 },
+    "me.com": { host: "smtp.mail.me.com", port: 587 },
+    "mac.com": { host: "smtp.mail.me.com", port: 587 },
     "protonmail.com": { host: "127.0.0.1", port: 1025 },
+    "proton.me": { host: "127.0.0.1", port: 1025 },
     "zoho.com": { host: "smtp.zoho.com", port: 587 },
     "yandex.com": { host: "smtp.yandex.com", port: 587 },
+    "fastmail.com": { host: "smtp.fastmail.com", port: 587 },
+    "aol.com": { host: "smtp.aol.com", port: 587 },
   };
 
   if (providerSettings[domain]) return providerSettings[domain];
 
-  // 3. For custom domains, try cPanel API first
-  try {
-    console.log(`Attempting cPanel API lookup for domain: ${domain}`);
-    const cpanelResponse = await cpanelRequest("Email/get_client_settings", {
-      account: email,
-    });
-
-    if (cpanelResponse && cpanelResponse.data) {
-      const smtpData = cpanelResponse.data;
-
-      // Validate that we have the required SMTP settings
-      if (smtpData.smtp_host && smtpData.smtp_port) {
-        console.log(`cPanel API success for ${email}:`, {
-          host: smtpData.smtp_host,
-          port: smtpData.smtp_port,
-        });
-        return {
-          host: smtpData.smtp_host,
-          port: parseInt(smtpData.smtp_port) || 465,
-        };
-      } else {
-        console.log(
-          `cPanel API response missing SMTP settings for ${email}:`,
-          smtpData,
-        );
-      }
-    } else {
-      console.log(`cPanel API response invalid for ${email}:`, cpanelResponse);
-    }
-  } catch (cpanelError) {
-    console.log(`cPanel API failed for ${email}:`, cpanelError.message);
-    // Continue to fallback logic
-  }
-
-  // 4. Fallback: Check MX records for provider detection
+  // 3. DNS MX record lookup to detect real email server for custom domains
   try {
     const mxRecords = await cachedMxLookup(domain);
     const sorted = mxRecords.sort((a, b) => a.priority - b.priority);
@@ -860,43 +844,106 @@ async function getSMTPSettings(email, customHost, customPort) {
     );
     if (isGoogleWorkspace) return { host: "smtp.gmail.com", port: 587 };
 
-    // Detect Outlook/Microsoft
+    // Detect Outlook / Microsoft 365
     const isOutlook = sorted.some(
       (mx) =>
         mx.exchange.includes("outlook") ||
+        mx.exchange.includes("protection.outlook.com") ||
         mx.exchange.includes("hotmail") ||
         mx.exchange.includes("microsoft"),
     );
     if (isOutlook) return { host: "smtp-mail.outlook.com", port: 587 };
 
-    // Detect cPanel/WHM servers
-    const isCPanel = sorted.some(
-      (mx) =>
-        mx.exchange.includes("cpanel") ||
-        mx.exchange.includes("whm") ||
-        mx.exchange === domain || // Self-hosted MX
-        mx.exchange.endsWith(`.${domain}`), // Subdomain of the same domain
-    );
+    // Detect Zoho
+    const isZoho = sorted.some((mx) => mx.exchange.includes("zoho"));
+    if (isZoho) return { host: "smtp.zoho.com", port: 587 };
 
-    if (isCPanel) {
+    // Detect GoDaddy
+    const isGoDaddy = sorted.some((mx) =>
+      mx.exchange.includes("secureserver.net"),
+    );
+    if (isGoDaddy) return { host: "smtpout.secureserver.net", port: 465 };
+
+    // Detect Namecheap PrivateEmail
+    const isPrivateEmail = sorted.some((mx) =>
+      mx.exchange.includes("privateemail.com"),
+    );
+    if (isPrivateEmail) return { host: "mail.privateemail.com", port: 465 };
+
+    // Detect Mailgun
+    const isMailgun = sorted.some((mx) => mx.exchange.includes("mailgun"));
+    if (isMailgun) return { host: "smtp.mailgun.org", port: 587 };
+
+    // Detect SendGrid
+    const isSendGrid = sorted.some((mx) => mx.exchange.includes("sendgrid"));
+    if (isSendGrid) return { host: "smtp.sendgrid.net", port: 587 };
+
+    // Detect Fastmail
+    const isFastmail = sorted.some((mx) =>
+      mx.exchange.includes("messagingengine.com"),
+    );
+    if (isFastmail) return { host: "smtp.fastmail.com", port: 587 };
+
+    // Check if MX points to internal cPanel server (WHM_HOST) or contains cPanel / WHM / domain MX
+    const whmHostDomain = process.env.WHM_HOST
+      ? process.env.WHM_HOST.toLowerCase().replace(/^https?:\/\//, "").split(":")[0]
+      : "";
+    const isCPanelServer =
+      (whmHostDomain &&
+        (domain.includes(whmHostDomain) ||
+          whmHostDomain.includes(domain) ||
+          sorted.some((mx) => mx.exchange.toLowerCase().includes(whmHostDomain)))) ||
+      sorted.some(
+        (mx) =>
+          mx.exchange.includes("cpanel") ||
+          mx.exchange.includes("whm") ||
+          mx.exchange.toLowerCase().includes(domain) ||
+          mx.exchange.toLowerCase().endsWith(`.${domain}`),
+      );
+
+    if (isCPanelServer) {
+      try {
+        console.log(
+          `MX points to cPanel server. Attempting cPanel API lookup for domain: ${domain}`,
+        );
+        const cpanelResponse = await cpanelRequest(
+          "Email/get_client_settings",
+          {
+            account: email,
+          },
+        );
+
+        if (
+          cpanelResponse &&
+          cpanelResponse.status === 1 &&
+          cpanelResponse.data &&
+          cpanelResponse.data.smtp_host
+        ) {
+          const smtpData = cpanelResponse.data;
+          return {
+            host: smtpData.smtp_host,
+            port: parseInt(smtpData.smtp_port) || 465,
+          };
+        }
+      } catch (cpanelError) {
+        console.log(`cPanel API failed for ${email}:`, cpanelError.message);
+      }
       return { host: `mail.${domain}`, port: 465 };
     }
 
-    // For other self-hosted domains, default to cPanel style
-    const isSelfHosted = sorted.some(
-      (mx) => mx.exchange === domain || mx.exchange.endsWith(`.${domain}`),
-    );
-
-    if (isSelfHosted) {
-      return { host: `mail.${domain}`, port: 465 };
+    // If top MX exchange host is custom like mail.domain.com or smtp.domain.com
+    if (sorted[0] && sorted[0].exchange) {
+      const topMx = sorted[0].exchange.toLowerCase().replace(/\.$/, "");
+      if (topMx.startsWith("mail.") || topMx.startsWith("smtp.")) {
+        return { host: topMx, port: 587 };
+      }
     }
 
-    // Fallback for unknown providers
-    return { host: `smtp.${domain}`, port: 587 };
+    // Default fallback for custom domain: mail.<domain>
+    return { host: `mail.${domain}`, port: 587 };
   } catch (error) {
     console.log(`Could not resolve MX records for ${domain}:`, error.message);
-    // Default to cPanel style as fallback for unknown domains
-    return { host: `mail.${domain}`, port: 465 };
+    return { host: `mail.${domain}`, port: 587 };
   }
 }
 
@@ -1527,7 +1574,10 @@ router.post("/api/emailsend", async (req, res) => {
           message: "Email sent via Microsoft Graph API",
         });
       } catch (graphError) {
-        console.error(`❌ Graph API Send Error (To: ${to}, From: ${from}):`, graphError);
+        console.error(
+          `❌ Graph API Send Error (To: ${to}, From: ${from}):`,
+          graphError,
+        );
         return res
           .status(500)
           .json({ success: false, error: graphError.message });
@@ -1561,13 +1611,19 @@ router.post("/api/emailsend", async (req, res) => {
       const pixelTag = `<img src="${trackingPixelUrl}" width="1" height="1" style="display:none;border:0;" alt=""/>`;
       if (emailHtml.includes("</body>")) {
         emailHtml = emailHtml.replace("</body>", `${pixelTag}</body>`);
-        console.log(`🔍 Tracking pixel injected inside </body>: ${trackingPixelUrl}`);
+        console.log(
+          `🔍 Tracking pixel injected inside </body>: ${trackingPixelUrl}`,
+        );
       } else if (emailHtml.includes("</html>")) {
         emailHtml = emailHtml.replace("</html>", `${pixelTag}</html>`);
-        console.log(`🔍 Tracking pixel injected inside </html>: ${trackingPixelUrl}`);
+        console.log(
+          `🔍 Tracking pixel injected inside </html>: ${trackingPixelUrl}`,
+        );
       } else {
         emailHtml += pixelTag;
-        console.log(`🔍 Tracking pixel appended (no closing tags): ${trackingPixelUrl}`);
+        console.log(
+          `🔍 Tracking pixel appended (no closing tags): ${trackingPixelUrl}`,
+        );
       }
     }
 
@@ -1832,7 +1888,7 @@ router.post("/api/emailforward", async (req, res) => {
           console.log("⚠️ IMAP force-close failed, destroying connection");
           try {
             imapClient.connection?.destroy();
-          } catch (e) { }
+          } catch (e) {}
         }
       }
     })();
@@ -1871,14 +1927,14 @@ router.post("/api/emailforward", async (req, res) => {
 
     const forwardedDate = envelope.date
       ? new Date(envelope.date).toLocaleString("en-US", {
-        weekday: "short",
-        year: "numeric",
-        month: "short",
-        day: "numeric",
-        hour: "2-digit",
-        minute: "2-digit",
-        timeZoneName: "short",
-      })
+          weekday: "short",
+          year: "numeric",
+          month: "short",
+          day: "numeric",
+          hour: "2-digit",
+          minute: "2-digit",
+          timeZoneName: "short",
+        })
       : "";
 
     const forwardedCc = envelope.cc
@@ -1917,13 +1973,14 @@ router.post("/api/emailforward", async (req, res) => {
         </style>
       </head>
       <body>
-        ${safeForwardMessage
-        ? `<div class="forward-message">${safeForwardMessage.replace(
-          /\n/g,
-          "<br>",
-        )}</div>`
-        : ""
-      }
+        ${
+          safeForwardMessage
+            ? `<div class="forward-message">${safeForwardMessage.replace(
+                /\n/g,
+                "<br>",
+              )}</div>`
+            : ""
+        }
         
         <div class="gmail-attr">
           ---------- Forwarded message ---------<br>
@@ -1934,10 +1991,11 @@ router.post("/api/emailforward", async (req, res) => {
         </div>
         
         <div class="gmail-quote">
-          ${original.html ||
-      original.textAsHtml ||
-      `<pre>${original.text || ""}</pre>`
-      }
+          ${
+            original.html ||
+            original.textAsHtml ||
+            `<pre>${original.text || ""}</pre>`
+          }
         </div>
       </body>
       </html>
@@ -2100,7 +2158,7 @@ ${original.text || "No text content"}
       console.log("🔒 Force closing IMAP on error...");
       try {
         // Force close immediately on error - don't wait
-        imapClient.close().catch(() => { });
+        imapClient.close().catch(() => {});
         imapClient.connection?.destroy();
       } catch (e) {
         // Ignore cleanup errors
@@ -2257,12 +2315,13 @@ router.post("/api/fetchinbox", async (req, res) => {
             // URL to download the attachment
             url: `${baseUrl}/api/email/attachment?email=${encodeURIComponent(
               email,
-            )}&token=${encodeURIComponent(token)}&uid=${msg.uid
-              }&messageId=${encodeURIComponent(
-                msg.envelope.messageId,
-              )}&filename=${encodeURIComponent(
-                att.filename || "unnamed_attachment",
-              )}&checksum=${encodeURIComponent(att.checksum || "")}`,
+            )}&token=${encodeURIComponent(token)}&uid=${
+              msg.uid
+            }&messageId=${encodeURIComponent(
+              msg.envelope.messageId,
+            )}&filename=${encodeURIComponent(
+              att.filename || "unnamed_attachment",
+            )}&checksum=${encodeURIComponent(att.checksum || "")}`,
           }));
         }
         // Method 2: Alternative - check for attachments in email structure
@@ -2337,7 +2396,7 @@ router.post("/api/fetchinbox", async (req, res) => {
     console.error("Inbox Fetch Error:", err);
 
     if (client) {
-      await client.logout().catch(() => { });
+      await client.logout().catch(() => {});
     }
 
     if (
@@ -2489,7 +2548,8 @@ router.get("/api/email/attachment", async (req, res) => {
 
       console.log(`[Attachment] Parsed subject: ${parsed.subject}`);
       console.log(
-        `[Attachment] Parsed attachments count: ${parsed.attachments ? parsed.attachments.length : 0
+        `[Attachment] Parsed attachments count: ${
+          parsed.attachments ? parsed.attachments.length : 0
         }`,
       );
 
@@ -2745,10 +2805,10 @@ router.post("/api/fetchsingleemail", async (req, res) => {
         messageId: msg.envelope.messageId,
         attachments: parsed.attachments
           ? parsed.attachments.map((att) => ({
-            filename: att.filename,
-            contentType: att.contentType,
-            size: att.size,
-          }))
+              filename: att.filename,
+              contentType: att.contentType,
+              size: att.size,
+            }))
           : [],
       };
 
@@ -2825,7 +2885,7 @@ router.post("/api/fetchsingleemail", async (req, res) => {
 // Helper to identify automated machine opens (scanners/pre-fetchers) for all major email providers
 function checkIsMachineOpen(userAgent = "") {
   const ua = userAgent.toLowerCase();
-  
+
   // 1. Google/Gmail Scanners & Prefetchers
   if (
     ua.includes("gmail-content-sampling") ||
@@ -2835,7 +2895,7 @@ function checkIsMachineOpen(userAgent = "") {
   ) {
     return true;
   }
-  
+
   // 2. Microsoft/Outlook/Office 365 Scanners & SafeLinks
   if (
     ua.includes("office365") ||
@@ -2845,24 +2905,21 @@ function checkIsMachineOpen(userAgent = "") {
   ) {
     return true;
   }
-  
+
   // 3. Yahoo Mail Proxy
-  if (
-    ua.includes("yahoomailproxy") ||
-    ua.includes("yahoo-mail-proxy")
-  ) {
+  if (ua.includes("yahoomailproxy") || ua.includes("yahoo-mail-proxy")) {
     return true;
   }
 
   // 4. Apple Mail Privacy Protection (MPP) & generic masked agents (ends with "Mozilla/5.0" or is exactly "Mozilla/5.0")
   if (
-    userAgent.trim() === "Mozilla/5.0" || 
+    userAgent.trim() === "Mozilla/5.0" ||
     userAgent.trim() === "mozilla/5.0" ||
     ua.endsWith("mozilla/5.0")
   ) {
     return true;
   }
-  
+
   // 5. General Security Scanners, Crawlers, and Bots
   if (
     ua.includes("bot") ||
@@ -2874,7 +2931,7 @@ function checkIsMachineOpen(userAgent = "") {
   ) {
     return true;
   }
-  
+
   return false;
 }
 
@@ -2927,7 +2984,10 @@ router.get("/api/track/open/:trackingId", async (req, res) => {
     if (!tracking) {
       console.log(`Tracking not found for: ${trackingId}`);
       res.set("Content-Type", "image/png");
-      res.set("Cache-Control", "no-store, no-cache, must-revalidate, private, max-age=0, post-check=0, pre-check=0");
+      res.set(
+        "Cache-Control",
+        "no-store, no-cache, must-revalidate, private, max-age=0, post-check=0, pre-check=0",
+      );
       res.set("Pragma", "no-cache");
       res.set("Expires", "0");
       return res.send(
@@ -3011,7 +3071,8 @@ router.get("/api/track/open/:trackingId", async (req, res) => {
     const recentOpen =
       tracking.openEvents &&
       tracking.openEvents.find(
-        (event) => event.sessionId === sessionId && event.openedAt > thirtySecondsAgo,
+        (event) =>
+          event.sessionId === sessionId && event.openedAt > thirtySecondsAgo,
       );
 
     let shouldCount = false;
@@ -3126,7 +3187,10 @@ router.get("/api/track/open/:trackingId", async (req, res) => {
 
     // Disable cache completely to ensure accurate tracking on every email open
     res.set("Content-Type", "image/png");
-    res.set("Cache-Control", "no-store, no-cache, must-revalidate, private, max-age=0, post-check=0, pre-check=0");
+    res.set(
+      "Cache-Control",
+      "no-store, no-cache, must-revalidate, private, max-age=0, post-check=0, pre-check=0",
+    );
     res.set("Pragma", "no-cache");
     res.set("Expires", "0");
     res.send(
@@ -3136,9 +3200,15 @@ router.get("/api/track/open/:trackingId", async (req, res) => {
       ),
     );
   } catch (error) {
-    console.error(`❌ Open tracking error for trackingId ${req.params.trackingId || "unknown"}:`, error);
+    console.error(
+      `❌ Open tracking error for trackingId ${req.params.trackingId || "unknown"}:`,
+      error,
+    );
     res.set("Content-Type", "image/png");
-    res.set("Cache-Control", "no-store, no-cache, must-revalidate, private, max-age=0, post-check=0, pre-check=0");
+    res.set(
+      "Cache-Control",
+      "no-store, no-cache, must-revalidate, private, max-age=0, post-check=0, pre-check=0",
+    );
     res.set("Pragma", "no-cache");
     res.set("Expires", "0");
     res
@@ -3272,7 +3342,10 @@ router.get("/api/track/click/:trackingId", async (req, res) => {
 
     res.redirect(url);
   } catch (error) {
-    console.error(`❌ Click tracking error for trackingId ${req.params.trackingId || "unknown"} (URL: ${req.query.url || "unknown"}):`, error);
+    console.error(
+      `❌ Click tracking error for trackingId ${req.params.trackingId || "unknown"} (URL: ${req.query.url || "unknown"}):`,
+      error,
+    );
     res.redirect(decodeURIComponent(req.query.url));
   }
 });
@@ -3299,8 +3372,19 @@ function replyLog(level, event, data = {}) {
 
 // Human-readable cycle summary printed alongside the cycle_done JSON line.
 // Additive — does not replace any existing JSON-line log.
-function printCycleSummary(report, totals, durationMs, candidatesLoaded, startedAtIso) {
-  const STATUS_ICON = { completed: "✅", skipped: "⚠️ ", failed: "❌", pending: "❔" };
+function printCycleSummary(
+  report,
+  totals,
+  durationMs,
+  candidatesLoaded,
+  startedAtIso,
+) {
+  const STATUS_ICON = {
+    completed: "✅",
+    skipped: "⚠️ ",
+    failed: "❌",
+    pending: "❔",
+  };
   const rows = [];
   let counts = { completed: 0, skipped: 0, failed: 0 };
   let i = 0;
@@ -3314,12 +3398,17 @@ function printCycleSummary(report, totals, durationMs, candidatesLoaded, started
     } else if (m.status === "failed") {
       details = `${m.reason || "error"}`;
     } else {
-      const skipped = m.recordsSkipped
-        ? `${m.recordsSkipped} dropped, `
-        : "";
+      const skipped = m.recordsSkipped ? `${m.recordsSkipped} dropped, ` : "";
       details = `${skipped}${m.checked} checked → ${m.replies} repl${m.replies === 1 ? "y" : "ies"}${m.errors ? `, ${m.errors} err` : ""}`;
     }
-    rows.push({ i, mailbox, icon, records: m.recordsTotal, host: m.host, details });
+    rows.push({
+      i,
+      mailbox,
+      icon,
+      records: m.recordsTotal,
+      host: m.host,
+      details,
+    });
   }
 
   const widths = {
@@ -3412,7 +3501,10 @@ async function checkForReplies() {
           records: records.length,
         });
         const r = mailboxReport.get(mailbox);
-        if (r) { r.status = "skipped"; r.reason = "no_credentials"; }
+        if (r) {
+          r.status = "skipped";
+          r.reason = "no_credentials";
+        }
         continue;
       }
 
@@ -3438,7 +3530,10 @@ async function checkForReplies() {
           records: records.length,
         });
         const r = mailboxReport.get(mailbox);
-        if (r) { r.status = "skipped"; r.reason = "all_records_invalid"; }
+        if (r) {
+          r.status = "skipped";
+          r.reason = "all_records_invalid";
+        }
         continue;
       }
 
@@ -3502,7 +3597,10 @@ async function checkForReplies() {
               let replyHtml = "";
 
               try {
-                const mimeContent = await fetchMimeContentViaGraph(accessToken, matchedMsg.id);
+                const mimeContent = await fetchMimeContentViaGraph(
+                  accessToken,
+                  matchedMsg.id,
+                );
                 const parsed = await simpleParser(mimeContent);
                 if (parsed.text) replyText = parsed.text;
                 if (parsed.html) replyHtml = parsed.html;
@@ -3522,8 +3620,7 @@ async function checkForReplies() {
                 replyDate: matchedMsg.receivedDateTime,
                 replyText,
                 replyHtml,
-                replyMessageId:
-                  matchedMsg.internetMessageId || matchedMsg.id,
+                replyMessageId: matchedMsg.internetMessageId || matchedMsg.id,
               };
 
               await EmailTracking.findOneAndUpdate(
@@ -3752,8 +3849,8 @@ async function checkForReplies() {
                   replyDetails = {
                     replyFrom: msg.envelope.from
                       ? msg.envelope.from
-                        .map((f) => `${f.name || ""} <${f.address}>`)
-                        .join(", ")
+                          .map((f) => `${f.name || ""} <${f.address}>`)
+                          .join(", ")
                       : "Unknown",
                     replySubject: msg.envelope.subject || "(No Subject)",
                     replyDate: msg.envelope.date,
@@ -3941,8 +4038,8 @@ router.post("/api/check-replies", async (req, res) => {
           subject: msg.envelope.subject || "(No Subject)",
           from: msg.envelope.from
             ? msg.envelope.from
-              .map((f) => `${f.name || ""} <${f.address}>`)
-              .join(", ")
+                .map((f) => `${f.name || ""} <${f.address}>`)
+                .join(", ")
             : "Unknown",
           date: msg.envelope.date,
           uid: msg.uid,
@@ -3984,8 +4081,8 @@ router.post("/api/check-replies", async (req, res) => {
             subject: msg.envelope.subject || "(No Subject)",
             from: msg.envelope.from
               ? msg.envelope.from
-                .map((f) => `${f.name || ""} <${f.address}>`)
-                .join(", ")
+                  .map((f) => `${f.name || ""} <${f.address}>`)
+                  .join(", ")
               : "Unknown",
             date: msg.envelope.date,
             uid: msg.uid,
@@ -4113,8 +4210,8 @@ router.get("/api/track/:trackingId", async (req, res) => {
                 subject: msg.envelope.subject || "(No Subject)",
                 from: msg.envelope.from
                   ? msg.envelope.from
-                    .map((f) => `${f.name || ""} <${f.address}>`)
-                    .join(", ")
+                      .map((f) => `${f.name || ""} <${f.address}>`)
+                      .join(", ")
                   : "Unknown",
                 date: formatDate(msg.envelope.date),
                 uid: msg.uid,
@@ -4155,8 +4252,8 @@ router.get("/api/track/:trackingId", async (req, res) => {
                   subject: msg.envelope.subject || "(No Subject)",
                   from: msg.envelope.from
                     ? msg.envelope.from
-                      .map((f) => `${f.name || ""} <${f.address}>`)
-                      .join(", ")
+                        .map((f) => `${f.name || ""} <${f.address}>`)
+                        .join(", ")
                     : "Unknown",
                   date: formatDate(msg.envelope.date),
                   uid: msg.uid,
@@ -4219,12 +4316,12 @@ router.get("/api/track/:trackingId", async (req, res) => {
         // Enhanced Open Tracking
         openEvents: tracking.openEvents
           ? tracking.openEvents.map((event) => ({
-            openedAt: formatDate(event.openedAt),
-            ip: cleanIP(event.ip),
-            userAgent: event.userAgent,
-            sessionId: event.sessionId,
-            isMachineOpen: event.isMachineOpen || false,
-          }))
+              openedAt: formatDate(event.openedAt),
+              ip: cleanIP(event.ip),
+              userAgent: event.userAgent,
+              sessionId: event.sessionId,
+              isMachineOpen: event.isMachineOpen || false,
+            }))
           : [],
         uniqueOpens: tracking.openEvents ? tracking.openEvents.length : 0,
 
@@ -4232,21 +4329,21 @@ router.get("/api/track/:trackingId", async (req, res) => {
         replayCount: tracking.replayCount || 0,
         replayEvents: tracking.replayEvents
           ? tracking.replayEvents.map((event) => ({
-            replayedAt: formatDate(event.replayedAt),
-            ip: cleanIP(event.ip),
-            userAgent: event.userAgent,
-            sessionId: event.sessionId,
-            isMachineOpen: event.isMachineOpen || false,
-          }))
+              replayedAt: formatDate(event.replayedAt),
+              ip: cleanIP(event.ip),
+              userAgent: event.userAgent,
+              sessionId: event.sessionId,
+              isMachineOpen: event.isMachineOpen || false,
+            }))
           : [],
 
         // Click Events
         clicks: tracking.clickEvents
           ? tracking.clickEvents.map((click) => ({
-            ...click,
-            clickedAt: formatDate(click.clickedAt),
-            ip: cleanIP(click.ip),
-          }))
+              ...click,
+              clickedAt: formatDate(click.clickedAt),
+              ip: cleanIP(click.ip),
+            }))
           : [],
         totalClicks: tracking.clickEvents ? tracking.clickEvents.length : 0,
 
@@ -4280,7 +4377,8 @@ router.post("/api/track/batch", async (req, res) => {
     } else {
       return res.status(400).json({
         success: false,
-        error: "Either 'trackingIds' (array) or 'toEmail' (string) must be provided in request body",
+        error:
+          "Either 'trackingIds' (array) or 'toEmail' (string) must be provided in request body",
       });
     }
 
@@ -4328,11 +4426,7 @@ router.post("/api/track/batch", async (req, res) => {
         if (smtp) {
           const imapAuth = await getAuthForIMAP(smtp, fromEmail);
           const client = new ImapFlow({
-            host: getImapHost(
-              smtp.host,
-              fromEmail,
-              smtp.oauth2?.provider,
-            ),
+            host: getImapHost(smtp.host, fromEmail, smtp.oauth2?.provider),
             port: 993,
             secure: true,
             auth: imapAuth,
@@ -4361,7 +4455,8 @@ router.post("/api/track/batch", async (req, res) => {
               })) {
                 const parsed = await simpleParser(msg.source);
                 const flags = Array.isArray(msg.flags) ? msg.flags : [];
-                const isRead = flags.includes("Seen") || flags.includes("\\Seen");
+                const isRead =
+                  flags.includes("Seen") || flags.includes("\\Seen");
 
                 replies.push({
                   subject: msg.envelope.subject || "(No Subject)",
@@ -4400,7 +4495,8 @@ router.post("/api/track/batch", async (req, res) => {
               })) {
                 const parsed = await simpleParser(msg.source);
                 const flags = Array.isArray(msg.flags) ? msg.flags : [];
-                const isRead = flags.includes("Seen") || flags.includes("\\Seen");
+                const isRead =
+                  flags.includes("Seen") || flags.includes("\\Seen");
 
                 // Avoid duplicates
                 const existingReply = replies.find((r) => r.uid === msg.uid);
@@ -4441,7 +4537,10 @@ router.post("/api/track/batch", async (req, res) => {
           await client.logout();
         }
       } catch (error) {
-        console.error(`Reply details batch fetch error for ${fromEmail}:`, error);
+        console.error(
+          `Reply details batch fetch error for ${fromEmail}:`,
+          error,
+        );
       }
     }
 
@@ -5810,7 +5909,7 @@ router.post("/api/fetch-conversation", async (req, res) => {
     });
   } catch (error) {
     console.error("Fetch Conversation Error:", error);
-    if (client) client.close().catch(() => { });
+    if (client) client.close().catch(() => {});
     return res.status(500).json({ success: false, error: error.message });
   }
 });
@@ -5916,21 +6015,21 @@ router.post("/api/fetch-email-thread", async (req, res) => {
             subject: msg.envelope.subject,
             from: msg.envelope.from
               ? msg.envelope.from.map((f) => ({
-                name: f.name || "",
-                address: f.address,
-              }))
+                  name: f.name || "",
+                  address: f.address,
+                }))
               : [],
             to: msg.envelope.to
               ? msg.envelope.to.map((t) => ({
-                name: t.name || "",
-                address: t.address,
-              }))
+                  name: t.name || "",
+                  address: t.address,
+                }))
               : [],
             cc: msg.envelope.cc
               ? msg.envelope.cc.map((c) => ({
-                name: c.name || "",
-                address: c.address,
-              }))
+                  name: c.name || "",
+                  address: c.address,
+                }))
               : [],
             date: msg.envelope.date,
             html: parsed.html || parsed.textAsHtml || "",
@@ -6067,21 +6166,21 @@ router.post("/api/fetch-email-thread", async (req, res) => {
           subject: msg.envelope.subject || "(No Subject)",
           from: msg.envelope.from
             ? msg.envelope.from.map((f) => ({
-              name: f.name || "",
-              address: f.address,
-            }))
+                name: f.name || "",
+                address: f.address,
+              }))
             : [],
           to: msg.envelope.to
             ? msg.envelope.to.map((t) => ({
-              name: t.name || "",
-              address: t.address,
-            }))
+                name: t.name || "",
+                address: t.address,
+              }))
             : [],
           cc: msg.envelope.cc
             ? msg.envelope.cc.map((c) => ({
-              name: c.name || "",
-              address: c.address,
-            }))
+                name: c.name || "",
+                address: c.address,
+              }))
             : [],
           date: msg.envelope.date,
           html: parsed.html || parsed.textAsHtml || "",
@@ -6105,7 +6204,7 @@ router.post("/api/fetch-email-thread", async (req, res) => {
       console.log(`⚠️ [FetchThread] Logout warning:`, logoutErr.message);
       try {
         client.close();
-      } catch (e) { }
+      } catch (e) {}
     }
     client = null;
 
@@ -6154,7 +6253,7 @@ router.post("/api/fetch-email-thread", async (req, res) => {
     if (client) {
       try {
         await client.close();
-      } catch (e) { }
+      } catch (e) {}
     }
 
     return res.status(500).json({
@@ -6396,13 +6495,13 @@ router.get("/api/auth/microsoft/callback", async (req, res) => {
           stateEmail =
             JSON.parse(Buffer.from(req.query.state || "", "base64").toString())
               .email || "";
-        } catch (_) { }
+        } catch (_) {}
 
         const adminConsentUrl = `${(process.env.BASE_URL || "https://videoresponse.onepgr.com:3001").replace(/\/api\/?$/, "")}/api/auth/microsoft/admin-consent`;
         return res.redirect(
           `${defaultFrontend}/account-setup/email-accounts?status=pending_admin` +
-          `&email=${encodeURIComponent(stateEmail)}` +
-          `&admin_consent_url=${encodeURIComponent(adminConsentUrl)}`,
+            `&email=${encodeURIComponent(stateEmail)}` +
+            `&admin_consent_url=${encodeURIComponent(adminConsentUrl)}`,
         );
       }
 
@@ -6541,7 +6640,6 @@ router.get("/api/smtp-auth/:email", async (req, res) => {
   }
 });
 
-//
 module.exports = {
   router,
   getSMTPSettings,
