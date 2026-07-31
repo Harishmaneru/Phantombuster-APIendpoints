@@ -6270,6 +6270,7 @@ router.get("/api/auth/detect-provider", async (req, res) => {
     }
 
     const provider = await detectProvider(email);
+    const smtpSettings = await getSMTPSettings(email);
     const requiresOAuth = provider === "microsoft";
     const baseUrl = (
       process.env.BASE_URL || "https://videoresponse.onepgr.com:3001"
@@ -6284,6 +6285,7 @@ router.get("/api/auth/detect-provider", async (req, res) => {
       oauthUrl: requiresOAuth
         ? `${baseUrl}/api/auth/microsoft/authorize?email=${encodeURIComponent(email)}`
         : null,
+      smtpSettings,
     });
   } catch (error) {
     console.error("Provider detection error:", error);
