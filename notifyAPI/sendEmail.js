@@ -807,7 +807,16 @@ async function getSMTPSettings(email, customHost, customPort) {
     };
   }
 
-  // 2. Check for known provider domains
+  // 2. Check for known provider domains via detectProvider (Google, Microsoft)
+  const provider = await detectProvider(email);
+  if (provider === "google") {
+    return { host: "smtp.gmail.com", port: 587 };
+  }
+  if (provider === "microsoft") {
+    return { host: "smtp-mail.outlook.com", port: 587 };
+  }
+
+  // 3. Check for other static known provider domains
   const providerSettings = {
     "gmail.com": { host: "smtp.gmail.com", port: 587 },
     "googlemail.com": { host: "smtp.gmail.com", port: 587 },
@@ -830,29 +839,10 @@ async function getSMTPSettings(email, customHost, customPort) {
 
   if (providerSettings[domain]) return providerSettings[domain];
 
-  // 3. DNS MX record lookup to detect real email server for custom domains
+  // 4. DNS MX record lookup to detect real email server for custom domains
   try {
     const mxRecords = await cachedMxLookup(domain);
     const sorted = mxRecords.sort((a, b) => a.priority - b.priority);
-
-    // Detect Google Workspace
-    const isGoogleWorkspace = sorted.some(
-      (mx) =>
-        mx.exchange.includes("google") ||
-        mx.exchange.includes("aspmx.l.google.com") ||
-        mx.exchange.includes("googlemail.com"),
-    );
-    if (isGoogleWorkspace) return { host: "smtp.gmail.com", port: 587 };
-
-    // Detect Outlook / Microsoft 365
-    const isOutlook = sorted.some(
-      (mx) =>
-        mx.exchange.includes("outlook") ||
-        mx.exchange.includes("protection.outlook.com") ||
-        mx.exchange.includes("hotmail") ||
-        mx.exchange.includes("microsoft"),
-    );
-    if (isOutlook) return { host: "smtp-mail.outlook.com", port: 587 };
 
     // Detect Zoho
     const isZoho = sorted.some((mx) => mx.exchange.includes("zoho"));
@@ -884,21 +874,21 @@ async function getSMTPSettings(email, customHost, customPort) {
     );
     if (isFastmail) return { host: "smtp.fastmail.com", port: 587 };
 
-    // Check if MX points to internal cPanel server (WHM_HOST) or contains cPanel / WHM / domain MX
-    const whmHostDomain = process.env.WHM_HOST
-      ? process.env.WHM_HOST.toLowerCase().replace(/^https?:\/\//, "").split(":")[0]
-      : "";
+    // Check if MX points strictly to internal cPanel server (WHM_HOST) or contains cPanel / WHM
+    const rawWhmHost = process.env.WHM_HOST ? process.env.WHM_HOST.trim() : "";
+    const whmHostDomain = rawWhmHost
+      ? rawWhmHost.toLowerCase().replace(/^https?:\/\//, "").split(":")[0]
+      : null;
+
     const isCPanelServer =
-      (whmHostDomain &&
-        (domain.includes(whmHostDomain) ||
-          whmHostDomain.includes(domain) ||
-          sorted.some((mx) => mx.exchange.toLowerCase().includes(whmHostDomain)))) ||
+      Boolean(
+        whmHostDomain &&
+          (domain === whmHostDomain ||
+            domain.endsWith("." + whmHostDomain) ||
+            sorted.some((mx) => mx.exchange.toLowerCase().includes(whmHostDomain))),
+      ) ||
       sorted.some(
-        (mx) =>
-          mx.exchange.includes("cpanel") ||
-          mx.exchange.includes("whm") ||
-          mx.exchange.toLowerCase().includes(domain) ||
-          mx.exchange.toLowerCase().endsWith(`.${domain}`),
+        (mx) => mx.exchange.includes("cpanel") || mx.exchange.includes("whm"),
       );
 
     if (isCPanelServer) {
