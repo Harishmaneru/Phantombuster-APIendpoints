@@ -79,7 +79,7 @@ const formatE164Phone = (phone) => {
  * POST /api/whatsapp/connect-qr
  * Body: { "user_id": "...", "name": "..." }
  */
-router.post("/api/whatsapp/connect-qr", async (req, res) => {
+router.post(["/api/whatsapp/connect-qr", "/api/unipile/whatsapp/connect-qr"], async (req, res) => {
   try {
     const { user_id, name } = req.body;
 
@@ -130,7 +130,7 @@ router.post("/api/whatsapp/connect-qr", async (req, res) => {
  * POST /api/whatsapp/connect-pairing
  * Body: { "user_id": "...", "pairing_phone_number": "33612345678", "name": "..." }
  */
-router.post("/api/whatsapp/connect-pairing", async (req, res) => {
+router.post(["/api/whatsapp/connect-pairing", "/api/unipile/whatsapp/connect-pairing"], async (req, res) => {
   try {
     const { user_id, pairing_phone_number, name } = req.body;
 
@@ -192,7 +192,7 @@ router.post("/api/whatsapp/connect-pairing", async (req, res) => {
  * GET /api/whatsapp/account-status
  * Query: ?user_id=... or ?account_id=...
  */
-router.get("/api/whatsapp/account-status", async (req, res) => {
+router.get(["/api/whatsapp/account-status", "/api/unipile/whatsapp/account-status"], async (req, res) => {
   try {
     const { user_id, account_id } = req.query;
 
@@ -258,7 +258,7 @@ router.get("/api/whatsapp/account-status", async (req, res) => {
  * POST /api/whatsapp/disconnect
  * Body: { "user_id": "...", "account_id": "..." }
  */
-router.post("/api/whatsapp/disconnect", async (req, res) => {
+router.post(["/api/whatsapp/disconnect", "/api/unipile/whatsapp/disconnect"], async (req, res) => {
   try {
     const { user_id, account_id, reason } = req.body;
 
@@ -304,7 +304,7 @@ router.post("/api/whatsapp/disconnect", async (req, res) => {
  * List all registered WhatsApp Accounts
  * GET /api/whatsapp/accounts
  */
-router.get("/api/whatsapp/accounts", async (req, res) => {
+router.get(["/api/whatsapp/accounts", "/api/unipile/whatsapp/accounts"], async (req, res) => {
   try {
     const { user_id } = req.query;
     const filter = user_id ? { user_id: user_id, provider: "WHATSAPP" } : { provider: "WHATSAPP" };
@@ -328,7 +328,7 @@ router.get("/api/whatsapp/accounts", async (req, res) => {
  * - attachments (optional file uploads, max 15MB each)
  * - bypass_warmup_check (optional boolean for admin override)
  */
-router.post("/api/whatsapp/chats", upload.array("attachments", 10), async (req, res) => {
+router.post(["/api/whatsapp/chats", "/api/unipile/whatsapp/chats"], upload.array("attachments", 10), async (req, res) => {
   try {
     const account_id = req.body.account_id;
     const user_id = req.body.user_id;
@@ -438,7 +438,7 @@ router.post("/api/whatsapp/chats", upload.array("attachments", 10), async (req, 
  * - text
  * - attachments (optional file uploads)
  */
-router.post("/api/whatsapp/chats/:chatId/messages", upload.array("attachments", 10), async (req, res) => {
+router.post(["/api/whatsapp/chats/:chatId/messages", "/api/unipile/whatsapp/chats/:chatId/messages"], upload.array("attachments", 10), async (req, res) => {
   try {
     const { chatId } = req.params;
     const { account_id, user_id, text = "" } = req.body;
@@ -535,7 +535,7 @@ router.post("/api/whatsapp/chats/:chatId/messages", upload.array("attachments", 
  * - message_deleted
  * - account_status / account_connected
  */
-router.post("/api/whatsapp/webhook", async (req, res) => {
+router.post(["/api/whatsapp/webhook", "/api/unipile/whatsapp/webhook"], async (req, res) => {
   try {
     const payload = req.body;
     const event = payload.event || payload.type;
@@ -616,7 +616,7 @@ router.post("/api/whatsapp/webhook", async (req, res) => {
  * GET /api/whatsapp/chats
  * Query: ?account_id=... &limit=50 &cursor=...
  */
-router.get("/api/whatsapp/chats", async (req, res) => {
+router.get(["/api/whatsapp/chats", "/api/unipile/whatsapp/chats"], async (req, res) => {
   try {
     const { account_id, user_id, limit = 50, cursor } = req.query;
 
@@ -662,7 +662,7 @@ router.get("/api/whatsapp/chats", async (req, res) => {
  * Query: ?account_id=... &limit=100 &cursor=...
  * Returns paginated conversation history including is_sender, delivered, seen, seen_by
  */
-router.get("/api/whatsapp/chats/:chatId/messages", async (req, res) => {
+router.get(["/api/whatsapp/chats/:chatId/messages", "/api/unipile/whatsapp/chats/:chatId/messages"], async (req, res) => {
   try {
     const { chatId } = req.params;
     const { account_id, user_id, limit = 100, cursor } = req.query;
@@ -729,7 +729,7 @@ router.get("/api/whatsapp/chats/:chatId/messages", async (req, res) => {
  * GET /api/whatsapp/limits-status
  * Query: ?account_id=... or ?user_id=...
  */
-router.get("/api/whatsapp/limits-status", async (req, res) => {
+router.get(["/api/whatsapp/limits-status", "/api/unipile/whatsapp/limits-status"], async (req, res) => {
   try {
     const { account_id, user_id } = req.query;
 
@@ -790,7 +790,7 @@ router.get("/api/whatsapp/limits-status", async (req, res) => {
  * GET /api/whatsapp/messages/:messageId/attachments/:attachmentId
  * Query: ?account_id=...
  */
-router.get("/api/whatsapp/messages/:messageId/attachments/:attachmentId", async (req, res) => {
+router.get(["/api/whatsapp/messages/:messageId/attachments/:attachmentId", "/api/unipile/whatsapp/messages/:messageId/attachments/:attachmentId"], async (req, res) => {
   try {
     const { messageId, attachmentId } = req.params;
     const { account_id, user_id } = req.query;

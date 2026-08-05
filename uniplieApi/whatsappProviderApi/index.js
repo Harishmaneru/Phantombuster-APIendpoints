@@ -68,7 +68,7 @@ const getChatCacheKey = (accountId, providerId) => `wa_chat:${accountId}:${provi
 // POST /api/whatsapp/fetch-profile
 // Payload: { "providerID": "...", "accountId": "...", "user_id": "..." }
 
-router.post("/api/whatsapp/fetch-profile", async (req, res) => {
+router.post(["/api/whatsapp/fetch-profile", "/api/unipile/whatsapp/fetch-profile"], async (req, res) => {
   try {
     const { providerID, accountId, user_id } = req.body;
 
@@ -131,7 +131,7 @@ router.post("/api/whatsapp/fetch-profile", async (req, res) => {
 // POST /api/whatsapp/fetch-conversations
 // Payload: { "providerID": "...", "accountId": "...", "user_id": "...", "limit": 50, "include_messages": false, "message_limit": 50 }
 
-router.post("/api/whatsapp/fetch-conversations", async (req, res) => {
+router.post(["/api/whatsapp/fetch-conversations", "/api/unipile/whatsapp/fetch-conversations"], async (req, res) => {
   try {
     const { providerID, accountId, user_id, limit = 50, include_messages = false, message_limit = 50 } = req.body;
 
@@ -277,7 +277,7 @@ router.post("/api/whatsapp/fetch-conversations", async (req, res) => {
 // POST /api/whatsapp/fetch-messages
 // Payload: { "chatId": "...", "accountId": "...", "user_id": "...", "limit": 100 }
 
-router.post("/api/whatsapp/fetch-messages", async (req, res) => {
+router.post(["/api/whatsapp/fetch-messages", "/api/unipile/whatsapp/fetch-messages"], async (req, res) => {
   try {
     const { chatId, accountId, user_id, limit = 100 } = req.body;
 
