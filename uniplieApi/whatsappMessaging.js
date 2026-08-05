@@ -79,14 +79,15 @@ const formatE164Phone = (phone) => {
  * POST /api/whatsapp/connect-qr
  * Body: { "user_id": "...", "name": "..." }
  */
-router.post(["/api/whatsapp/connect-qr", "/api/unipile/whatsapp/connect-qr"], async (req, res) => {
+router.all(["/api/whatsapp/connect-qr", "/api/unipile/whatsapp/connect-qr"], async (req, res) => {
   try {
-    const { user_id, name } = req.body;
+    const user_id = req.body.user_id || req.query.user_id;
+    const name = req.body.name || req.query.name;
 
     if (!user_id) {
       return res.status(400).json({
         success: false,
-        error: "user_id is required in body",
+        error: "user_id is required in body or query params",
       });
     }
 
@@ -130,21 +131,23 @@ router.post(["/api/whatsapp/connect-qr", "/api/unipile/whatsapp/connect-qr"], as
  * POST /api/whatsapp/connect-pairing
  * Body: { "user_id": "...", "pairing_phone_number": "33612345678", "name": "..." }
  */
-router.post(["/api/whatsapp/connect-pairing", "/api/unipile/whatsapp/connect-pairing"], async (req, res) => {
+router.all(["/api/whatsapp/connect-pairing", "/api/unipile/whatsapp/connect-pairing"], async (req, res) => {
   try {
-    const { user_id, pairing_phone_number, name } = req.body;
+    const user_id = req.body.user_id || req.query.user_id;
+    const pairing_phone_number = req.body.pairing_phone_number || req.query.pairing_phone_number;
+    const name = req.body.name || req.query.name;
 
     if (!user_id) {
       return res.status(400).json({
         success: false,
-        error: "user_id is required in body",
+        error: "user_id is required in body or query params",
       });
     }
 
     if (!pairing_phone_number) {
       return res.status(400).json({
         success: false,
-        error: "pairing_phone_number is required in body (E.164 digits without +)",
+        error: "pairing_phone_number is required in body or query params (E.164 digits without +)",
       });
     }
 
