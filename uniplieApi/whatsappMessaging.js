@@ -72,17 +72,122 @@ const formatE164Phone = (phone) => {
   return String(phone).replace(/\D/g, "");
 };
 
-// ==================== 1. ACCOUNT CONNECTION ====================
+// Helper to extract phone number from any parameter field
+const getPhoneParam = (req) => {
+  return (
+    req.body.whatsapp_number ||
+    req.body.pairing_phone_number ||
+    req.body.phone_number ||
+    req.body.number ||
+    req.query.whatsapp_number ||
+    req.query.pairing_phone_number ||
+    req.query.phone_number ||
+    req.query.number ||
+    null
+  );
+};
+
+/**
+ * Unified Connect Endpoint (Auto-detects Pairing Code vs QR Code flow)
+ * POST /api/whatsapp/connect or /api/unipile/whatsapp/connect
+ * Accepts: user_id, whatsapp_number (or pairing_phone_number / phone_number), name
+ */
+router.all(["/api/whatsapp/connect", "/api/unipile/whatsapp/connect"], async (req, res) => {
+  try {
+    const user_id = req.body.user_id || req.query.user_id;
+    const phoneInput = getPhoneParam(req);
+    const name = req.body.name || req.query.name || (phoneInput ? `WhatsApp ${phoneInput}` : null);
+
+    if (!user_id) {
+      return res.status(400).json({
+        success: false,
+        error: "user_id is required in body or query params",
+      });
+    }
+
+    if (phoneInput) {
+      // ---------------- PAIRING CODE FLOW ----------------
+      const sanitizedPhone = formatE164Phone(phoneInput);
+      const payload = {
+        provider: "WHATSAPP",
+        pairing_phone_number: sanitizedPhone,
+        ...(name && { name: name }),
+      };
+
+      console.log(`Generating WhatsApp Pairing Code for phone ${sanitizedPhone}...`);
+
+      const response = await axios.post(`${getBaseUrl()}/accounts`, payload, {
+        headers: getHeaders(),
+      });
+
+      const accountData = response.data;
+      const accountId = accountData.account_id || accountData.id;
+      const pairingCode = accountData.pairing_code || accountData.code;
+
+      await connectWhatsAppAccount(user_id, accountId, "WHATSAPP", name, {
+        pairing_phone_number: sanitizedPhone,
+        pairing_code: pairingCode,
+        status: accountData.status || "PENDING_PAIRING",
+      });
+
+      return res.json({
+        success: true,
+        flow: "PAIRING_CODE",
+        account_id: accountId,
+        provider: "WHATSAPP",
+        whatsapp_number: sanitizedPhone,
+        pairing_code: pairingCode,
+        status: accountData.status || "PENDING_PAIRING",
+        unipile_response: accountData,
+      });
+    } else {
+      // ---------------- QR CODE FLOW ----------------
+      const payload = {
+        provider: "WHATSAPP",
+        ...(name && { name: name }),
+      };
+
+      console.log("Generating WhatsApp QR Code via Unipile...", payload);
+
+      const response = await axios.post(`${getBaseUrl()}/accounts`, payload, {
+        headers: getHeaders(),
+      });
+
+      const accountData = response.data;
+      const accountId = accountData.account_id || accountData.id;
+      const qrCodeString = accountData.qrCodeString || accountData.qr_code || accountData.code;
+
+      await connectWhatsAppAccount(user_id, accountId, "WHATSAPP", name, {
+        qrCodeString: qrCodeString,
+        status: accountData.status || "PENDING_QR",
+      });
+
+      return res.json({
+        success: true,
+        flow: "QR_CODE",
+        account_id: accountId,
+        provider: "WHATSAPP",
+        status: accountData.status || "PENDING_QR",
+        qrCodeString: qrCodeString,
+        qr_code_image_instructions: "Render qrCodeString using standard QR code library on frontend",
+        unipile_response: accountData,
+      });
+    }
+  } catch (err) {
+    handleError(err, res);
+  }
+});
 
 /**
  * Step 1 & 2: Start Authentication - QR Code flow
  * POST /api/whatsapp/connect-qr
- * Body: { "user_id": "...", "name": "..." }
+ * Body: { "user_id": "...", "name": "...", "whatsapp_number": "..." }
  */
 router.all(["/api/whatsapp/connect-qr", "/api/unipile/whatsapp/connect-qr"], async (req, res) => {
   try {
     const user_id = req.body.user_id || req.query.user_id;
-    const name = req.body.name || req.query.name;
+    const phoneInput = getPhoneParam(req);
+    const name = req.body.name || req.query.name || (phoneInput ? `WhatsApp ${phoneInput}` : null);
 
     if (!user_id) {
       return res.status(400).json({
@@ -109,6 +214,7 @@ router.all(["/api/whatsapp/connect-qr", "/api/unipile/whatsapp/connect-qr"], asy
     // Record account in DB
     await connectWhatsAppAccount(user_id, accountId, "WHATSAPP", name, {
       qrCodeString: qrCodeString,
+      whatsapp_number: phoneInput ? formatE164Phone(phoneInput) : null,
       status: accountData.status || "PENDING_QR",
     });
 
@@ -129,13 +235,14 @@ router.all(["/api/whatsapp/connect-qr", "/api/unipile/whatsapp/connect-qr"], asy
 /**
  * Step 1 & 2: Start Authentication - Pairing Code flow
  * POST /api/whatsapp/connect-pairing
- * Body: { "user_id": "...", "pairing_phone_number": "33612345678", "name": "..." }
+ * Body: { "user_id": "...", "whatsapp_number": "919391783193" }
+ * Accepts: whatsapp_number, pairing_phone_number, phone_number, or number
  */
 router.all(["/api/whatsapp/connect-pairing", "/api/unipile/whatsapp/connect-pairing"], async (req, res) => {
   try {
     const user_id = req.body.user_id || req.query.user_id;
-    const pairing_phone_number = req.body.pairing_phone_number || req.query.pairing_phone_number;
-    const name = req.body.name || req.query.name;
+    const rawPhone = getPhoneParam(req);
+    const name = req.body.name || req.query.name || (rawPhone ? `WhatsApp ${rawPhone}` : null);
 
     if (!user_id) {
       return res.status(400).json({
@@ -144,14 +251,14 @@ router.all(["/api/whatsapp/connect-pairing", "/api/unipile/whatsapp/connect-pair
       });
     }
 
-    if (!pairing_phone_number) {
+    if (!rawPhone) {
       return res.status(400).json({
         success: false,
-        error: "pairing_phone_number is required in body or query params (E.164 digits without +)",
+        error: "whatsapp_number (or pairing_phone_number / phone_number) is required in body or query params",
       });
     }
 
-    const sanitizedPhone = formatE164Phone(pairing_phone_number);
+    const sanitizedPhone = formatE164Phone(rawPhone);
 
     const payload = {
       provider: "WHATSAPP",
@@ -172,6 +279,7 @@ router.all(["/api/whatsapp/connect-pairing", "/api/unipile/whatsapp/connect-pair
     // Record account in DB
     await connectWhatsAppAccount(user_id, accountId, "WHATSAPP", name, {
       pairing_phone_number: sanitizedPhone,
+      whatsapp_number: sanitizedPhone,
       pairing_code: pairingCode,
       status: accountData.status || "PENDING_PAIRING",
     });
@@ -180,6 +288,7 @@ router.all(["/api/whatsapp/connect-pairing", "/api/unipile/whatsapp/connect-pair
       success: true,
       account_id: accountId,
       provider: "WHATSAPP",
+      whatsapp_number: sanitizedPhone,
       pairing_phone_number: sanitizedPhone,
       pairing_code: pairingCode,
       status: accountData.status || "PENDING_PAIRING",
