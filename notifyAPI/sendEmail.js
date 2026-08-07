@@ -877,15 +877,20 @@ async function getSMTPSettings(email, customHost, customPort) {
     // Check if MX points strictly to internal cPanel server (WHM_HOST) or contains cPanel / WHM
     const rawWhmHost = process.env.WHM_HOST ? process.env.WHM_HOST.trim() : "";
     const whmHostDomain = rawWhmHost
-      ? rawWhmHost.toLowerCase().replace(/^https?:\/\//, "").split(":")[0]
+      ? rawWhmHost
+          .toLowerCase()
+          .replace(/^https?:\/\//, "")
+          .split(":")[0]
       : null;
 
     const isCPanelServer =
       Boolean(
         whmHostDomain &&
-          (domain === whmHostDomain ||
-            domain.endsWith("." + whmHostDomain) ||
-            sorted.some((mx) => mx.exchange.toLowerCase().includes(whmHostDomain))),
+        (domain === whmHostDomain ||
+          domain.endsWith("." + whmHostDomain) ||
+          sorted.some((mx) =>
+            mx.exchange.toLowerCase().includes(whmHostDomain),
+          )),
       ) ||
       sorted.some(
         (mx) => mx.exchange.includes("cpanel") || mx.exchange.includes("whm"),
@@ -6343,10 +6348,10 @@ router.get("/api/auth/microsoft/authorize", (req, res) => {
     `scope=${encodeURIComponent(scopes)}&` +
     `state=${encodeURIComponent(state)}&` +
     `login_hint=${encodeURIComponent(email)}&` +
-    `prompt=select_account`;
+    `prompt=login`;
 
   console.log(
-    `🔐 Redirecting ${email} to Microsoft OAuth consent screen (frontend: ${stateData.frontend})`,
+    `Redirecting ${email} to Microsoft OAuth consent screen (frontend: ${stateData.frontend})`,
   );
   res.redirect(authUrl);
 });
