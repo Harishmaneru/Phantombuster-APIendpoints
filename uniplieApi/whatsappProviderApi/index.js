@@ -407,19 +407,30 @@ const resolveAccountId = async (accountId, user_id) => {
 };
 
 // Normalize one Unipile message: keep everything it returned, then layer
-// stable/normalized keys on top so nothing (reactions, quotes, type, future
-// fields) is silently discarded.
+// stable/normalized keys on top so nothing (reactions, quoted, message_type,
+// hidden, edited, attachments, future fields) is silently discarded.
+//
+// Field names/types below are verified against Unipile's Message object schema:
+//   - is_sender / seen / delivered / hidden / deleted / edited / is_event
+//     arrive as 0|1 NUMBERS, not booleans — coerce them.
+//   - seen_by is an OBJECT map { providerUserId: boolean|timestamp }, NOT an array.
+//   - real field names are id, text, timestamp, sender_id
+//     (Unipile never sends body / created_at / from / message_id at top level).
+const toBool = (v) => v === true || v === 1;
+
 const normalizeMessage = (msg, chatId) => ({
-  ...msg,
-  id: msg.id || msg.message_id,
-  ...(chatId ? { chat_id: chatId } : {}),
-  text: msg.text ?? msg.body ?? null,
-  timestamp: msg.timestamp || msg.created_at,
-  is_sender: Boolean(msg.is_sender),
-  sender_id: msg.sender_id || msg.from,
-  delivered: msg.delivered ?? true,
-  seen: msg.seen ?? false,
-  seen_by: msg.seen_by || [],
+  ...msg, // keep every Unipile field untouched
+  id: msg.id,
+  chat_id: chatId || msg.chat_id,
+  text: msg.text ?? null,
+  timestamp: msg.timestamp,
+  is_sender: toBool(msg.is_sender),
+  sender_id: msg.sender_id,
+  // delivered has per-provider support; treat "absent" as optimistic true,
+  // but coerce a real 0 to false.
+  delivered: msg.delivered == null ? true : toBool(msg.delivered),
+  seen: toBool(msg.seen),
+  seen_by: msg.seen_by || {}, // object map keyed by provider user id
   attachments: msg.attachments || [],
 });
 
