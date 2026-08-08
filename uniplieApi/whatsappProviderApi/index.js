@@ -346,6 +346,7 @@
 const express = require("express");
 const axios = require("axios");
 const NodeCache = require("node-cache");
+const FormData = require("form-data");
 const router = express.Router();
 
 const { getWhatsAppAccountStatus } = require("../whatsappAccountService");
@@ -768,4 +769,145 @@ router.post(
   },
 );
 
+// ==================== API 4: SEND MESSAGE ====================
+// POST /api/unipile/whatsapp/send-message
+// Payload: { chatId, text, user_id }
+
+router.post(
+  ["/api/whatsapp/send-message", "/api/unipile/whatsapp/send-message"],
+  async (req, res) => {
+    try {
+      const chatId = req.body.chatId || req.body.chat_id;
+      const text = req.body.text;
+
+      if (!chatId) {
+        return res.status(400).json({
+          success: false,
+          error: "chatId is required",
+          message: "chatId is required",
+        });
+      }
+
+      if (!text || typeof text !== "string" || !text.trim()) {
+        return res.status(400).json({
+          success: false,
+          error: "text is required and must be non-empty",
+          message: "text is required and must be non-empty",
+        });
+      }
+
+      const form = new FormData();
+      form.append("text", text);
+
+      const response = await axios.post(
+        `${getBaseUrl()}/chats/${encodeURIComponent(chatId)}/messages`,
+        form,
+        {
+          headers: {
+            "X-API-KEY": process.env.UNIPILE_API_KEY,
+            Accept: "application/json",
+            ...form.getHeaders(),
+          },
+        },
+      );
+
+      return res.json({
+        success: true,
+        chat_id: chatId,
+        data: response.data,
+      });
+    } catch (err) {
+      handleError(err, res);
+    }
+  },
+);
+
+// ==================== API 5: START CHAT ====================
+// POST /api/unipile/whatsapp/start-chat
+// Payload: { whatsapp_number, text, user_id }
+
+router.post(
+  ["/api/whatsapp/start-chat", "/api/unipile/whatsapp/start-chat"],
+  async (req, res) => {
+    try {
+      const { user_id, accountId, text } = req.body;
+      const rawNumber =
+        req.body.whatsapp_number || req.body.number || req.body.phone_number;
+
+      const cleanNumber = String(rawNumber || "").replace(/\D/g, "");
+
+      const finalAccountId = await resolveAccountId(accountId, user_id);
+      if (!finalAccountId) {
+        return res.status(404).json({
+          success: false,
+          error: "No WhatsApp account found",
+          message: "No WhatsApp account found. Provide user_id or accountId",
+        });
+      }
+
+      if (!cleanNumber) {
+        return res.status(400).json({
+          success: false,
+          error: "whatsapp_number is required and must contain valid digits",
+          message: "whatsapp_number is required",
+        });
+      }
+
+      if (!text || typeof text !== "string" || !text.trim()) {
+        return res.status(400).json({
+          success: false,
+          error: "text is required and must be non-empty",
+          message: "text is required",
+        });
+      }
+
+      let response;
+      try {
+        const form1 = new FormData();
+        form1.append("account_id", finalAccountId);
+        form1.append("attendees_ids", cleanNumber);
+        form1.append("text", text);
+
+        response = await axios.post(`${getBaseUrl()}/chats`, form1, {
+          headers: {
+            "X-API-KEY": process.env.UNIPILE_API_KEY,
+            Accept: "application/json",
+            ...form1.getHeaders(),
+          },
+        });
+      } catch (attempt1Err) {
+        // Fall back to `${cleanNumber}@s.whatsapp.net` if bare number is rejected
+        try {
+          const form2 = new FormData();
+          form2.append("account_id", finalAccountId);
+          form2.append("attendees_ids", `${cleanNumber}@s.whatsapp.net`);
+          form2.append("text", text);
+
+          response = await axios.post(`${getBaseUrl()}/chats`, form2, {
+            headers: {
+              "X-API-KEY": process.env.UNIPILE_API_KEY,
+              Accept: "application/json",
+              ...form2.getHeaders(),
+            },
+          });
+        } catch (attempt2Err) {
+          throw attempt2Err;
+        }
+      }
+
+      const chat = response.data;
+      const chat_id = chat?.id || chat?.chat_id;
+
+      return res.json({
+        success: true,
+        chat_id: chat_id,
+        data: chat,
+      });
+    } catch (err) {
+      handleError(err, res);
+    }
+  },
+);
+
 module.exports = router;
+
