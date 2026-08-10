@@ -649,56 +649,87 @@ router.post(
         });
       }
 
-      // ---- hydrate each chat with its most recent messages ----
-      const fetchChatMessages = async (chat) => {
+      // ---- hydrate each chat with Messages + Attendees (Profile) ----
+      const hydrateChatDetails = async (chat) => {
         const chatId = chat.id || chat.chat_id;
-        if (!chatId) return { ...chat, messages: [], message_count: 0 };
+        if (!chatId)
+          return {
+            ...chat,
+            messages: [],
+            attendees_profiles: [],
+            message_count: 0,
+          };
 
         try {
-          const messageParams = new URLSearchParams();
-          messageParams.append("account_id", finalAccountId);
+          const params = new URLSearchParams();
+          params.append("account_id", finalAccountId);
+
+          const messageParams = new URLSearchParams(params);
           messageParams.append("limit", parseInt(message_limit) || 50);
 
-          const messageResponse = await axios.get(
-            `${getBaseUrl()}/chats/${chatId}/messages?${messageParams}`,
-            { headers: getHeaders(), timeout: 5000 },
-          );
+          // Fetch messages and attendees from Unipile concurrently
+          const [rawMessages, rawAttendees] = await Promise.all([
+            axios
+              .get(
+                `${getBaseUrl()}/chats/${chatId}/messages?${messageParams}`,
+                { headers: getHeaders(), timeout: 5000 },
+              )
+              .then((res) => res.data?.items || res.data?.messages || [])
+              .catch(() => []),
+            axios
+              .get(
+                `${getBaseUrl()}/chats/${chatId}/attendees?${params}`,
+                { headers: getHeaders(), timeout: 5000 },
+              )
+              .then((res) => res.data?.items || res.data || [])
+              .catch(() => []),
+          ]);
 
-          const messages =
-            messageResponse.data?.items || messageResponse.data?.messages || [];
-          const processedMessages = messages.map((msg) =>
+          const processedMessages = rawMessages.map((msg) =>
             normalizeMessage(msg, chatId),
           );
 
+          const profiles = (Array.isArray(rawAttendees) ? rawAttendees : [])
+            .filter((a) => !a.is_self)
+            .map((a) => ({
+              id: a.id,
+              name: a.name || chat.name || "Unknown",
+              provider_id: a.provider_id,
+              public_identifier: a.public_identifier,
+              profile_picture_url: `${req.protocol}://${req.get("host")}/api/whatsapp/attendees/${a.id}/picture?account_id=${finalAccountId}`,
+            }));
+
           return {
             ...chat,
+            attendees_profiles: profiles,
             messages: processedMessages,
             message_count: processedMessages.length,
           };
         } catch (err) {
           return {
             ...chat,
+            attendees_profiles: [],
             messages: [],
             message_count: 0,
-            message_error: err.message,
+            hydrate_error: err.message,
           };
         }
       };
 
       const results = await Promise.allSettled(
-        limitedChats.map((chat) => fetchChatMessages(chat)),
+        limitedChats.map((chat) => hydrateChatDetails(chat)),
       );
 
-      const chatsWithMessages = results
+      const hydratedChats = results
         .filter((r) => r.status === "fulfilled")
         .map((r) => r.value);
 
       res.json({
         success: true,
         data: {
-          items: chatsWithMessages,
+          items: hydratedChats,
           total: chats.length,
-          returned: chatsWithMessages.length,
+          returned: hydratedChats.length,
           cursor: null,
           cached: false,
         },
@@ -905,6 +936,39 @@ router.post(
       });
     } catch (err) {
       handleError(err, res);
+    }
+  },
+);
+
+// ==================== API 6: PROXY PROFILE PICTURE ====================
+// GET /api/whatsapp/attendees/:id/picture
+// Streams the profile picture from Unipile without exposing API keys to the frontend.
+
+router.get(
+  ["/api/whatsapp/attendees/:id/picture", "/api/unipile/whatsapp/attendees/:id/picture"],
+  async (req, res) => {
+    try {
+      const { id } = req.params;
+      const { account_id } = req.query;
+
+      if (!account_id) {
+        return res.status(400).send("account_id query parameter is required.");
+      }
+
+      const response = await axios.get(
+        `${getBaseUrl()}/attendees/${id}/picture?account_id=${account_id}`,
+        {
+          headers: getHeaders(),
+          responseType: "stream",
+        },
+      );
+
+      res.set("Content-Type", response.headers["content-type"] || "image/jpeg");
+      res.set("Cache-Control", "public, max-age=86400");
+      response.data.pipe(res);
+    } catch (err) {
+      const status = err.response?.status || 500;
+      res.status(status).send("Profile picture not found or unavailable.");
     }
   },
 );
