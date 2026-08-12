@@ -19,6 +19,8 @@ const {
   connectLinkedInAccount,
   disconnectLinkedInAccount,
   getLinkedInAccountStatus,
+  getLinkedInAccountByAccountId,
+  associateLinkedInAccount,
   refreshLinkedInAccount,
   handleAccountError,
   getAllLinkedInAccounts,
@@ -431,11 +433,32 @@ router.post("/api/unipile/auth/link", async (req, res) => {
     // Generate expiration (24 hours from now)
     const expiresOn = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
 
-    // Include user_id in notify_url if provided
+    // Determine notify_url and ensure user_id is included
     let finalNotifyUrl = notify_url;
-    if (user_id && notify_url) {
-      const separator = notify_url.includes("?") ? "&" : "?";
-      finalNotifyUrl = `${notify_url}${separator}user_id=${user_id}`;
+    if (user_id) {
+      if (notify_url) {
+        const separator = notify_url.includes("?") ? "&" : "?";
+        finalNotifyUrl = `${notify_url}${separator}user_id=${user_id}`;
+      } else {
+        // Default notify URL to server webhook endpoint so Unipile always sends user_id in callback
+        const host = req.get("host");
+        const protocol = req.protocol || "https";
+        finalNotifyUrl = `${protocol}://${host}/api/unipile/webhook/unipile-account?user_id=${user_id}`;
+      }
+    }
+
+    // Format account name to always contain user_id (e.g. "11092|jimmy@thecodeproject.ai" or "11092|LinkedIn Account")
+    let finalName = name;
+    if (user_id) {
+      if (!name) {
+        finalName = `${user_id}|LinkedIn Account`;
+      } else if (
+        !name.startsWith(`${user_id}|`) &&
+        !name.includes(`|${user_id}`) &&
+        name !== user_id
+      ) {
+        finalName = `${user_id}|${name}`;
+      }
     }
 
     const payload = {
@@ -446,7 +469,7 @@ router.post("/api/unipile/auth/link", async (req, res) => {
       ...(success_redirect_url && { success_redirect_url }),
       ...(failure_redirect_url && { failure_redirect_url }),
       ...(finalNotifyUrl && { notify_url: finalNotifyUrl }),
-      ...(name && { name }),
+      ...(finalName && { name: finalName }),
       ...(reconnect_account && { reconnect_account }),
       // Use metadata to pass custom data
       metadata: {
@@ -465,9 +488,11 @@ router.post("/api/unipile/auth/link", async (req, res) => {
       data: response.data,
       message: "Hosted auth link created successfully",
       user_id: user_id,
+      name: finalName,
+      notify_url: finalNotifyUrl,
       note: user_id
-        ? "User ID included for webhook processing"
-        : "No user ID provided - account will not be stored automatically",
+        ? "User ID included in notify_url, name, and metadata for reliable webhook processing"
+        : "No user ID provided - account will require manual association",
     });
   } catch (err) {
     handleError(err, res);
@@ -606,8 +631,9 @@ router.post("/api/unipile/webhook/unipile-account", async (req, res) => {
     // Extract data safely regardless of Unipile's payload shape
     if (req.body.AccountStatus) {
       account_id = req.body.AccountStatus.account_id;
-      status = req.body.AccountStatus.message; // "OK", "STOPPED", etc.
+      status = req.body.AccountStatus.message; // "OK", "STOPPED", "CREATION_SUCCESS", etc.
       provider = req.body.AccountStatus.account_type;
+      name = req.body.AccountStatus.name;
     } else if (req.body.Account) {
       account_id = req.body.Account.id || req.body.Account.account_id;
       status = req.body.Account.status || "CREATION_SUCCESS";
@@ -617,17 +643,6 @@ router.post("/api/unipile/webhook/unipile-account", async (req, res) => {
       ({ status, account_id, name, provider, error } = req.body);
     }
 
-    // Resolve user_id from various possible locations
-    const finalUserId =
-      req.body.user_id ||
-      req.query.user_id ||
-      req.body.metadata?.user_id ||
-      req.body.Account?.metadata?.user_id;
-
-    console.log(
-      `Processing Webhook: status=${status}, account_id=${account_id}, user_id=${finalUserId}`,
-    );
-
     if (!account_id) {
       return res.json({
         success: true,
@@ -635,28 +650,114 @@ router.post("/api/unipile/webhook/unipile-account", async (req, res) => {
       });
     }
 
-    // --- CASE 1: SUCCESSFUL CONNECTION OR SYNC ---
-    if (
-      ["CREATION_SUCCESS", "OK", "SYNC_SUCCESS", "CONNECTED"].includes(status)
-    ) {
-      // First, try to update the account if it already exists in the DB
-      const updateResult = await updateLinkedInAccountStatusByAccountId(
-        account_id,
-        status,
-        req.body,
-      );
+    // Helper: Extract clean user_id from account name (e.g. "11092|jimmy@thecodeproject.ai" -> "11092")
+    const extractUserIdFromName = (str) => {
+      if (!str || typeof str !== "string") return null;
+      const trimmed = str.trim();
+      if (trimmed.includes("|")) {
+        const candidate = trimmed.split("|")[0].trim();
+        if (candidate && !candidate.startsWith("temp_")) return candidate;
+      }
+      if (/^\d+$/.test(trimmed)) {
+        return trimmed;
+      }
+      return null;
+    };
 
-      // 🔥 THE FIX: If the account DOES NOT exist in the DB, we MUST create it
-      if (!updateResult.success || updateResult.match_count === 0) {
+    // ── Multi-tier user_id resolution ──
+    let finalUserId =
+      req.body.user_id ||
+      req.query.user_id ||
+      req.body.metadata?.user_id ||
+      req.body.Account?.metadata?.user_id ||
+      req.body.AccountStatus?.metadata?.user_id;
+
+    // Tier 1: Check name in payload
+    if (!finalUserId && name) {
+      finalUserId = extractUserIdFromName(name);
+    }
+    if (!finalUserId && req.body.Account?.name) {
+      finalUserId = extractUserIdFromName(req.body.Account.name);
+    }
+
+    // Tier 2: Check MongoDB if this account_id was previously stored or known
+    if (!finalUserId && account_id) {
+      const existingAccount = await getLinkedInAccountByAccountId(account_id);
+      if (
+        existingAccount &&
+        existingAccount.user_id &&
+        !existingAccount.user_id.startsWith("temp_")
+      ) {
+        finalUserId = existingAccount.user_id;
+        if (!name && existingAccount.name) name = existingAccount.name;
         console.log(
-          `⚠️ Account ${account_id} not found in DB. Creating new record...`,
+          `🔍 Resolved user_id "${finalUserId}" from existing MongoDB record for account ${account_id}`,
         );
+      }
+    }
 
-        // Restore your fallback temporary ID logic
-        const targetUserId = finalUserId || `temp_${account_id}_${Date.now()}`;
+    // Tier 3: Fetch LIVE account from Unipile API to get full account details (name, metadata)
+    if (!finalUserId && account_id) {
+      try {
+        console.log(
+          `🔍 Fetching live account details from Unipile API for account: ${account_id}...`,
+        );
+        const unipileRes = await axios.get(
+          `${getBaseUrl()}/accounts/${account_id}`,
+          { headers: getHeaders(), timeout: 5000 },
+        );
+        const unipileAccount = unipileRes.data;
+        if (unipileAccount) {
+          if (!name && unipileAccount.name) {
+            name = unipileAccount.name;
+          }
+          if (unipileAccount.name) {
+            const extracted = extractUserIdFromName(unipileAccount.name);
+            if (extracted) {
+              finalUserId = extracted;
+              console.log(
+                `✅ Resolved user_id "${finalUserId}" from Unipile account name: "${unipileAccount.name}"`,
+              );
+            }
+          }
+          if (!finalUserId && unipileAccount.metadata?.user_id) {
+            finalUserId = unipileAccount.metadata.user_id;
+          }
+        }
+      } catch (fetchErr) {
+        console.warn(
+          `⚠️ Could not fetch live account ${account_id} from Unipile:`,
+          fetchErr.message,
+        );
+      }
+    }
 
+    console.log(
+      `Processing Webhook: status=${status}, account_id=${account_id}, user_id=${finalUserId}, name=${name}`,
+    );
+
+    // Normalize status
+    const isSuccessStatus = [
+      "CREATION_SUCCESS",
+      "OK",
+      "SYNC_SUCCESS",
+      "CONNECTED",
+    ].includes(status);
+
+    const isFailureStatus = [
+      "CREATION_FAILED",
+      "STOPPED",
+      "ERROR",
+      "ACCOUNT_ERROR",
+      "ACCOUNT_STOPPED",
+    ].includes(status);
+
+    // --- CASE 1: SUCCESSFUL CONNECTION OR SYNC ---
+    if (isSuccessStatus) {
+      if (finalUserId) {
+        // If we have a real user_id, connect/upsert LinkedIn account directly
         await connectLinkedInAccount(
-          targetUserId,
+          finalUserId,
           account_id,
           provider || "LINKEDIN",
           name || "LinkedIn Account",
@@ -664,31 +765,54 @@ router.post("/api/unipile/webhook/unipile-account", async (req, res) => {
             connected_via: "webhook",
             webhook_data: req.body,
             status: status,
-            is_temporary: !finalUserId,
-            needs_user_association: !finalUserId,
+            is_temporary: false,
+            needs_user_association: false,
           },
         );
-      } else {
         console.log(
-          `✅ Updated existing account ${account_id} to status ${status}`,
+          `✅ Successfully connected/updated LinkedIn account ${account_id} for user ${finalUserId}`,
         );
+      } else {
+        // Try updating existing record by account ID
+        const updateResult = await updateLinkedInAccountStatusByAccountId(
+          account_id,
+          status,
+          req.body,
+        );
+
+        if (!updateResult.success || updateResult.match_count === 0) {
+          // As a fallback if all resolution methods failed to find user_id:
+          const targetUserId = `temp_${account_id}_${Date.now()}`;
+          console.warn(
+            `⚠️ Could not resolve real user_id for account ${account_id}. Creating temporary record: ${targetUserId}`,
+          );
+
+          await connectLinkedInAccount(
+            targetUserId,
+            account_id,
+            provider || "LINKEDIN",
+            name || "LinkedIn Account",
+            {
+              connected_via: "webhook",
+              webhook_data: req.body,
+              status: status,
+              is_temporary: true,
+              needs_user_association: true,
+            },
+          );
+        } else {
+          console.log(
+            `✅ Updated existing account ${account_id} status to ${status}`,
+          );
+        }
       }
     }
     // --- CASE 2: ERRORS AND DISCONNECTIONS ---
-    else if (
-      [
-        "CREATION_FAILED",
-        "STOPPED",
-        "ERROR",
-        "ACCOUNT_ERROR",
-        "ACCOUNT_STOPPED",
-      ].includes(status)
-    ) {
+    else if (isFailureStatus) {
       console.error(
         `❌ Account Issue: ${status} - ${error || "Check Unipile Dashboard"}`,
       );
 
-      // Disconnect in DB if we know the user
       if (finalUserId) {
         await disconnectLinkedInAccount(
           finalUserId,
@@ -696,7 +820,13 @@ router.post("/api/unipile/webhook/unipile-account", async (req, res) => {
         );
       }
 
-      // Also update the status by account ID to ensure it's marked disconnected
+      await updateLinkedInAccountStatusByAccountId(
+        account_id,
+        status,
+        req.body,
+      );
+    } else {
+      // Other status updates (e.g. CONNECTING, SYNCING)
       await updateLinkedInAccountStatusByAccountId(
         account_id,
         status,
@@ -2232,13 +2362,13 @@ router.post("/api/unipile/account/disconnect", async (req, res) => {
     }
 
     // Get current status before disconnect
-    const currentAccount = await getAccountStatus(user_id);
+    const currentAccount = await getLinkedInAccountStatus(user_id);
     console.log("Before disconnect - Status:", currentAccount.status);
 
     const result = await disconnectLinkedInAccount(user_id, reason);
 
     // Verify status was updated
-    const updatedAccount = await getAccountStatus(user_id);
+    const updatedAccount = await getLinkedInAccountStatus(user_id);
     console.log("After disconnect - Status:", updatedAccount.status);
 
     res.json({

@@ -515,6 +515,7 @@ async function connectLinkedInAccount(
 ) {
   await ensureConnected();
   try {
+    const isTemp = typeof userId === "string" && userId.startsWith("temp_");
     const updateData = {
       user_id: userId,
       account_id: accountId,
@@ -523,9 +524,21 @@ async function connectLinkedInAccount(
       connected: true,
       connected_at: new Date(),
       last_error: null,
-      metadata: metadata,
+      metadata: {
+        ...metadata,
+        is_temporary: isTemp,
+        needs_user_association: isTemp,
+      },
       updated_at: new Date(),
     };
+
+    // If connecting with a real user_id, clean up any old temporary record for this account_id
+    if (!isTemp) {
+      await LinkedInAccounts.deleteMany({
+        account_id: accountId,
+        user_id: { $regex: "^temp_" },
+      });
+    }
 
     // Using upsert prevents issues where the user might double-click the connect button
     const result = await LinkedInAccounts.updateOne(
@@ -605,6 +618,55 @@ async function disconnectLinkedInAccount(userId, reason = "User disconnected") {
 }
 
 /**
+ * Get LinkedIn account by account_id
+ * @param {string} accountId - Unipile account ID
+ * @returns {Promise<Object|null>} - LinkedIn account document
+ */
+async function getLinkedInAccountByAccountId(accountId) {
+  await ensureConnected();
+  if (!LinkedInAccounts) return null;
+  try {
+    return await LinkedInAccounts.findOne({ account_id: accountId });
+  } catch (error) {
+    console.error("Error finding LinkedIn account by accountId:", error);
+    return null;
+  }
+}
+
+/**
+ * Associate a LinkedIn account to a user ID
+ * @param {string} userId - Real User ID
+ * @param {string} accountId - Unipile account ID
+ * @returns {Promise<Object>} - Result of the operation
+ */
+async function associateLinkedInAccount(userId, accountId) {
+  await ensureConnected();
+  try {
+    const result = await LinkedInAccounts.updateOne(
+      { account_id: accountId },
+      {
+        $set: {
+          user_id: userId,
+          "metadata.is_temporary": false,
+          "metadata.needs_user_association": false,
+          updated_at: new Date(),
+        },
+      },
+    );
+    return {
+      success: result.matchedCount > 0,
+      message:
+        result.matchedCount > 0
+          ? `Associated account ${accountId} to user ${userId}`
+          : `Account ${accountId} not found in database`,
+    };
+  } catch (error) {
+    console.error("Error associating account:", error);
+    return { success: false, error: error.message };
+  }
+}
+
+/**
  * Get LinkedIn account status for a user
  * @param {string} userId - User ID
  * @returns {Promise<Object>} - Account status
@@ -612,10 +674,42 @@ async function disconnectLinkedInAccount(userId, reason = "User disconnected") {
 async function getLinkedInAccountStatus(userId) {
   await ensureConnected();
   try {
-    const account = await LinkedInAccounts.findOne({
+    let account = await LinkedInAccounts.findOne({
       user_id: userId,
       provider: "LINKEDIN",
     });
+
+    // Auto-association / recovery for temp or orphaned accounts:
+    if (!account && userId) {
+      account = await LinkedInAccounts.findOne({
+        provider: "LINKEDIN",
+        $or: [
+          { name: new RegExp(`^${userId}(\\||$)`, "i") },
+          { "metadata.user_id": String(userId) },
+          { "metadata.webhook_data.name": new RegExp(`^${userId}(\\||$)`, "i") },
+          { "webhook_data.name": new RegExp(`^${userId}(\\||$)`, "i") },
+          { "webhook_data.Account.name": new RegExp(`^${userId}(\\||$)`, "i") },
+        ],
+      });
+
+      if (account) {
+        console.log(
+          `🔄 Auto-associating temp account ${account.account_id} (${account.user_id}) to real user ${userId}`,
+        );
+        await LinkedInAccounts.updateOne(
+          { _id: account._id },
+          {
+            $set: {
+              user_id: userId,
+              "metadata.is_temporary": false,
+              "metadata.needs_user_association": false,
+              updated_at: new Date(),
+            },
+          },
+        );
+        account.user_id = userId;
+      }
+    }
 
     if (!account) {
       return {
@@ -633,6 +727,7 @@ async function getLinkedInAccountStatus(userId) {
       connected_at: account.connected_at,
       last_error: account.last_error,
       metadata: account.metadata,
+      status: account.status || (account.connected ? "OK" : "DISCONNECTED"),
     };
   } catch (error) {
     console.error("Error getting LinkedIn account status:", error);
@@ -815,6 +910,7 @@ async function updateLinkedInAccountStatusByAccountId(
       message: "Account status updated",
       account_id: accountId,
       status: status,
+      match_count: result.matchedCount,
     };
   } catch (error) {
     console.error("Error updating account status by ID:", error);
@@ -889,6 +985,8 @@ module.exports = {
   connectLinkedInAccount,
   disconnectLinkedInAccount,
   getLinkedInAccountStatus,
+  getLinkedInAccountByAccountId,
+  associateLinkedInAccount,
   refreshLinkedInAccount,
   handleAccountError,
   getAllLinkedInAccounts,
