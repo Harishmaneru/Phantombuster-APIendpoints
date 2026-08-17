@@ -792,7 +792,7 @@ router.post(["/api/whatsapp/webhook", "/api/unipile/whatsapp/webhook"], async (r
  */
 router.get(["/api/whatsapp/chats", "/api/unipile/whatsapp/chats"], async (req, res) => {
   try {
-    const { account_id, user_id, limit = 50, cursor } = req.query;
+    const { account_id, user_id, limit = 50, cursor, include_messages = "false", include_profiles = "false", message_limit = 50 } = req.query;
 
     let finalAccountId = account_id;
     if (!finalAccountId && user_id) {
@@ -819,10 +819,97 @@ router.get(["/api/whatsapp/chats", "/api/unipile/whatsapp/chats"], async (req, r
       headers: getHeaders(),
     });
 
+    let rawChats = response.data.items || response.data || [];
+
+    const shouldHydrate = include_messages === "true" || include_messages === true || include_profiles === "true" || include_profiles === true;
+
+    if (!shouldHydrate) {
+      return res.json({
+        success: true,
+        account_id: finalAccountId,
+        chats: rawChats,
+        cursor: response.data.cursor || null,
+      });
+    }
+
+    // Hydrate messages & attendee profiles with profile picture URLs
+    const hydrateChat = async (chat) => {
+      const chatId = chat.id || chat.chat_id;
+      if (!chatId) return { ...chat, messages: [], attendees_profiles: [] };
+
+      try {
+        const queryParams = new URLSearchParams();
+        queryParams.append("account_id", finalAccountId);
+
+        const msgParams = new URLSearchParams(queryParams);
+        msgParams.append("limit", String(message_limit));
+
+        const [messagesRes, attendeesRes] = await Promise.all([
+          axios
+            .get(`${getBaseUrl()}/chats/${chatId}/messages?${msgParams}`, {
+              headers: getHeaders(),
+              timeout: 4000,
+            })
+            .then((r) => r.data?.items || r.data?.messages || [])
+            .catch(() => []),
+          axios
+            .get(`${getBaseUrl()}/chats/${chatId}/attendees?${queryParams}`, {
+              headers: getHeaders(),
+              timeout: 4000,
+            })
+            .then((r) => r.data?.items || r.data || [])
+            .catch(() => []),
+        ]);
+
+        const attendeesList =
+          Array.isArray(attendeesRes) && attendeesRes.length > 0
+            ? attendeesRes
+            : Array.isArray(chat.attendees)
+            ? chat.attendees
+            : Array.isArray(chat.participants)
+            ? chat.participants
+            : [];
+
+        const profiles = attendeesList
+          .filter((a) => !a.is_self && a.is_self !== 1)
+          .map((a) => {
+            const attId = a.id || a.provider_id;
+            const directPic = a.picture_url || a.picture || a.profile_picture_url || a.avatar_url || null;
+            const proxyPic = `${req.protocol}://${req.get("host")}/api/whatsapp/attendees/${encodeURIComponent(attId)}/picture?account_id=${finalAccountId}`;
+
+            return {
+              id: attId,
+              name: a.name || chat.name || "WhatsApp Contact",
+              provider_id: a.provider_id || a.id,
+              public_identifier: a.public_identifier || a.phone_number || a.provider_id,
+              picture_url: directPic,
+              profile_picture_url: directPic || proxyPic,
+            };
+          });
+
+        return {
+          ...chat,
+          attendees_profiles: profiles,
+          messages: messagesRes,
+          message_count: messagesRes.length,
+        };
+      } catch (err) {
+        return { ...chat, attendees_profiles: [], messages: [] };
+      }
+    };
+
+    const hydratedResults = await Promise.allSettled(
+      rawChats.map((c) => hydrateChat(c))
+    );
+
+    const hydratedChats = hydratedResults
+      .filter((r) => r.status === "fulfilled")
+      .map((r) => r.value);
+
     res.json({
       success: true,
       account_id: finalAccountId,
-      chats: response.data.items || response.data,
+      chats: hydratedChats,
       cursor: response.data.cursor || null,
     });
   } catch (err) {

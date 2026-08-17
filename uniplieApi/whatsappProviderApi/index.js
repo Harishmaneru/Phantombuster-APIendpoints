@@ -702,15 +702,37 @@ router.post(
             normalizeMessage(msg, chatId),
           );
 
-          const profiles = (Array.isArray(rawAttendees) ? rawAttendees : [])
-            .filter((a) => !a.is_self)
-            .map((a) => ({
-              id: a.id,
-              name: a.name || chat.name || "Unknown",
-              provider_id: a.provider_id,
-              public_identifier: a.public_identifier,
-              profile_picture_url: `${req.protocol}://${req.get("host")}/api/whatsapp/attendees/${a.id}/picture?account_id=${finalAccountId}`,
-            }));
+          const attendeesList =
+            Array.isArray(rawAttendees) && rawAttendees.length > 0
+              ? rawAttendees
+              : Array.isArray(chat.attendees)
+              ? chat.attendees
+              : Array.isArray(chat.participants)
+              ? chat.participants
+              : [];
+
+          const profiles = attendeesList
+            .filter((a) => !a.is_self && a.is_self !== 1)
+            .map((a) => {
+              const attId = a.id || a.provider_id;
+              const directPic =
+                a.picture_url ||
+                a.picture ||
+                a.profile_picture_url ||
+                a.avatar_url ||
+                null;
+              const proxyPic = `${req.protocol}://${req.get("host")}/api/whatsapp/attendees/${encodeURIComponent(attId)}/picture?account_id=${finalAccountId}`;
+
+              return {
+                id: a.id || a.provider_id,
+                name: a.name || chat.name || "WhatsApp Contact",
+                provider_id: a.provider_id || a.id,
+                public_identifier:
+                  a.public_identifier || a.phone_number || a.provider_id,
+                picture_url: directPic,
+                profile_picture_url: directPic || proxyPic,
+              };
+            });
 
           return {
             ...chat,
@@ -958,7 +980,12 @@ router.post(
 // Streams the profile picture from Unipile without exposing API keys to the frontend.
 
 router.get(
-  ["/api/whatsapp/attendees/:id/picture", "/api/unipile/whatsapp/attendees/:id/picture"],
+  [
+    "/api/whatsapp/attendees/:id/picture",
+    "/api/unipile/whatsapp/attendees/:id/picture",
+    "/api/whatsapp/users/:id/picture",
+    "/api/unipile/whatsapp/users/:id/picture",
+  ],
   async (req, res) => {
     try {
       const { id } = req.params;
@@ -968,17 +995,33 @@ router.get(
         return res.status(400).send("account_id query parameter is required.");
       }
 
-      const response = await axios.get(
-        `${getBaseUrl()}/attendees/${id}/picture?account_id=${account_id}`,
-        {
-          headers: getHeaders(),
-          responseType: "stream",
-        },
-      );
+      // Try 1: GET /attendees/${id}/picture
+      try {
+        const response = await axios.get(
+          `${getBaseUrl()}/attendees/${encodeURIComponent(id)}/picture?account_id=${account_id}`,
+          {
+            headers: getHeaders(),
+            responseType: "stream",
+          },
+        );
 
-      res.set("Content-Type", response.headers["content-type"] || "image/jpeg");
-      res.set("Cache-Control", "public, max-age=86400");
-      response.data.pipe(res);
+        res.set("Content-Type", response.headers["content-type"] || "image/jpeg");
+        res.set("Cache-Control", "public, max-age=86400");
+        return response.data.pipe(res);
+      } catch (attendeeErr) {
+        // Try 2: Fall back to GET /users/${id}/picture
+        const response = await axios.get(
+          `${getBaseUrl()}/users/${encodeURIComponent(id)}/picture?account_id=${account_id}`,
+          {
+            headers: getHeaders(),
+            responseType: "stream",
+          },
+        );
+
+        res.set("Content-Type", response.headers["content-type"] || "image/jpeg");
+        res.set("Cache-Control", "public, max-age=86400");
+        return response.data.pipe(res);
+      }
     } catch (err) {
       const status = err.response?.status || 500;
       res.status(status).send("Profile picture not found or unavailable.");
