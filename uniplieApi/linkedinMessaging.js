@@ -733,16 +733,21 @@ router.post("/api/unipile/webhook/unipile-account", async (req, res) => {
     }
 
     console.log(
-      `Processing Webhook: status=${status}, account_id=${account_id}, user_id=${finalUserId}, name=${name}`,
+      `Processing Webhook: status=${status}, event=${req.body.event || req.body.type || "N/A"}, account_id=${account_id}, user_id=${finalUserId}, name=${name}`,
     );
 
-    // Normalize status
+    // Normalize status and event names
+    const normalizedStatus = (status || req.body.event || req.body.type || "").toUpperCase();
+
     const isSuccessStatus = [
       "CREATION_SUCCESS",
       "OK",
       "SYNC_SUCCESS",
       "CONNECTED",
-    ].includes(status);
+      "RECONNECTED",
+      "ACCOUNT_CONNECTED",
+      "ACCOUNT_RECONNECTED",
+    ].includes(normalizedStatus);
 
     const isFailureStatus = [
       "CREATION_FAILED",
@@ -750,7 +755,12 @@ router.post("/api/unipile/webhook/unipile-account", async (req, res) => {
       "ERROR",
       "ACCOUNT_ERROR",
       "ACCOUNT_STOPPED",
-    ].includes(status);
+      "DELETED",
+      "ACCOUNT_DELETED",
+      "CREDENTIALS",
+      "PERMISSIONS",
+      "ACCOUNT_DISCONNECTED",
+    ].includes(normalizedStatus);
 
     // --- CASE 1: SUCCESSFUL CONNECTION OR SYNC ---
     if (isSuccessStatus) {

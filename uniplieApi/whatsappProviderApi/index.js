@@ -1107,6 +1107,54 @@ router.get(
         : { provider: "WHATSAPP" };
 
       const result = await getAllWhatsAppAccounts(filter);
+
+      if (result.success && Array.isArray(result.accounts)) {
+        for (let i = 0; i < result.accounts.length; i++) {
+          const acc = result.accounts[i];
+          if (
+            acc.account_id &&
+            (!acc.connected ||
+              acc.status === "PENDING_QR" ||
+              acc.status === "PENDING_PAIRING" ||
+              acc.status === "PENDING")
+          ) {
+            try {
+              const response = await axios.get(
+                `${getBaseUrl()}/accounts/${acc.account_id}`,
+                { headers: getHeaders(), timeout: 4000 },
+              );
+              const liveData = response.data;
+              const currentStatus =
+                liveData.status ||
+                (liveData.connected ? "CONNECTED" : "DISCONNECTED");
+              await updateWhatsAppAccountStatusByAccountId(
+                acc.account_id,
+                currentStatus,
+                { metadata: liveData },
+              );
+              result.accounts[i].status = currentStatus;
+              result.accounts[i].connected =
+                currentStatus === "OK" || currentStatus === "CONNECTED";
+              if (liveData.name) result.accounts[i].name = liveData.name;
+            } catch (syncErr) {
+              if (syncErr.response?.status === 404) {
+                await updateWhatsAppAccountStatusByAccountId(
+                  acc.account_id,
+                  "EXPIRED",
+                  {
+                    last_error:
+                      "Account not found on Unipile (QR session expired or deleted)",
+                    connected: false,
+                  },
+                );
+                result.accounts[i].status = "EXPIRED";
+                result.accounts[i].connected = false;
+              }
+            }
+          }
+        }
+      }
+
       res.json(result);
     } catch (err) {
       handleError(err, res);
