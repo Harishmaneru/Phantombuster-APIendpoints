@@ -283,6 +283,7 @@ async function updateWhatsAppAccountStatusByAccountId(accountId, status, extraDa
 
     if (isConnected) {
       setFields.connected_at = setFields.connected_at || now;
+      setFields.last_error = null;
       if (!extraData.warmup_ends_at) {
         setFields.warmup_ends_at = new Date(now.getTime() + 24 * 60 * 60 * 1000);
       }

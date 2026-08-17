@@ -363,6 +363,24 @@ const MAX_CHAT_PAGES = 50; // safety cap so a bad cursor loop can't run forever
 
 // ==================== UTILITIES ====================
 
+// Helper to extract account status from Unipile response (supports liveData.status, liveData.connected, and liveData.sources)
+const extractUnipileStatus = (liveData) => {
+  if (!liveData) return "DISCONNECTED";
+  if (liveData.status) return liveData.status;
+  if (typeof liveData.connected === "boolean") {
+    return liveData.connected ? "CONNECTED" : "DISCONNECTED";
+  }
+  if (Array.isArray(liveData.sources) && liveData.sources.length > 0) {
+    const hasOk = liveData.sources.some(
+      (s) => s.status === "OK" || s.status === "CONNECTED",
+    );
+    if (hasOk) return "CONNECTED";
+    const firstStatus = liveData.sources[0]?.status;
+    if (firstStatus) return firstStatus;
+  }
+  return "DISCONNECTED";
+};
+
 const getBaseUrl = () => {
   if (process.env.UNIPILE_DSN) {
     let dsn = process.env.UNIPILE_DSN.trim();
@@ -1066,8 +1084,7 @@ router.get(
           { headers: getHeaders() },
         );
         liveData = response.data;
-        currentStatus =
-          liveData.status || (liveData.connected ? "CONNECTED" : "DISCONNECTED");
+        currentStatus = extractUnipileStatus(liveData);
       } catch (unipileErr) {
         if (unipileErr.response?.status === 404) {
           console.warn(
@@ -1167,9 +1184,7 @@ router.get(
                 { headers: getHeaders(), timeout: 4000 },
               );
               const liveData = response.data;
-              const currentStatus =
-                liveData.status ||
-                (liveData.connected ? "CONNECTED" : "DISCONNECTED");
+              const currentStatus = extractUnipileStatus(liveData);
               await updateWhatsAppAccountStatusByAccountId(
                 acc.account_id,
                 currentStatus,

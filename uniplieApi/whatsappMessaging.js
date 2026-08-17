@@ -19,6 +19,24 @@ const {
   deleteWhatsAppAccount,
 } = require("./whatsappAccountService");
 
+// Helper to extract account status from Unipile response (supports liveData.status, liveData.connected, and liveData.sources)
+const extractUnipileStatus = (liveData) => {
+  if (!liveData) return "DISCONNECTED";
+  if (liveData.status) return liveData.status;
+  if (typeof liveData.connected === "boolean") {
+    return liveData.connected ? "CONNECTED" : "DISCONNECTED";
+  }
+  if (Array.isArray(liveData.sources) && liveData.sources.length > 0) {
+    const hasOk = liveData.sources.some(
+      (s) => s.status === "OK" || s.status === "CONNECTED",
+    );
+    if (hasOk) return "CONNECTED";
+    const firstStatus = liveData.sources[0]?.status;
+    if (firstStatus) return firstStatus;
+  }
+  return "DISCONNECTED";
+};
+
 // ==================== CONFIG & UTILITIES ====================
 
 const getBaseUrl = () => {
@@ -335,7 +353,7 @@ router.get(["/api/whatsapp/account-status", "/api/unipile/whatsapp/account-statu
         headers: getHeaders(),
       });
       liveData = response.data;
-      currentStatus = liveData.status || (liveData.connected ? "CONNECTED" : "DISCONNECTED");
+      currentStatus = extractUnipileStatus(liveData);
     } catch (unipileErr) {
       if (unipileErr.response?.status === 404) {
         console.warn(`⚠️ WhatsApp account ${targetAccountId} not found on Unipile (404). Updating status to EXPIRED in DB.`);
@@ -463,7 +481,7 @@ router.get(["/api/whatsapp/accounts", "/api/unipile/whatsapp/accounts"], async (
               timeout: 4000,
             });
             const liveData = response.data;
-            const currentStatus = liveData.status || (liveData.connected ? "CONNECTED" : "DISCONNECTED");
+            const currentStatus = extractUnipileStatus(liveData);
             await updateWhatsAppAccountStatusByAccountId(acc.account_id, currentStatus, {
               metadata: liveData,
             });
