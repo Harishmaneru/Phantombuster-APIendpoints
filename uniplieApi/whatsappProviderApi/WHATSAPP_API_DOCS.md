@@ -460,6 +460,33 @@ export const WhatsAppChatList: React.FC<{ userId: string }> = ({ userId }) => {
 };
 ```
 
+### 7. Send / Add Reaction to a Message (`POST /api/whatsapp/messages/:messageId/reaction`)
+
+Sends an emoji or reaction to a WhatsApp message.
+
+- **Endpoints:**
+  - `POST /api/whatsapp/messages/:messageId/reaction`
+  - `POST /api/unipile/whatsapp/messages/:messageId/reaction`
+  - `DELETE /api/whatsapp/messages/:messageId/reaction` (remove reaction)
+
+#### Request Body
+| Field | Type | Required | Description |
+| :--- | :--- | :--- | :--- |
+| `reaction` | `string` | **Yes** | Emoji or reaction string (e.g. `"❤️"`, `"👍"`, `"2"`). |
+
+#### Response (`200 OK`)
+```json
+{
+  "success": true,
+  "message": "Reaction added successfully",
+  "message_id": "x1a6LELAXhSRsLqMNbwoIQ",
+  "reaction": "❤️",
+  "data": {
+    "status": "ok"
+  }
+}
+```
+
 ---
 
 ## 5. Summary Matrix
@@ -472,3 +499,5 @@ export const WhatsAppChatList: React.FC<{ userId: string }> = ({ userId }) => {
 | **Send Message** | `POST` | `/api/whatsapp/send-message` | `chatId`, `text` | Created message confirmation |
 | **Start Chat** | `POST` | `/api/whatsapp/start-chat` | `whatsapp_number`, `text` | New chat object & `chat_id` |
 | **Avatar Proxy** | `GET` | `/api/whatsapp/attendees/:id/picture` | `account_id` (Query) | Binary image stream |
+| **Add Reaction** | `POST` | `/api/whatsapp/messages/:messageId/reaction` | `reaction` | Reaction confirmation |
+| **Remove Reaction**| `DELETE` | `/api/whatsapp/messages/:messageId/reaction` | | Deletion confirmation |

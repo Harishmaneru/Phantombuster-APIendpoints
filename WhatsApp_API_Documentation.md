@@ -663,6 +663,48 @@ curl --location 'https://videoresponse.onepgr.com:3001/api/unipile/whatsapp/webh
 
 ---
 
+## Message Reactions
+
+### 20. Add / Send Reaction to a Message
+Sends an emoji or reaction to a WhatsApp message.
+
+```bash
+curl --location 'https://videoresponse.onepgr.com:3001/api/unipile/whatsapp/messages/x1a6LELAXhSRsLqMNbwoIQ/reaction' \
+--header 'Content-Type: application/json' \
+--data '{
+  "reaction": "❤️"
+}'
+```
+
+**Sample Response:**
+```json
+{
+  "success": true,
+  "message": "Reaction added successfully",
+  "message_id": "x1a6LELAXhSRsLqMNbwoIQ",
+  "reaction": "❤️",
+  "data": {
+    "status": "ok"
+  }
+}
+```
+
+### 21. Remove Reaction from a Message
+```bash
+curl --location --request DELETE 'https://videoresponse.onepgr.com:3001/api/unipile/whatsapp/messages/x1a6LELAXhSRsLqMNbwoIQ/reaction'
+```
+
+**Sample Response:**
+```json
+{
+  "success": true,
+  "message": "Reaction removed successfully",
+  "message_id": "x1a6LELAXhSRsLqMNbwoIQ"
+}
+```
+
+---
+
 ## Endpoint Quick Reference
 
 | # | Method | Endpoint | Description |
@@ -670,7 +712,7 @@ curl --location 'https://videoresponse.onepgr.com:3001/api/unipile/whatsapp/webh
 | 1 | POST/GET | `/api/unipile/whatsapp/connect-qr` | Start QR code auth flow |
 | 2 | POST | `/api/unipile/whatsapp/connect-pairing` | Start pairing code auth |
 | 3 | POST | `/api/unipile/whatsapp/connect` | Auto-detect QR vs pairing |
-| 4 | POST | `/api/unipile/whatsapp/disconnect` | Disconnect account |
+| 4 | POST/DELETE | `/api/unipile/whatsapp/disconnect` | Disconnect / delete account |
 | 5 | GET | `/api/unipile/whatsapp/account-status` | Check connection status |
 | 6 | GET | `/api/unipile/whatsapp/accounts` | List all WA accounts |
 | 7 | GET | `/api/unipile/whatsapp/limits-status` | Warmup & sending limits |
@@ -686,5 +728,7 @@ curl --location 'https://videoresponse.onepgr.com:3001/api/unipile/whatsapp/webh
 | 17 | GET | `/api/unipile/whatsapp/attendees/:id/picture` | Profile picture proxy |
 | 18 | GET | `/api/unipile/whatsapp/messages/:msgId/attachments/:attId` | Download attachment |
 | 19 | POST | `/api/unipile/whatsapp/webhook` | Webhook event receiver |
+| 20 | POST | `/api/unipile/whatsapp/messages/:msgId/reaction` | Add reaction to message |
+| 21 | DELETE | `/api/unipile/whatsapp/messages/:msgId/reaction` | Remove reaction from message |
 
 > **Note:** All endpoints support both `/api/whatsapp/...` and `/api/unipile/whatsapp/...` prefixes. Use `user_id` in place of `account_id` where supported — the server resolves it automatically.

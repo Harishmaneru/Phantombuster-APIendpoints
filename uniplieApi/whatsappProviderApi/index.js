@@ -354,6 +354,8 @@ const {
   getWhatsAppAccountByAccountId,
   updateWhatsAppAccountStatusByAccountId,
   getAllWhatsAppAccounts,
+  disconnectWhatsAppAccount,
+  deleteWhatsAppAccount,
 } = require("../whatsappAccountService");
 
 // ==================== CONFIG ====================
@@ -1214,6 +1216,162 @@ router.get(
       }
 
       res.json(result);
+    } catch (err) {
+      handleError(err, res);
+    }
+  },
+);
+
+// ==================== API 9: DISCONNECT / DELETE ACCOUNT ====================
+// POST /api/whatsapp/disconnect or /api/unipile/whatsapp/disconnect
+// DELETE /api/whatsapp/accounts/:accountId or /api/unipile/whatsapp/accounts/:accountId
+
+router.all(
+  [
+    "/api/whatsapp/disconnect",
+    "/api/unipile/whatsapp/disconnect",
+    "/api/whatsapp/accounts/:accountId",
+    "/api/unipile/whatsapp/accounts/:accountId",
+  ],
+  async (req, res) => {
+    try {
+      const user_id = req.body?.user_id || req.query?.user_id;
+      const account_id =
+        req.params?.accountId ||
+        req.body?.account_id ||
+        req.query?.account_id;
+      const reason = req.body?.reason || req.query?.reason;
+
+      let targetAccountId = account_id;
+      if (!targetAccountId && user_id) {
+        const statusRes = await getWhatsAppAccountStatus(user_id);
+        if (statusRes.success && statusRes.account_id) {
+          targetAccountId = statusRes.account_id;
+        }
+      }
+
+      if (!targetAccountId) {
+        return res.status(400).json({
+          success: false,
+          error: "account_id or user_id is required",
+        });
+      }
+
+      // Call Unipile delete account API (DELETE /api/v1/accounts/{account_id})
+      let unipileDeleted = false;
+      try {
+        await axios.delete(`${getBaseUrl()}/accounts/${targetAccountId}`, {
+          headers: getHeaders(),
+        });
+        unipileDeleted = true;
+      } catch (unipileErr) {
+        console.warn("Unipile delete account call warning:", unipileErr.message);
+      }
+
+      if (user_id) {
+        await disconnectWhatsAppAccount(
+          user_id,
+          reason || "User requested disconnect",
+        );
+      }
+
+      res.json({
+        success: true,
+        message: "WhatsApp account deleted/disconnected successfully",
+        account_id: targetAccountId,
+        unipile_deleted: unipileDeleted,
+      });
+    } catch (err) {
+      handleError(err, res);
+    }
+  },
+);
+
+// ==================== API 10: MESSAGE REACTION ====================
+// POST /api/whatsapp/messages/:messageId/reaction or /api/unipile/whatsapp/messages/:messageId/reaction
+// Payload: { "reaction": "❤️" } or { "messageId": "...", "reaction": "👍" }
+
+router.post(
+  [
+    "/api/whatsapp/messages/:messageId/reaction",
+    "/api/unipile/whatsapp/messages/:messageId/reaction",
+    "/api/whatsapp/messages/reaction",
+    "/api/unipile/whatsapp/messages/reaction",
+  ],
+  async (req, res) => {
+    try {
+      const messageId =
+        req.params.messageId ||
+        req.body?.messageId ||
+        req.body?.message_id ||
+        req.body?.id;
+      const reaction = req.body?.reaction || req.query?.reaction;
+
+      if (!messageId) {
+        return res.status(400).json({
+          success: false,
+          error: "messageId is required in URL path or body",
+          message: "messageId is required",
+        });
+      }
+
+      if (!reaction || typeof reaction !== "string" || !reaction.trim()) {
+        return res.status(400).json({
+          success: false,
+          error: "reaction string is required in payload",
+          message: "reaction is required",
+        });
+      }
+
+      const response = await axios.post(
+        `${getBaseUrl()}/messages/${encodeURIComponent(messageId)}/reaction`,
+        { reaction: reaction.trim() },
+        { headers: getHeaders() },
+      );
+
+      res.json({
+        success: true,
+        message: "Reaction added successfully",
+        message_id: messageId,
+        reaction: reaction.trim(),
+        data: response.data,
+      });
+    } catch (err) {
+      handleError(err, res);
+    }
+  },
+);
+
+router.delete(
+  [
+    "/api/whatsapp/messages/:messageId/reaction",
+    "/api/unipile/whatsapp/messages/:messageId/reaction",
+  ],
+  async (req, res) => {
+    try {
+      const messageId =
+        req.params.messageId ||
+        req.body?.messageId ||
+        req.body?.message_id;
+
+      if (!messageId) {
+        return res.status(400).json({
+          success: false,
+          error: "messageId is required in URL path or body",
+        });
+      }
+
+      const response = await axios.delete(
+        `${getBaseUrl()}/messages/${encodeURIComponent(messageId)}/reaction`,
+        { headers: getHeaders() },
+      );
+
+      res.json({
+        success: true,
+        message: "Reaction removed successfully",
+        message_id: messageId,
+        data: response.data,
+      });
     } catch (err) {
       handleError(err, res);
     }
