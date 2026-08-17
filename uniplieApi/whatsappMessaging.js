@@ -327,12 +327,41 @@ router.get(["/api/whatsapp/account-status", "/api/unipile/whatsapp/account-statu
     }
 
     // Query Unipile API directly for live status
-    const response = await axios.get(`${getBaseUrl()}/accounts/${targetAccountId}`, {
-      headers: getHeaders(),
-    });
+    let liveData = null;
+    let currentStatus = "DISCONNECTED";
 
-    const liveData = response.data;
-    const currentStatus = liveData.status || (liveData.connected ? "CONNECTED" : "DISCONNECTED");
+    try {
+      const response = await axios.get(`${getBaseUrl()}/accounts/${targetAccountId}`, {
+        headers: getHeaders(),
+      });
+      liveData = response.data;
+      currentStatus = liveData.status || (liveData.connected ? "CONNECTED" : "DISCONNECTED");
+    } catch (unipileErr) {
+      if (unipileErr.response?.status === 404) {
+        console.warn(`⚠️ WhatsApp account ${targetAccountId} not found on Unipile (404). Updating status to EXPIRED in DB.`);
+        currentStatus = "EXPIRED";
+        await updateWhatsAppAccountStatusByAccountId(targetAccountId, "EXPIRED", {
+          last_error: "Account not found on Unipile (QR code session expired or account removed)",
+          connected: false,
+        });
+
+        return res.json({
+          success: true,
+          account_id: targetAccountId,
+          provider: "WHATSAPP",
+          status: "EXPIRED",
+          connected: false,
+          warmup_active: false,
+          warmup_ends_at: null,
+          hours_until_warmup_complete: 0,
+          daily_chats_count: 0,
+          daily_messages_count: 0,
+          message: "WhatsApp account session expired or not found on Unipile. Please generate a new QR code or pairing code.",
+          unipile_account_details: null,
+        });
+      }
+      throw unipileErr;
+    }
 
     // Update database record
     await updateWhatsAppAccountStatusByAccountId(targetAccountId, currentStatus, {

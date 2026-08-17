@@ -349,7 +349,12 @@ const NodeCache = require("node-cache");
 const FormData = require("form-data");
 const router = express.Router();
 
-const { getWhatsAppAccountStatus } = require("../whatsappAccountService");
+const {
+  getWhatsAppAccountStatus,
+  getWhatsAppAccountByAccountId,
+  updateWhatsAppAccountStatusByAccountId,
+  getAllWhatsAppAccounts,
+} = require("../whatsappAccountService");
 
 // ==================== CONFIG ====================
 
@@ -385,9 +390,17 @@ const handleError = (err, res) => {
   });
   const status = err.response?.status || 500;
   if (err.response?.data) {
+    const errorData = err.response.data;
+    if (status === 404 && (errorData.detail?.includes("Account not found") || errorData.title?.includes("Resource not found"))) {
+      return res.status(404).json({
+        success: false,
+        error: errorData,
+        message: "WhatsApp account session expired or not found on Unipile. Please generate a new QR code or pairing code.",
+      });
+    }
     return res.status(status).json({
       success: false,
-      error: err.response.data,
+      error: errorData,
       message: err.message,
     });
   }
@@ -969,6 +982,134 @@ router.get(
     } catch (err) {
       const status = err.response?.status || 500;
       res.status(status).send("Profile picture not found or unavailable.");
+    }
+  },
+);
+
+// ==================== API 7: ACCOUNT STATUS ====================
+// GET /api/whatsapp/account-status or /api/unipile/whatsapp/account-status
+// Query: ?user_id=... or ?account_id=...
+
+router.get(
+  ["/api/whatsapp/account-status", "/api/unipile/whatsapp/account-status"],
+  async (req, res) => {
+    try {
+      const { user_id, account_id } = req.query;
+
+      let targetAccountId = account_id;
+
+      if (!targetAccountId && user_id) {
+        const statusRes = await getWhatsAppAccountStatus(user_id);
+        if (statusRes.success && statusRes.account_id) {
+          targetAccountId = statusRes.account_id;
+        } else {
+          return res.json(statusRes);
+        }
+      }
+
+      if (!targetAccountId) {
+        return res.status(400).json({
+          success: false,
+          error: "Provide user_id or account_id query parameter",
+        });
+      }
+
+      let liveData = null;
+      let currentStatus = "DISCONNECTED";
+
+      try {
+        const response = await axios.get(
+          `${getBaseUrl()}/accounts/${targetAccountId}`,
+          { headers: getHeaders() },
+        );
+        liveData = response.data;
+        currentStatus =
+          liveData.status || (liveData.connected ? "CONNECTED" : "DISCONNECTED");
+      } catch (unipileErr) {
+        if (unipileErr.response?.status === 404) {
+          console.warn(
+            `⚠️ WhatsApp account ${targetAccountId} not found on Unipile (404). Updating status to EXPIRED in DB.`,
+          );
+          currentStatus = "EXPIRED";
+          await updateWhatsAppAccountStatusByAccountId(
+            targetAccountId,
+            "EXPIRED",
+            {
+              last_error:
+                "Account not found on Unipile (QR code session expired or account removed)",
+              connected: false,
+            },
+          );
+
+          return res.json({
+            success: true,
+            account_id: targetAccountId,
+            provider: "WHATSAPP",
+            status: "EXPIRED",
+            connected: false,
+            warmup_active: false,
+            warmup_ends_at: null,
+            hours_until_warmup_complete: 0,
+            daily_chats_count: 0,
+            daily_messages_count: 0,
+            message:
+              "WhatsApp account session expired or not found on Unipile. Please generate a new QR code or pairing code.",
+            unipile_account_details: null,
+          });
+        }
+        throw unipileErr;
+      }
+
+      await updateWhatsAppAccountStatusByAccountId(
+        targetAccountId,
+        currentStatus,
+        { metadata: liveData },
+      );
+
+      const dbAccount = await getWhatsAppAccountByAccountId(targetAccountId);
+      const now = new Date();
+      const warmupEndsAt = dbAccount?.warmup_ends_at
+        ? new Date(dbAccount.warmup_ends_at)
+        : null;
+      const isWarmupActive = warmupEndsAt ? warmupEndsAt > now : false;
+
+      res.json({
+        success: true,
+        account_id: targetAccountId,
+        provider: "WHATSAPP",
+        status: currentStatus,
+        connected: currentStatus === "OK" || currentStatus === "CONNECTED",
+        warmup_active: isWarmupActive,
+        warmup_ends_at: warmupEndsAt,
+        hours_until_warmup_complete: isWarmupActive
+          ? Number(((warmupEndsAt - now) / (1000 * 60 * 60)).toFixed(1))
+          : 0,
+        daily_chats_count: dbAccount?.daily_chats_count || 0,
+        daily_messages_count: dbAccount?.daily_messages_count || 0,
+        unipile_account_details: liveData,
+      });
+    } catch (err) {
+      handleError(err, res);
+    }
+  },
+);
+
+// ==================== API 8: LIST ALL ACCOUNTS ====================
+// GET /api/whatsapp/accounts or /api/unipile/whatsapp/accounts
+
+router.get(
+  ["/api/whatsapp/accounts", "/api/unipile/whatsapp/accounts"],
+  async (req, res) => {
+    try {
+      const { user_id } = req.query;
+      const filter = user_id
+        ? { user_id: user_id, provider: "WHATSAPP" }
+        : { provider: "WHATSAPP" };
+
+      const result = await getAllWhatsAppAccounts(filter);
+      res.json(result);
+    } catch (err) {
+      handleError(err, res);
     }
   },
 );
