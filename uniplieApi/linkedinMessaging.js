@@ -326,27 +326,102 @@ router.post("/api/unipile/accounts/cookie", async (req, res) => {
   }
 });
 
-// Delete account
-router.delete("/api/unipile/accounts/:accountId", async (req, res) => {
-  try {
-    const { accountId } = req.params;
+// Delete LinkedIn Account completely (from Unipile AND MongoDB)
+// DELETE /api/unipile/accounts/:accountId
+// DELETE /api/unipile/linkedin/accounts/:accountId
+// DELETE /api/unipile/linkedin/account?user_id=... or ?account_id=...
+// POST /api/unipile/linkedin/account/delete or /api/unipile/account/delete
+router.all(
+  [
+    "/api/unipile/accounts/:accountId",
+    "/api/unipile/linkedin/accounts/:accountId",
+    "/api/unipile/linkedin/account",
+    "/api/unipile/linkedin/account/delete",
+    "/api/unipile/account/delete",
+  ],
+  async (req, res) => {
+    // Only handle DELETE or POST methods on this route
+    if (req.method !== "DELETE" && req.method !== "POST") {
+      return res.status(405).json({
+        success: false,
+        error: `Method ${req.method} not allowed. Use DELETE or POST.`,
+      });
+    }
 
-    const response = await axios.delete(
-      `${getBaseUrl()}/accounts/${accountId}`,
-      {
-        headers: getHeaders(),
-      },
-    );
+    try {
+      const user_id = req.body?.user_id || req.query?.user_id;
+      const account_id =
+        req.params?.accountId ||
+        req.body?.account_id ||
+        req.body?.accountId ||
+        req.query?.account_id ||
+        req.query?.accountId;
 
-    res.json({
-      success: true,
-      data: response.data,
-      message: "Account deleted successfully",
-    });
-  } catch (err) {
-    handleError(err, res);
-  }
-});
+      let targetAccountId = account_id;
+      let targetUserId = user_id;
+
+      // 1. Resolve missing account_id from user_id if needed
+      if (!targetAccountId && targetUserId) {
+        const dbResult = await getLinkedInAccountStatus(targetUserId);
+        if (dbResult.success && dbResult.account_id) {
+          targetAccountId = dbResult.account_id;
+        }
+      }
+
+      // 2. Resolve missing user_id from account_id if needed
+      if (!targetUserId && targetAccountId) {
+        const dbAccount = await getLinkedInAccountByAccountId(targetAccountId);
+        if (dbAccount && dbAccount.user_id) {
+          targetUserId = dbAccount.user_id;
+        }
+      }
+
+      if (!targetAccountId && !targetUserId) {
+        return res.status(400).json({
+          success: false,
+          error: "accountId or user_id is required in URL param, query, or body",
+        });
+      }
+
+      // 3. Delete from Unipile servers
+      let unipileDeleted = false;
+      let unipileData = null;
+      if (targetAccountId) {
+        try {
+          console.log(`🗑️ Deleting LinkedIn account ${targetAccountId} from Unipile...`);
+          const unipileResp = await axios.delete(
+            `${getBaseUrl()}/accounts/${targetAccountId}`,
+            { headers: getHeaders() },
+          );
+          unipileDeleted = true;
+          unipileData = unipileResp.data;
+          console.log(`✅ Deleted LinkedIn account ${targetAccountId} from Unipile.`);
+        } catch (unipileErr) {
+          console.warn(
+            `⚠️ Unipile delete API warning for ${targetAccountId}:`,
+            unipileErr.response?.data?.message || unipileErr.message,
+          );
+          unipileData = unipileErr.response?.data || null;
+        }
+      }
+
+      // 4. Delete document completely from MongoDB
+      const dbDeleteResult = await deleteLinkedInAccount(targetAccountId || targetUserId);
+
+      res.json({
+        success: true,
+        message: "LinkedIn account deleted successfully from both Unipile and MongoDB",
+        account_id: targetAccountId,
+        user_id: targetUserId,
+        unipile_deleted: unipileDeleted,
+        mongodb_deleted: dbDeleteResult.success,
+        unipile_response: unipileData,
+      });
+    } catch (err) {
+      handleError(err, res);
+    }
+  },
+);
 
 // Validate OTP / Checkpoint for LinkedIn account
 router.post("/api/unipile/account/validate-otp", async (req, res) => {

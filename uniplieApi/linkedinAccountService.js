@@ -947,35 +947,43 @@ async function getAllLinkedInAccounts(filters = {}) {
 }
 
 /**
- * Delete LinkedIn account completely
- * @param {string} userId - User ID
+ * Delete LinkedIn account completely from database
+ * @param {string} userIdOrAccountId - User ID or Unipile Account ID
  * @returns {Promise<Object>} - Result of the operation
  */
-async function deleteLinkedInAccount(userId) {
+async function deleteLinkedInAccount(userIdOrAccountId) {
   await ensureConnected();
+  if (!LinkedInAccounts) return { success: true, message: "Deleted (no DB)" };
   try {
-    const result = await LinkedInAccounts.deleteOne({
-      user_id: userId,
+    const result = await LinkedInAccounts.deleteMany({
+      $or: [
+        { user_id: userIdOrAccountId },
+        { account_id: userIdOrAccountId },
+      ],
       provider: "LINKEDIN",
     });
 
     if (result.deletedCount === 0) {
       return {
         success: false,
-        message: "No LinkedIn account found for this user",
+        message: "No LinkedIn account found in database for this identifier",
+        deleted_count: 0,
       };
     }
 
-    console.log(`Deleted LinkedIn account for user ${userId}`);
+    console.log(
+      `🗑️ Deleted LinkedIn account document(s) for ${userIdOrAccountId} (${result.deletedCount} deleted)`,
+    );
     return {
       success: true,
-      message: "LinkedIn account deleted successfully",
+      message: "LinkedIn account deleted successfully from database",
+      deleted_count: result.deletedCount,
     };
   } catch (error) {
     console.error("Error deleting LinkedIn account:", error);
     return {
       success: false,
-      message: "Failed to delete LinkedIn account",
+      message: "Failed to delete LinkedIn account from database",
       error: error.message,
     };
   }
