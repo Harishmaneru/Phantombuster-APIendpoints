@@ -4,6 +4,11 @@ const FormData = require("form-data");
 const NodeCache = require("node-cache");
 const router = express.Router();
 const upload = require("../middlewares/upload");
+const {
+  validateSearchCombination,
+  buildParameterSearchUrl,
+  buildLinkedInSearchRequest,
+} = require("./linkedinSearchCompatibility");
 
 const {
   INDUSTRY_V1,
@@ -5728,13 +5733,15 @@ router.all("/api/unipile/user/:userId/linkedin/search", async (req, res) => {
         });
       }
 
-      // Build query params for Unipile API
-      const params = new URLSearchParams();
-      params.append("account_id", accountId);
-      params.append("type", paramType);
-      if (keywords) params.append("keywords", keywords);
-      params.append("limit", limit);
-      if (api !== "classic") params.append("api", api);
+      // Preserve the public `api` option while translating to Unipile's
+      // required `service` enum for the search-parameter lookup.
+      const parameterUrl = buildParameterSearchUrl(getBaseUrl(), {
+        accountId,
+        type: paramType,
+        keywords,
+        limit,
+        api,
+      });
 
       console.log(
         `🔍 LinkedIn Search Parameters: type=${paramType}, keywords=${
@@ -5743,7 +5750,7 @@ router.all("/api/unipile/user/:userId/linkedin/search", async (req, res) => {
       );
 
       const response = await axios.get(
-        `${getBaseUrl()}/linkedin/search/parameters?${params}`,
+        parameterUrl,
         { headers: getHeaders() },
       );
 
@@ -5835,20 +5842,17 @@ router.all("/api/unipile/user/:userId/linkedin/search", async (req, res) => {
       }
 
       // Change B: Validate api and category enum values before hitting Unipile
-      const validApis = ["classic", "sales_navigator", "recruiter"];
-      const validCategories = ["people", "companies", "posts", "jobs"];
-
-      if (!validApis.includes(searchBody.api)) {
+      const combinationError = validateSearchCombination(searchBody.api, searchBody.category);
+      if (combinationError) {
         return res.status(400).json({
           success: false,
-          error: `Invalid api: "${searchBody.api}". Must be one of: ${validApis.join(", ")}`,
-        });
-      }
-
-      if (!validCategories.includes(searchBody.category)) {
-        return res.status(400).json({
-          success: false,
-          error: `Invalid category: "${searchBody.category}". Must be one of: ${validCategories.join(", ")}`,
+          error: combinationError,
+          valid_apis: ["classic", "sales_navigator", "recruiter"],
+          valid_categories_by_api: {
+            classic: ["people", "companies", "posts", "jobs"],
+            sales_navigator: ["people", "companies"],
+            recruiter: ["people"],
+          },
         });
       }
 
@@ -6073,10 +6077,12 @@ router.all("/api/unipile/user/:userId/linkedin/search", async (req, res) => {
       });
 
       // Build URL with query params
-      const params = new URLSearchParams();
-      params.append("account_id", accountId);
-      params.append("limit", limit);
-      if (cursor) params.append("cursor", cursor);
+      const providerRequest = buildLinkedInSearchRequest(getBaseUrl(), {
+        accountId,
+        limit,
+        cursor,
+        body: searchBody,
+      });
 
       // Change 3: Log both final body and query params before sending
       console.log(
@@ -6086,8 +6092,8 @@ router.all("/api/unipile/user/:userId/linkedin/search", async (req, res) => {
       console.log(`🔍 FINAL QUERY PARAMS: ${params.toString()}`);
 
       const response = await axios.post(
-        `${getBaseUrl()}/linkedin/search?${params}`,
-        searchBody,
+        providerRequest.url,
+        providerRequest.body,
         { headers: getHeaders() },
       );
 
@@ -6821,6 +6827,4 @@ router.get("/api/unipile/user/:userId/quick-info", async (req, res) => {
 });
 
 module.exports = router;
-
-
 
