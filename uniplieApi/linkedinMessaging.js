@@ -6089,7 +6089,8 @@ router.all("/api/unipile/user/:userId/linkedin/search", async (req, res) => {
         `🔍 FINAL REQUEST BODY for LinkedIn ${searchBody.category} Search (${searchBody.api}):`,
         JSON.stringify(searchBody, null, 2),
       );
-      console.log(`🔍 FINAL QUERY PARAMS: ${params.toString()}`);
+      const queryParams = new URL(providerRequest.url).searchParams.toString();
+      console.log(`🔍 FINAL QUERY PARAMS: ${queryParams}`);
 
       const response = await axios.post(
         providerRequest.url,
