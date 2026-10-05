@@ -10,14 +10,18 @@ const fs = require('fs');
 const path = require('path');
 const { spawn } = require('child_process');
 const axios = require('axios');
+const FormData = require('form-data');
 const { OpenAI } = require('openai');
 const crypto = require('crypto');
 
-
-
-const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY,
-});
+let openai = null;
+if (process.env.OPENAI_API_KEY) {
+  try {
+    openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+  } catch (err) {
+    console.warn('OpenAI init warning:', err.message);
+  }
+}
 
 // AWS S3 configuration
 const s3 = new AWS.S3({
@@ -956,29 +960,59 @@ function getFileStream(filePath) {
 }
 
 
-// Transcribe an audio chunk using OpenAI's Whisper API
+// Transcribe an audio chunk using Groq Whisper (free) or OpenAI Whisper API
 async function transcribeAudioToText(audioPath) {
   try {
-    console.log(`[Whisper] Starting transcription for: ${audioPath}`);
-    const fileStream = await getFileStream(audioPath);
-    const response = await openai.audio.transcriptions.create({
-      file: fileStream,
-      model: "whisper-1"
-    });
+    const groqKey = process.env.GROQ_API_KEY;
+    const openaiKey = process.env.OPENAI_API_KEY;
 
-    const transcriptionText = response.text || (response.data && response.data.text);
+    if (groqKey) {
+      console.log(`[Groq Whisper] Starting transcription for: ${audioPath}`);
+      const form = new FormData();
+      form.append('file', fs.createReadStream(audioPath));
+      form.append('model', process.env.GROQ_WHISPER_MODEL || 'whisper-large-v3');
 
-    if (!transcriptionText) {
-      const error = new Error("Unexpected transcription API response");
-      console.error('Transcription failed', { error: error.message });
-      throw error;
+      const response = await axios.post('https://api.groq.com/openai/v1/audio/transcriptions', form, {
+        headers: {
+          ...form.getHeaders(),
+          'Authorization': `Bearer ${groqKey}`
+        },
+        maxBodyLength: Infinity,
+        maxContentLength: Infinity
+      });
+
+      const transcriptionText = response.data?.text;
+      if (typeof transcriptionText !== 'string') {
+        throw new Error('Unexpected empty response from Groq transcription API');
+      }
+      return transcriptionText;
+    } else if (openaiKey) {
+      console.log(`[OpenAI Whisper] Starting transcription for: ${audioPath}`);
+      const form = new FormData();
+      form.append('file', fs.createReadStream(audioPath));
+      form.append('model', 'whisper-1');
+
+      const response = await axios.post('https://api.openai.com/v1/audio/transcriptions', form, {
+        headers: {
+          ...form.getHeaders(),
+          'Authorization': `Bearer ${openaiKey}`
+        },
+        maxBodyLength: Infinity,
+        maxContentLength: Infinity
+      });
+
+      const transcriptionText = response.data?.text;
+      if (typeof transcriptionText !== 'string') {
+        throw new Error('Unexpected empty response from OpenAI transcription API');
+      }
+      return transcriptionText;
+    } else {
+      throw new Error('No transcription API key found. Please set GROQ_API_KEY in .env');
     }
-
-    //console.log(`[Whisper] Transcription completed successfully. Length: ${transcriptionText.length} characters`);
-    return transcriptionText;
   } catch (error) {
-    console.error(`[Whisper ERROR] Transcription failed: ${error.message}`);
-    throw error;
+    const errorMsg = error.response?.data?.error?.message || error.message;
+    console.error(`[Transcription ERROR] Transcription failed: ${errorMsg}`);
+    throw new Error(`Transcription failed: ${errorMsg}`);
   }
 }
 
@@ -1146,18 +1180,21 @@ const downloadFileFromS3 = async (fileUrl) => {
 };
 
 
-// Function to evaluate transcription using the AI API
+// Function to evaluate transcription using Claude (Anthropic API) with Groq LLM fallback
 async function evaluateTranscription(transcription, question) {
-  // 1) Build the JSON‑only prompt with your custom guardrail text
+  const anthropicKey = process.env.ANTHROPIC_API_KEY || process.env.CLAUDE_API_KEY;
+  const groqKey = process.env.GROQ_API_KEY;
+
   const scorePrompt = `
-You are an expert interviewer and subject‑matter specialist. You will be given:
-  • The original interview question.
-  • The candidate's spoken response transcription.
+You will evaluate the candidate's response to an interview question.
+
+Question: "${question}"
+Transcription: "${transcription}"
 
 First, check for a substantive answer:
   – If the transcription is fewer than 10 words, or
   – If it contains only generic phrases (e.g. "Thank you", "You", "Hi"), or
-  – If it's entirely non‑English or gibberish,
+  – If it's entirely non-English or gibberish,
 
 then assign 0/5 on all criteria with the insight:
   "Candidate did not provide a response."
@@ -1168,66 +1205,98 @@ Otherwise, compare the transcription to the question. For each criterion below, 
   – Suggest how to improve.
 
 Criteria:
-  1. Articulation & Clarity  
-  2. Technical Knowledge  
-  3. Depth & Detail  
-  4. Conversational Effectiveness  
+  1. Articulation and Clarity
+  2. Technical Knowledge
+  3. Depth and Detail
+  4. Conversational Effectiveness
 
-Return exactly valid JSON in this format:
-\`\`\`json
+Return ONLY a valid JSON object in this exact schema (no markdown formatting, no backticks, no preamble, no commentary):
 {
-  "Articulation and Clarity":    { "score": 0, "insight": "" },
-  "Technical Knowledge":        { "score": 0, "insight": "" },
-  "Depth and Detail":           { "score": 0, "insight": "" },
-  "Conversational Effectiveness":{ "score": 0, "insight": "" }
+  "Articulation and Clarity": { "score": 0, "insight": "" },
+  "Technical Knowledge": { "score": 0, "insight": "" },
+  "Depth and Detail": { "score": 0, "insight": "" },
+  "Conversational Effectiveness": { "score": 0, "insight": "" }
 }
-\`\`\`
-
-Begin now.  
-Question: "${question}"  
-Transcription: "${transcription}"
   `.trim();
 
-  const payload = { prompt: scorePrompt, subject: 0 };
+  let rawText = null;
 
-  // 2) Call the API, catching any network or API‐side errors
-  let envelope;
-  try {
-    const response = await axios.post(
-      'https://app.onepgr.com/session/generateAiResponse',
-      payload,
-      {
-        headers: {
-          'Authorization': `Bearer ${process.env.OPENAI_API_KEY}`
+  // 1. Try Claude if Anthropic key is provided
+  if (anthropicKey) {
+    try {
+      const model = process.env.CLAUDE_MODEL || 'claude-3-5-sonnet-20241022';
+      const systemPrompt = `You are an expert interviewer and subject-matter specialist. You evaluate the candidate's spoken response based strictly on the provided interview question and transcription. Output must be strictly valid JSON and nothing else.`;
+
+      const response = await axios.post(
+        'https://api.anthropic.com/v1/messages',
+        {
+          model: model,
+          max_tokens: 1500,
+          system: systemPrompt,
+          messages: [{ role: 'user', content: scorePrompt }]
+        },
+        {
+          headers: {
+            'x-api-key': anthropicKey.trim(),
+            'anthropic-version': '2023-06-01',
+            'content-type': 'application/json'
+          },
+          timeout: 60000
         }
+      );
+      rawText = response.data?.content?.[0]?.text;
+    } catch (apiErr) {
+      console.warn('Claude API scoring call failed:', apiErr.response?.data?.error?.message || apiErr.message);
+      if (!groqKey) {
+        throw new Error(`Claude scoring failed: ${apiErr.response?.data?.error?.message || apiErr.message}`);
       }
-    );
-    console.log('AI raw response:', response.data);
-    envelope = response.data;
-  } catch (apiErr) {
-    console.error('AI API call failed:', apiErr.message);
-    throw new Error(`AI service unreachable: ${apiErr.message}`);
+    }
   }
 
-  // Proxy-level error
-  if (envelope.status !== 0) {
-    const msg = envelope.data?.error?.message || envelope.message || 'Unknown AI proxy error';
-    console.error('AI proxy error:', msg);
-    throw new Error(msg);
+  // 2. Fallback to Groq LLM if Claude failed or was not provided
+  if (!rawText && groqKey) {
+    try {
+      console.log('[Scoring] Using Groq LLM fallback for evaluation...');
+      const response = await axios.post(
+        'https://api.groq.com/openai/v1/chat/completions',
+        {
+          model: process.env.GROQ_LLM_MODEL || 'openai/gpt-oss-120b',
+          response_format: { type: 'json_object' },
+          messages: [{ role: 'user', content: scorePrompt }]
+        },
+        {
+          headers: { Authorization: `Bearer ${groqKey}` },
+          timeout: 60000
+        }
+      );
+      rawText = response.data?.choices?.[0]?.message?.content;
+    } catch (groqErr) {
+      console.error('Groq LLM scoring call failed:', groqErr.response?.data || groqErr.message);
+      throw new Error(`Scoring failed: ${groqErr.response?.data?.error?.message || groqErr.message}`);
+    }
   }
 
-  // 3) Try to parse JSON; if that fails, throw error
+  if (!rawText) {
+    throw new Error('No AI scoring service available. Please configure ANTHROPIC_API_KEY or GROQ_API_KEY in .env');
+  }
+
+  // Parse JSON
   try {
-    // Remove any HTML breaks and markdown code block syntax from the data
-    const rawData = envelope.data
-      .replace(/<br\s*\/?>/g, '')
-      .replace(/```json/g, '')
+    const cleaned = rawText
+      .replace(/<br\s*\/?>/gi, '')
+      .replace(/```json/gi, '')
       .replace(/```/g, '')
       .trim();
-    return JSON.parse(rawData);
+    return JSON.parse(cleaned);
   } catch (parseErr) {
-    console.error('Failed to parse AI response as JSON:', parseErr.message, 'raw:', envelope.data);
-    throw new Error(`Invalid JSON from AI service: ${parseErr.message}`);
+    const jsonMatch = rawText.match(/\{[\s\S]*\}/);
+    if (jsonMatch) {
+      try {
+        return JSON.parse(jsonMatch[0]);
+      } catch (innerErr) {}
+    }
+    console.error('Failed to parse AI response as JSON:', parseErr.message, 'raw:', rawText);
+    throw new Error(`Invalid JSON from scoring service: ${parseErr.message}`);
   }
 }
 
@@ -1237,13 +1306,28 @@ Transcription: "${transcription}"
 router.get('/score/:submissionId', ensureDbConnection, async (req, res) => {
   try {
     const submissionId = req.params.submissionId;
-    const submission = await Submission.findById(submissionId, { score: 1 });
+    const submission = await Submission.findById(submissionId);
     if (!submission) {
       return res.status(404).json({
         success: false,
         message: 'Submission not found'
       });
     }
+
+    // Auto-repair: If score is missing or has error, evaluate on the fly!
+    if (!submission.score || (submission.score && submission.score.error) || !Array.isArray(submission.score)) {
+      if (submission.videoResponses && submission.videoResponses.length > 0) {
+        try {
+          console.log(`[Auto-Evaluating] Evaluating submission ${submission._id} on-demand for UI modal...`);
+          const evaluations = await evaluateSubmissionVideos(submission);
+          submission.score = evaluations;
+          await submission.save();
+        } catch (evalErr) {
+          console.error(`[Auto-Evaluating Error] ${submission._id}:`, evalErr.message);
+        }
+      }
+    }
+
     res.status(200).json({
       success: true,
       data: submission.score
@@ -1254,6 +1338,83 @@ router.get('/score/:submissionId', ensureDbConnection, async (req, res) => {
       success: false,
       message: 'Failed to fetch score',
       error: error.message
+    });
+  }
+});
+
+// Endpoint to re-evaluate recent failed or pending submissions
+router.post('/re-evaluate-failed', ensureDbConnection, async (req, res) => {
+  try {
+    const limit = parseInt(req.body.limit, 10) || 10;
+    const submissionId = req.body.submissionId;
+
+    let query = {};
+    if (submissionId) {
+      query = { _id: submissionId };
+    } else {
+      query = {
+        $or: [
+          { score: null },
+          { 'score.error': { $exists: true } }
+        ]
+      };
+    }
+
+    const failedSubmissions = await Submission.find(query)
+      .sort({ submittedAt: -1 })
+      .limit(limit);
+
+    if (failedSubmissions.length === 0) {
+      return res.status(200).json({
+        success: true,
+        message: 'No pending or failed submissions found to evaluate.',
+        count: 0,
+        data: []
+      });
+    }
+
+    const results = [];
+    for (const sub of failedSubmissions) {
+      if (!sub.videoResponses || sub.videoResponses.length === 0) {
+        continue;
+      }
+      try {
+        console.log(`[Re-evaluating] Submission ${sub._id} (${sub.applicantName})`);
+        const evaluations = await evaluateSubmissionVideos(sub);
+        sub.score = evaluations;
+        await sub.save();
+        results.push({
+          submissionId: sub._id,
+          applicantName: sub.applicantName,
+          status: 'success',
+          videoCount: evaluations.length,
+          score: evaluations
+        });
+      } catch (evalErr) {
+        console.error(`[Re-evaluate Error] Submission ${sub._id}:`, evalErr.message);
+        sub.score = { error: evalErr.message };
+        await sub.save();
+        results.push({
+          submissionId: sub._id,
+          applicantName: sub.applicantName,
+          status: 'failed',
+          error: evalErr.message
+        });
+      }
+    }
+
+    res.status(200).json({
+      success: true,
+      message: `Completed evaluation for ${results.length} submission(s)`,
+      count: results.length,
+      data: results
+    });
+  } catch (err) {
+    console.error('Error in /re-evaluate-failed:', err);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to re-evaluate submissions',
+      error: err.message
     });
   }
 });

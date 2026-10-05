@@ -1,7 +1,16 @@
 const { spawn } = require('child_process');
 const fs = require('fs');
+const axios = require('axios');
+const FormData = require('form-data');
 const { OpenAI } = require('openai');
-const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+let openai = null;
+if (process.env.OPENAI_API_KEY) {
+    try {
+        openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+    } catch (e) {
+        console.warn('OpenAI init warning in videoTotext:', e.message);
+    }
+}
 
 // Main function to process video responses
 const processVideoResponses = async ({ videoFiles }) => {
@@ -78,22 +87,53 @@ const convertVideoToAudio = async (videoPath) => {
     });
 };
 
-// Transcribe audio using OpenAI Whisper API
+// Transcribe audio using Groq Whisper (free) or OpenAI Whisper API
 const transcribeAudio = async (audioPath) => {
     try {
         if (!fs.existsSync(audioPath)) {
             throw new Error(`Audio file not found: ${audioPath}`);
         }
 
-        const response = await openai.audio.transcriptions.create({
-            file: fs.createReadStream(audioPath),
-            model: 'whisper-1',
-        });
+        const groqKey = process.env.GROQ_API_KEY;
+        const openaiKey = process.env.OPENAI_API_KEY;
 
-        return response.text;
+        if (groqKey) {
+            const form = new FormData();
+            form.append('file', fs.createReadStream(audioPath));
+            form.append('model', process.env.GROQ_WHISPER_MODEL || 'whisper-large-v3');
+
+            const response = await axios.post('https://api.groq.com/openai/v1/audio/transcriptions', form, {
+                headers: {
+                    ...form.getHeaders(),
+                    'Authorization': `Bearer ${groqKey}`
+                },
+                maxBodyLength: Infinity,
+                maxContentLength: Infinity
+            });
+
+            return response.data?.text || '';
+        } else if (openaiKey) {
+            const form = new FormData();
+            form.append('file', fs.createReadStream(audioPath));
+            form.append('model', 'whisper-1');
+
+            const response = await axios.post('https://api.openai.com/v1/audio/transcriptions', form, {
+                headers: {
+                    ...form.getHeaders(),
+                    'Authorization': `Bearer ${openaiKey}`
+                },
+                maxBodyLength: Infinity,
+                maxContentLength: Infinity
+            });
+
+            return response.data?.text || '';
+        } else {
+            throw new Error('No transcription API key configured. Please set GROQ_API_KEY in .env');
+        }
     } catch (error) {
-        console.error('Transcription error:', error);
-        throw error;
+        const errorMsg = error.response?.data?.error?.message || error.message;
+        console.error('Transcription error:', errorMsg);
+        throw new Error(`Transcription failed: ${errorMsg}`);
     }
 };
 
