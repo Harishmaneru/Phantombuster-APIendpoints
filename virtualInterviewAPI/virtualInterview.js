@@ -11,7 +11,15 @@ const { Interview } = require('./interviewLink');
 const axios = require('axios');
 const cheerio = require('cheerio');
 
-const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+// Safe OpenAI initialization (optional fallback)
+let openai = null;
+if (process.env.OPENAI_API_KEY) {
+    try {
+        openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+    } catch (e) {
+        console.warn('OpenAI init warning in virtualInterview:', e.message);
+    }
+}
 
 const router = express.Router();
 const upload = multer({ dest: 'uploads/' });
@@ -660,9 +668,11 @@ const scrapeJobDescription = async (jobPostingUrl, rayId = null) => {
 
 const generateQuestions = async (JobDescription, JobTitle = null, numQuestions = 3) => {
     // Check if the job description is meaningful or just navigation/menu text
-    const isMenuText = JobDescription.includes('Popular Jobs') &&
+    const isMenuText = JobDescription && (
+        JobDescription.includes('Popular Jobs') &&
         JobDescription.includes('Top job titles') &&
-        JobDescription.includes('Top job types');
+        JobDescription.includes('Top job types')
+    );
 
     let prompt;
 
@@ -673,22 +683,100 @@ const generateQuestions = async (JobDescription, JobTitle = null, numQuestions =
         prompt = `Generate exactly ${numQuestions} relevant and challenging technical interview questions based on the following job description. The questions should focus on conceptual understanding and require detailed verbal explanations, not code-writing tasks. Avoid asking questions that involve solving problems by writing code. Provide only the questions, without any introductory text, explanations, or formatting:\n\n${JobDescription}`;
     }
 
-    const response = await openai.chat.completions.create({
-        model: 'gpt-3.5-turbo',
-        messages: [
-            {
-                role: 'system',
-                content: 'You are an expert technical interviewer who creates concise, challenging technical questions for candidates.'
-            },
-            {
-                role: 'user',
-                content: prompt
-            }
-        ],
-        temperature: 0.7,
-    });
+    const anthropicKey = process.env.ANTHROPIC_API_KEY || process.env.CLAUDE_API_KEY;
+    const groqKey = process.env.GROQ_API_KEY;
+    let rawText = null;
 
-    return response.choices[0].message.content.split('\n').filter(q => q.trim());
+    // 1. Try Claude (Anthropic API)
+    if (anthropicKey) {
+        try {
+            console.log('[Question Generation] Using Claude (Anthropic API)...');
+            const model = process.env.CLAUDE_MODEL || 'claude-3-5-sonnet-20241022';
+            const systemPrompt = 'You are an expert technical interviewer who creates concise, challenging technical questions for candidates.';
+
+            const response = await axios.post(
+                'https://api.anthropic.com/v1/messages',
+                {
+                    model: model,
+                    max_tokens: 1000,
+                    system: systemPrompt,
+                    messages: [{ role: 'user', content: prompt }]
+                },
+                {
+                    headers: {
+                        'x-api-key': anthropicKey.trim(),
+                        'anthropic-version': '2023-06-01',
+                        'content-type': 'application/json'
+                    },
+                    timeout: 60000
+                }
+            );
+            rawText = response.data?.content?.[0]?.text;
+        } catch (apiErr) {
+            console.warn('Claude API question generation failed:', apiErr.response?.data?.error?.message || apiErr.message);
+            if (!groqKey && !openai) {
+                throw new Error(`Claude question generation failed: ${apiErr.response?.data?.error?.message || apiErr.message}`);
+            }
+        }
+    }
+
+    // 2. Fallback to Groq LLM if Claude failed or not configured
+    if (!rawText && groqKey) {
+        try {
+            console.log('[Question Generation] Using Groq LLM fallback...');
+            const response = await axios.post(
+                'https://api.groq.com/openai/v1/chat/completions',
+                {
+                    model: process.env.GROQ_LLM_MODEL || 'llama-3.3-70b-versatile',
+                    messages: [
+                        { role: 'system', content: 'You are an expert technical interviewer who creates concise, challenging technical questions for candidates.' },
+                        { role: 'user', content: prompt }
+                    ]
+                },
+                {
+                    headers: { Authorization: `Bearer ${groqKey}` },
+                    timeout: 60000
+                }
+            );
+            rawText = response.data?.choices?.[0]?.message?.content;
+        } catch (groqErr) {
+            console.warn('Groq LLM question generation failed:', groqErr.response?.data || groqErr.message);
+            if (!openai) {
+                throw new Error(`Question generation failed: ${groqErr.response?.data?.error?.message || groqErr.message}`);
+            }
+        }
+    }
+
+    // 3. Fallback to OpenAI if still not generated
+    if (!rawText && openai) {
+        try {
+            console.log('[Question Generation] Using OpenAI fallback...');
+            const response = await openai.chat.completions.create({
+                model: 'gpt-3.5-turbo',
+                messages: [
+                    {
+                        role: 'system',
+                        content: 'You are an expert technical interviewer who creates concise, challenging technical questions for candidates.'
+                    },
+                    {
+                        role: 'user',
+                        content: prompt
+                    }
+                ],
+                temperature: 0.7,
+            });
+            rawText = response.choices[0].message.content;
+        } catch (openaiErr) {
+            console.error('OpenAI question generation failed:', openaiErr.message);
+            throw openaiErr;
+        }
+    }
+
+    if (!rawText) {
+        throw new Error('No AI service available. Please configure ANTHROPIC_API_KEY or GROQ_API_KEY in .env');
+    }
+
+    return rawText.split('\n').filter(q => q.trim());
 };
 
 
