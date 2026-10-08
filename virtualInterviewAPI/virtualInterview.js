@@ -674,25 +674,41 @@ const generateQuestions = async (JobDescription, JobTitle = null, numQuestions =
         JobDescription.includes('Top job types')
     );
 
-    let prompt;
+    const roleTitle = JobTitle ? `for a "${JobTitle}" role` : 'for the specified role';
 
     if (isMenuText && JobTitle) {
         console.log('Job description appears to be menu text, using job title instead:', JobTitle);
-        prompt = `Generate exactly ${numQuestions} relevant and challenging interview questions for a "${JobTitle}" position. The questions should focus on skills and knowledge relevant to this role. Provide only the questions, without any introductory text, explanations, or formatting.`;
+        prompt = `You are an expert interviewer. Generate exactly ${numQuestions} relevant, specific, and challenging interview questions for a "${JobTitle}" position.
+
+Instructions:
+- Tailor questions specifically to the core responsibilities, day-to-day workflows, key tools, and real-world scenarios typically faced in this role.
+- Avoid generic, generic-filler, or textbook questions.
+- Focus on in-depth verbal explanations of past execution and practical problem-solving.
+- Provide ONLY the numbered questions (1., 2., 3., etc.), without any introductory text, preamble, or markdown formatting (**).`;
     } else {
-        prompt = `Generate exactly ${numQuestions} relevant and challenging technical interview questions based on the following job description. The questions should focus on conceptual understanding and require detailed verbal explanations, not code-writing tasks. Avoid asking questions that involve solving problems by writing code. Provide only the questions, without any introductory text, explanations, or formatting:\n\n${JobDescription}`;
+        prompt = `You are an expert hiring manager and interviewer. Generate exactly ${numQuestions} highly relevant, specific, and challenging interview questions strictly grounded in the following job description ${roleTitle}.
+
+Instructions:
+- Each question must directly probe and evaluate specific requirements, qualifications, tools, day-to-day responsibilities, workflows, target personas, or KPIs explicitly described in this job description.
+- Do NOT produce generic, surface-level, or cookie-cutter questions (avoid generic questions like "tell me about a challenge" or basic textbook definitions).
+- For technical roles: Focus on architecture, system design, technical decision-making, and verbal explanations of engineering trade-offs (avoid asking candidates to write code).
+- For business/sales/marketing/operations roles: Focus on campaign execution, deal cycles, pipeline strategy, stakeholder engagement, and domain metrics.
+- Provide ONLY the numbered questions (1., 2., 3., etc.), without any introductory text, conversational preamble, or markdown bold (**).
+
+Job Description:
+${JobDescription}`;
     }
 
     const anthropicKey = process.env.ANTHROPIC_API_KEY || process.env.CLAUDE_API_KEY;
     const groqKey = process.env.GROQ_API_KEY;
     let rawText = null;
+    const systemPrompt = 'You are an expert hiring manager and interviewer who generates role-specific, challenging interview questions strictly grounded in the provided job requirements without introductory preamble.';
 
     // 1. Try Claude (Anthropic API)
     if (anthropicKey) {
         try {
             console.log('[Question Generation] Using Claude (Anthropic API)...');
             const model = process.env.CLAUDE_MODEL || 'claude-3-5-sonnet-20241022';
-            const systemPrompt = 'You are an expert technical interviewer who creates concise, challenging technical questions for candidates.';
 
             const response = await axios.post(
                 'https://api.anthropic.com/v1/messages',
@@ -733,7 +749,7 @@ const generateQuestions = async (JobDescription, JobTitle = null, numQuestions =
                 {
                     model: groqModel,
                     messages: [
-                        { role: 'system', content: 'You are an expert technical interviewer who creates concise, challenging technical questions for candidates.' },
+                        { role: 'system', content: systemPrompt },
                         { role: 'user', content: prompt }
                     ]
                 },
@@ -751,7 +767,7 @@ const generateQuestions = async (JobDescription, JobTitle = null, numQuestions =
                     {
                         model: 'qwen/qwen3.8-27b',
                         messages: [
-                            { role: 'system', content: 'You are an expert technical interviewer who creates concise, challenging technical questions for candidates.' },
+                            { role: 'system', content: systemPrompt },
                             { role: 'user', content: prompt }
                         ]
                     },
@@ -772,27 +788,36 @@ const generateQuestions = async (JobDescription, JobTitle = null, numQuestions =
         throw new Error('Failed to generate questions. Please ensure ANTHROPIC_API_KEY (Claude) or GROQ_API_KEY is configured and valid.');
     }
 
-    return rawText.split('\n').filter(q => q.trim());
+    return cleanQuestions(rawText);
 };
 
 
-// Function to clean the generated questions
-const cleanQuestions = (questions) => {
-    let cleanedQuestions = [];
-    let questionNumber = 1;
+// Function to clean and standardize generated questions
+const cleanQuestions = (input) => {
+    if (!input) return [];
+    const raw = Array.isArray(input) ? input.join('\n') : String(input || '');
 
-    for (let question of questions) {
-
-        let cleanedQuestion = question.replace(/\*\*/g, '').trim();
-
-
-        cleanedQuestion = cleanedQuestion.replace(/^Technical Question \d+:/, `Question ${questionNumber}:`);
-        cleanedQuestions.push(cleanedQuestion);
-
-        questionNumber++;
+    // Match numbered blocks like '1. ', '1) ', 'Question 1:'
+    const regex = /(?:^|\n)\s*(?:Question\s*\d+[:.]?|\d+[\.\)])\s*([\s\S]*?)(?=(?:\n\s*(?:Question\s*\d+[:.]?|\d+[\.\)])\s*)|$)/gi;
+    const list = [];
+    let match;
+    while ((match = regex.exec(raw)) !== null) {
+        let text = match[1].replace(/\*\*/g, '').trim();
+        text = text.replace(/^(?:Question\s*\d+[:.]?|\d+[\.\)])\s*/i, '').trim();
+        if (text.length > 15) {
+            list.push(text);
+        }
     }
 
-    return cleanedQuestions;
+    if (list.length > 0) {
+        return list.map((q, idx) => `${idx + 1}. ${q}`);
+    }
+
+    // Fallback split by lines if regex didn't catch numbered format
+    return raw.split('\n')
+        .map(l => l.replace(/\*\*/g, '').replace(/^(?:Question\s*\d+[:.]?|\d+[\.\)])\s*/i, '').trim())
+        .filter(l => l.length > 15 && !l.toLowerCase().startsWith('here are') && !l.toLowerCase().includes('certainly'))
+        .map((q, idx) => `${idx + 1}. ${q}`);
 };
 
 // Add a cache to store job data
@@ -937,6 +962,7 @@ router.post('/generate-questions', async (req, res) => {
         }
 
         console.log(`Final job description length for user ${userId}:`, jobDescription.length);
+        console.log(`[Job Description Preview for user ${userId}]: "${jobDescription.substring(0, 150).replace(/\s+/g, ' ')}..."`);
 
         // Generate raw questions based on the description and title
         const rawQuestions = await generateQuestions(jobDescription, extractedJobTitle, numQuestions);
