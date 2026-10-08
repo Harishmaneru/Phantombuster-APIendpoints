@@ -727,7 +727,7 @@ const generateQuestions = async (JobDescription, JobTitle = null, numQuestions =
             const response = await axios.post(
                 'https://api.groq.com/openai/v1/chat/completions',
                 {
-                    model: process.env.GROQ_LLM_MODEL || 'llama-3.3-70b-versatile',
+                    model: process.env.GROQ_LLM_MODEL || 'openai/gpt-oss-120b',
                     messages: [
                         { role: 'system', content: 'You are an expert technical interviewer who creates concise, challenging technical questions for candidates.' },
                         { role: 'user', content: prompt }
@@ -740,40 +740,32 @@ const generateQuestions = async (JobDescription, JobTitle = null, numQuestions =
             );
             rawText = response.data?.choices?.[0]?.message?.content;
         } catch (groqErr) {
-            console.warn('Groq LLM question generation failed:', groqErr.response?.data || groqErr.message);
-            if (!openai) {
+            console.warn('Groq LLM primary model failed, trying qwen fallback:', groqErr.response?.data?.error?.message || groqErr.message);
+            try {
+                const response = await axios.post(
+                    'https://api.groq.com/openai/v1/chat/completions',
+                    {
+                        model: 'qwen/qwen3.8-27b',
+                        messages: [
+                            { role: 'system', content: 'You are an expert technical interviewer who creates concise, challenging technical questions for candidates.' },
+                            { role: 'user', content: prompt }
+                        ]
+                    },
+                    {
+                        headers: { Authorization: `Bearer ${groqKey}` },
+                        timeout: 60000
+                    }
+                );
+                rawText = response.data?.choices?.[0]?.message?.content;
+            } catch (qwenErr) {
+                console.warn('Groq LLM secondary fallback failed:', qwenErr.response?.data?.error?.message || qwenErr.message);
                 throw new Error(`Question generation failed: ${groqErr.response?.data?.error?.message || groqErr.message}`);
             }
         }
     }
 
-    // 3. Fallback to OpenAI if still not generated
-    if (!rawText && openai) {
-        try {
-            console.log('[Question Generation] Using OpenAI fallback...');
-            const response = await openai.chat.completions.create({
-                model: 'gpt-3.5-turbo',
-                messages: [
-                    {
-                        role: 'system',
-                        content: 'You are an expert technical interviewer who creates concise, challenging technical questions for candidates.'
-                    },
-                    {
-                        role: 'user',
-                        content: prompt
-                    }
-                ],
-                temperature: 0.7,
-            });
-            rawText = response.choices[0].message.content;
-        } catch (openaiErr) {
-            console.error('OpenAI question generation failed:', openaiErr.message);
-            throw openaiErr;
-        }
-    }
-
     if (!rawText) {
-        throw new Error('No AI service available. Please configure ANTHROPIC_API_KEY or GROQ_API_KEY in .env');
+        throw new Error('Failed to generate questions. Please ensure ANTHROPIC_API_KEY (Claude) or GROQ_API_KEY is configured and valid.');
     }
 
     return rawText.split('\n').filter(q => q.trim());
