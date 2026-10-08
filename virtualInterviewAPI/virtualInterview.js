@@ -724,10 +724,14 @@ const generateQuestions = async (JobDescription, JobTitle = null, numQuestions =
     if (!rawText && groqKey) {
         try {
             console.log('[Question Generation] Using Groq LLM fallback...');
+            let groqModel = process.env.GROQ_LLM_MODEL;
+            if (!groqModel || groqModel.includes('llama')) {
+                groqModel = 'openai/gpt-oss-120b';
+            }
             const response = await axios.post(
                 'https://api.groq.com/openai/v1/chat/completions',
                 {
-                    model: process.env.GROQ_LLM_MODEL || 'openai/gpt-oss-120b',
+                    model: groqModel,
                     messages: [
                         { role: 'system', content: 'You are an expert technical interviewer who creates concise, challenging technical questions for candidates.' },
                         { role: 'user', content: prompt }

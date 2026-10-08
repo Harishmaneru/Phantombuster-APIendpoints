@@ -1257,10 +1257,14 @@ Return ONLY a valid JSON object in this exact schema (no markdown formatting, no
   if (!rawText && groqKey) {
     try {
       console.log('[Scoring] Using Groq LLM fallback for evaluation...');
+      let groqModel = process.env.GROQ_LLM_MODEL;
+      if (!groqModel || groqModel.includes('llama')) {
+        groqModel = 'openai/gpt-oss-120b';
+      }
       const response = await axios.post(
         'https://api.groq.com/openai/v1/chat/completions',
         {
-          model: process.env.GROQ_LLM_MODEL || 'openai/gpt-oss-120b',
+          model: groqModel,
           response_format: { type: 'json_object' },
           messages: [{ role: 'user', content: scorePrompt }]
         },
