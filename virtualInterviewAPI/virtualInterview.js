@@ -837,7 +837,10 @@ const getUserJobKeys = (userId) => {
 };
 
 router.post('/generate-questions', async (req, res) => {
-    const { jobPostingUrl, jobTitle, manualJobDescription, rayId, numQuestions = 3, isAdditionalRequest = false, userId } = req.body;
+    const manualJobDescription = req.body.manualJobDescription || req.body.jobDescription || req.body.JobDescription || req.body.description;
+    const jobTitle = req.body.jobTitle || req.body.JobTitle || req.body.title;
+    const jobPostingUrl = req.body.jobPostingUrl || req.body.JobPostingUrl || req.body.url;
+    const { rayId, numQuestions = 3, isAdditionalRequest = false, userId } = req.body;
 
     if (!jobPostingUrl && !jobTitle && !manualJobDescription) {
         return res.status(400).json({
