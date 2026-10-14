@@ -373,6 +373,25 @@ async function getValidAccessToken(smtpRecord) {
 //   return { success: true, method: "graph-api" };
 // }
 
+// Helper: Auto-generate plain text from HTML when caller only sends html
+function htmlToPlainText(html = "") {
+  if (!html || typeof html !== "string") return "";
+  return html
+    .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, "")
+    .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, "")
+    .replace(/<br\s*\/?>/gi, "\n")
+    .replace(/<\/(p|div|h[1-6]|li|tr)>/gi, "\n")
+    .replace(/<[^>]+>/g, "")
+    .replace(/&nbsp;/gi, " ")
+    .replace(/&amp;/gi, "&")
+    .replace(/&lt;/gi, "<")
+    .replace(/&gt;/gi, ">")
+    .replace(/&quot;/gi, '"')
+    .replace(/&#39;/gi, "'")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
 // Microsoft Graph API Email Sending
 // Inject the open-tracking pixel and rewrite links for click tracking.
 // Mirrors the SMTP send path so Graph-sent mail is tracked identically.
@@ -384,7 +403,7 @@ function applyEmailTracking(html, trackLinks, trackingId) {
     process.env.BASE_URL || "https://videoresponse.onepgr.com:3001"
   ).replace(/\/api\/?$/, "");
   const trackingPixelUrl = `${baseUrl}/api/track/open/${trackingId}`;
-  const pixelTag = `<img src="${trackingPixelUrl}" width="1" height="1" style="display:none;border:0;" alt=""/>`;
+  const pixelTag = `<img src="${trackingPixelUrl}" width="1" height="1" border="0" style="border:0;outline:none;text-decoration:none;" alt=""/>`;
 
   let out = html;
   if (out.includes("</body>")) {
@@ -1597,13 +1616,13 @@ router.post("/api/emailsend", async (req, res) => {
     ).replace(/\/api\/?$/, "");
     const trackingPixelUrl = `${baseUrl}/api/track/open/${trackingId}`;
 
-    // Use exactly what user provided - no template processing
-    let emailHtml = html;
-    let emailText = text;
+    // Ensure both HTML and Plain Text exist so Nodemailer always sends multipart/alternative
+    let emailHtml = html || (text ? text.replace(/\n/g, "<br>") : "");
+    let emailText = text && text.trim() ? text : htmlToPlainText(emailHtml);
 
     // Add tracking pixel only if HTML content exists AND link tracking is enabled
     if (emailHtml && trackLinks) {
-      const pixelTag = `<img src="${trackingPixelUrl}" width="1" height="1" style="display:none;border:0;" alt=""/>`;
+      const pixelTag = `<img src="${trackingPixelUrl}" width="1" height="1" border="0" style="border:0;outline:none;text-decoration:none;" alt=""/>`;
       if (emailHtml.includes("</body>")) {
         emailHtml = emailHtml.replace("</body>", `${pixelTag}</body>`);
         console.log(
@@ -1623,28 +1642,23 @@ router.post("/api/emailsend", async (req, res) => {
     }
 
     // Track links only if requested and HTML content exists
-    // Track links only if requested and HTML content exists
     // Skip tracking for links with data-no-track or data-media-link attributes
     if (emailHtml && trackLinks) {
-      // Use a more sophisticated regex that captures the full <a> tag
       emailHtml = emailHtml.replace(
         /<a\s+([^>]*)href=["']([^"']+)["']([^>]*)>(.*?)<\/a>/gi,
         (match, beforeHref, url, afterHref, content) => {
           const fullAttributes = beforeHref + 'href="' + url + '"' + afterHref;
 
-          // Check if this link should NOT be tracked
           const shouldSkipTracking =
             fullAttributes.includes('data-no-track="true"') ||
             fullAttributes.includes("data-no-track='true'") ||
             fullAttributes.includes('data-media-link="true"') ||
             fullAttributes.includes("data-media-link='true'");
 
-          // If it's a media link or marked as no-track, keep the direct URL
           if (shouldSkipTracking) {
-            return match; // Return original link unchanged
+            return match;
           }
 
-          // Otherwise, wrap with tracking URL
           if (url.startsWith("http") && !url.includes(baseUrl)) {
             const encodedUrl = encodeURIComponent(url);
             return `<a ${beforeHref}href="${baseUrl}/api/track/click/${trackingId}?url=${encodedUrl}"${afterHref}>${content}</a>`;
@@ -1655,8 +1669,21 @@ router.post("/api/emailsend", async (req, res) => {
       );
     }
 
-    // Format from field with sender name if provided
-    const fromField = sender_name ? `${sender_name} <${from}>` : from;
+    // Prevent display-name spoofing: if sender_name doesn't match the mailbox prefix
+    // (e.g. sender_name="Rohit" used for "aditya@get-wizdata.com"), derive name from the email
+    const emailPrefix = from.split("@")[0];
+    let safeSenderName = sender_name ? sender_name.trim() : "";
+    if (
+      safeSenderName &&
+      !safeSenderName.toLowerCase().includes(emailPrefix.toLowerCase()) &&
+      !emailPrefix.toLowerCase().includes(safeSenderName.toLowerCase())
+    ) {
+      // Capitalize the email prefix instead of using a mismatched account name
+      safeSenderName =
+        emailPrefix.charAt(0).toUpperCase() + emailPrefix.slice(1);
+    }
+
+    const fromField = safeSenderName ? `${safeSenderName} <${from}>` : from;
 
     // Encode subject properly for email headers (handles HTML content)
     const encodedSubject = encodeSubjectForEmail(subject);
@@ -1666,12 +1693,8 @@ router.post("/api/emailsend", async (req, res) => {
       to,
       subject: encodedSubject,
       html: emailHtml,
-      text: emailText,
+      text: emailText, // <-- Always populated now; forces multipart/alternative
       messageId: `<${trackingId}@${from.split("@")[1]}>`,
-      headers: {
-        "X-Tracking-ID": trackingId,
-        References: `<${trackingId}@${from.split("@")[1]}>`,
-      },
     };
 
     if (cc) emailOptions.cc = cc;
