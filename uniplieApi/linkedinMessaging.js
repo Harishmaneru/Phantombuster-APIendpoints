@@ -1638,7 +1638,13 @@ router.post(
         form.append("subject", subject);
       }
 
-      if (use_inmail) {
+      const isInMail =
+        use_inmail === true ||
+        String(use_inmail).toLowerCase() === "true" ||
+        use_inmail === 1 ||
+        use_inmail === "1";
+
+      if (isInMail) {
         form.append("linkedin[inmail]", "true");
       }
 
@@ -1676,7 +1682,8 @@ router.post(
       res.json({
         success: true,
         data: response.data,
-        message: use_inmail
+        is_inmail: isInMail,
+        message: isInMail
           ? "InMail sent successfully"
           : "Message sent successfully",
         chat_id: response.data.chat_id,
@@ -1818,7 +1825,13 @@ router.post(
         form.append("subject", subject);
       }
 
-      if (use_inmail) {
+      const isInMail =
+        use_inmail === true ||
+        String(use_inmail).toLowerCase() === "true" ||
+        use_inmail === 1 ||
+        use_inmail === "1";
+
+      if (isInMail) {
         form.append("linkedin[inmail]", "true");
       }
 
@@ -1856,7 +1869,8 @@ router.post(
       res.json({
         success: true,
         data: response.data,
-        message: use_inmail
+        is_inmail: isInMail,
+        message: isInMail
           ? "InMail sent successfully"
           : "Message sent successfully",
         chat_id: response.data.chat_id,
@@ -4817,6 +4831,68 @@ router.get("/api/unipile/user/:userId/inmail/credits", async (req, res) => {
       success: true,
       credits: response.data,
       account_id: accountId,
+      user_id: userId,
+    });
+  } catch (err) {
+    handleError(err, res);
+  }
+});
+
+// Check InMail credits by direct accountId
+router.get("/api/unipile/account/:accountId/inmail/credits", async (req, res) => {
+  try {
+    const { accountId } = req.params;
+    if (!accountId) {
+      return res
+        .status(400)
+        .json({ success: false, error: "account_id is required" });
+    }
+
+    const response = await axios.get(
+      `${getBaseUrl()}/linkedin/inmail_balance?account_id=${accountId}`,
+      { headers: getHeaders() },
+    );
+
+    res.json({
+      success: true,
+      credits: response.data,
+      account_id: accountId,
+    });
+  } catch (err) {
+    handleError(err, res);
+  }
+});
+
+// Check InMail credits via query parameter (?account_id=... OR ?user_id=...)
+router.get("/api/unipile/linkedin/inmail/credits", async (req, res) => {
+  try {
+    const { account_id, user_id } = req.query;
+
+    let finalAccountId = account_id;
+    if (!finalAccountId && user_id) {
+      const dbResult = await getLinkedInAccountStatus(user_id);
+      if (dbResult.success && dbResult.account_id) {
+        finalAccountId = dbResult.account_id;
+      }
+    }
+
+    if (!finalAccountId) {
+      return res.status(400).json({
+        success: false,
+        error: "Either account_id or user_id query parameter is required",
+      });
+    }
+
+    const response = await axios.get(
+      `${getBaseUrl()}/linkedin/inmail_balance?account_id=${finalAccountId}`,
+      { headers: getHeaders() },
+    );
+
+    res.json({
+      success: true,
+      credits: response.data,
+      account_id: finalAccountId,
+      ...(user_id && { user_id }),
     });
   } catch (err) {
     handleError(err, res);
