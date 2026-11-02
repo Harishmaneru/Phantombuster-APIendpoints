@@ -726,6 +726,8 @@ const emailTrackingSchema = new mongoose.Schema(
     openedCount: { type: Number, default: 0 },
     lastOpenedIP: String,
     repliedAt: Date,
+    bouncedAt: Date,
+    bounceDetails: mongoose.Schema.Types.Mixed,
     webhookUrl: String,
     // Store email content for tracking data extraction
     emailContent: {
@@ -3016,6 +3018,24 @@ router.get("/api/track/open/:trackingId", async (req, res) => {
       );
     }
 
+    // Ignore open tracking on emails that have already bounced (avoids fake opens from MTA/scanner bots)
+    if (tracking.bouncedAt) {
+      console.log(`ℹ️ Ignored open tracking on already-bounced email: ${trackingId} (${tracking.toEmail})`);
+      res.set("Content-Type", "image/png");
+      res.set(
+        "Cache-Control",
+        "no-store, no-cache, must-revalidate, private, max-age=0, post-check=0, pre-check=0",
+      );
+      res.set("Pragma", "no-cache");
+      res.set("Expires", "0");
+      return res.send(
+        Buffer.from(
+          "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=",
+          "base64",
+        ),
+      );
+    }
+
     // Get tracking payload data (directly stored or extracted from content)
     let extractedTrackingData = {};
 
@@ -3417,7 +3437,8 @@ function printCycleSummary(
       details = `${m.reason || "error"}`;
     } else {
       const skipped = m.recordsSkipped ? `${m.recordsSkipped} dropped, ` : "";
-      details = `${skipped}${m.checked} checked → ${m.replies} repl${m.replies === 1 ? "y" : "ies"}${m.errors ? `, ${m.errors} err` : ""}`;
+      const bounces = m.bounces ? `, ${m.bounces} bounce${m.bounces === 1 ? "" : "s"}` : "";
+      details = `${skipped}${m.checked} checked → ${m.replies} repl${m.replies === 1 ? "y" : "ies"}${bounces}${m.errors ? `, ${m.errors} err` : ""}`;
     }
     rows.push({
       i,
@@ -3441,8 +3462,9 @@ function printCycleSummary(
   const lines = [];
   lines.push("");
   lines.push("================ Reply Check Cycle Summary ================");
+  const bounceInfo = totals.bouncesFound ? ` · ${totals.bouncesFound} bounce(s)` : "";
   lines.push(
-    `${startedAtIso} · duration ${(durationMs / 1000).toFixed(1)}s · ${totals.repliesFound} repl${totals.repliesFound === 1 ? "y" : "ies"} · ${totals.errors} error(s)`,
+    `${startedAtIso} · duration ${(durationMs / 1000).toFixed(1)}s · ${totals.repliesFound} repl${totals.repliesFound === 1 ? "y" : "ies"}${bounceInfo} · ${totals.errors} error(s)`,
   );
   lines.push(
     `mailboxes: ${report.size} (✅ ${counts.completed || 0}  ⚠️  ${counts.skipped || 0}  ❌ ${counts.failed || 0})  ·  candidates: ${candidatesLoaded}  ·  records checked: ${totals.recordsChecked}`,
@@ -3461,6 +3483,38 @@ function printCycleSummary(
   console.log(lines.join("\n"));
 }
 
+// Bounce detection helper
+const BOUNCE_DETECTION_REGEX =
+  /delivery status notification|undeliver|mail delivery (failed|subsystem)|returned mail|failure notice|delivery (has )?failed|mailer-daemon|postmaster|disableduser|address restriction/i;
+
+function isBounceMessage(details) {
+  if (!details) return false;
+  const from = (details.replyFrom || details.from || "").toLowerCase();
+  const subject = (details.replySubject || details.subject || "").toLowerCase();
+  const text = (details.replyText || details.text || details.body || "").toLowerCase();
+
+  // 1. Check sender
+  if (/mailer-daemon|postmaster|mail delivery system/i.test(from)) {
+    return true;
+  }
+
+  // 2. Check subject
+  if (BOUNCE_DETECTION_REGEX.test(subject)) {
+    return true;
+  }
+
+  // 3. Check bounce phrases / error codes in body
+  if (
+    /550[- ]5\.[12]\.\d|user unknown|mailbox unavailable|account that you tried to reach is inactive|diagnostic-code:\s*smtp|action:\s*failed|reporting-mta:/i.test(
+      text,
+    )
+  ) {
+    return true;
+  }
+
+  return false;
+}
+
 async function checkForReplies() {
   if (replyCheckRunning) {
     replyLog("warn", "cycle_skipped", { reason: "previous_cycle_running" });
@@ -3472,6 +3526,7 @@ async function checkForReplies() {
   try {
     const trackings = await EmailTracking.find({
       repliedAt: { $exists: false },
+      bouncedAt: { $exists: false },
       fromEmail: { $exists: true },
       originalMessageId: { $exists: true, $ne: null },
     })
@@ -3503,11 +3558,12 @@ async function checkForReplies() {
         host: "—",
         checked: 0,
         replies: 0,
+        bounces: 0,
         errors: 0,
       });
     }
 
-    const totals = { recordsChecked: 0, repliesFound: 0, errors: 0 };
+    const totals = { recordsChecked: 0, repliesFound: 0, bouncesFound: 0, errors: 0 };
 
     // Sequential — one mailbox at a time
     for (const [mailbox, records] of byMailbox) {
@@ -3640,6 +3696,62 @@ async function checkForReplies() {
                 replyHtml,
                 replyMessageId: matchedMsg.internetMessageId || matchedMsg.id,
               };
+
+              const isBounce = isBounceMessage(replyDetails);
+
+              if (isBounce) {
+                await EmailTracking.findOneAndUpdate(
+                  { messageId: tracking.messageId },
+                  {
+                    $set: {
+                      bouncedAt: replyTime,
+                      bounceDetails: replyDetails,
+                    },
+                  },
+                );
+
+                replyLog("info", "bounce_found", {
+                  mailbox,
+                  trackingId: tracking.messageId,
+                  method: matchMethod,
+                  originalMessageId: tracking.originalMessageId,
+                  bounceFrom: replyDetails.replyFrom,
+                });
+
+                console.log(
+                  `⚠️ Email Bounce detected via Graph for ${tracking.toEmail} (${replyDetails.replyFrom}): ${replyDetails.replySubject}`,
+                );
+
+                let extractedTrackingData = {};
+                if (tracking.trackingPayload) {
+                  extractedTrackingData = { ...tracking.trackingPayload };
+                }
+
+                await sendWebhookNotification(
+                  "https://meet.onepgr.com/session/smatpTracking",
+                  {
+                    event: "bounced",
+                    trackingId: tracking.messageId,
+                    email: tracking.toEmail,
+                    from: tracking.fromEmail,
+                    subject: tracking.subject,
+                    timestamp: replyTime,
+                    extractedTrackingData,
+                    replyDetails,
+                    originalMessageId: tracking.originalMessageId,
+                    replyCount: 0,
+                  },
+                );
+
+                replyLog("info", "bounce_webhook_sent", {
+                  mailbox,
+                  trackingId: tracking.messageId,
+                });
+
+                mb.bounces = (mb.bounces || 0) + 1;
+                totals.bouncesFound = (totals.bouncesFound || 0) + 1;
+                continue;
+              }
 
               await EmailTracking.findOneAndUpdate(
                 { messageId: tracking.messageId },
@@ -3855,10 +3967,16 @@ async function checkForReplies() {
             const replyTime = new Date();
             let replyDetails = null;
             try {
-              const replyMessages = await client.search({
+              let replyMessages = await client.search({
                 header: { "In-Reply-To": tracking.originalMessageId },
               });
-              if (replyMessages.length > 0) {
+              if (!replyMessages || replyMessages.length === 0) {
+                // If not found by In-Reply-To, search by References header (standard for bounces)
+                replyMessages = await client.search({
+                  header: { References: tracking.originalMessageId },
+                });
+              }
+              if (replyMessages && replyMessages.length > 0) {
                 for await (let msg of client.fetch(replyMessages.slice(0, 1), {
                   envelope: true,
                   source: true,
@@ -3886,6 +4004,62 @@ async function checkForReplies() {
                 error: error.message,
               });
               // Continue with basic reply detection even if details fetch fails
+            }
+
+            const isBounce = isBounceMessage(replyDetails);
+
+            if (isBounce) {
+              await EmailTracking.findOneAndUpdate(
+                { messageId: tracking.messageId },
+                {
+                  $set: {
+                    bouncedAt: replyTime,
+                    bounceDetails: replyDetails,
+                  },
+                },
+              );
+
+              replyLog("info", "bounce_found", {
+                mailbox,
+                trackingId: tracking.messageId,
+                method: matchMethod,
+                originalMessageId: tracking.originalMessageId,
+                bounceFrom: replyDetails ? replyDetails.replyFrom : null,
+              });
+
+              console.log(
+                `⚠️ Email Bounce detected via IMAP for ${tracking.toEmail} (${replyDetails?.replyFrom || "unknown"}): ${replyDetails?.replySubject || "Mail delivery failed"}`,
+              );
+
+              let extractedTrackingData = {};
+              if (tracking.trackingPayload) {
+                extractedTrackingData = { ...tracking.trackingPayload };
+              }
+
+              await sendWebhookNotification(
+                "https://meet.onepgr.com/session/smatpTracking",
+                {
+                  event: "bounced",
+                  trackingId: tracking.messageId,
+                  email: tracking.toEmail,
+                  from: tracking.fromEmail,
+                  subject: tracking.subject,
+                  timestamp: replyTime,
+                  extractedTrackingData,
+                  replyDetails: replyDetails,
+                  originalMessageId: tracking.originalMessageId,
+                  replyCount: 0,
+                },
+              );
+
+              replyLog("info", "bounce_webhook_sent", {
+                mailbox,
+                trackingId: tracking.messageId,
+              });
+
+              mb.bounces = (mb.bounces || 0) + 1;
+              totals.bouncesFound = (totals.bouncesFound || 0) + 1;
+              continue;
             }
 
             await EmailTracking.findOneAndUpdate(
@@ -4330,6 +4504,9 @@ router.get("/api/track/:trackingId", async (req, res) => {
         lastOpenedIP: cleanIP(tracking.lastOpenedIP),
         replied: !!tracking.repliedAt,
         repliedAt: formatDate(tracking.repliedAt),
+        bounced: !!tracking.bouncedAt,
+        bouncedAt: formatDate(tracking.bouncedAt),
+        bounceDetails: tracking.bounceDetails || null,
 
         // Enhanced Open Tracking
         openEvents: tracking.openEvents
