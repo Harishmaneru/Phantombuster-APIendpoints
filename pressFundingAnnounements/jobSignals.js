@@ -540,13 +540,14 @@ async function cleanup() {
 // Add cleanup handlers
 process.on('SIGINT', cleanup);  // Ctrl+C
 process.on('SIGTERM', cleanup); // Kill command
-process.on('uncaughtException', async (error) => {
+// This file is loaded into the shared API server (app.js), so these handlers
+// see errors from every route. Log them only: exiting here restarted the whole
+// API whenever any route had an unhandled error, killing sends in progress.
+process.on('uncaughtException', (error) => {
     console.error('Uncaught Exception:', error);
-    await cleanup();
 });
-process.on('unhandledRejection', async (reason, promise) => {
+process.on('unhandledRejection', (reason, promise) => {
     console.error('Unhandled Rejection at:', promise, 'reason:', reason);
-    await cleanup();
 });
 
 //To Test Locally

@@ -1762,8 +1762,14 @@ router.post("/api/emailsend", async (req, res) => {
       senderName: sender_name || null,
     });
   } catch (err) {
+    // to/from are declared inside the try block; read them from the request here.
+    // Referencing them directly threw a ReferenceError in this catch, which went
+    // unhandled and restarted the whole server, losing the send.
+    const { to, from } = req.body || {};
     console.error(`❌ Email Send Error (To: ${to}, From: ${from}):`, err);
-    return res.status(500).json({ success: false, error: err.message });
+    if (!res.headersSent) {
+      return res.status(500).json({ success: false, error: err.message });
+    }
   }
 });
 
