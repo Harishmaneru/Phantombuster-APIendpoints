@@ -501,7 +501,7 @@ connectMongoDb().catch(() => {});
  * Connect a LinkedIn account to a user
  * @param {string} userId - User ID
  * @param {string} accountId - Unipile account ID
- * @param {string} provider - Provider (LINKEDIN)
+ * @param {string} provider - Ignored; kept for call-site compatibility. Always stored as "LINKEDIN".
  * @param {string} name - Account name
  * @param {Object} metadata - Additional metadata
  * @returns {Promise<Object>} - Result of the operation
@@ -509,7 +509,7 @@ connectMongoDb().catch(() => {});
 async function connectLinkedInAccount(
   userId,
   accountId,
-  provider = "LINKEDIN",
+  provider = "LINKEDIN", // eslint-disable-line no-unused-vars
   name = null,
   metadata = {},
 ) {
@@ -519,7 +519,10 @@ async function connectLinkedInAccount(
     const updateData = {
       user_id: userId,
       account_id: accountId,
-      provider: provider,
+      // Must match the upsert filter below. Storing any other value means the
+      // filter never matches the record just written, so every call inserts a
+      // new duplicate document.
+      provider: "LINKEDIN",
       name: name,
       connected: true,
       connected_at: new Date(),

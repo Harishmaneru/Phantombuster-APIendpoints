@@ -9,6 +9,10 @@ const {
   buildParameterSearchUrl,
   buildLinkedInSearchRequest,
 } = require("./linkedinSearchCompatibility");
+const {
+  extractWebhookProvider,
+  isNonLinkedInWebhookEvent,
+} = require("./unipileWebhookProvider");
 
 const {
   INDUSTRY_V1,
@@ -727,6 +731,20 @@ router.post("/api/unipile/webhook/unipile-account", async (req, res) => {
       return res.json({
         success: true,
         message: "No account_id in payload, ignoring.",
+      });
+    }
+
+    // This webhook receives events for ALL Unipile accounts. Only LinkedIn
+    // belongs in the LinkedIn collection — WhatsApp status is handled in
+    // whatsappMessaging.js. Without this, a WhatsApp name (a phone number) is
+    // read as a user_id and every event inserts a duplicate record.
+    if (isNonLinkedInWebhookEvent(req.body)) {
+      console.log(
+        `Ignoring ${extractWebhookProvider(req.body)} account event for ${account_id} (not LinkedIn)`,
+      );
+      return res.json({
+        success: true,
+        message: "Non-LinkedIn account event ignored.",
       });
     }
 
