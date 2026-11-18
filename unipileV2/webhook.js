@@ -187,7 +187,10 @@ async function processAccountEvent(event, deps) {
   if (!meta) return { handled: false, reason: "unknown_account_event" };
 
   const store = deps.storeForProvider(eventProvider(event));
-  if (!store) return { handled: false, reason: `unsupported_provider:${eventProvider(event)}` };
+  if (!store) {
+    log(`ℹ️ ${event.type} for ${eventProvider(event) || "unknown"} account ${eventAccountId(event) || "?"} received — not stored (only LinkedIn/WhatsApp are tracked)`);
+    return { handled: false, reason: `unsupported_provider:${eventProvider(event)}` };
+  }
 
   const v2AccountId = eventAccountId(event);
   if (!v2AccountId) return { handled: false, reason: "missing_account_id" };
@@ -258,6 +261,7 @@ function processMessageEvent(event, { eventCache, log }) {
       }
       break;
     case "message.reaction.new":
+    case "message.reaction.delete":
     case "message.update":
     case "message.delete":
       if (messageId) eventCache.set(`msg_event:${messageId}`, { ...p, ...base });

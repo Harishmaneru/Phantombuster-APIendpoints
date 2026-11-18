@@ -66,9 +66,16 @@ function createAccountStore({
 }) {
   const col = () => getCollection(collectionName);
 
+  // Only this provider's records. The LinkedIn collection also holds hundreds of
+  // provider:"WHATSAPP" records written by a v1 webhook bug — never match those.
   const anyIdFilter = (accountId) => ({
+    provider,
     $or: [{ account_id: accountId }, { v2_account_id: accountId }],
   });
+
+  // Placeholder records the v1 webhook creates before it knows the user.
+  const NOT_TEMP = { $not: /^temp_/ };
+  const isTemp = (doc) => typeof doc?.user_id === "string" && doc.user_id.startsWith("temp_");
 
   return {
     provider,
@@ -79,10 +86,11 @@ function createAccountStore({
       return (await col()).findOne({ user_id: String(userId), provider });
     },
 
-    /** Match a v1 or a v2 account id. */
+    /** Match a v1 or a v2 account id; a real user's record wins over a temp_ one. */
     async findByAnyAccountId(accountId) {
       if (!accountId) return null;
-      return (await col()).findOne(anyIdFilter(accountId));
+      const docs = await (await col()).find(anyIdFilter(accountId)).limit(20).toArray();
+      return docs.find((d) => !isTemp(d)) || docs[0] || null;
     },
 
     /** The v2 account id for a user, or null if the user has not been linked to v2 yet. */
@@ -100,16 +108,27 @@ function createAccountStore({
       );
     },
 
-    /** Link by v1 account id (used by the backfill script). Returns matched count. */
+    /**
+     * Link by v1 account id (used by the backfill script). Only real users'
+     * records of this provider are linked (no temp_ placeholders).
+     * @returns {Promise<{ matched: number, users: string[], tempCount: number }>}
+     */
     async linkV2AccountByV1Id(v1AccountId, v2AccountId, { dryRun = false } = {}) {
       const c = await col();
-      if (dryRun) return c.countDocuments({ account_id: v1AccountId });
-      const now = new Date();
-      const result = await c.updateMany(
-        { account_id: v1AccountId },
-        { $set: { v2_account_id: v2AccountId, v2_linked_at: now, v2_updated_at: now } },
-      );
-      return result.matchedCount;
+      const filter = { provider, account_id: v1AccountId, user_id: NOT_TEMP };
+      const docs = await c.find(filter).project({ user_id: 1 }).toArray();
+      const tempCount = await c.countDocuments({
+        provider,
+        account_id: v1AccountId,
+        user_id: /^temp_/,
+      });
+      if (!dryRun && docs.length) {
+        const now = new Date();
+        await c.updateMany(filter, {
+          $set: { v2_account_id: v2AccountId, v2_linked_at: now, v2_updated_at: now },
+        });
+      }
+      return { matched: docs.length, users: docs.map((d) => d.user_id), tempCount };
     },
 
     /**

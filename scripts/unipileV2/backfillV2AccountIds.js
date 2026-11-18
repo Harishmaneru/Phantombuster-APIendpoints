@@ -55,11 +55,12 @@ async function main() {
     if (!store) result = "skipped (provider not used by our app)";
     else if (!v1Id) result = "no v1_account_id (linked directly in v2)";
     else {
-      const matched = await store.linkV2AccountByV1Id(v1Id, acc.id, { dryRun });
+      const { matched, users, tempCount } = await store.linkV2AccountByV1Id(v1Id, acc.id, { dryRun });
+      const tempNote = tempCount ? ` (+${tempCount} temp_ record(s) skipped)` : "";
       result =
         matched === 0
-          ? "NOT IN MONGO (no record uses this v1 account)"
-          : `${dryRun ? "would link" : "linked"} ${matched} record(s)`;
+          ? `NOT LINKED: no user record uses this v1 account${tempNote}`
+          : `${dryRun ? "would link" : "linked"} user ${users.join(", ")}${tempNote}`;
     }
     rows.push({
       provider: acc.provider,
@@ -72,18 +73,24 @@ async function main() {
   }
   console.table(rows);
 
-  // Mongo records that still have no v2 account.
+  // Real user records that still have no v2 account (these users must reconnect).
   for (const [provider, name] of Object.entries(COLLECTIONS)) {
     const col = await getCollection(name);
+    const noV2 = { $or: [{ v2_account_id: { $exists: false } }, { v2_account_id: null }] };
     const missing = await col
-      .find({ $or: [{ v2_account_id: { $exists: false } }, { v2_account_id: null }] })
+      .find({ provider, user_id: { $not: /^temp_/ }, ...noV2 })
       .project({ user_id: 1, account_id: 1, name: 1, connected: 1, _id: 0 })
       .toArray();
+    const tempCount = await col.countDocuments({ provider, user_id: /^temp_/ });
+    const otherProvider = await col.countDocuments({ provider: { $ne: provider } });
     console.log(
-      `\n${provider}: ${missing.length} Mongo record(s) without v2_account_id` +
+      `\n${provider}: ${missing.length} user record(s) without v2_account_id` +
         (dryRun ? " (before this run)" : ""),
     );
     if (missing.length) console.table(missing);
+    console.log(
+      `   ignored: ${tempCount} temp_ placeholder record(s), ${otherProvider} record(s) with a different provider in this collection`,
+    );
   }
 }
 

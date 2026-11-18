@@ -199,6 +199,9 @@ test('message receipts are cached under the v1 keys', async () => {
   assert.equal(status.seen, true);
   await processEvent({ type: 'message.new', id: 'evt_9', account_id: 'acc_1', account_provider: 'whatsapp', payload: { id: 'm2', text: 'hi' } }, d);
   assert.equal(cache.get('incoming_msg:m2').text, 'hi');
+  const removed = await processEvent({ type: 'message.reaction.delete', account_id: 'acc_1', account_provider: 'whatsapp', payload: { message_id: 'm2', reaction: '👍' } }, d);
+  assert.equal(removed.handled, true);
+  assert.equal(cache.get('msg_event:m2').event, 'message.reaction.delete');
 });
 
 // ---------------------------------------------------------------- account store
@@ -217,6 +220,37 @@ test('accountStore.applyStatus only touches primary fields when writePrimary is 
   assert.equal('connected' in updates[0].$set, false);
   assert.equal(updates[1].$set.status, 'CREDENTIALS');
   assert.equal(updates[1].$set.connected, false);
+});
+
+test('accountStore ignores other-provider and temp_ records', async () => {
+  const docs = [
+    { _id: 1, user_id: 'temp_abc_1', provider: 'LINKEDIN', account_id: 'v1_X' },
+    { _id: 2, user_id: '9426', provider: 'LINKEDIN', account_id: 'v1_X' },
+    { _id: 3, user_id: '919110397112', provider: 'WHATSAPP', account_id: 'v1_W' }, // v1 webhook junk
+  ];
+  const matches = (doc, filter) =>
+    Object.entries(filter).every(([k, v]) => {
+      if (k === '$or') return v.some((f) => matches(doc, f));
+      if (v instanceof RegExp) return v.test(doc[k]);
+      if (v && v.$not) return !v.$not.test(doc[k]);
+      return doc[k] === v;
+    });
+  const fakeCol = {
+    find: (filter) => {
+      const rows = docs.filter((d) => matches(d, filter));
+      const cursor = { limit: () => cursor, project: () => cursor, toArray: async () => rows };
+      return cursor;
+    },
+    countDocuments: async (filter) => docs.filter((d) => matches(d, filter)).length,
+    updateMany: async () => ({}),
+  };
+  const store = createAccountStore({ provider: 'LINKEDIN', collectionName: 'x', getCollection: async () => fakeCol });
+
+  assert.equal((await store.findByAnyAccountId('v1_X'))._id, 2, 'real user wins over temp_');
+  assert.equal(await store.findByAnyAccountId('v1_W'), null, 'WHATSAPP junk in LinkedIn collection ignored');
+
+  const result = await store.linkV2AccountByV1Id('v1_X', 'acc_1', { dryRun: true });
+  assert.deepEqual(result, { matched: 1, users: ['9426'], tempCount: 1 });
 });
 
 // ---------------------------------------------------------------- HTTP route

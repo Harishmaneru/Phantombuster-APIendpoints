@@ -32,8 +32,10 @@ This folder replaces `uniplieApi/` (v1), which is left untouched as the rollback
 3. **Events:**
    - all `account.*`
    - `message.new`, `message.update`, `message.delete`
-   - `message.receipt.read`, `message.receipt.delivery`
-   - `message.reaction.new`
+   - `message.receipt.read`
+   - `message.reaction.new`, `message.reaction.delete`
+   - `relation.new` (LinkedIn Classic only; for detecting accepted invitations later)
+   - **Not** `message.receipt.delivery`: it never fires for LinkedIn or WhatsApp (see Unipile's "Provider features & availability" page)
 4. Copy the endpoint secret into `UNIPILE_V2_WEBHOOK_SECRET` and restart the server.
 5. Send a test event from **Test and Debug Webhooks**. The server log should show `[unipile-v2-webhook] …`.
 
