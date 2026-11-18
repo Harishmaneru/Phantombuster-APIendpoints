@@ -127,6 +127,9 @@ const whatsappProviderApi = require("./uniplieApi/whatsappProviderApi");
 
 const salesLeadsSearch = require("./salesLeadsAPI/salesLeadsSearch");
 
+// Unipile v2 webhook (signed events; mounted in both v1 and v2 mode)
+const unipileV2Webhook = require("./unipileV2/webhook");
+
 const notifyAPI = require("./notifyAPI/sendEmail.js");
 
 const smtp2goAPI = require("./smtp2goAPI/emailApi.js");
@@ -221,6 +224,10 @@ app.use("/slack/rb2b-ri-visitors", slackRouter);
 
 // Mount Slack Logger webhook routes
 app.use("/webhooks/slackLogger", slackLoggerRouter);
+
+// Unipile v2 webhook verifies an HMAC over the raw body, so it must be mounted
+// before express.json(). It only handles /api/unipile/v2/webhook.
+app.use(unipileV2Webhook);
 
 // Global middleware for parsing JSON with increased limits (fixes 413 Payload Too Large for email attachments etc.)
 app.use(express.json({ limit: "100mb" }));
