@@ -322,9 +322,9 @@ app.use("/api/twilio", twilioAPI);
 app.use("/api/dnc", dncLookup);
 
 const options = {
-  key: fs.readFileSync("./onepgr.com.key", "utf8"),
-  cert: fs.readFileSync("./STAR_onepgr_com.crt", "utf8"),
-  ca: fs.readFileSync("./STAR_onepgr_com.ca-bundle", "utf8"),
+  key: fs.readFileSync("./onepgr_com_2026.key", "utf8"),
+  cert: fs.readFileSync("./onepgr_com_2026.crt", "utf8"),
+  ca: fs.readFileSync("./onepgr_com_2026.ca-bundle", "utf8"),
   requestTimeout: 30 * 60 * 1000, // 30 minutes
   headersTimeout: 15 * 60 * 1000, // 15 minutes
   keepAliveTimeout: 10 * 60 * 1000, // 5 minutes
